@@ -28,6 +28,8 @@
 #include "db/extensions.hh"
 #include "db/tags/extension.hh"
 #include "gms/gossiper.hh"
+#include "audit/audit.hh"
+#include "audit/audit_rule.hh"
 
 static const sstring table_name = "cf";
 
@@ -347,6 +349,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("audit-tables", bpo::value<std::string>(), "value for audit_tables config entry")
         ("audit-categories", bpo::value<std::string>(), "value for audit_categories config entry")
         ("audit-unix-socket-path", bpo::value<std::string>(), "value for audit_unix_socket_path config entry")
+        ("audit-rules", bpo::value<std::string>(), "JSON value for audit_rules config entry")
         ;
 
     set_abort_on_internal_error(true);
@@ -386,6 +389,9 @@ int scylla_simple_query_main(int argc, char** argv) {
             set_from_cli("audit-tables", app, cfg.db_config->audit_tables);
             set_from_cli("audit-categories", app, cfg.db_config->audit_categories);
             set_from_cli("audit-unix-socket-path", app, cfg.db_config->audit_unix_socket_path);
+            if (app.configuration().contains("audit-rules")) {
+                cfg.db_config->audit_rules(audit::parse_audit_rules_from_json(app.configuration()["audit-rules"].as<std::string>()));
+            }
           return do_with_cql_env_thread([&app] (auto&& env) {
             auto cfg = test_config();
             cfg.partitions = app.configuration()["partitions"].as<unsigned>();
@@ -427,6 +433,9 @@ int scylla_simple_query_main(int argc, char** argv) {
             auto audit_storage_stop = defer([] {
                 audit::audit::stop_storage().get();
             });
+            audit::audit::audit_instance().invoke_on_all([] (audit::audit& a) {
+                a.on_role_created("tester");
+            }).get();
             auto results = do_cql_test(env, cfg);
             aggregated_perf_results agg(results);
             std::cout << agg << std::endl;

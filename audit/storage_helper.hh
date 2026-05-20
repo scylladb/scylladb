@@ -8,6 +8,7 @@
 #pragma once
 
 #include "audit/audit.hh"
+#include "audit/audit_rule.hh"
 #include <seastar/core/future.hh>
 
 namespace audit {
@@ -19,13 +20,15 @@ public:
     virtual ~storage_helper() {}
     virtual future<> start(const db::config& cfg) = 0;
     virtual future<> stop() = 0;
-    virtual future<> write(const audit_info* audit_info,
+    virtual future<> write(audit_sink_set sinks,
+                           const audit_info* audit_info,
                            socket_address node_ip,
                            socket_address client_ip,
                            std::optional<db::consistency_level> cl,
                            const sstring& username,
                            bool error) = 0;
-    virtual future<> write_login(const sstring& username,
+    virtual future<> write_login(audit_sink_set sinks,
+                                 const sstring& username,
                                  socket_address node_ip,
                                  socket_address client_ip,
                                  bool error) = 0;

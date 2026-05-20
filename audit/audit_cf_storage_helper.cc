@@ -127,19 +127,27 @@ future<> audit_cf_storage_helper::stop() {
     return make_ready_future<>();
 }
 
-future<> audit_cf_storage_helper::write(const audit_info* audit_info,
-                                    socket_address node_ip,
-                                    socket_address client_ip,
-                                    std::optional<db::consistency_level> cl,
-                                    const sstring& username,
-                                    bool error) {
+future<> audit_cf_storage_helper::write(audit_sink_set sinks,
+                                        const audit_info* audit_info,
+                                        socket_address node_ip,
+                                        socket_address client_ip,
+                                        std::optional<db::consistency_level> cl,
+                                        const sstring& username,
+                                        bool error) {
+    if (!sinks.contains(audit_sink::table)) {
+        return make_ready_future<>();
+    }
     return _table.insert(_qp, _mm, _dummy_query_state, make_data, audit_info, node_ip, client_ip, cl, username, error);
 }
 
-future<> audit_cf_storage_helper::write_login(const sstring& username,
+future<> audit_cf_storage_helper::write_login(audit_sink_set sinks,
+                                              const sstring& username,
                                               socket_address node_ip,
                                               socket_address client_ip,
                                               bool error) {
+    if (!sinks.contains(audit_sink::table)) {
+        return make_ready_future<>();
+    }
     return _table.insert(_qp, _mm, _dummy_query_state, make_login_data, node_ip, client_ip, username, error);
 }
 

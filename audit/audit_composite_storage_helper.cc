@@ -39,7 +39,8 @@ future<> audit_composite_storage_helper::stop() {
     return res;
 }
 
-future<> audit_composite_storage_helper::write(const audit_info* audit_info,
+future<> audit_composite_storage_helper::write(audit_sink_set sinks,
+                                               const audit_info* audit_info,
                                                socket_address node_ip,
                                                socket_address client_ip,
                                                std::optional<db::consistency_level> cl,
@@ -47,20 +48,21 @@ future<> audit_composite_storage_helper::write(const audit_info* audit_info,
                                                bool error) {
     return seastar::parallel_for_each(
         _storage_helpers,
-        [audit_info, node_ip, client_ip, cl, &username, error](std::unique_ptr<storage_helper>& h) {
-            return h->write(audit_info, node_ip, client_ip, cl, username, error);
+        [sinks, audit_info, node_ip, client_ip, cl, &username, error](std::unique_ptr<storage_helper>& h) {
+            return h->write(sinks, audit_info, node_ip, client_ip, cl, username, error);
         }
     );
 }
 
-future<> audit_composite_storage_helper::write_login(const sstring& username,
+future<> audit_composite_storage_helper::write_login(audit_sink_set sinks,
+                                                     const sstring& username,
                                                      socket_address node_ip,
                                                      socket_address client_ip,
                                                      bool error) {
     return seastar::parallel_for_each(
         _storage_helpers,
-        [&username, node_ip, client_ip, error](std::unique_ptr<storage_helper>& h) {
-            return h->write_login(username, node_ip, client_ip, error);
+        [sinks, &username, node_ip, client_ip, error](std::unique_ptr<storage_helper>& h) {
+            return h->write_login(sinks, username, node_ip, client_ip, error);
         }
     );
 }

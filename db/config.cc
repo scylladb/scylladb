@@ -33,6 +33,8 @@
 #include "db/paxos_grace_seconds_extension.hh"
 #include "db/tags/extension.hh"
 #include "db/object_storage_endpoint_param.hh"
+#include "audit/audit_rule.hh"
+#include "audit/audit.hh"
 #include "config.hh"
 #include "extensions.hh"
 #include "sstables/compressor.hh"
@@ -150,6 +152,12 @@ template <>
 sstring
 config_from_string(std::string_view value) {
     return sstring(value);
+}
+
+template <>
+std::vector<audit::audit_rule>
+config_from_string(std::string_view value) {
+    return audit::parse_audit_rules_from_json(sstring(value));
 }
 
 template <>
@@ -346,6 +354,22 @@ const config_type& config_type_for<netw::advanced_rpc_compressor::tracker::algo_
 template <>
 const config_type& config_type_for<std::vector<db::object_storage_endpoint_param>>() {
     static config_type ct("object storage endpoint configuration", object_storage_endpoints_to_json);
+    return ct;
+}
+
+static json::json_return_type
+audit_rules_list_to_json(const std::vector<audit::audit_rule>& rules) {
+    // Return the raw JSON string directly — audit_rules_to_json_string already
+    // produces valid JSON, so we must not wrap it with formatter::to_json which
+    // would add string quoting.
+    json::json_return_type ret(json::json_return_type::body_writer_type{});
+    ret._res = audit::audit_rules_to_json_string(rules);
+    return ret;
+}
+
+template <>
+const config_type& config_type_for<std::vector<audit::audit_rule>>() {
+    static config_type ct("audit rule list", audit_rules_list_to_json);
     return ct;
 }
 
@@ -567,6 +591,38 @@ template<>
 struct convert<db::object_storage_endpoint_param> {
     static bool decode(const Node& node, db::object_storage_endpoint_param& ep) {
         ep = db::object_storage_endpoint_param::decode(node);
+        return true;
+    }
+};
+
+template<>
+struct convert<audit::audit_rule> {
+    static bool decode(const Node& node, audit::audit_rule& rule) {
+        if (!node.IsMap()) {
+            return false;
+        }
+        auto get_string_list = [](const Node& n, const char* field) -> std::vector<sstring> {
+            if (!n.IsSequence()) {
+                throw audit::audit_exception(fmt::format(
+                    "Bad configuration: '{}' must be a YAML sequence", field));
+            }
+            std::vector<sstring> result;
+            for (const auto& elem : n) {
+                result.emplace_back(elem.as<std::string>());
+            }
+            return result;
+        };
+        for (const auto& field : audit::audit_rule_required_fields) {
+            if (!node[field]) {
+                throw audit::audit_exception(fmt::format(
+                    "Bad configuration: audit rule missing required field '{}'", field));
+            }
+        }
+        rule.sinks = get_string_list(node["sinks"], "sinks");
+        rule.categories = audit::parse_categories(get_string_list(node["categories"], "categories"));
+        rule.qualified_table_names = get_string_list(node["qualified_table_names"], "qualified_table_names");
+        rule.roles = get_string_list(node["roles"], "roles");
+        audit::validate_audit_rule(rule);
         return true;
     }
 };
@@ -1634,6 +1690,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , audit_keyspaces(this, "audit_keyspaces", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of keyspaces that will be audited. All tables in those keyspaces will be audited")
     , audit_unix_socket_path(this, "audit_unix_socket_path", value_status::Used, "/dev/log", "The path to the unix socket used for writing to syslog. Only applicable when audit is set to syslog.")
     , audit_syslog_write_buffer_size(this, "audit_syslog_write_buffer_size", value_status::Used, 1048576, "The size (in bytes) of a write buffer used when writing to syslog socket.")
+     , audit_rules(this, "audit_rules", liveness::LiveUpdate, value_status::Used, {},
+        "List of granular audit rules. Each rule has: sinks, categories, qualified_table_names, roles. "
+        "When non-empty, these rules extend audit_categories, audit_tables, and audit_keyspaces; "
+        "events are audited if matched by either mechanism. Prefer audit_rules for new configurations. "
+        "Empty categories or roles lists mean 'match nothing'. "
+        "Empty qualified_table_names prevents matching for table-scoped categories (DML, DDL, QUERY) "
+        "but has no effect on table-independent categories (AUTH, ADMIN, DCL). "
+        "Rule sinks must be a subset of the global 'audit' config. "
+        "In YAML, use a list of maps. In CQL, use a JSON array of objects.")
     , ldap_url_template(this, "ldap_url_template", value_status::Used, "", "LDAP URL template used by LDAPRoleManager for crafting queries.")
     , ldap_attr_role(this, "ldap_attr_role", value_status::Used, "", "LDAP attribute containing Scylla role.")
     , ldap_bind_dn(this, "ldap_bind_dn", value_status::Used, "", "Distinguished name used by LDAPRoleManager for binding to LDAP server.")
@@ -1825,6 +1890,15 @@ std::istream& operator>>(std::istream& is, object_storage_endpoint_param& f) {
 
 }
 
+namespace audit {
+
+std::istream& operator>>(std::istream& is, audit_rule&) {
+    throw std::runtime_error("reading audit_rule from istream is not implemented");
+    return is;
+}
+
+}
+
 auto fmt::formatter<db::error_injection_at_startup>::format(const db::error_injection_at_startup& eias, fmt::format_context& ctx) const
     -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "error_injection_at_startup{{name={}, one_short={}, parameters={}}}",
@@ -1852,6 +1926,14 @@ void config_file::named_value<db::config::seed_provider_type>::add_command_line_
                                         set(std::move(old_seed_provider), config_source::CommandLine);
                                     }),
                     desc().data());
+}
+
+template<>
+void config_file::named_value<std::vector<audit::audit_rule>>::add_command_line_option(
+                boost::program_options::options_description_easy_init& init) {
+    init(hyphenate(name()).data(), value_ex<sstring>()->notifier([this] (sstring new_value) {
+        set(audit::parse_audit_rules_from_json(new_value), config_source::CommandLine);
+    }), desc().data());
 }
 
 }
@@ -2047,6 +2129,7 @@ template struct utils::config_file::named_value<std::vector<db::error_injection_
 template struct utils::config_file::named_value<std::vector<std::unordered_map<sstring, sstring>>>;
 template struct utils::config_file::named_value<std::unordered_map<sstring, seastar::log_level>>;
 template struct utils::config_file::named_value<std::vector<db::object_storage_endpoint_param>>;
+template struct utils::config_file::named_value<std::vector<audit::audit_rule>>;
 
 namespace utils {
 

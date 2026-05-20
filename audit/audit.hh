@@ -12,6 +12,9 @@
 #include "utils/observable.hh"
 #include "service/client_state.hh"
 #include "db/consistency_level_type.hh"
+#include "utils/serialized_action.hh"
+#include "audit/audit_rule.hh"
+#include "audit/preprocessed_audit_rules.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/util/log.hh>
 
@@ -37,6 +40,7 @@ class query_options;
 namespace service {
 
 class migration_manager;
+class migration_notifier;
 class query_state;
 
 }
@@ -59,17 +63,6 @@ public:
         return _what.c_str();
     }
 };
-
-enum class statement_category {
-    QUERY, DML, DDL, DCL, AUTH, ADMIN
-};
-
-using category_set = enum_set<super_enum<statement_category, statement_category::QUERY,
-                                                             statement_category::DML,
-                                                             statement_category::DDL,
-                                                             statement_category::DCL,
-                                                             statement_category::AUTH,
-                                                             statement_category::ADMIN>>;
 
 // Holds the audit metadata for a single request: the operation category,
 // target keyspace/table, and the query string to be logged.
@@ -127,6 +120,7 @@ public:
 };
 
 class storage_helper;
+class audit_schema_listener;
 
 class audit final : public seastar::async_sharded_service<audit> {
 public:
@@ -140,18 +134,29 @@ private:
     audited_tables_t _audited_tables;
     category_set _audited_categories;
 
+    audit_sink_set _audit_sinks;
+    preprocessed_audit_rules _preprocessed_rules;
+
     std::unique_ptr<storage_helper> _storage_helper_ptr;
     bool _storage_running = false;
+    std::unique_ptr<audit_schema_listener> _schema_listener;
+    service::migration_notifier& _migration_notifier;
 
     const db::config& _cfg;
     utils::observer<sstring> _cfg_keyspaces_observer;
     utils::observer<sstring> _cfg_tables_observer;
     utils::observer<sstring> _cfg_categories_observer;
+    serialized_action _rules_rebuild_action;
+    std::optional<utils::observer<std::vector<audit_rule>>> _cfg_rules_observer;
 
     template<class T>
     void update_config(const sstring & new_value, std::function<T(const sstring&)> parse_func, T& cfg_parameter);
 
     bool should_log_table(std::string_view keyspace, std::string_view name) const;
+    bool rules_may_log(statement_category cat, std::string_view keyspace, std::string_view table) const;
+    audit_sink_set sinks_for(const audit_info& audit_info, std::string_view role) const;
+    audit_sink_set sinks_for_login(const sstring& username) const;
+    future<> rebuild_rules();
 public:
     static seastar::sharded<audit>& audit_instance() {
         // FIXME: leaked intentionally to avoid shutdown problems, see #293
@@ -171,18 +176,24 @@ public:
     audit(locator::shared_token_metadata& stm,
           cql3::query_processor& qp,
           service::migration_manager& mm,
-          std::set<sstring>&& audit_modes,
+          audit_sink_set audit_sinks,
           audited_keyspaces_t&& audited_keyspaces,
           audited_tables_t&& audited_tables,
           category_set&& audited_categories,
+          std::vector<audit_rule>&& audit_rules,
           const db::config& cfg);
     ~audit();
     future<> shutdown();
-    bool should_log(const audit_info& audit_info) const;
     bool will_log(statement_category cat, std::string_view keyspace = {}, std::string_view table = {}) const;
-    bool should_log_login() const { return _audited_categories.contains(statement_category::AUTH); }
+    bool should_log_login(const sstring& username) const;
     future<> log(const audit_info& audit_info, const service::client_state& client_state, std::optional<db::consistency_level> cl, bool error);
     future<> log_login(const sstring& username, socket_address client_ip, bool error) noexcept;
+
+    void on_role_created(const sstring& role);
+    void on_role_dropped(const sstring& role);
+
+    future<> set_known_entities(std::unordered_set<sstring> roles,
+                                preprocessed_audit_rules::known_table_set tables);
 };
 
 future<> inspect(const audit_info_alternator& audit_info, const service::client_state& client_state, bool error);

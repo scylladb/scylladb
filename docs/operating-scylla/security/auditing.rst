@@ -176,6 +176,57 @@ returns:
    2026-03-18 00:00:00+0000 | 10.143.2.108 | 3429b1a5-2a94-11e8-8f4e-000000000001 |      DML | LOCAL_QUORUM | False | alternator_my_table   | PutItem|{"TableName":"my_table","Item":{"p":{"S":"pk_val"}}}                     | 127.0.0.1 |   my_table | anonymous |
    (1 row)
 
+Audit Rules
+^^^^^^^^^^^^^
+
+Audit rules provide fine-grained, role-aware auditing. They can be used together
+with ``audit_categories``, ``audit_tables``, and ``audit_keyspaces`` to extend an
+existing audit configuration with more granular rules. The settings do not
+override each other: for each event, ScyllaDB evaluates both mechanisms
+independently, and the event is audited if either one matches.
+
+For new configurations, prefer ``audit_rules`` because they provide more precise
+matching options, including table patterns and role patterns.
+
+Each rule contains the following fields:
+
+- **sinks** — target sinks for matched events (e.g. ``table``, ``syslog``).
+  Must be a subset of the global ``audit`` setting; a rule referencing a sink
+  not enabled globally will log an error and events for that sink will not be
+  written.
+- **categories** — which operation types to audit: ``DML``, ``DDL``,
+  ``QUERY``, ``AUTH``, ``ADMIN``, ``DCL``. An empty list matches nothing.
+- **qualified_table_names** — ``keyspace.table`` patterns to match. For
+  table-independent categories (``AUTH``, ``ADMIN``, ``DCL``) this field is
+  ignored. An empty list prevents matching for table-scoped categories
+  (``DML``, ``DDL``, ``QUERY``).
+- **roles** — role patterns to match. An empty list matches nothing.
+
+The ``qualified_table_names`` and ``roles`` fields support fnmatch glob patterns
+with extended syntax (``FNM_EXTMATCH``), including negation ``!(…)``,
+alternation ``@(a|b)``, and quantifiers ``+(…)``, ``*(…)``, ``?(…)``. For
+example, ``"prod_ks.*"`` or ``"!(system).*"`` for tables and ``"admin_*"`` for
+roles.
+
+``audit_rules`` is a live-updatable parameter. To apply changes at runtime, edit
+``scylla.yaml`` and send ``SIGHUP`` to the ScyllaDB process. See
+:doc:`/reference/configuration-parameters` for details on live updates and
+configuration precedence.
+
+Example ``scylla.yaml`` configuration:
+
+.. code-block:: yaml
+
+   audit_rules:
+     - sinks: [table]
+       categories: [DML, DDL]
+       qualified_table_names: ["prod_ks.*"]
+       roles: ["admin_*"]
+     - sinks: [syslog]
+       categories: [AUTH]
+       qualified_table_names: []
+       roles: ["*"]
+
 Configuring Audit Storage
 ---------------------------
 

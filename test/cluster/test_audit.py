@@ -10,6 +10,7 @@ import datetime
 import enum
 import functools
 import itertools
+import json
 import logging
 import os.path
 from pathlib import Path
@@ -53,7 +54,7 @@ syslog_socket_path = tempfile.mktemp(prefix="/tmp/scylla-audit-", suffix=".socke
 # Keys that require server restart (not live-updatable).
 NON_LIVE_AUDIT_KEYS = {"audit", "audit_unix_socket_path"}
 # Keys that can be updated via SIGHUP (live-updatable).
-LIVE_AUDIT_KEYS = {"audit_categories", "audit_keyspaces", "audit_tables"}
+LIVE_AUDIT_KEYS = {"audit_categories", "audit_keyspaces", "audit_tables", "audit_rules"}
 # Auth config applied when user/password are requested.
 AUTH_CONFIG = {
     "authenticator": "org.apache.cassandra.auth.PasswordAuthenticator",
@@ -162,6 +163,11 @@ class AuditTester:
         IPs would poison newly added servers.  Detect this automatically and
         bootstrap the first server with an explicit self-seed.
         """
+        audit_cmdline = ['--logger-log-level', 'audit=debug']
+        if cmdline:
+            audit_cmdline.extend(cmdline)
+        cmdline = audit_cmdline
+
         cfg = self._build_server_config(needed, enable_compact_storage, user)
         connect_opts: dict[str, Any] = {}
         if auth_provider:
@@ -618,6 +624,22 @@ class CQLAuditTester(AuditTester):
             for row in reg_list:
                 logger.debug("  %s", row)
         return { mode: len(reg_list) for mode, reg_list in reg_dict.items() }
+
+    @contextmanager
+    def assert_audit_entry_counts_by_mode_were_added(self, session: Session, expected_counts: dict[str, int]):
+        counts_before = self.get_audit_entries_count_dict(session)
+        yield
+
+        counts_after: dict[str, int] = {}
+        def counts_match():
+            nonlocal counts_after
+            counts_after = self.get_audit_entries_count_dict(session)
+            for mode, expected_count in expected_counts.items():
+                if counts_after.get(mode, 0) != counts_before.get(mode, 0) + expected_count:
+                    return False
+            return True
+
+        wait_for(counts_match, timeout=60)
 
     @staticmethod
     def token_in_range(token, start_token, end_token):
@@ -1906,6 +1928,462 @@ class CQLAuditTester(AuditTester):
             maint_session.execute(f"DROP ROLE IF EXISTS {role_name}")
             safe_driver_shutdown(maint_cluster)
 
+    async def _test_audit_rules_matching(self):
+        """Verify rule matching, non-matches, and audit_categories/audit_keyspaces coexistence."""
+        rules = [
+            {
+                "sinks": ["table"],
+                "categories": [],
+                "qualified_table_names": ["ks.ignored_tbl"],
+                "roles": ["*"],
+            },
+            {
+                "sinks": ["table"],
+                "categories": ["DML"],
+                "qualified_table_names": ["ks.ignored_tbl"],
+                "roles": [],
+            },
+            {
+                "sinks": ["table"],
+                "categories": ["DML"],
+                "qualified_table_names": ["ks.rules_tbl"],
+                "roles": ["*"],
+            },
+        ]
+        audit_settings = {
+            "audit": "table",
+            "audit_categories": "DDL",
+            "audit_keyspaces": "ks",
+            "audit_tables": "",
+            "audit_rules": rules,
+        }
+        session = await self.prepare(audit_settings=audit_settings)
+
+        logger.info("Verifying DDL on ks is audited by audit_categories")
+        self.execute_and_validate_new_audit_entry(
+            session, "CREATE TABLE rules_tbl (id int PRIMARY KEY, v text)",
+            category="DDL", table="rules_tbl", ks="ks")
+        self.execute_and_validate_new_audit_entry(
+            session, "CREATE TABLE other_tbl (id int PRIMARY KEY, v text)",
+            category="DDL", table="other_tbl", ks="ks")
+        self.execute_and_validate_new_audit_entry(
+            session, "CREATE TABLE ignored_tbl (id int PRIMARY KEY, v text)",
+            category="DDL", table="ignored_tbl", ks="ks")
+
+        logger.info("Verifying DML on rules_tbl is audited by rules path")
+        self.execute_and_validate_new_audit_entry(
+            session, "INSERT INTO rules_tbl (id, v) VALUES (1, 'hello')",
+            category="DML", table="rules_tbl", ks="ks")
+
+        logger.info("Verifying DML on other_tbl and ignored_tbl is NOT audited")
+        expected = [AuditEntry(category="DML", cl="ONE", error=False, ks="ks",
+                                statement="INSERT INTO ks.rules_tbl (id, v) VALUES (2, 'fence')",
+                                table="rules_tbl", user="anonymous")]
+        with self.assert_entries_were_added(session, expected):
+            session.execute("INSERT INTO ks.other_tbl (id, v) VALUES (1, 'hello')")
+            session.execute("INSERT INTO ks.ignored_tbl (id, v) VALUES (1, 'ignored')")
+            session.execute("INSERT INTO ks.rules_tbl (id, v) VALUES (2, 'fence')")
+
+    async def _test_audit_rules_auth_with_empty_tables(self):
+        """Verify that AUTH category works with empty qualified_table_names."""
+        rules = [
+            {
+                "sinks": ["table"],
+                "categories": ["AUTH"],
+                "qualified_table_names": [],
+                "roles": ["*"],
+            }
+        ]
+        audit_settings = {
+            "audit": "table",
+            "audit_categories": "",
+            "audit_keyspaces": "",
+            "audit_tables": "",
+            "audit_rules": rules,
+        }
+        session = await self.prepare(
+            user="cassandra", password="cassandra",
+            audit_settings=audit_settings, create_keyspace=False)
+
+        logger.info("Opening a fresh connection to generate a fresh AUTH entry")
+        auth_provider = PlainTextAuthProvider(username="cassandra", password="cassandra")
+        expected_entry = AuditEntry(category="AUTH", statement="LOGIN", table="", ks="", user="cassandra", cl="", error=False)
+        with self.assert_entries_were_added(session, [expected_entry], filter_out_cassandra_auth=False):
+            servers = await self.manager.running_servers()
+            await self.manager.get_cql_exclusive(servers[0], auth_provider=auth_provider)
+
+    async def _test_audit_rules_liveupdate(self):
+        """Verify audit_rules live updates and system.config serialization."""
+        initial_rules = [
+            {
+                "sinks": ["table"],
+                "categories": ["DML"],
+                "qualified_table_names": ["rules_update_ks.tbl_a"],
+                "roles": ["*"],
+            }
+        ]
+        session = await self.prepare(audit_settings={
+            "audit": "table",
+            "audit_categories": "",
+            "audit_keyspaces": "",
+            "audit_tables": "",
+            "audit_rules": initial_rules,
+        }, create_keyspace=False)
+        srv = (await self.manager.running_servers())[0]
+        server_log = await self.manager.server_open_log(srv.server_id)
+
+        session.execute(
+            "CREATE KEYSPACE IF NOT EXISTS rules_update_ks "
+            "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"
+            " AND tablets = {'enabled': false}"
+        )
+        session.execute("CREATE TABLE IF NOT EXISTS rules_update_ks.tbl_a (id int PRIMARY KEY, v text)")
+        session.execute("CREATE TABLE IF NOT EXISTS rules_update_ks.tbl_b (id int PRIMARY KEY, v text)")
+        session.execute("CREATE TABLE IF NOT EXISTS rules_update_ks.tbl_c (id int PRIMARY KEY, v text)")
+
+        config_rows = list(session.execute("SELECT value FROM system.config WHERE name = 'audit_rules'"))
+        assert len(config_rows) == 1
+        loaded = json.loads(config_rows[0].value)
+        assert loaded[0]["qualified_table_names"] == ["rules_update_ks.tbl_a"]
+
+        self.execute_and_validate_new_audit_entry(
+            session,
+            "INSERT INTO rules_update_ks.tbl_a (id, v) VALUES (1, 'a')",
+            category="DML",
+            table="tbl_a",
+            ks="rules_update_ks",
+        )
+
+        new_rules = [
+            {
+                "sinks": ["table"],
+                "categories": ["DML"],
+                "qualified_table_names": ["rules_update_ks.tbl_b"],
+                "roles": ["*"],
+            }
+        ]
+        log_mark = await server_log.mark()
+        await self.manager.server_update_config(srv.server_id, "audit_rules", new_rules)
+        await server_log.wait_for("Audit rules updated: 1 rules configured", from_mark=log_mark, timeout=30)
+
+        self.execute_and_validate_new_audit_entry(
+            session,
+            "INSERT INTO rules_update_ks.tbl_b (id, v) VALUES (1, 'b')",
+            category="DML",
+            table="tbl_b",
+            ks="rules_update_ks",
+        )
+
+        expected_entries = [
+            AuditEntry(
+                category="DML", cl="ONE", error=False, ks="rules_update_ks",
+                statement="INSERT INTO rules_update_ks.tbl_b (id, v) VALUES (2, 'b2')",
+                table="tbl_b", user="anonymous")
+        ]
+        with self.assert_entries_were_added(session, expected_entries):
+            session.execute("INSERT INTO rules_update_ks.tbl_a (id, v) VALUES (2, 'a2')")
+            session.execute("INSERT INTO rules_update_ks.tbl_b (id, v) VALUES (2, 'b2')")
+
+        cql_rules = [
+            {
+                "sinks": ["table"],
+                "categories": ["DML"],
+                "qualified_table_names": ["rules_update_ks.tbl_c"],
+                "roles": ["*"],
+            }
+        ]
+        log_mark = await server_log.mark()
+        session.execute(
+            "UPDATE system.config SET value = %s WHERE name = 'audit_rules'",
+            [json.dumps(cql_rules)],
+        )
+        await server_log.wait_for("Audit rules updated: 1 rules configured", from_mark=log_mark, timeout=30)
+
+        expected_entries = [
+            AuditEntry(
+                category="DML", cl="ONE", error=False, ks="rules_update_ks",
+                statement="INSERT INTO rules_update_ks.tbl_c (id, v) VALUES (1, 'c')",
+                table="tbl_c", user="anonymous")
+        ]
+        with self.assert_entries_were_added(session, expected_entries):
+            session.execute("INSERT INTO rules_update_ks.tbl_b (id, v) VALUES (3, 'b3')")
+            session.execute("INSERT INTO rules_update_ks.tbl_c (id, v) VALUES (1, 'c')")
+
+        logger.info("Verifying invalid audit_rules update keeps previous rules")
+        before = json.loads(list(session.execute("SELECT value FROM system.config WHERE name = 'audit_rules'"))[0].value)
+        with pytest.raises(WriteFailure):
+            session.execute("UPDATE system.config SET value = %s WHERE name = 'audit_rules'", ["{not json}"])
+        after = json.loads(list(session.execute("SELECT value FROM system.config WHERE name = 'audit_rules'"))[0].value)
+        assert after == before
+        expected_entries = [
+            AuditEntry(
+                category="DML", cl="ONE", error=False, ks="rules_update_ks",
+                statement="INSERT INTO rules_update_ks.tbl_c (id, v) VALUES (2, 'c2')",
+                table="tbl_c", user="anonymous")
+        ]
+        with self.assert_entries_were_added(session, expected_entries):
+            session.execute("INSERT INTO rules_update_ks.tbl_b (id, v) VALUES (4, 'b4')")
+            session.execute("INSERT INTO rules_update_ks.tbl_c (id, v) VALUES (2, 'c2')")
+
+    async def _test_audit_rules_sink_routing(self):
+        """Verify that matching rules route events only to their sinks."""
+        rules = [
+            {
+                "sinks": ["table"],
+                "categories": ["DML"],
+                "qualified_table_names": ["route_ks.table_sink"],
+                "roles": ["*"],
+            },
+            {
+                "sinks": ["syslog"],
+                "categories": ["DML"],
+                "qualified_table_names": ["route_ks.syslog_sink"],
+                "roles": ["*"],
+            },
+            {
+                "sinks": ["table", "syslog"],
+                "categories": ["DML"],
+                "qualified_table_names": ["route_ks.both_sinks"],
+                "roles": ["*"],
+            },
+        ]
+        audit_settings = {
+            "audit": "table,syslog",
+            "audit_categories": "",
+            "audit_keyspaces": "",
+            "audit_tables": "",
+            "audit_rules": rules,
+        }
+        with AuditBackendComposite(socket_path=syslog_socket_path) as helper:
+            session = await self.prepare(helper=helper, audit_settings=audit_settings, create_keyspace=False)
+            session.execute(
+                "CREATE KEYSPACE route_ks "
+                "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"
+                " AND tablets = {'enabled': false}"
+            )
+            for table in ["table_sink", "syslog_sink", "both_sinks", "no_sink"]:
+                session.execute(f"CREATE TABLE route_ks.{table} (id int PRIMARY KEY, v text)")
+
+            self.helper.clear_audit_logs(session)
+
+            logger.info("Verifying table-only audit rule sink routing")
+            with self.assert_audit_entry_counts_by_mode_were_added(session, {"table": 1, "syslog": 0}):
+                session.execute("INSERT INTO route_ks.table_sink (id, v) VALUES (1, 'table')")
+
+            logger.info("Verifying syslog-only audit rule sink routing")
+            with self.assert_audit_entry_counts_by_mode_were_added(session, {"table": 0, "syslog": 1}):
+                session.execute("INSERT INTO route_ks.syslog_sink (id, v) VALUES (1, 'syslog')")
+
+            logger.info("Verifying combined audit rule sink routing")
+            with self.assert_audit_entry_counts_by_mode_were_added(session, {"table": 1, "syslog": 1}):
+                session.execute("INSERT INTO route_ks.both_sinks (id, v) VALUES (1, 'both')")
+
+            logger.info("Verifying non-matching table is not audited")
+            with self.assert_audit_entry_counts_by_mode_were_added(session, {"table": 0, "syslog": 0}):
+                session.execute("INSERT INTO route_ks.no_sink (id, v) VALUES (1, 'none')")
+
+    async def _test_audit_rules_role_filtering(self):
+        """Verify that audit_rules use the authenticated role for matching."""
+        rules = [
+            {
+                "sinks": ["table"],
+                "categories": ["DML"],
+                "qualified_table_names": ["role_ks.tbl"],
+                "roles": ["audit_user"],
+            }
+        ]
+        session = await self.prepare(user="cassandra", password="cassandra", audit_settings={
+            "audit": "table",
+            "audit_categories": "",
+            "audit_keyspaces": "",
+            "audit_tables": "",
+            "audit_rules": rules,
+        }, create_keyspace=False)
+
+        session.execute(
+            "CREATE KEYSPACE role_ks "
+            "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"
+            " AND tablets = {'enabled': false}"
+        )
+        session.execute("CREATE TABLE role_ks.tbl (id int PRIMARY KEY, v text)")
+        session.execute("CREATE ROLE audit_user WITH PASSWORD = 'audit_user' AND LOGIN = true")
+        session.execute("CREATE ROLE other_user WITH PASSWORD = 'other_user' AND LOGIN = true")
+        session.execute("GRANT MODIFY ON role_ks.tbl TO audit_user")
+        session.execute("GRANT MODIFY ON role_ks.tbl TO other_user")
+
+        servers = await self.manager.running_servers()
+        for srv in servers:
+            await read_barrier(self.manager.api, srv.ip_addr)
+
+        audit_session = await self.manager.get_cql_exclusive(
+            servers[0], auth_provider=PlainTextAuthProvider(username="audit_user", password="audit_user"))
+        audit_session.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
+        other_session = await self.manager.get_cql_exclusive(
+            servers[0], auth_provider=PlainTextAuthProvider(username="other_user", password="other_user"))
+        other_session.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
+
+        self.execute_and_validate_new_audit_entry(
+            audit_session,
+            "INSERT INTO role_ks.tbl (id, v) VALUES (1, 'audited')",
+            category="DML",
+            table="tbl",
+            ks="role_ks",
+            user="audit_user",
+            session_for_audit_entry_validation=session,
+        )
+
+        logger.info("Verifying DML by other_user is NOT audited")
+        other_session.execute("INSERT INTO role_ks.tbl (id, v) VALUES (2, 'ignored')")
+        logger.info("Flushing audit pipeline with a known-auditable statement")
+        expected = [AuditEntry(category="DML", cl="ONE", error=False, ks="role_ks",
+                               statement="INSERT INTO role_ks.tbl (id, v) VALUES (3, 'fence')",
+                               table="tbl", user="audit_user")]
+        with self.assert_entries_were_added(session, expected):
+            audit_session.execute("INSERT INTO role_ks.tbl (id, v) VALUES (3, 'fence')")
+
+    async def _test_audit_rules_cache_notifications(self):
+        """Verify that role and schema changes update audit rule caches."""
+        rules = [
+            {
+                "sinks": ["table"],
+                "categories": ["DML"],
+                "qualified_table_names": ["notify_ks.*"],
+                "roles": ["cassandra"],
+            }
+        ]
+        session = await self.prepare(user="cassandra", password="cassandra", audit_settings={
+            "audit": "table",
+            "audit_categories": "",
+            "audit_keyspaces": "",
+            "audit_tables": "",
+            "audit_rules": rules,
+        }, create_keyspace=False, rf=2)
+        logs = [await self.manager.server_open_log(srv.server_id) for srv in await self.manager.running_servers()]
+
+        logger.info("Creating audit_reader and waiting for audit cache notifications")
+        marks = [await log.mark() for log in logs]
+        session.execute("CREATE ROLE audit_reader")
+        for log, mark in zip(logs, marks):
+            await log.wait_for("Audit: known role added: audit_reader", from_mark=mark, timeout=30)
+
+        logger.info("Altering audit_reader and waiting for audit cache notifications")
+        marks = [await log.mark() for log in logs]
+        session.execute("ALTER ROLE audit_reader WITH PASSWORD = 'newpass'")
+        for log, mark in zip(logs, marks):
+            await log.wait_for("Audit: known role added: audit_reader", from_mark=mark, timeout=30)
+
+        session.execute(
+            "CREATE KEYSPACE IF NOT EXISTS notify_ks "
+            "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2}"
+            " AND tablets = {'enabled': false}"
+        )
+
+        logger.info("Creating matching table and waiting for audit table cache notifications")
+        marks = [await log.mark() for log in logs]
+        session.execute("CREATE TABLE notify_ks.audited_tbl (id int PRIMARY KEY, v text)")
+        for log, mark in zip(logs, marks):
+            await log.wait_for("Audit: table notify_ks.audited_tbl created, adding to known tables", from_mark=mark, timeout=30)
+
+        self.execute_and_validate_new_audit_entry(
+            session,
+            "INSERT INTO notify_ks.audited_tbl (id, v) VALUES (1, 'test')",
+            category="DML",
+            table="audited_tbl",
+            ks="notify_ks",
+            user="cassandra",
+        )
+
+        logger.info("Dropping matching table and waiting for audit table cache notifications")
+        marks = [await log.mark() for log in logs]
+        session.execute("DROP TABLE notify_ks.audited_tbl")
+        for log, mark in zip(logs, marks):
+            await log.wait_for("Audit: table notify_ks.audited_tbl dropped, removing from known tables", from_mark=mark, timeout=30)
+
+        logger.info("Dropping audit_reader and waiting for audit cache notifications")
+        marks = [await log.mark() for log in logs]
+        session.execute("DROP ROLE audit_reader")
+        for log, mark in zip(logs, marks):
+            await log.wait_for("Audit: known role removed: audit_reader", from_mark=mark, timeout=30)
+
+    async def _test_audit_rules_cache_notifications_mv(self):
+        """Verify that materialized view create/drop updates the audit rule cache."""
+        rules = [
+            {
+                "sinks": ["table"],
+                "categories": ["DML", "QUERY"],
+                "qualified_table_names": ["mv_notify_ks.*"],
+                "roles": ["cassandra"],
+            }
+        ]
+        session = await self.prepare(user="cassandra", password="cassandra", audit_settings={
+            "audit": "table",
+            "audit_categories": "",
+            "audit_keyspaces": "",
+            "audit_tables": "",
+            "audit_rules": rules,
+        }, create_keyspace=False, rf=2)
+        logs = [await self.manager.server_open_log(srv.server_id) for srv in await self.manager.running_servers()]
+
+        session.execute(
+            "CREATE KEYSPACE IF NOT EXISTS mv_notify_ks "
+            "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2}"
+            " AND tablets = {'enabled': false}"
+        )
+        session.execute("CREATE TABLE mv_notify_ks.base_tbl (id int PRIMARY KEY, v text)")
+
+        logger.info("Creating materialized view and waiting for audit table cache notification")
+        marks = [await log.mark() for log in logs]
+        session.execute(
+            "CREATE MATERIALIZED VIEW mv_notify_ks.mv_tbl AS "
+            "SELECT id, v FROM mv_notify_ks.base_tbl WHERE v IS NOT NULL AND id IS NOT NULL "
+            "PRIMARY KEY (v, id)"
+        )
+        for log, mark in zip(logs, marks):
+            await log.wait_for("Audit: table mv_notify_ks.mv_tbl created, adding to known tables", from_mark=mark, timeout=30)
+
+        logger.info("Verifying that a query on the materialized view is audited")
+        session.execute("INSERT INTO mv_notify_ks.base_tbl (id, v) VALUES (1, 'hello')")
+        self.execute_and_validate_new_audit_entry(
+            session,
+            "SELECT * FROM mv_notify_ks.mv_tbl",
+            category="QUERY",
+            table="mv_tbl",
+            ks="mv_notify_ks",
+            user="cassandra",
+        )
+
+        logger.info("Dropping materialized view and waiting for audit table cache notification")
+        marks = [await log.mark() for log in logs]
+        session.execute("DROP MATERIALIZED VIEW mv_notify_ks.mv_tbl")
+        for log, mark in zip(logs, marks):
+            await log.wait_for("Audit: table mv_notify_ks.mv_tbl dropped, removing from known tables", from_mark=mark, timeout=30)
+
+    async def _test_audit_rules_sink_mismatch_warning(self):
+        """Verify that rule sinks must be enabled by the global audit config."""
+        rules = [
+            {
+                "sinks": ["syslog"],
+                "categories": ["DML"],
+                "qualified_table_names": ["mismatch_ks.*"],
+                "roles": ["*"],
+            }
+        ]
+        await self.prepare(audit_settings={
+            "audit": "table",
+            "audit_categories": "",
+            "audit_keyspaces": "",
+            "audit_tables": "",
+            "audit_rules": [],
+        }, create_keyspace=False)
+        srv = (await self.manager.running_servers())[0]
+        server_log = await self.manager.server_open_log(srv.server_id)
+        log_mark = await server_log.mark()
+        await self.manager.server_update_config(srv.server_id, "audit_rules", rules)
+        await server_log.wait_for(
+            "Audit rule 0 references sink 'syslog' but the global 'audit' config does not enable it",
+            from_mark=log_mark,
+            timeout=30)
+
 # AuditBackendTable, no auth, rf=1
 
 async def test_audit_table_noauth(manager: ManagerClient):
@@ -2160,3 +2638,43 @@ async def test_upgrade_preserves_ddl_audit_for_tables(
         table=table,
         ks=keyspace,
     )
+
+
+async def test_audit_rules_matching(manager: ManagerClient):
+    """Tests for audit_rules behaviors not expressible with audit_categories/audit_keyspaces/audit_tables."""
+    await CQLAuditTester(manager)._test_audit_rules_matching()
+
+
+async def test_audit_rules_auth_empty_tables(manager: ManagerClient):
+    """AUTH category with empty qualified_table_names."""
+    await CQLAuditTester(manager)._test_audit_rules_auth_with_empty_tables()
+
+
+async def test_audit_rules_liveupdate(manager: ManagerClient):
+    """audit_rules can be live-updated."""
+    await CQLAuditTester(manager)._test_audit_rules_liveupdate()
+
+
+async def test_audit_rules_sink_routing(manager: ManagerClient):
+    """audit_rules route events to the configured sinks."""
+    await CQLAuditTester(manager)._test_audit_rules_sink_routing()
+
+
+async def test_audit_rules_role_filtering(manager: ManagerClient):
+    """audit_rules match the authenticated role."""
+    await CQLAuditTester(manager)._test_audit_rules_role_filtering()
+
+
+async def test_audit_rules_cache_notifications(manager: ManagerClient):
+    """Role and schema changes update audit rule caches."""
+    await CQLAuditTester(manager)._test_audit_rules_cache_notifications()
+
+
+async def test_audit_rules_cache_notifications_mv(manager: ManagerClient):
+    """Materialized view create/drop updates audit rule caches."""
+    await CQLAuditTester(manager)._test_audit_rules_cache_notifications_mv()
+
+
+async def test_audit_rules_sink_mismatch_warning(manager: ManagerClient):
+    """Rule sinks must be enabled by the global audit config."""
+    await CQLAuditTester(manager)._test_audit_rules_sink_mismatch_warning()

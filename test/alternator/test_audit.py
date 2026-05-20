@@ -6,6 +6,7 @@
 # Audit is a Scylla-only feature, so every test in this file is
 # Scylla-only (will be skipped when running against AWS DynamoDB).
 
+import json
 import time
 
 from botocore.exceptions import ClientError
@@ -169,13 +170,17 @@ def _strip_config_quotes(val):
     return val
 
 
+def _set_audit_rules(cql, rules):
+    cql.execute("UPDATE system.config SET value=%s WHERE name='audit_rules'", (json.dumps(rules),))
+
+
 # A fixture to enable auditing for all audit categories for the duration of the test.
 # The main config flag "audit" is not live updatable, so it is required to be already enabled.
 # After the test, the previous audit settings are restored.
 @pytest.fixture(scope="function")
 def alternator_audit_enabled(cql):
     # Store current values of audit config keys in the system.config table
-    names = ("audit_categories", "audit_keyspaces", "audit_tables")
+    names = ("audit_categories", "audit_keyspaces", "audit_tables", "audit_rules")
     names_in_clause = ", ".join(f"'{n}'" for n in names)
     rows = cql.execute(f"SELECT name, value FROM system.config WHERE name IN ({names_in_clause})")
     original_config_vals = {row.name: row.value for row in rows}
@@ -693,3 +698,65 @@ def test_audit_tables_filtering(dynamodb, cql, alternator_audit_enabled):
             _assert_no_audit_entries_for(new_rows, ks_name=ks_b)
             with pytest.raises(AssertionError):
                 _assert_no_audit_entries_for(new_rows, ks_name=ks_a)  # sanity check
+
+
+# Verify that single-table operations respect audit_rules filtering:
+# only operations on a table matched by a rule are logged.
+def test_audit_rules_basic_filtering(dynamodb, cql, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_a:
+        with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_b:
+            ks_a = f"alternator_{table_a.name}"
+            ks_b = f"alternator_{table_b.name}"
+            # Clear legacy config so only audit_rules controls auditing.
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_categories'", ("",))
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", ("",))
+            _set_audit_rules(cql, [{"sinks": ["table"], "categories": ["DML", "QUERY"],
+                                    "qualified_table_names": [f"{ks_a}.*"], "roles": ["*"]}])
+            before_rows = _get_audit_log_rows(cql)
+
+            # Matched by the rule — should be logged.
+            table_a.put_item(Item={"p": "pk_a"})
+            table_a.get_item(Key={"p": "pk_a"})
+            # Not matched by the rule — should NOT be logged.
+            table_b.put_item(Item={"p": "pk_b"})
+            table_b.get_item(Key={"p": "pk_b"})
+
+            expected = [
+                ("DML", "LOCAL_QUORUM", False, ks_a, table_a.name, ["PutItem", "pk_a"]),
+                ("QUERY", "LOCAL_ONE", False, ks_a, table_a.name, ["GetItem", "pk_a"]),
+            ]
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=len(expected))
+            _assert_audit_entries(new_rows, expected, ks_a, table_a.name)
+            _assert_no_audit_entries_for(new_rows, ks_name=ks_b)
+
+
+# Cross-table batch operations pass empty keyspace to the audit path,
+# bypassing qualified_table_names filtering in audit_rules. Verify that a
+# BatchWriteItem is logged even when the rule only targets one of the
+# batch's tables.
+def test_audit_rules_batch_bypass(dynamodb, cql, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_a:
+        with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_b:
+            ks_a = f"alternator_{table_a.name}"
+            client = table_a.meta.client
+            # Clear legacy config so only audit_rules controls auditing.
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_categories'", ("",))
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", ("",))
+            _set_audit_rules(cql, [{"sinks": ["table"], "categories": ["DML", "QUERY"],
+                                    "qualified_table_names": [f"{ks_a}.*"], "roles": ["*"]}])
+            before_rows = _get_audit_log_rows(cql)
+
+            # Batch spanning two tables — logged regardless of qualified_table_names
+            # because the empty keyspace bypasses the table filter in the rule.
+            client.batch_write_item(RequestItems={
+                table_a.name: [{"PutRequest": {"Item": {"p": "batch_a"}}}],
+                table_b.name: [{"PutRequest": {"Item": {"p": "batch_b"}}}],
+            })
+
+            expected = [
+                ("DML", "LOCAL_QUORUM", False, "", f"{table_a.name}|{table_b.name}", ["BatchWriteItem"]),
+            ]
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=len(expected))
+            _assert_audit_entries(new_rows, expected)
+            _assert_no_audit_entries_for(new_rows, ks_name=f"alternator_{table_a.name}")
+            _assert_no_audit_entries_for(new_rows, ks_name=f"alternator_{table_b.name}")
