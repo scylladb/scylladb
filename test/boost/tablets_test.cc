@@ -3251,6 +3251,16 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_shrinks_respecting_rack_allocation)
             stats.set_tablet_sizes(tmptr, t3_2, 1);
         }
 
+        // Provide activity data so activity-weighted allocation can proceed.
+        stats.set_table_activity(t1_1, 0, 1.0);
+        stats.set_table_activity(t1_2, 0, 1.0);
+        stats.set_table_activity(t1_3, 0, 1.0);
+        stats.set_table_activity(t1_4, 0, 1.0);
+        stats.set_table_activity(t1_5, 0, 1.0);
+        stats.set_table_activity(t2_1, 0, 1.0);
+        stats.set_table_activity(t3_1, 0, 1.0);
+        stats.set_table_activity(t3_2, 0, 1.0);
+
         rebalance_tablets(e, &stats);
 
         auto& tmeta = stm.get()->tablets();
@@ -5191,22 +5201,26 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
         // min_per_shard_tablet_count wants 5 * 3 = 15 (16) tablets
         e.execute_cql(fmt::format("ALTER TABLE {}.table1 "
                                   "WITH tablets = {{'min_per_shard_tablet_count': 5}}", ks_name1)).get();
+        load_stats.set_table_activity(table1, 0, 1.0);
         rebalance_tablets(e, &load_stats);
         BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
 
         // Check that hint can be dropped.
         e.execute_cql(fmt::format("ALTER TABLE {}.table1 WITH tablets = {{}}", ks_name1)).get();
+        load_stats.set_table_activity(table1, 0, 1.0);
         rebalance_tablets(e, &load_stats);
         BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
 
         // Default kicks in if keyspace setting and hint are missing.
         e.execute_cql(format("ALTER KEYSPACE {} with tablets = {{'enabled': true}}", ks_name1, dc)).get();
+        load_stats.set_table_activity(table1, 0, 1.0);
         rebalance_tablets(e, &load_stats);
         BOOST_REQUIRE_EQUAL(get_tablet_count(), 32);
 
         // initial scale can be live-updated.
         auto& cfg = e.db_config();
         cfg.tablets_initial_scale_factor(5);
+        load_stats.set_table_activity(table1, 0, 1.0);
         rebalance_tablets(e, &load_stats);
         BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
 
@@ -5214,17 +5228,20 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
 
         // merge
         cfg.tablets_per_shard_goal(1);
+        load_stats.set_table_activity(table1, 0, 1.0);
         rebalance_tablets(e, &load_stats);
         BOOST_REQUIRE_EQUAL(get_tablet_count(), 4);
 
         // split
         cfg.tablets_per_shard_goal(100);
+        load_stats.set_table_activity(table1, 0, 1.0);
         rebalance_tablets(e, &load_stats);
         BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
 
         // initial scale can be smaller than 1.
         // 0.5 tablet/shard * 3 shards = 1.5 tablets =~ 2 tablets.
         cfg.tablets_initial_scale_factor(0.5);
+        load_stats.set_table_activity(table1, 0, 1.0);
         rebalance_tablets(e, &load_stats);
         BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
     }, cfg).get();
@@ -5265,6 +5282,11 @@ SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) 
         auto& stm = e.shared_token_metadata().local();
 
         load_stats.set_default_tablet_sizes(stm.get());
+
+        // Provide activity data so Phase 3 can compress.
+        for (auto& table : tables) {
+            load_stats.set_table_activity(table, 0, 1.0);
+        }
 
         {
             load_sketch load(stm.get(), load_stats.get());
@@ -7158,6 +7180,161 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_dropped_table) {
             BOOST_REQUIRE_NE(mig.tablet.table, table1);
         }
     }).get();
+}
+
+// Activity-weighted tablet allocation tests
+
+SEASTAR_THREAD_TEST_CASE(test_activity_weighted_idle_tables_compress_more) {
+    // Active table keeps more budget when goal is exceeded.
+    cql_test_config cfg{};
+    cfg.db_config->tablets_per_shard_goal.set(10);
+    cfg.db_config->tablets_initial_scale_factor.set(0);
+    cfg.db_config->tablets_activity_weighted_allocation_enabled.set(true);
+    cfg.db_config->tablets_idle_table_rate_threshold.set(0.1);
+    cfg.db_config->tablets_idle_percentile.set(75);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 1);
+
+        auto& stats = topo.get_shared_load_stats();
+        auto& stm = e.shared_token_metadata().local();
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 8);
+
+        auto t1 = add_table(e, ks_name).get();
+        auto t2 = add_table(e, ks_name).get();
+        auto t3 = add_table(e, ks_name).get();
+        auto t4 = add_table(e, ks_name).get();
+
+        auto tmptr = stm.get();
+        stats.set_tablet_sizes(tmptr, t1, 1);
+        stats.set_tablet_sizes(tmptr, t2, 1);
+        stats.set_tablet_sizes(tmptr, t3, 1);
+        stats.set_tablet_sizes(tmptr, t4, 1);
+
+        stats.set_table_activity(t1, 0, 1000.0);
+        stats.set_table_activity(t2, 0, 0.0);
+        stats.set_table_activity(t3, 0, 0.0);
+        stats.set_table_activity(t4, 0, 0.0);
+
+        apply_resize_decisions(e, stats);
+
+        auto& tmeta = stm.get()->tablets();
+        auto t1_decision = tmeta.get_tablet_map(t1).resize_decision();
+        auto t2_decision = tmeta.get_tablet_map(t2).resize_decision();
+        auto t3_decision = tmeta.get_tablet_map(t3).resize_decision();
+        auto t4_decision = tmeta.get_tablet_map(t4).resize_decision();
+        // Active table should NOT get a merge decision.
+        BOOST_REQUIRE(!t1_decision.is_merge());
+        // At least one idle table should get a merge decision.
+        BOOST_REQUIRE(t2_decision.is_merge() || t3_decision.is_merge() || t4_decision.is_merge());
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_activity_weighted_disabled_uses_uniform) {
+    cql_test_config cfg{};
+    cfg.db_config->tablets_per_shard_goal.set(10);
+    cfg.db_config->tablets_initial_scale_factor.set(0);
+    cfg.db_config->tablets_activity_weighted_allocation_enabled.set(false);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 1);
+
+        auto& stats = topo.get_shared_load_stats();
+        auto& stm = e.shared_token_metadata().local();
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 8);
+
+        auto t1 = add_table(e, ks_name).get();
+        auto t2 = add_table(e, ks_name).get();
+
+        auto tmptr = stm.get();
+        stats.set_tablet_sizes(tmptr, t1, 1);
+        stats.set_tablet_sizes(tmptr, t2, 1);
+
+        stats.set_table_activity(t1, 0, 1000.0);
+        stats.set_table_activity(t2, 0, 0.0);
+
+        apply_resize_decisions(e, stats);
+
+        auto& tmeta = stm.get()->tablets();
+        auto t1_decision = tmeta.get_tablet_map(t1).resize_decision();
+        auto t2_decision = tmeta.get_tablet_map(t2).resize_decision();
+        // Uniform: both tables get the same decision.
+        BOOST_REQUIRE_EQUAL(t1_decision.is_merge(), t2_decision.is_merge());
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_activity_weighted_missing_data_pins_counts) {
+    cql_test_config cfg{};
+    cfg.db_config->tablets_per_shard_goal.set(10);
+    cfg.db_config->tablets_initial_scale_factor.set(0);
+    cfg.db_config->tablets_activity_weighted_allocation_enabled.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 1);
+
+        auto& stats = topo.get_shared_load_stats();
+        auto& stm = e.shared_token_metadata().local();
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 8);
+
+        auto t1 = add_table(e, ks_name).get();
+        auto t2 = add_table(e, ks_name).get();
+
+        auto tmptr = stm.get();
+        stats.set_tablet_sizes(tmptr, t1, 1);
+        stats.set_tablet_sizes(tmptr, t2, 1);
+
+        // No table_activity: pin to current.
+        apply_resize_decisions(e, stats);
+
+        auto& tmeta = stm.get()->tablets();
+        auto t1_decision = tmeta.get_tablet_map(t1).resize_decision();
+        auto t2_decision = tmeta.get_tablet_map(t2).resize_decision();
+        BOOST_REQUIRE(!t1_decision.is_merge());
+        BOOST_REQUIRE(!t1_decision.is_split());
+        BOOST_REQUIRE(!t2_decision.is_merge());
+        BOOST_REQUIRE(!t2_decision.is_split());
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_activity_weighted_all_tables_equally_active) {
+    cql_test_config cfg{};
+    cfg.db_config->tablets_per_shard_goal.set(10);
+    cfg.db_config->tablets_initial_scale_factor.set(0);
+    cfg.db_config->tablets_activity_weighted_allocation_enabled.set(true);
+    cfg.db_config->tablets_idle_table_rate_threshold.set(0.1);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 1);
+
+        auto& stats = topo.get_shared_load_stats();
+        auto& stm = e.shared_token_metadata().local();
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 8);
+
+        auto t1 = add_table(e, ks_name).get();
+        auto t2 = add_table(e, ks_name).get();
+
+        auto tmptr = stm.get();
+        stats.set_tablet_sizes(tmptr, t1, 1);
+        stats.set_tablet_sizes(tmptr, t2, 1);
+
+        stats.set_table_activity(t1, 0, 1000.0);
+        stats.set_table_activity(t2, 0, 1000.0);
+
+        apply_resize_decisions(e, stats);
+
+        auto& tmeta = stm.get()->tablets();
+        auto t1_decision = tmeta.get_tablet_map(t1).resize_decision();
+        auto t2_decision = tmeta.get_tablet_map(t2).resize_decision();
+        BOOST_REQUIRE_EQUAL(t1_decision.is_merge(), t2_decision.is_merge());
+    }, cfg).get();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

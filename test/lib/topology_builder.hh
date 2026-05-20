@@ -72,6 +72,10 @@ struct shared_load_stats {
         }).get();
         set_size(table, tablet_size * tmap.tablet_count());
     }
+
+    void set_table_activity(table_id table, double read_rate, double write_rate) {
+        stats.table_activity[table] = locator::table_activity_stats{read_rate, write_rate};
+    }
 };
 
 /// Modifies topology inside a given cql_test_env.
