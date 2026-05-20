@@ -255,6 +255,108 @@ def test_result_returned_by_vector_store_is_rescored(cql, test_keyspace, vector_
             assert len(rows[0]) == 1
 
 
+# Verifies that per-request rescoring option in the ANN() options map overrides
+# the index-level rescoring setting. Parametrized by index_rescoring to test
+# both directions: disabling rescoring on a rescoring-enabled index, and
+# enabling rescoring on a rescoring-disabled index.
+# Tests literal, bound, UNSET and empty map paths.
+#
+# Reproduces SCYLLADB-184.
+@pytest.mark.xfail(reason="per-request rescoring not yet implemented (SCYLLADB-184)")
+@pytest.mark.parametrize("index_rescoring", ["true", "false"])
+def test_per_request_rescoring_override(cql, test_keyspace, vector_store_mock, index_rescoring):
+    for func_name, data in TEST_DATA.items():
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"similarity_function": func_name, "rescoring": index_rescoring}) as table:
+            override_value = "false" if index_rescoring == "true" else "true"
+            index_is_rescored = (index_rescoring == "true")
+
+            # Expected id orders
+            rescored_order = [d_row.id for d_row in data[:2]]
+            non_rescored_order = list(reversed([d_row.id for d_row in data]))[:2]
+
+            prepared = cql.prepare(
+                f"SELECT id FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, ?) LIMIT 2")
+
+            # Literal: override flips the index-level behavior
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            rows = list(cql.execute(
+                f"SELECT id FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, "
+                f"{{'rescoring': '{override_value}'}}) LIMIT 2"))
+            expected = rescored_order if not index_is_rescored else non_rescored_order
+            assert [row.id for row in rows] == expected
+            assert len(rows[0]) == 1
+
+            # Bound: override flips the index-level behavior
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            rows = list(cql.execute(prepared, [{'rescoring': override_value}]))
+            assert [row.id for row in rows] == expected
+            assert len(rows[0]) == 1
+
+            # UNSET bind → falls back to index-level setting
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            rows = list(cql.execute(prepared, [UNSET_VALUE]))
+            fallback = rescored_order if index_is_rescored else non_rescored_order
+            assert [row.id for row in rows] == fallback
+            assert len(rows[0]) == 1
+
+            # Empty map {} → falls back to index-level setting
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            rows = list(cql.execute(prepared, [{}]))
+            assert [row.id for row in rows] == fallback
+            assert len(rows[0]) == 1
+
+
+# Verifies that invalid per-request rescoring values in the ANN() options
+# map are rejected with InvalidRequest.
+#
+# Reproduces SCYLLADB-184.
+@pytest.mark.xfail(reason="per-request rescoring not yet implemented (SCYLLADB-184)")
+def test_per_request_rescoring_invalid_values(cql, test_keyspace):
+    schema = "id int primary key, embedding vector<float, 2>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index'")
+
+        prepared = cql.prepare(
+            f"SELECT id FROM {table} ORDER BY ANN(embedding, [0.5, 0.5], ?) LIMIT 2")
+
+        # Values that are not valid boolean strings → InvalidRequest.
+        invalid_values = ['1', '0', '1.0', 'yes', 'enabled', 'on', 'off', '']
+        for value in invalid_values:
+            # Literal
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"SELECT id FROM {table} ORDER BY ANN(embedding, [0.5, 0.5], "
+                            f"{{'rescoring': '{value}'}}) LIMIT 2")
+            # Bound
+            with pytest.raises(InvalidRequest):
+                cql.execute(prepared, [{'rescoring': value}])
+
+
+# Verifies that per-request rescoring and oversampling can be combined in a
+# single ANN() options map.
+#
+# Reproduces SCYLLADB-553, SCYLLADB-184.
+@pytest.mark.xfail(reason="per-request ANN options not yet implemented (SCYLLADB-553, SCYLLADB-184)")
+def test_per_request_rescoring_and_oversampling_combined(cql, test_keyspace, vector_store_mock):
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data,
+            extra_options={"oversampling": "1.0", "rescoring": "false"}) as table:
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+
+        rows = list(cql.execute(
+            f"SELECT id FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, "
+            f"{{'rescoring': 'true', 'oversampling': '3.0'}}) LIMIT 2"))
+
+        # Verify oversampling: limit sent to vector store = ceil(3.0 * 2) = 6
+        actual_limit = json.loads(vector_store_mock.ann_requests[-1].body)["limit"]
+        assert actual_limit == 6
+
+        # Verify rescoring: results are in rescored (best similarity) order
+        expected = data[:2]
+        assert [row.id for row in rows] == [d_row.id for d_row in expected]
+        assert len(rows[0]) == 1
+
+
 # Verifies that f32 quantization disables rescoring -- results keep the
 # vector store's original (reversed) order.
 @pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
@@ -268,6 +370,26 @@ def test_f32_quantization_disables_rescoring(cql, test_keyspace, vector_store_mo
             f"SELECT id FROM {table} {order_by} LIMIT 2"))
 
         # Without rescoring the vector store's reversed order is preserved.
+        expected = list(reversed(data))[:2]
+        assert [row.id for row in rows] == [d_row.id for d_row in expected]
+        assert len(rows[0]) == 1
+
+
+# Verifies that per-request rescoring=true cannot override f32 quantization —
+# f32 always disables rescoring regardless of per-request options.
+#
+# Reproduces SCYLLADB-184.
+@pytest.mark.xfail(reason="per-request rescoring not yet implemented (SCYLLADB-184)")
+def test_f32_quantization_ignores_per_request_rescoring(cql, test_keyspace, vector_store_mock):
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data,
+            extra_options={"quantization": "f32"}) as table:
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        rows = list(cql.execute(
+            f"SELECT id FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, "
+            f"{{'rescoring': 'true'}}) LIMIT 2"))
+
+        # f32 quantization overrides per-request rescoring; order stays reversed.
         expected = list(reversed(data))[:2]
         assert [row.id for row in rows] == [d_row.id for d_row in expected]
         assert len(rows[0]) == 1
@@ -298,6 +420,30 @@ def test_similarity_function_returns_correctly_rescored_results(cql, test_keyspa
                 assert len(rows[0]) == 2
 
 
+# Verifies that per-request rescoring=true enables rescoring on an index with
+# rescoring=false, and the similarity function values are correctly computed.
+#
+# Reproduces SCYLLADB-184.
+@pytest.mark.xfail(reason="per-request rescoring not yet implemented (SCYLLADB-184)")
+def test_per_request_rescoring_with_similarity_functions(cql, test_keyspace, vector_store_mock):
+    for func_name, data in TEST_DATA.items():
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"similarity_function": func_name, "rescoring": "false"}) as table:
+            for func_args in [f"embedding, {ANN_QUERY_VECTOR_LITERAL}",
+                              f"{ANN_QUERY_VECTOR_LITERAL}, embedding"]:
+                vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+                rows = list(cql.execute(
+                    f"SELECT id, similarity_{func_name}({func_args}) AS similarity FROM {table} "
+                    f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, "
+                    f"{{'rescoring': 'true'}}) LIMIT 2"))
+
+                expected = data[:2]
+                assert [row.id for row in rows] == [d_row.id for d_row in expected]
+                for row, d_row in zip(rows, expected):
+                    assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
+                assert len(rows[0]) == 2
+
+
 # Verifies that SELECT * with rescoring returns rows in the correct similarity
 # order with correct embedding values. Tests a slightly different processing
 # path compared to the explicit column SELECT in test_result_returned_by_vector_store_is_rescored.
@@ -310,6 +456,27 @@ def test_wildcard_select_is_correctly_rescored(cql, test_keyspace, vector_store_
             order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
             rows = list(cql.execute(
                 f"SELECT * FROM {table} {order_by} LIMIT 2"))
+
+            expected = data[:2]
+            assert [row.id for row in rows] == [d_row.id for d_row in expected]
+            for row, d_row in zip(rows, expected):
+                assert list(row.embedding) == pytest.approx(d_row.embedding)
+            assert len(rows[0]) == 2
+
+
+# Verifies that per-request rescoring=true with SELECT * returns rows in the
+# correct rescored order with correct embedding values.
+#
+# Reproduces SCYLLADB-184.
+@pytest.mark.xfail(reason="per-request rescoring not yet implemented (SCYLLADB-184)")
+def test_wildcard_select_with_per_request_rescoring(cql, test_keyspace, vector_store_mock):
+    for func_name, data in TEST_DATA.items():
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"similarity_function": func_name, "rescoring": "false"}) as table:
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            rows = list(cql.execute(
+                f"SELECT * FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, "
+                f"{{'rescoring': 'true'}}) LIMIT 2"))
 
             expected = data[:2]
             assert [row.id for row in rows] == [d_row.id for d_row in expected]
@@ -388,6 +555,38 @@ def test_filters_invalid_similarity_scores_in_rescored_results(cql, test_keyspac
                 assert [row.id for row in rows] == [1]
             else:
                 # dot_product: [0, 0] produces 0.5 (valid); [INFINITY, ..] is invalid.
+                assert [row.id for row in rows] == [1, 14]
+            assert len(rows[0]) == 1
+
+
+# Verifies that per-request rescoring=true correctly filters invalid vectors
+# (NULL, NaN, INFINITY, [0,0]) when rescoring is enabled via per-request
+# override on an index with rescoring=false.
+#
+# Reproduces SCYLLADB-184.
+@pytest.mark.xfail(reason="per-request rescoring not yet implemented (SCYLLADB-184)")
+def test_per_request_rescoring_filters_invalid_vectors(cql, test_keyspace, vector_store_mock):
+    for func_name, data in TEST_DATA.items():
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"similarity_function": func_name, "rescoring": "false"}) as table:
+            cql.execute(f"INSERT INTO {table} (id, embedding) VALUES (17, NULL)")
+            cql.execute(f"INSERT INTO {table} (id, embedding) VALUES (16, [0.1, NaN])")
+            cql.execute(f"INSERT INTO {table} (id, embedding) VALUES (15, [INFINITY, 0.1])")
+            cql.execute(f"INSERT INTO {table} (id, embedding) VALUES (14, [0, 0])")
+
+            vector_store_mock.set_next_ann_response(200, json.dumps({
+                "primary_keys": {"id": [55, 17, 16, 15, 14, 1]},
+                "similarity_scores": [0, 0, 0, 0, 0, 0],
+            }))
+            rows = list(cql.execute(
+                f"SELECT id FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, "
+                f"{{'rescoring': 'true'}}) LIMIT 4"))
+
+            if func_name == "euclidean":
+                assert [row.id for row in rows] == [1, 14, 15]
+            elif func_name == "cosine":
+                assert [row.id for row in rows] == [1]
+            else:
                 assert [row.id for row in rows] == [1, 14]
             assert len(rows[0]) == 1
 
