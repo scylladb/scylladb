@@ -29,23 +29,27 @@ import re
 def rest_api_url(cql):
     return f'http://{cql.cluster.contact_points[0]}:10000'
 
-# Check whether the REST API at port 10000 is available - if not we will
-# fall back to using an external "nodetool" program.
-# We only check this once per REST API URL, and cache the decision.
-checked_rest_api = {}
-def has_rest_api(cql):
+# Cache of per-CQL-URL Scylla identity, to avoid repeated system table queries.
+_is_scylla_cache = {}
+
+def is_scylla(cql):
+    """Return True if the cluster behind cql is Scylla (not Cassandra).
+    We recognize Scylla by the presence of a system table whose name contains
+    'scylla', which is the same heuristic used in test/cqlpy/util.py.
+    The result is cached per contact-point URL."""
     url = rest_api_url(cql)
-    if not url in checked_rest_api:
-        # Scylla's REST API does not have an official "ping" command,
-        # so we just list the keyspaces as a (usually) short operation
-        try:
-            # Use a short timeout to give up quickly if the REST API port
-            # is blocked in a way that the request can just hang forever.
-            ok = requests.get(f'{url}/column_family/name/keyspace', timeout=1).ok
-        except:
-            ok = False
-        checked_rest_api[url] = ok
-    return checked_rest_api[url]
+    if url not in _is_scylla_cache:
+        names = [row.table_name for row in
+                 cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+        _is_scylla_cache[url] = any('scylla' in name for name in names)
+    return _is_scylla_cache[url]
+
+def has_rest_api(cql):
+    """Return True if the cluster behind cql is Scylla (and therefore exposes
+    the REST API).  This replaces the old availability-probe approach: instead
+    of trying to reach port 10000 and caching the result, we detect the cluster
+    identity once via CQL, which is reliable and not subject to startup races."""
+    return is_scylla(cql)
 
 
 # Find the external "nodetool" executable (can be overridden by the NODETOOL
