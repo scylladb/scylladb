@@ -1,6 +1,6 @@
 #
 # Copyright (C) 2011-present The Apache Software Foundation
-# Copyright (C) 2025-present ScyllaDB
+# Copyright (C) 2026-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from cassandra import ConsistencyLevel, InvalidRequest, Unauthorized
+from cassandra.policies import RetryPolicy
 from cassandra.query import SimpleStatement
 
 from dtest_class import Tester, create_cf, create_ks
@@ -30,11 +31,29 @@ from tools.misc import ImmutableMapping
 logger = logging.getLogger(__name__)
 
 
+class NoWriteTimeoutRetryPolicy(RetryPolicy):
+    """Disable retries on WriteTimeout to prevent double-applying counter updates.
+
+    Counter mutations are not idempotent, so retrying a timed-out write
+    that was actually applied results in overcounting.
+    """
+    def on_write_timeout(self, query, consistency, write_type, required_responses, received_responses, retry_num):
+        return self.RETHROW, None
+
+    def on_request_error(self, query, consistency, error, retry_num):
+        return self.RETHROW, None
+
+
 class TestCounters(Tester):
     @pytest.fixture(autouse=True)
     def fixture_add_additional_log_patterns(self, fixture_dtest_setup):
         fixture_dtest_setup.ignore_log_patterns += [
             r"raft_topology - raft_topology_cmd wait_for_ip failed with: seastar::sleep_aborted",
+            r"raft_topology - raft_topology_cmd stream_ranges failed with",
+            r"Startup failed: seastar::rpc::remote_verb_error \(seastar::abort_requested_exception",
+            r"Startup failed: seastar::rpc::closed_error",
+            r"raft::transport_error.*connection is closed",
+            r"CDC generation publisher fiber got error",
         ]
 
     def test_simple_increment(self):
@@ -42,7 +61,7 @@ class TestCounters(Tester):
         cluster = self.cluster
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
         session = self.patient_cql_connection(nodes[0])
@@ -76,7 +95,7 @@ class TestCounters(Tester):
 
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=2)).start()
+        cluster.populate(generate_cluster_topology(rack_num=2)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
         session = self.patient_cql_connection(nodes[0])
@@ -144,9 +163,9 @@ class TestCounters(Tester):
         cluster = self.cluster
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         node1, _node2, _node3 = cluster.nodelist()
-        session = self.patient_cql_connection(node1)
+        session = self.patient_cql_connection(node1, retry_policy=NoWriteTimeoutRetryPolicy())
         create_ks(session, "counter_tests", 3)
 
         stmt = """
@@ -244,7 +263,7 @@ class TestCounters(Tester):
 
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         node1, _node2, _node3 = cluster.nodelist()
         session = self.patient_cql_connection(node1)
         create_ks(session, "counter_tests", 3)
@@ -355,14 +374,14 @@ class TestCounters(Tester):
         cluster = self.cluster
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
-        session = self.patient_cql_connection(nodes[0])
+        session = self.patient_cql_connection(nodes[0], retry_policy=NoWriteTimeoutRetryPolicy())
         create_ks(session, "ks", 3)
         create_cf(session, "cf", validation="CounterColumnType", columns={"c": "counter"})
 
-        sessions = [self.patient_cql_connection(node, "ks") for node in nodes]
+        sessions = [self.patient_cql_connection(node, "ks", retry_policy=NoWriteTimeoutRetryPolicy()) for node in nodes]
         nb_increment = 500
         if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
             nb_increment //= 10
@@ -408,14 +427,14 @@ class TestCounters(Tester):
 
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
-        session = self.patient_cql_connection(nodes[0])
+        session = self.patient_cql_connection(nodes[0], retry_policy=NoWriteTimeoutRetryPolicy())
         create_ks(session, "ks", 3)
         create_cf(session, "cf", validation="CounterColumnType", columns={"c": "counter"})
 
-        sessions = [self.patient_cql_connection(node, "ks") for node in nodes]
+        sessions = [self.patient_cql_connection(node, "ks", retry_policy=NoWriteTimeoutRetryPolicy()) for node in nodes]
         nb_increment = 500
         if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
             nb_increment //= 10
@@ -618,6 +637,17 @@ class TestCounters(Tester):
 
 
 class TestCountersOnMultipleNodes(Tester):
+    @pytest.fixture(autouse=True)
+    def fixture_add_additional_log_patterns(self, fixture_dtest_setup):
+        fixture_dtest_setup.ignore_log_patterns += [
+            r"raft_topology - raft_topology_cmd wait_for_ip failed with: seastar::sleep_aborted",
+            r"raft_topology - raft_topology_cmd stream_ranges failed with",
+            r"Startup failed: seastar::rpc::remote_verb_error \(seastar::abort_requested_exception",
+            r"Startup failed: seastar::rpc::closed_error",
+            r"raft::transport_error.*connection is closed",
+            r"CDC generation publisher fiber got error",
+        ]
+
     @pytest.fixture(scope="function", autouse=True)
     def fixture_dtest_setup_overrides(self, dtest_config):
         dtest_setup_overrides = DTestSetupOverrides()
