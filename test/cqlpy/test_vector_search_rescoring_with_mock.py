@@ -21,6 +21,11 @@ from .test_vector_search_with_vector_store_mock import vector_store_mock, _vecto
 from .util import new_test_table
 
 
+# All tests in this file require tablet support (vector search with vector_index).
+@pytest.fixture(scope="function", autouse=True)
+def require_tablets(skip_without_tablets):
+    pass
+
 # ---------------------------------------------------------------------------
 # Shared test data
 # ---------------------------------------------------------------------------
@@ -63,6 +68,17 @@ ANN_QUERY_VECTOR_LITERAL = str(ANN_QUERY_VECTOR)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+ANN_SYNTAX = [
+    pytest.param("cassandra"),
+    pytest.param("function", marks=pytest.mark.xfail(reason="function-style ANN syntax not yet implemented (SCYLLADB-2210)")),
+]
+
+def order_by_ann(column, vector, syntax):
+    """Build ORDER BY clause for ANN query in Cassandra or function-style syntax."""
+    if syntax == "cassandra":
+        return f"ORDER BY {column} ANN OF {vector}"
+    return f"ORDER BY ANN({column}, {vector})"
 
 def reversed_ann_response(data):
     """Return a JSON mock ANN response with row ids in reversed order and
@@ -111,12 +127,14 @@ def rescoring_test_table(cql, keyspace, data, extra_options=None):
 # ---------------------------------------------------------------------------
 
 # Verifies that the LIMIT sent to the vector store is ceil(oversampling * cql_limit).
-def test_oversampling_multiplies_limit_for_vector_store_query(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_oversampling_multiplies_limit_for_vector_store_query(cql, test_keyspace, vector_store_mock, ann_syntax):
     schema = "id int primary key, embedding vector<float, 3>"
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index' WITH OPTIONS = {{'oversampling': '3.4'}}")
 
-        cql.execute(f"SELECT * FROM {table} ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 3")
+        order_by = order_by_ann("embedding", "[0.1, 0.2, 0.3]", ann_syntax)
+        cql.execute(f"SELECT * FROM {table} {order_by} LIMIT 3")
 
         requests = vector_store_mock.ann_requests
         assert requests, "Expected at least one ANN request to the vector store"
@@ -126,7 +144,8 @@ def test_oversampling_multiplies_limit_for_vector_store_query(cql, test_keyspace
 
 # Verifies that when the vector store returns more results than the CQL LIMIT,
 # the output is trimmed to the CQL LIMIT.
-def test_oversampled_vector_store_results_are_limited_to_cql_limit(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_oversampled_vector_store_results_are_limited_to_cql_limit(cql, test_keyspace, vector_store_mock, ann_syntax):
     schema = "id int primary key, embedding vector<float, 3>"
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index' WITH OPTIONS = {{'oversampling': '2'}}")
@@ -137,20 +156,23 @@ def test_oversampled_vector_store_results_are_limited_to_cql_limit(cql, test_key
             "primary_keys": {"id": [1, 2]},
             "similarity_scores": [0, 0],
         }))
-        rows = list(cql.execute(f"SELECT id FROM {table} ORDER BY embedding ANN OF [1, 1, 1] LIMIT 1"))
+        order_by = order_by_ann("embedding", "[1, 1, 1]", ann_syntax)
+        rows = list(cql.execute(f"SELECT id FROM {table} {order_by} LIMIT 1"))
 
         assert len(rows) == 1
 
 
 # Verifies that reversed ANN order is rescored back to expected similarity order.
 # Runs for all three similarity functions.
-def test_result_returned_by_vector_store_is_rescored(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_result_returned_by_vector_store_is_rescored(cql, test_keyspace, vector_store_mock, ann_syntax):
     for func_name, data in TEST_DATA.items():
         with rescoring_test_table(cql, test_keyspace, data,
                 extra_options={"similarity_function": func_name}) as table:
             vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
             rows = list(cql.execute(
-                f"SELECT id FROM {table} ORDER BY embedding ANN OF {ANN_QUERY_VECTOR_LITERAL} LIMIT 2"))
+                f"SELECT id FROM {table} {order_by} LIMIT 2"))
 
             expected = data[:2]
             assert [row.id for row in rows] == [d_row.id for d_row in expected]
@@ -159,13 +181,15 @@ def test_result_returned_by_vector_store_is_rescored(cql, test_keyspace, vector_
 
 # Verifies that f32 quantization disables rescoring -- results keep the
 # vector store's original (reversed) order.
-def test_f32_quantization_disables_rescoring(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_f32_quantization_disables_rescoring(cql, test_keyspace, vector_store_mock, ann_syntax):
     data = TEST_DATA["cosine"]
     with rescoring_test_table(cql, test_keyspace, data,
             extra_options={"quantization": "f32"}) as table:
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
         rows = list(cql.execute(
-            f"SELECT id FROM {table} ORDER BY embedding ANN OF {ANN_QUERY_VECTOR_LITERAL} LIMIT 2"))
+            f"SELECT id FROM {table} {order_by} LIMIT 2"))
 
         # Without rescoring the vector store's reversed order is preserved.
         expected = list(reversed(data))[:2]
@@ -177,7 +201,8 @@ def test_f32_quantization_disables_rescoring(cql, test_keyspace, vector_store_mo
 # rescored (reordered) results.
 # Kept separate from test_result_returned_by_vector_store_is_rescored to ensure
 # the similarity-column and non-similarity-column code paths are both tested.
-def test_similarity_function_returns_correctly_rescored_results(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_similarity_function_returns_correctly_rescored_results(cql, test_keyspace, vector_store_mock, ann_syntax):
     for func_name, data in TEST_DATA.items():
         with rescoring_test_table(cql, test_keyspace, data,
                 extra_options={"similarity_function": func_name}) as table:
@@ -185,9 +210,10 @@ def test_similarity_function_returns_correctly_rescored_results(cql, test_keyspa
             for func_args in [f"embedding, {ANN_QUERY_VECTOR_LITERAL}",
                               f"{ANN_QUERY_VECTOR_LITERAL}, embedding"]:
                 vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+                order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
                 rows = list(cql.execute(
                     f"SELECT id, similarity_{func_name}({func_args}) AS similarity FROM {table} "
-                    f"ORDER BY embedding ANN OF {ANN_QUERY_VECTOR_LITERAL} LIMIT 2"))
+                    f"{order_by} LIMIT 2"))
 
                 expected = data[:2]
                 assert [row.id for row in rows] == [d_row.id for d_row in expected]
@@ -199,13 +225,15 @@ def test_similarity_function_returns_correctly_rescored_results(cql, test_keyspa
 # Verifies that SELECT * with rescoring returns rows in the correct similarity
 # order with correct embedding values. Tests a slightly different processing
 # path compared to the explicit column SELECT in test_result_returned_by_vector_store_is_rescored.
-def test_wildcard_select_is_correctly_rescored(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_wildcard_select_is_correctly_rescored(cql, test_keyspace, vector_store_mock, ann_syntax):
     for func_name, data in TEST_DATA.items():
         with rescoring_test_table(cql, test_keyspace, data,
                 extra_options={"similarity_function": func_name}) as table:
             vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
             rows = list(cql.execute(
-                f"SELECT * FROM {table} ORDER BY embedding ANN OF {ANN_QUERY_VECTOR_LITERAL} LIMIT 2"))
+                f"SELECT * FROM {table} {order_by} LIMIT 2"))
 
             expected = data[:2]
             assert [row.id for row in rows] == [d_row.id for d_row in expected]
@@ -217,14 +245,16 @@ def test_wildcard_select_is_correctly_rescored(cql, test_keyspace, vector_store_
 # Verifies that when the similarity function argument in SELECT differs from the
 # ANN ordering vector, the correct similarity values are computed. Uses a
 # prepared statement so the argument difference is only visible at execution time.
-def test_select_similarity_function_other_than_ann_ordering(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_select_similarity_function_other_than_ann_ordering(cql, test_keyspace, vector_store_mock, ann_syntax):
     data = TEST_DATA["cosine"]
     with rescoring_test_table(cql, test_keyspace, data) as table:
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
 
+        order_by = order_by_ann("embedding", "?", ann_syntax)
         prepared = cql.prepare(
             f"SELECT id, similarity_cosine(embedding, ?) AS similarity FROM {table} "
-            f"ORDER BY embedding ANN OF ? LIMIT 2")
+            f"{order_by} LIMIT 2")
         # Compute similarity to data[1].embedding while ordering by ANN_QUERY_VECTOR.
         rows = list(cql.execute(prepared, [data[1].embedding, ANN_QUERY_VECTOR]))
 
@@ -251,7 +281,8 @@ def test_select_similarity_function_other_than_ann_ordering(cql, test_keyspace, 
 #
 # Reproduces SCYLLADB-2231
 @pytest.mark.xfail(reason="SCYLLADB-2231 rescoring does not yet filter rows with invalid similarity scores (NaN)")
-def test_filters_invalid_similarity_scores_in_rescored_results(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_filters_invalid_similarity_scores_in_rescored_results(cql, test_keyspace, vector_store_mock, ann_syntax):
     for func_name, data in TEST_DATA.items():
         with rescoring_test_table(cql, test_keyspace, data,
                 extra_options={"similarity_function": func_name}) as table:
@@ -269,8 +300,9 @@ def test_filters_invalid_similarity_scores_in_rescored_results(cql, test_keyspac
                 "primary_keys": {"id": [55, 17, 16, 15, 14, 1]},
                 "similarity_scores": [0, 0, 0, 0, 0, 0],
             }))
+            order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
             rows = list(cql.execute(
-                f"SELECT id FROM {table} ORDER BY embedding ANN OF {ANN_QUERY_VECTOR_LITERAL} LIMIT 4"))
+                f"SELECT id FROM {table} {order_by} LIMIT 4"))
 
             if func_name == "euclidean":
                 # [INFINITY, 0.1] produces a valid 0 similarity score for euclidean.
@@ -295,12 +327,14 @@ def test_filters_invalid_similarity_scores_in_rescored_results(cql, test_keyspac
 #
 # Reproduces SCYLLADB-2231
 @pytest.mark.xfail(reason="SCYLLADB-2231: rescoring does not yet filter NaN similarity scores")
-def test_rescoring_with_zerovector_query(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_rescoring_with_zerovector_query(cql, test_keyspace, vector_store_mock, ann_syntax):
     data = TEST_DATA["cosine"]
     with rescoring_test_table(cql, test_keyspace, data) as table:
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        order_by = order_by_ann("embedding", "[0, 0]", ann_syntax)
         rows = list(cql.execute(
-            f"SELECT id FROM {table} ORDER BY embedding ANN OF [0, 0] LIMIT 3"))
+            f"SELECT id FROM {table} {order_by} LIMIT 3"))
 
         # NaN similarity scores produced by the zero-vector query should be
         # filtered out by rescoring, leaving an empty result set.
