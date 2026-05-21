@@ -12,9 +12,11 @@
 
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/column_identifier.hh"
 
 #include "cql3/cql_statement.hh"
 #include "cql3/result_set.hh"
+#include "cql3/memory_usage.hh"
 
 namespace cql3 {
 
@@ -74,6 +76,44 @@ void prepared_statement::calculate_metadata_id() {
 
 cql_metadata_id_type prepared_statement::get_metadata_id() const {
     return _metadata_id;
+}
+
+size_t prepared_statement::external_memory_usage() const {
+    size_t s = 0;
+
+    // bound_names: vector of lw_shared_ptr<column_specification>
+    s += vector_external_memory_usage(bound_names);
+    for (const auto& cs : bound_names) {
+        if (cs) {
+            s += sizeof(column_specification);
+            s += sstring_external_memory_usage(cs->ks_name);
+            s += sstring_external_memory_usage(cs->cf_name);
+            if (cs->name) {
+                s += sizeof(column_identifier);
+                s += basic_sstring_external_memory_usage(cs->name->bytes_);
+                s += sstring_external_memory_usage(cs->name->text());
+            }
+        }
+    }
+
+    // partition_key_bind_indices
+    s += vector_external_memory_usage(partition_key_bind_indices);
+
+    // warnings
+    s += vector_external_memory_usage(warnings);
+    for (const auto& w : warnings) {
+        s += sstring_external_memory_usage(w);
+    }
+
+    // _metadata_id (fixed-size, no heap allocation)
+    s += 0;
+
+    // statement (the cql_statement itself)
+    if (statement) {
+        s += statement->object_size() + statement->external_memory_usage();
+    }
+
+    return s;
 }
 
 }

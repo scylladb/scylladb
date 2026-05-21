@@ -43,6 +43,10 @@ public:
         }
         virtual void fill_prepare_context(prepare_context& ctx) override;
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        size_t external_memory_usage() const override {
+            return operation::external_memory_usage() + _k.external_memory_usage();
+        }
+        size_t object_size() const override { return sizeof(*this); }
     };
 
     class putter : public operation_skip_if_unset {

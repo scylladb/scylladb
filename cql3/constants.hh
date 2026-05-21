@@ -51,6 +51,7 @@ public:
         static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value);
 
         virtual expr::expression prepare_new_value_for_broadcast_tables() const override;
+        size_t object_size() const override { return sizeof(*this); }
     };
 
     struct adder final : operation_skip_if_unset {

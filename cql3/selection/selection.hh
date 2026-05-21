@@ -177,6 +177,12 @@ public:
      */
     bool is_trivial() const { return _is_trivial; }
 
+    /// Returns the actual size of the derived object.
+    virtual size_t object_size() const { return sizeof(*this); }
+
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    virtual size_t external_memory_usage() const;
+
     friend class result_set_builder;
 };
 

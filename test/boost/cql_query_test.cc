@@ -7117,4 +7117,67 @@ SEASTAR_TEST_CASE(test_widening_value_into_wider_sink) {
     });
 }
 
+SEASTAR_TEST_CASE(test_prepared_statement_memory_sizing) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.sizing_test (pk int, ck text, v1 text, v2 int, PRIMARY KEY (pk, ck))").get();
+
+        auto sized = [&] (const sstring& cql) {
+            auto key = e.prepare(cql).get();
+            auto stmt_ptr = e.local_qp().get_prepared(key);
+            BOOST_REQUIRE(stmt_ptr);
+            return stmt_ptr->external_memory_usage();
+        };
+
+        auto select_mem = sized("SELECT * FROM ks.sizing_test WHERE pk = ? AND ck = ?");
+        testlog.info("SELECT prepared statement external_memory_usage: {}", select_mem);
+        BOOST_REQUIRE_EQUAL(select_mem, 5150);
+
+        auto insert_mem = sized("INSERT INTO ks.sizing_test (pk, ck, v1, v2) VALUES (?, ?, ?, ?)");
+        testlog.info("INSERT prepared statement external_memory_usage: {}", insert_mem);
+        BOOST_REQUIRE_EQUAL(insert_mem, 5553);
+
+        auto update_mem = sized("UPDATE ks.sizing_test SET v1 = ?, v2 = ? WHERE pk = ? AND ck = ?");
+        testlog.info("UPDATE prepared statement external_memory_usage: {}", update_mem);
+        BOOST_REQUIRE_EQUAL(update_mem, 5554);
+
+        auto delete_mem = sized("DELETE FROM ks.sizing_test WHERE pk = ? AND ck = ?");
+        testlog.info("DELETE prepared statement external_memory_usage: {}", delete_mem);
+        BOOST_REQUIRE_EQUAL(delete_mem, 4964);
+
+        // A batch of two INSERTs must cost more than a single INSERT.
+        auto single_insert_mem = sized("INSERT INTO ks.sizing_test (pk, ck, v1) VALUES (?, ?, ?)");
+        auto batch_mem = sized("BEGIN BATCH "
+                "INSERT INTO ks.sizing_test (pk, ck, v1) VALUES (?, ?, ?); "
+                "INSERT INTO ks.sizing_test (pk, ck, v2) VALUES (?, ?, ?); "
+                "APPLY BATCH");
+        testlog.info("single INSERT: {}, BATCH(2): {}", single_insert_mem, batch_mem);
+        BOOST_REQUIRE_EQUAL(single_insert_mem, 5258);
+        BOOST_REQUIRE_EQUAL(batch_mem, 10869);
+        BOOST_REQUIRE_GT(batch_mem, single_insert_mem);
+
+        // A statement with more selectors and more restrictions must cost more
+        // than a minimal one over the same table.
+        auto simple_mem = sized("SELECT pk FROM ks.sizing_test WHERE pk = ?");
+        auto complex_mem = sized("SELECT pk, ck, v1, v2 FROM ks.sizing_test WHERE pk = ? AND ck > ? AND ck < ? ALLOW FILTERING");
+        testlog.info("Simple SELECT: {}, Complex SELECT: {}", simple_mem, complex_mem);
+        BOOST_REQUIRE_EQUAL(simple_mem, 3604);
+        BOOST_REQUIRE_EQUAL(complex_mem, 6462);
+        BOOST_REQUIRE_GT(complex_mem, simple_mem);
+
+        // Verify the cache-entry sizing arithmetic (the actual integration
+        // point): the cache charges sizeof(prepared_statement) +
+        // external_memory_usage(), which must exceed the fixed object size.
+        {
+            auto key = e.prepare("SELECT * FROM ks.sizing_test WHERE pk = ?").get();
+            auto stmt_ptr = e.local_qp().get_prepared(key);
+            BOOST_REQUIRE(stmt_ptr);
+            const size_t charged = sizeof(cql3::statements::prepared_statement) + stmt_ptr->external_memory_usage();
+            testlog.info("charged: {}, sizeof(prepared_statement): {}, external_memory_usage: {}", charged, sizeof(cql3::statements::prepared_statement), stmt_ptr->external_memory_usage());
+            BOOST_REQUIRE_GT(charged, sizeof(cql3::statements::prepared_statement));
+            BOOST_REQUIRE_EQUAL(stmt_ptr->external_memory_usage(), 3651);
+            BOOST_REQUIRE_EQUAL(charged, 3771);
+        }
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
