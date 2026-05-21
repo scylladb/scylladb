@@ -232,6 +232,36 @@ Procedure
          Keyspace: ks
          Status: tablets
 
+   #. Optionally, wait for tablet layout normalization to complete:
+
+      After finalization, a tablet normalization process takes place in the
+      background which transforms the tablets of all migrated tables into a
+      power-of-two layout. Until power-of-two convergence is complete, the
+      tablet layout of all these tables will be suboptimal, causing degraded
+      performance. Run the following command repeatedly to monitor the per-table
+      status of this background work:
+
+      .. code-block:: console
+
+         scylla nodetool migrate-to-tablets status <keyspace> --with-tablet-status
+
+      **Example:**
+
+      .. code-block:: console
+
+         $ scylla nodetool migrate-to-tablets status ks --with-tablet-status
+         Keyspace: ks
+         Status: tablets
+
+         Tablet info:
+           Pow2 tablet layout convergence: in progress
+           Tables converging: 2/3
+
+         Table   Status       Tablets   Target
+         t1      converging   2301      2048
+         t2      converging   2176      2048
+         t3      converged    2048      -
+
 Rollback Procedure
 ------------------
 
