@@ -219,7 +219,7 @@ future<> raft_group0_client::add_entry_unguarded(group0_command group0_cmd, seas
 
     // Command is not retried, because for now it's not idempotent.
     try {
-        co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied, as);
+        co_await _raft_gr.get_group0()->add_entry(cmd, raft::wait_type::applied, as);
     } catch (const raft::not_a_leader& e) {
         // This should not happen since follower-to-leader entry forwarding is enabled in group 0.
         // Just fail the operation by propagating the error.

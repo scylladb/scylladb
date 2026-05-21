@@ -491,6 +491,9 @@ future<> group0_voter_handler::update_nodes(
         co_return co_await _group0.modify_voters({}, nodes_removed, as);
     }
 
+    // Plain reference is sufficient here since raft_server is only used
+    // synchronously below (not held across co_await). If it were used
+    // across async calls, get_group0_server() should be used instead.
     auto& raft_server = _group0.group0_server();
 
     const auto& leader_id = raft_server.current_leader();

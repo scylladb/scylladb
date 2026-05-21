@@ -1043,7 +1043,7 @@ public:
         while (!_raft_gr.local().group0().current_leader()) {
             abort_on_expiry aoe(permit.timeout());
             reader_permit::awaits_guard ag(permit);
-            co_await _raft_gr.local().group0().read_barrier(&aoe.abort_source());
+            co_await _raft_gr.local().get_group0()->read_barrier(&aoe.abort_source());
         }
 
         co_return _raft_gr.local().group0().current_leader();

@@ -383,7 +383,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm](this auto) -> future<> {
             co_await state.server_control_op.get_future();
             co_await start_raft_group(tablet, id, std::move(new_tm));
-            state.server = &_raft_gr.get_server(id);
+            state.server = _raft_gr.find_server(id);
+            if (!state.server) {
+                on_internal_error(logger, format("update(): no server for group {}", id));
+            }
             state.leader_info_updater = leader_info_updater(state, tablet, id);
 
             // We want to make sure the server is ready to serve requests before

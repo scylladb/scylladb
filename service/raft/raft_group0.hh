@@ -239,10 +239,19 @@ public:
         return _client;
     }
 
-    // Return an instance of group 0. Valid only on shard 0,
-    // after boot/upgrade is complete
+    // Return a reference to group 0 server. Valid only on shard 0,
+    // after boot/upgrade is complete.
     raft::server& group0_server() {
         return _raft_gr.group0();
+    }
+
+    // Return a handle to group 0 server. Valid only on shard 0,
+    // after boot/upgrade is complete.
+    // The handle holds the server's shutdown gate open,
+    // preventing the server from being aborted while the handle exists.
+    // Use this variant when the server reference is held across async calls.
+    raft::server::handle get_group0_server() {
+        return _raft_gr.get_group0();
     }
 
     // Returns a wrapper for the group0_server() with timeouts support.
