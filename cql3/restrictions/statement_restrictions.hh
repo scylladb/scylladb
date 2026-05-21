@@ -88,6 +88,7 @@ struct predicate {
     expr::comparison_order order = expr::comparison_order::cql;
     std::optional<expr::oper_t> op;  // the binary operator, if any
     bool is_subscript = false;       // whether the LHS is a subscript (map element access)
+    bool is_bm25 = false;            // whether the LHS is a BM25 function call
 };
 
 ///In some cases checking if columns have indexes is undesired of even
@@ -306,6 +307,8 @@ public:
     bool uses_secondary_indexing() const {
         return _uses_secondary_indexing;
     }
+
+    bool has_bm25_restriction() const;
 
     const expr::expression& get_partition_key_restrictions() const {
         return _partition_key_restrictions;

@@ -554,6 +554,29 @@ to_predicates(
                         [&] (const temporary&) -> std::vector<predicate> {
                             return cannot_solve(oper);
                         },
+                        [&] (const bm25_call& bm) -> std::vector<predicate> {
+                            // BM25(col, query_term) > threshold
+                            const auto* col = as_if<column_value>(&bm.column);
+                            if (!col) {
+                                return cannot_solve(oper);
+                            }
+                            auto solve = [oper] (const query_options& options) {
+                                managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
+                                if (!val) {
+                                    return empty_value_set;
+                                }
+                                return value_set(value_list{*val});
+                            };
+                            return to_vector(predicate{
+                                .solve_for = std::move(solve),
+                                .filter = oper,
+                                .on = on_column{col->col},
+                                .is_singleton = false,
+                                .order = oper.order,
+                                .op = oper.op,
+                                .is_bm25 = true,
+                            });
+                        },
                     }, oper.lhs);
                 },
             [] (const column_value& cv) -> std::vector<predicate> {
@@ -591,6 +614,9 @@ to_predicates(
             },
             [] (const usertype_constructor& uc) -> std::vector<predicate> {
                 return cannot_solve(uc);
+            },
+            [] (const bm25_call& bm) -> std::vector<predicate> {
+                return cannot_solve(bm);
             },
             [] (const temporary& t) -> std::vector<predicate> {
                 return cannot_solve(t);
@@ -676,6 +702,9 @@ is_predicate_supported_by(const predicate& pred, const secondary_index::index& i
     }
     return std::visit(overloaded_functor{
         [&] (const on_column& oc) -> ret_t {
+            if (pred.is_bm25) {
+                return idx.supports_bm25_expression(*oc.column);
+            }
             if (pred.is_subscript) {
                 return idx.supports_subscript_expression(*oc.column, *pred.op);
             }
@@ -1112,6 +1141,7 @@ statement_restrictions::statement_restrictions(private_tag,
         }
     }
     _has_multi_column = has_mc_clustering;
+    bool has_queriable_fulltext_index = false;
     if (_check_indexes) {
         auto cf = db.find_column_family(schema);
         auto& sim = cf.get_index_manager();
@@ -1129,6 +1159,16 @@ statement_restrictions::statement_restrictions(private_tag,
                 && index_supports_some_column(sc_pk_pred_vectors, sim, allow_local)
                 && !type.is_delete();
         _has_queriable_regular_index = index_supports_some_column(sc_nonpk_pred_vectors, sim, allow_local)
+                && !type.is_delete();
+        single_column_predicate_vectors sc_nonpk_match_pred_vectors;
+        for (const auto& [col, preds] : sc_nonpk_pred_vectors) {
+            for (const auto& pred : preds) {
+                if (pred.is_bm25) {
+                    sc_nonpk_match_pred_vectors[col].push_back(pred);
+                }
+            }
+        }
+        has_queriable_fulltext_index = index_supports_some_column(sc_nonpk_match_pred_vectors, sim, allow_local)
                 && !type.is_delete();
     } else {
         _has_queriable_ck_index = false;
@@ -1183,6 +1223,10 @@ statement_restrictions::statement_restrictions(private_tag,
     }
 
     if (!is_empty_restriction(_nonprimary_key_restrictions)) {
+        if (has_bm25_restriction() && !has_queriable_fulltext_index) {
+            throw exceptions::invalid_request_exception(
+                "No fulltext index found for FTS query");
+        }
         if (_has_queriable_regular_index && _partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering && !type.is_delete() && !type.is_update()) {
@@ -1304,6 +1348,13 @@ statement_restrictions::clustering_key_restrictions_has_only_eq() const {
 bool
 statement_restrictions::has_token_restrictions() const {
     return has_partition_token(_partition_key_restrictions, *_schema);
+}
+
+bool
+statement_restrictions::has_bm25_restriction() const {
+    return expr::has_bm25_function(_nonprimary_key_restrictions)
+        || expr::has_bm25_function(_clustering_columns_restrictions)
+        || expr::has_bm25_function(_partition_key_restrictions);
 }
 
 bool
