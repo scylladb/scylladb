@@ -17,6 +17,7 @@
 #include <fmt/core.h>
 
 #include "utils/lister.hh"
+#include "utils/s3/creds.hh"
 
 namespace seastar {
 class abort_source;
@@ -84,13 +85,14 @@ public:
     virtual future<> upload_file(std::filesystem::path path, object_name, utils::upload_progress& up, seastar::abort_source* = nullptr) = 0;
 
     virtual void update_config_sync(const db::object_storage_endpoint_param&) = 0;
+    virtual void update_connections_per_shard(unsigned) = 0;
 
     virtual future<> close() = 0;
 };
 
 using shard_client_factory = std::function<shared_ptr<object_storage_client>(std::string)>;
 
-shared_ptr<object_storage_client> make_object_storage_client(const db::object_storage_endpoint_param&, semaphore&, shard_client_factory);
+shared_ptr<object_storage_client> make_object_storage_client(const db::object_storage_endpoint_param&, semaphore&, shard_client_factory, unsigned connections_per_shard = s3::endpoint_config::default_connections_per_shard);
 
 }
 

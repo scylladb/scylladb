@@ -84,7 +84,9 @@ storage_manager::object_storage_endpoint::object_storage_endpoint(db::object_sto
 
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
+    , _connections_per_shard(cfg.object_storage_connections_per_shard())
     , _config_updater(std::make_unique<config_updater_sync>(cfg, *this))
+    , _connections_updater(std::make_unique<connections_updater_sync>(cfg, *this))
 {
     for (auto& e : cfg.object_storage_endpoints()) {
         _object_storage_endpoints.emplace(std::make_pair(e.key(), e));
@@ -122,7 +124,7 @@ shared_ptr<sstables::object_storage_client> storage_manager::get_endpoint_client
     if (ep.client == nullptr) {
         ep.client = make_object_storage_client(ep.cfg, _object_storage_clients_memory, [&ct = container()] (std::string ep) {
             return ct.local().get_endpoint_client(ep);
-        });
+        }, _connections_per_shard);
     }
     return ep.client;
 }
@@ -165,6 +167,18 @@ storage_manager::config_updater_sync::config_updater_sync(const db::config& cfg,
         std::erase_if(sstm._object_storage_endpoints, [&updates](const auto& e) {
             return !updates.contains(e.first);
         });
+    }))
+{}
+
+storage_manager::connections_updater_sync::connections_updater_sync(const db::config& cfg, storage_manager& sstm)
+    : observer(cfg.object_storage_connections_per_shard.observe([&sstm] (unsigned new_value) {
+        smlogger.info("connections_updater: updating connections_per_shard to {}", new_value);
+        sstm._connections_per_shard = new_value;
+        for (auto& [endpoint, ep] : sstm._object_storage_endpoints) {
+            if (ep.client) {
+                ep.client->update_connections_per_shard(new_value);
+            }
+        }
     }))
 {}
 

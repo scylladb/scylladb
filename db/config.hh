@@ -608,6 +608,7 @@ public:
     const db::extensions& extensions() const;
 
     named_value<std::vector<object_storage_endpoint_param>> object_storage_endpoints;
+    named_value<unsigned> object_storage_connections_per_shard;
 
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
     named_value<double> topology_barrier_stall_detector_threshold_seconds;

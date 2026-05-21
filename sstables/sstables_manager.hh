@@ -67,6 +67,11 @@ class storage_manager : public peering_sharded_service<storage_manager> {
         config_updater_sync(const db::config& cfg, storage_manager&);
     };
 
+    struct connections_updater_sync {
+        utils::observer<unsigned> observer;
+        connections_updater_sync(const db::config& cfg, storage_manager&);
+    };
+
     struct object_storage_endpoint {
         db::object_storage_endpoint_param cfg;
         shared_ptr<object_storage_client> client;
@@ -74,8 +79,10 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     };
 
     semaphore _object_storage_clients_memory;
+    unsigned _connections_per_shard;
     std::unordered_map<sstring, object_storage_endpoint> _object_storage_endpoints;
     std::unique_ptr<config_updater_sync> _config_updater;
+    std::unique_ptr<connections_updater_sync> _connections_updater;
     seastar::metrics::metric_groups metrics;
 
     object_storage_endpoint& get_endpoint(const sstring& ep);
