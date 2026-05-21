@@ -10,6 +10,7 @@
 
 #include "cql3/attributes.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/memory_usage.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "exceptions/exceptions.hh"
@@ -169,6 +170,26 @@ void attributes::fill_prepare_context(prepare_context& ctx) {
     if (_concurrency.has_value()) {
         expr::fill_prepare_context(*_concurrency, ctx);
     }
+}
+
+size_t attributes::external_memory_usage() const {
+    size_t s = 0;
+    if (_timestamp) {
+        s += _timestamp->external_memory_usage();
+    }
+    if (_time_to_live) {
+        s += _time_to_live->external_memory_usage();
+    }
+    if (_timeout) {
+        s += _timeout->external_memory_usage();
+    }
+    if (_service_level) {
+        s += sstring_external_memory_usage(*_service_level);
+    }
+    if (_concurrency) {
+        s += _concurrency->external_memory_usage();
+    }
+    return s;
 }
 
 std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database db, const sstring& ks_name, const sstring& cf_name) const {

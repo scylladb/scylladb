@@ -7767,6 +7767,76 @@ SEASTAR_TEST_CASE(test_a_parsed_statement_gets_only_the_markers_of_its_text) {
     });
 }
 
+SEASTAR_TEST_CASE(test_prepared_statement_memory_sizing) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.sizing_test (pk int, ck text, v1 text, v2 int, PRIMARY KEY (pk, ck))").get();
+
+        auto sized = [&] (const sstring& cql) {
+            auto key = e.prepare(cql).get();
+            auto stmt_ptr = e.local_qp().get_prepared(key);
+            BOOST_REQUIRE(stmt_ptr);
+            return stmt_ptr->external_memory_usage();
+        };
+
+        // The exact byte count depends on sizeof() of many interacting classes
+        // and shifts with unrelated ABI/layout changes elsewhere in the tree.
+        // Check that each statement falls inside a sane envelope around its
+        // last-measured baseline instead of an exact value.
+        auto check_envelope = [&] (const char* what, size_t actual, size_t baseline) {
+            const size_t lo = baseline * 85 / 100;
+            const size_t hi = baseline * 115 / 100;
+            testlog.info("{} external_memory_usage: {} (envelope [{}, {}])", what, actual, lo, hi);
+            BOOST_REQUIRE_GE(actual, lo);
+            BOOST_REQUIRE_LE(actual, hi);
+        };
+
+        auto select_mem = sized("SELECT * FROM ks.sizing_test WHERE pk = ? AND ck = ?");
+        check_envelope("SELECT", select_mem, 5150);
+
+        auto insert_mem = sized("INSERT INTO ks.sizing_test (pk, ck, v1, v2) VALUES (?, ?, ?, ?)");
+        check_envelope("INSERT", insert_mem, 5553);
+
+        auto update_mem = sized("UPDATE ks.sizing_test SET v1 = ?, v2 = ? WHERE pk = ? AND ck = ?");
+        check_envelope("UPDATE", update_mem, 5554);
+
+        auto delete_mem = sized("DELETE FROM ks.sizing_test WHERE pk = ? AND ck = ?");
+        check_envelope("DELETE", delete_mem, 4964);
+
+        // A batch of two INSERTs must cost more than a single INSERT.
+        auto single_insert_mem = sized("INSERT INTO ks.sizing_test (pk, ck, v1) VALUES (?, ?, ?)");
+        auto batch_mem = sized("BEGIN BATCH "
+                "INSERT INTO ks.sizing_test (pk, ck, v1) VALUES (?, ?, ?); "
+                "INSERT INTO ks.sizing_test (pk, ck, v2) VALUES (?, ?, ?); "
+                "APPLY BATCH");
+        check_envelope("single INSERT", single_insert_mem, 5258);
+        check_envelope("BATCH(2)", batch_mem, 10869);
+        BOOST_REQUIRE_GT(batch_mem, single_insert_mem);
+
+        // A statement with more selectors and more restrictions must cost more
+        // than a minimal one over the same table.
+        auto simple_mem = sized("SELECT pk FROM ks.sizing_test WHERE pk = ?");
+        auto complex_mem = sized("SELECT pk, ck, v1, v2 FROM ks.sizing_test WHERE pk = ? AND ck > ? AND ck < ? ALLOW FILTERING");
+        check_envelope("Simple SELECT", simple_mem, 3604);
+        check_envelope("Complex SELECT", complex_mem, 6462);
+        BOOST_REQUIRE_GT(complex_mem, simple_mem);
+
+        // Verify the cache-entry sizing arithmetic (the actual integration
+        // point): the cache charges sizeof(prepared_statement) +
+        // external_memory_usage(), which must exceed the fixed object size.
+        {
+            auto key = e.prepare("SELECT * FROM ks.sizing_test WHERE pk = ?").get();
+            auto stmt_ptr = e.local_qp().get_prepared(key);
+            BOOST_REQUIRE(stmt_ptr);
+            const size_t ext_mem = stmt_ptr->external_memory_usage();
+            const size_t charged = sizeof(cql3::statements::prepared_statement) + ext_mem;
+            testlog.info("charged: {}, sizeof(prepared_statement): {}, external_memory_usage: {}", charged, sizeof(cql3::statements::prepared_statement), ext_mem);
+            BOOST_REQUIRE_GT(charged, sizeof(cql3::statements::prepared_statement));
+            check_envelope("SELECT pk = ?", ext_mem, 3651);
+            check_envelope("charged(SELECT pk = ?)", charged, 3771);
+        }
+    });
+}
+
 // Reproduces a bug in which TWCS sstable sets filtered sstables by clustering key
 // using the query-schema (reversed) ranges, which `sstable::may_contain_rows()`
 // interprets as table-schema ranges. Both the optimized TWCS read path

@@ -21,6 +21,7 @@
 #include "cartesian_product.hh"
 
 #include "cql3/cql_config.hh"
+#include "cql3/memory_usage.hh"
 #include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/statements/request_validations.hh"
@@ -2937,6 +2938,121 @@ make_trivial_statement_restrictions(
         schema_ptr schema,
         bool allow_filtering) {
     return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, std::move(schema), allow_filtering);
+}
+
+static size_t predicate_external_memory_usage(const predicate& p) {
+    size_t s = p.filter.external_memory_usage();
+    if (p.solve_for) {
+        // make_conjunction() builds a closure capturing two nested solve_for_t
+        // functions plus a data_type, which exceeds libstdc++'s std::function
+        // SBO and heap-allocates. We can't introspect the actual captured
+        // state, so use that largest known case as a conservative estimate.
+        s += 2 * sizeof(solve_for_t) + sizeof(data_type);
+    }
+    // on variant: only on_clustering_key_prefix has a vector
+    if (auto* ckp = std::get_if<on_clustering_key_prefix>(&p.on)) {
+        s += ckp->columns.capacity() * sizeof(const column_definition*);
+    }
+    return s;
+}
+
+static size_t expression_map_external_memory_usage(const expr::single_column_restrictions_map& m) {
+    size_t s = map_node_external_memory_usage(m);
+    for (const auto& [col, e] : m) {
+        s += e.external_memory_usage();
+    }
+    return s;
+}
+
+size_t statement_restrictions::external_memory_usage() const {
+    size_t s = 0;
+
+    s += _partition_key_restrictions.external_memory_usage();
+    s += _partition_level_filter.external_memory_usage();
+    s += _clustering_columns_restrictions.external_memory_usage();
+    s += _clustering_row_level_filter.external_memory_usage();
+    s += _nonprimary_key_restrictions.external_memory_usage();
+    s += _regular_columns_filter.external_memory_usage();
+
+    s += expression_map_external_memory_usage(_single_column_partition_key_restrictions);
+    s += expression_map_external_memory_usage(_single_column_clustering_key_restrictions);
+    s += expression_map_external_memory_usage(_single_column_nonprimary_key_restrictions);
+
+    s += _index_restrictions.capacity() * sizeof(expr::expression);
+    for (const auto& e : _index_restrictions) {
+        s += e.external_memory_usage();
+    }
+    s += _where.capacity() * sizeof(expr::expression);
+    for (const auto& e : _where) {
+        s += e.external_memory_usage();
+    }
+
+    s += _clustering_prefix_restrictions.capacity() * sizeof(predicate);
+    for (const auto& p : _clustering_prefix_restrictions) {
+        s += predicate_external_memory_usage(p);
+    }
+    if (_idx_tbl_ck_prefix) {
+        s += _idx_tbl_ck_prefix->capacity() * sizeof(predicate);
+        for (const auto& p : *_idx_tbl_ck_prefix) {
+            s += predicate_external_memory_usage(p);
+        }
+    }
+
+    // partition_range_restrictions variant
+    std::visit(overloaded_functor{
+        [](const no_partition_range_restrictions&) {},
+        [&s](const token_range_restrictions& tr) {
+            s += predicate_external_memory_usage(tr.token_restrictions);
+        },
+        [&s](const single_column_partition_range_restrictions& scr) {
+            s += scr.per_column_restrictions.capacity() * sizeof(predicate);
+            for (const auto& p : scr.per_column_restrictions) {
+                s += predicate_external_memory_usage(p);
+            }
+        },
+    }, _partition_range_restrictions);
+
+    s += unordered_set_node_external_memory_usage(_not_null_columns);
+    s += unordered_set_node_external_memory_usage(_columns_with_eq);
+
+    s += _column_defs_for_filtering.capacity() * sizeof(const column_definition*);
+
+    s += vector_external_memory_usage(_scoring_function_restrictions);
+    for (const auto& bo : _scoring_function_restrictions) {
+        s += bo.lhs.external_memory_usage();
+        s += bo.rhs.external_memory_usage();
+    }
+
+    if (_idx_opt) {
+        s += sizeof(secondary_index::index);
+        s += secondary_index_external_memory_usage(*_idx_opt);
+    }
+
+    s += vector_external_memory_usage(_idx_column_predicates);
+    for (const auto& p : _idx_column_predicates) {
+        s += predicate_external_memory_usage(p);
+    }
+
+    // _get_clustering_bounds_fn is a retained class member (see
+    // build_get_clustering_bounds_fn()). Its empty and single-column cases
+    // capture only references (fit std::function SBO, no heap). The
+    // multi-column cases (build_get_multi_column_clustering_bounds_fn() and
+    // build_range_from_raw_bounds_fn()) build a range_builders vector of
+    // per-predicate std::function closures, each in turn capturing a
+    // binary_operator by value -- that vector's own heap buffer is always
+    // present. std::function object size doesn't depend on its signature, so
+    // sizeof(std::function<void()>) is used as a stand-in element size.
+    if (!_clustering_prefix_restrictions.empty() && _clustering_prefix_restrictions[0].is_multi_column) {
+        s += _clustering_prefix_restrictions.capacity() * sizeof(std::function<void ()>);
+        for (const auto& pred : _clustering_prefix_restrictions) {
+            if (pred.is_multi_column) {
+                s += expr::as<binary_operator>(pred.filter).lhs.external_memory_usage();
+                s += expr::as<binary_operator>(pred.filter).rhs.external_memory_usage();
+            }
+        }
+    }
+
+    return s;
 }
 
 } // namespace restrictions
