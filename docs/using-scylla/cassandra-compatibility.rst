@@ -239,7 +239,9 @@ Indexing and Caching
 |:doc:`Materialized Views </features/materialized-views>`        | |v|                                                                                  |
 +----------------------------------------------------------------+--------------------------------------------------------------------------------------+
 
-:sup:`*` SAI class name on vector columns is rewritten to native ``vector_index``
+:sup:`*` SAI class name on vector columns is rewritten to native ``vector_index``;
+SAI on ``ENTRIES(map)`` is rewritten to a regular secondary index
+(requires ``enable_cassio_compatibility: true``)
 
 
 Additional Features
