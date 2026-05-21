@@ -254,6 +254,15 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
         // Token restriction
         std::vector<const column_definition*> column_defs = to_column_definitions(as<function_call>(prepared_binop.lhs).args);
         validate_token_relation(column_defs, prepared_binop.op, *schema);
+    } else if (auto* bm = as_if<bm25_call>(&prepared_binop.lhs)) {
+        // BM25 fulltext scoring restriction - validate the column argument
+        const auto* col = as_if<column_value>(&bm->column);
+        if (!col) {
+            throw exceptions::invalid_request_exception("First argument to BM25 must be a column");
+        }
+        if (prepared_binop.op == oper_t::LIKE) {
+            throw exceptions::invalid_request_exception("LIKE cannot be used with BM25");
+        }
     } else {
         // Anything else
         throw exceptions::invalid_request_exception(

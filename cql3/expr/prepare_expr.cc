@@ -1397,6 +1397,26 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
         [&] (const function_call& fc) -> std::optional<expression> {
             return prepare_function_call(fc, db, keyspace, schema_opt, std::move(receiver));
         },
+        [&] (const bm25_call& bm) -> std::optional<expression> {
+            if (!schema_opt) {
+                throw exceptions::invalid_request_exception("BM25 requires a schema context");
+            }
+            // Prepare the column argument
+            auto prepared_col = try_prepare_expression(bm.column, db, keyspace, schema_opt, nullptr);
+            if (!prepared_col) {
+                throw exceptions::invalid_request_exception("Could not resolve column argument of BM25");
+            }
+            // Prepare the query term argument - it should be text type
+            auto text_receiver = make_lw_shared<column_specification>(
+                keyspace, schema_opt->cf_name(),
+                ::make_shared<column_identifier>("bm25_query", true),
+                expr::type_of(*prepared_col));
+            auto prepared_term = try_prepare_expression(bm.query_term, db, keyspace, schema_opt, text_receiver);
+            if (!prepared_term) {
+                throw exceptions::invalid_request_exception("Could not resolve query term argument of BM25");
+            }
+            return bm25_call{std::move(*prepared_col), std::move(*prepared_term)};
+        },
         [&] (const cast& c) -> std::optional<expression> {
             return cast_prepare_expression(c, db, keyspace, schema_opt, receiver);
         },
@@ -1502,6 +1522,9 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         [&] (const usertype_constructor& uc) -> test_result {
             return usertype_constructor_test_assignment(uc, db, keyspace, schema_opt, receiver);
         },
+        [&] (const bm25_call&) -> test_result {
+            on_internal_error(expr_logger, "bm25_call is not yet reachable via test_assignment()");
+        },
         [&] (const temporary& t) -> test_result {
             on_internal_error(expr_logger, "temporary found in test_assignment, should have been introduced post-prepare");
         },
@@ -1601,6 +1624,9 @@ test_assignment_any_size_float_vector(const expression& expr) {
             on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
         },
         [&] (const usertype_constructor& uc) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const bm25_call&) -> test_result {
             return NOT_ASSIGNABLE;
         },
         [&] (const temporary& t) -> test_result {
@@ -1740,6 +1766,13 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
                 schema.ks_name(), schema.cf_name(),
                 ::make_shared<column_identifier>(format("{:user}", fun_call), true),
                 return_type);
+        },
+        [&](const bm25_call&) -> lw_shared_ptr<column_specification> {
+            return make_lw_shared<column_specification>(
+                schema.ks_name(),
+                schema.cf_name(),
+                ::make_shared<column_identifier>("bm25", true),
+                float_type);
         },
         [](const auto& other) -> lw_shared_ptr<column_specification> {
             on_internal_error(expr_logger, format("get_lhs_receiver: unexpected expression: {}", other));
