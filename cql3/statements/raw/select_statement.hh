@@ -46,7 +46,11 @@ public:
     // Vector of floats with dimension the same as the vector indexed column.
     // This vector is the target for the nearest neighbors in ANN queries.
     using ann_vector = expr::expression;
-    using ordering_type = std::variant<ordering, ann_vector>;
+    // BM25 ordering stores the query term for fulltext scoring.
+    struct bm25_ordering {
+        expr::expression query_term;
+    };
+    using ordering_type = std::variant<ordering, ann_vector, bm25_ordering>;
     class parameters final {
     public:
         using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering_type>>;

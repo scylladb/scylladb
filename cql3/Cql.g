@@ -386,7 +386,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         bool bypass_cache = false;
         auto attrs = std::make_unique<cql3::attributes::raw>();
         expression wclause = conjunction{};
-        bool is_ann_ordering = false;
+        bool is_similarity_ordering = false;
     }
     : K_SELECT (
                 ( (K_JSON K_DISTINCT)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
@@ -401,7 +401,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
              )
       ( K_WHERE w=whereClause { wclause = std::move(w); } )?
       ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
-      ( K_ORDER K_BY orderByClause[orderings, is_ann_ordering] ( ',' orderByClause[orderings, is_ann_ordering] )* )?
+      ( K_ORDER K_BY orderByClause[orderings, is_similarity_ordering] ( ',' orderByClause[orderings, is_similarity_ordering] )* )?
       ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = std::move(rows); } )?
       ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
@@ -459,15 +459,24 @@ whereClause returns [uexpression clause]
         { clause = conjunction{std::move(terms)}; }
     ;
 
-orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool& is_ann_ordering]
+orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool& is_similarity_ordering]
     @init{
         raw::select_statement::ordering ordering = raw::select_statement::ordering::ascending;
         std::optional<expression> ann_ordering;
     }
-    : c=cident (K_ANN K_OF t=term {ann_ordering=std::move(t);})? (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })?
+    : K_BM25 '(' c=cident ',' t=term ')'
+    {
+        if (!orderings.empty()) {
+            throw exceptions::invalid_request_exception(
+                "BM25 ordering does not support any other ordering");
+        }
+        is_similarity_ordering = true;
+        orderings.emplace_back(c, raw::select_statement::bm25_ordering{std::move(t)});
+    }
+    | c=cident (K_ANN K_OF t=term {ann_ordering=std::move(t);})? (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })?
     {
         if (!ann_ordering) {
-            if (is_ann_ordering) {
+            if (is_similarity_ordering) {
                 throw exceptions::invalid_request_exception(
                     "ANN ordering does not support any other ordering");
             }
@@ -478,7 +487,7 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool
                     "Descending ANN ordering is not supported");
             }
             if (!orderings.empty()) {
-                if (is_ann_ordering) {
+                if (is_similarity_ordering) {
                     throw exceptions::invalid_request_exception(
                         "Cannot specify more than one ANN ordering");
                 } else {
@@ -486,7 +495,7 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool
                         "ANN ordering does not support any other ordering");
                 }
             }
-            is_ann_ordering = true;
+            is_similarity_ordering = true;
             orderings.emplace_back(c, ann_ordering.value());
         }
     }
@@ -1891,6 +1900,11 @@ relation returns [uexpression e]
         }); }
     | name=cident K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
         t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, rt, std::move(t)); }
+    | K_BM25 '(' name=cident ',' t=term ')' type=relationType threshold=term
+        { $e = binary_operator(
+            bm25_call{unresolved_identifier{std::move(name)}, std::move(t)},
+            type,
+            std::move(threshold)); }
     | name=cident '[' key=term ']' type=relationType t=term { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t)); }
     | ids=tupleOfIdentifiers
       ( K_IN
@@ -2406,6 +2420,8 @@ K_SCYLLA_CLUSTERING_BOUND: S C Y L L A '_' C L U S T E R I N G '_' B O U N D;
 K_GROUP:       G R O U P;
 
 K_LIKE:        L I K E;
+
+K_BM25:        B M '2' '5';
 
 K_TIMEOUT:     T I M E O U T;
 K_PRUNE:       P R U N E;
