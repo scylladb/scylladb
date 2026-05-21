@@ -354,6 +354,22 @@ async def validate_addrs_unused(addresses: list[str]) -> None:
         diagnostics = f"Command: {shlex.join(ss_command)}\nOutput (expected empty):\n{ss_output.decode()}"
         raise AddressAlreadyInUseException(addresses, diagnostics)
 
+def write_rackdc_properties(cluster_workdir: PathLike, addr: str, dc: str, rack: str) -> None:
+    """Write a node-local rack/DC configuration file for the snitch."""
+    conf_dir = os.path.realpath(f"{cluster_workdir}/{addr}/conf")
+    os.makedirs(conf_dir, exist_ok=True)
+    with open(f"{conf_dir}/cassandra-rackdc.properties", "w") as f:
+        f.write(f"dc={dc}\n")
+        f.write(f"rack={rack}\n")
+
+def prepare_node_conf(cluster_workdir: PathLike, addr: str, dc: str, rack: str) -> None:
+    """Populate a node-local conf directory and apply its rack/DC settings."""
+    node_workdir = os.path.realpath(f"{cluster_workdir}/{addr}")
+    conf_dir = f"{node_workdir}/conf"
+    if not os.path.exists(conf_dir):
+        shutil.copytree(os.path.realpath("../conf"), conf_dir)
+    write_rackdc_properties(cluster_workdir=cluster_workdir, addr=addr, dc=dc, rack=rack)
+
 async def start_node(executable: PathLike, cluster_workdir: PathLike, addr: str, seed: str, cluster_name: str, extra_opts: list[str]) -> Process:
     """Starts a Scylla node.
     Its --workdir will be $cluster_workdir/$addr/, its log file will be $cluster_workdir/$addr.log,
@@ -364,12 +380,13 @@ async def start_node(executable: PathLike, cluster_workdir: PathLike, addr: str,
     # The directory change to it happens via the cwd=cluster_workdir in run()
     llvm_profile_file = f"{addr}-%m.profraw"
     scylla_workdir = f"{addr}"
+    scylla_home = os.path.realpath(f"{cluster_workdir}/{scylla_workdir}")
     logfile = f"{addr}.log"
     socket = maintenance_socket_path(cluster_workdir, addr)
     command = [
         "env",
         f"LLVM_PROFILE_FILE={llvm_profile_file}",
-        f"SCYLLA_HOME={os.path.realpath(os.getcwd())}", # We assume that the script has Scylla's `conf/` as its filesystem neighbour.
+        f"SCYLLA_HOME={scylla_home}",
         os.path.realpath(executable),
         f"--workdir={scylla_workdir}",
         f"--maintenance-socket={socket}",
@@ -433,6 +450,7 @@ async def start_cluster(executable: PathLike, addrs: list[str], cpusets: Optiona
     seed = addrs[0]
     try:
         for i in range(0, len(addrs)):
+            prepare_node_conf(cluster_workdir=workdir, addr=addrs[i], dc="dc1", rack=f"rack{i + 1}")
             proc = await start_node(executable, addr=addrs[i], seed=seed, cluster_workdir=workdir, cluster_name=cluster_name, extra_opts=extra_opts+cpuset_args[i])
             procs.append(proc)
             await wait_for_node(proc, addrs[i], timeout)
