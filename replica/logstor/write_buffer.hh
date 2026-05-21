@@ -114,19 +114,22 @@ public:
 
     struct buffer_header {
         uint32_t magic;
-        uint32_t data_size; // size of all records data following the buffer_header
-        segment_generation seg_gen;
         segment_kind kind;
         uint8_t version;
+        uint16_t reserved;
+        segment_sequence segment_seq;
+        uint32_t data_size; // size of all records data following the header(s)
         uint32_t crc;
 
         uint32_t calculate_crc() const;
     };
     static constexpr size_t buffer_header_size =
-        2 * sizeof(uint32_t)
-        + sizeof(segment_generation::underlying)
+        sizeof(uint32_t)
         + sizeof(std::underlying_type_t<segment_kind>)
         + sizeof(uint8_t)
+        + sizeof(uint16_t)
+        + sizeof(segment_sequence)
+        + sizeof(uint32_t)
         + sizeof(uint32_t);
     static_assert(buffer_header_size % record_alignment == 0, "Buffer header size must be aligned by record_alignment");
 
@@ -234,8 +237,6 @@ public:
         return s;
     }
 
-    static void write_empty_header(ostream& out, segment_generation seg_gen);
-
     static bool validate_header(const buffer_header& bh);
 
 private:
@@ -243,7 +244,7 @@ private:
     const char* data() const noexcept { return _buffer.get(); }
 
     // table is set for segment_kind::full
-    void write_header(segment_generation seg_gen, std::optional<table_id> table);
+    void write_header(segment_sequence segment_seq, std::optional<table_id> table);
 
     // get all write records in the buffer.
     // with_record_copy must be to true when creating the write_buffer.
@@ -329,30 +330,33 @@ struct serializer<replica::logstor::write_buffer::buffer_header> {
     template <typename Output>
     static void write(Output& out, const replica::logstor::write_buffer::buffer_header& h) {
         serializer<uint32_t>::write(out, h.magic);
-        serializer<uint32_t>::write(out, h.data_size);
-        serializer<replica::logstor::segment_generation>::write(out, h.seg_gen);
         serializer<uint8_t>::write(out, static_cast<uint8_t>(h.kind));
         serializer<uint8_t>::write(out, h.version);
+        serializer<uint16_t>::write(out, h.reserved);
+        serializer<uint64_t>::write(out, h.segment_seq.value);
+        serializer<uint32_t>::write(out, h.data_size);
         serializer<uint32_t>::write(out, h.crc);
     }
     template <typename Input>
     static replica::logstor::write_buffer::buffer_header read(Input& in) {
         replica::logstor::write_buffer::buffer_header h;
         h.magic = serializer<uint32_t>::read(in);
-        h.data_size = serializer<uint32_t>::read(in);
-        h.seg_gen = serializer<replica::logstor::segment_generation>::read(in);
         h.kind = static_cast<replica::logstor::segment_kind>(serializer<uint8_t>::read(in));
         h.version = serializer<uint8_t>::read(in);
+        h.reserved = serializer<uint16_t>::read(in);
+        h.segment_seq = replica::logstor::segment_sequence{serializer<uint64_t>::read(in)};
+        h.data_size = serializer<uint32_t>::read(in);
         h.crc = serializer<uint32_t>::read(in);
         return h;
     }
     template <typename Input>
     static void skip(Input& in) {
         serializer<uint32_t>::skip(in);
+        serializer<uint8_t>::skip(in);
+        serializer<uint8_t>::skip(in);
+        serializer<uint16_t>::skip(in);
+        serializer<uint64_t>::skip(in);
         serializer<uint32_t>::skip(in);
-        serializer<replica::logstor::segment_generation>::skip(in);
-        serializer<uint8_t>::skip(in);
-        serializer<uint8_t>::skip(in);
         serializer<uint32_t>::skip(in);
     }
 };

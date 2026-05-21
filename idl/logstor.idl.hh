@@ -8,6 +8,7 @@
 
 #include "idl/frozen_schema.idl.hh"
 #include "idl/token.idl.hh"
+#include "mutation/timestamp.hh"
 
 namespace replica {
 namespace logstor {
@@ -18,7 +19,7 @@ struct primary_index_key {
 
 class log_record_header {
     replica::logstor::primary_index_key key;
-    replica::logstor::record_generation generation;
+    api::timestamp_type timestamp;
     table_id table;
 };
 

@@ -1113,7 +1113,7 @@ future<> compaction_group::discard_logstor_segments() {
     co_await sm.discard_segments(*_logstor_segments);
 }
 
-future<> compaction_group::flush_separator(std::optional<size_t> seq_num) {
+future<> compaction_group::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
     auto units = co_await get_units(_separator_flush_sem, 1);
     auto pending = std::exchange(_separator_flushes, {});
     if (_logstor_separator && (!seq_num || _logstor_separator->min_seq_num < *seq_num)) {
@@ -2611,7 +2611,7 @@ void table::try_trigger_compaction(compaction_group& cg) noexcept {
     }
 }
 
-future<> table::flush_separator(std::optional<size_t> seq_num) {
+future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
     if (!uses_logstor()) {
         co_return;
     }

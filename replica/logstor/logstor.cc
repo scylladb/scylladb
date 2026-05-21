@@ -21,6 +21,25 @@ namespace replica::logstor {
 
 seastar::logger logstor_logger("logstor");
 
+static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
+    const auto& partition = m.partition();
+
+    for (const auto& row_entry : partition.clustered_rows()) {
+        if (row_entry.dummy()) {
+            continue;
+        }
+        if (!row_entry.row().marker().is_missing()) {
+            return row_entry.row().marker().timestamp();
+        }
+    }
+
+    if (const auto partition_tombstone = partition.partition_tombstone(); partition_tombstone) {
+        return partition_tombstone.timestamp;
+    }
+
+    throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
+}
+
 logstor::logstor(logstor_config config)
     : _segment_manager(config.segment_manager_cfg)
     , _write_buffer(_segment_manager, config.flush_sg) {
@@ -73,33 +92,32 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
     table_id table = m.schema()->id();
     auto& index = cg.get_logstor_index();
 
-    // TODO ?
-    record_generation gen = index.get(key)
-        .transform([](const index_entry& entry) {
-            return entry.generation + 1;
-         }).value_or(record_generation(1));
+    const auto ts = extract_logstor_record_timestamp(m);
 
     log_record record {
         .header = {
             .key = key,
-            .generation = gen,
+            .timestamp = ts,
             .table = table,
         },
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record), &cg, std::move(cg_holder)).then_unpack([this, &index, gen, key = std::move(key)]
+    return _write_buffer.write(std::move(record), &cg, std::move(cg_holder)).then_unpack([this, &index, ts, key = std::move(key)]
             (log_location location, seastar::gate::holder op) {
         index_entry new_entry {
             .location = location,
-            .generation = gen,
+            .timestamp = ts,
         };
 
-        auto old_entry = index.exchange(key, std::move(new_entry));
+        auto [inserted, prev_entry] = index.insert(key, std::move(new_entry));
 
-        // If overwriting, free old record
-        if (old_entry) {
-            _segment_manager.free_record(old_entry->location);
+        if (!inserted) {
+            // A newer entry already exists; free the record we just wrote.
+            _segment_manager.free_record(location);
+        } else if (prev_entry) {
+            // Overwrote an older entry; free it.
+            _segment_manager.free_record(prev_entry->location);
         }
     }).handle_exception([] (std::exception_ptr ep) {
         logstor_logger.error("Error writing mutation: {}", ep);
@@ -292,7 +310,7 @@ void logstor::set_trigger_compaction_hook(std::function<void()> fn) {
     _segment_manager.set_trigger_compaction_hook(std::move(fn));
 }
 
-void logstor::set_trigger_separator_flush_hook(std::function<void(size_t)> fn) {
+void logstor::set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
     _segment_manager.set_trigger_separator_flush_hook(std::move(fn));
 }
 

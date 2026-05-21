@@ -33,7 +33,6 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     // when freeing a record, increase by the record's net data size
     size_t free_space{0};
     size_t record_count{0};
-    segment_generation seg_gen{1};
     segment_set* owner{nullptr}; // non-owning, set when added to a segment_set
     int ref_count{0};
 
@@ -44,10 +43,6 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
 
     size_t net_data_size(size_t segment_size) const noexcept {
         return segment_size - free_space;
-    }
-
-    void on_free_segment() noexcept {
-        ++seg_gen;
     }
 
     void on_write(size_t net_data_size, size_t cnt = 1) noexcept {
@@ -160,7 +155,7 @@ struct separator_buffer {
     write_buffer* buf;
     utils::chunked_vector<future<>> pending_updates;
     utils::chunked_vector<segment_ref> held_segments;
-    std::optional<size_t> min_seq_num;
+    std::optional<segment_sequence> min_seq_num;
     bool flushed{false};
 
     separator_buffer(write_buffer* wb)

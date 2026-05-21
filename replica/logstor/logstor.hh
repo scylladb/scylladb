@@ -74,7 +74,7 @@ public:
                                        tracing::trace_state_ptr trace_state = nullptr);
 
     void set_trigger_compaction_hook(std::function<void()> fn);
-    void set_trigger_separator_flush_hook(std::function<void(size_t)> fn);
+    void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn);
 };
 
 } // namespace logstor

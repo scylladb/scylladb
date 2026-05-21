@@ -165,11 +165,14 @@ A serialized form of `write_buffer::buffer_header`.
 | Offset | Size | Field       | Description |
 |--------|------|-------------|-------------|
 | 0      | 4    | `magic`     | `0x4C475342` ("LGSB"). Used to detect valid buffers during recovery. |
-| 4      | 4    | `data_size` | Size in bytes of all record data following the header(s). |
-| 8      | 2    | `seg_gen`   | Segment generation number. Incremented each time the segment slot is reused. Used during recovery to discard stale data. |
-| 10     | 1    | `kind`      | Segment kind: `0` = mixed, `1` = full. |
-| 11     | 1    | `version`   | Version of the write buffer format. |
-| 12     | 4    | `crc`       | CRC32 of all other fields in the buffer header. Used for validating the header. |
+| 4      | 1    | `kind`      | Segment kind: `0` = mixed, `1` = full. |
+| 5      | 1    | `version`   | Version of the write buffer format. |
+| 6      | 2    | `reserved`  | Reserved for future use. Currently written as zero and included in the CRC. |
+| 8      | 8    | `segment_seq` | Monotonic segment sequence number used during recovery and segment ordering checks. |
+| 16     | 4    | `data_size` | Size in bytes of all record data following the header(s). |
+| 20     | 4    | `crc`       | CRC32 of all preceding buffer header fields. Used for validating the header. |
+
+The buffer header is 24 bytes long, which keeps it aligned to `record_alignment` (8 bytes).
 
 #### Segment Header (full segments only)
 
@@ -179,9 +182,9 @@ A serialized form of `write_buffer::segment_header`.
 
 | Offset | Size | Field         | Description |
 |--------|------|---------------|-------------|
-| 16     | 16   | `table`       | UUID of the table this segment belongs to. |
-| 32     | 8    | `first_token` | Minimum token of all records in the segment (raw token number). |
-| 40     | 8    | `last_token`  | Maximum token of all records in the segment (raw token number). |
+| 24     | 16   | `table`       | UUID of the table this segment belongs to. |
+| 40     | 8    | `first_token` | Minimum token of all records in the segment (raw token number). |
+| 48     | 8    | `last_token`  | Maximum token of all records in the segment (raw token number). |
 
 #### Records
 
@@ -205,7 +208,7 @@ zero_padding         -- to align to record_alignment (8 bytes)
 
 The `header_size` bytes immediately following the record header are the IDL-serialized form of `log_record_header`, which contains:
 - `key`: the partition key (`primary_index_key`), including a `decorated_key` with a token and partition key bytes.
-- `generation`: a 16-bit write generation number, used during recovery to resolve conflicts when the same key appears in multiple segments.
+- `timestamp`: the timestamp of the record, used to resolve conflicts by keeping the record with the latest timestamp.
 - `table`: UUID of the table this record belongs to.
 
 **Mutation Data**:
