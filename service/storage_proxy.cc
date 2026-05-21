@@ -1473,17 +1473,16 @@ public:
     }
 };
 
-// same mutation for each destination
-class shared_mutation : public mutation_holder {
+class single_mutation_holder : public mutation_holder {
 protected:
     lw_shared_ptr<const frozen_mutation> _mutation;
 public:
-    explicit shared_mutation(frozen_mutation_and_schema&& fm_a_s)
+    explicit single_mutation_holder(frozen_mutation_and_schema&& fm_a_s)
             : _mutation(make_lw_shared<const frozen_mutation>(std::move(fm_a_s.fm))) {
         _size = _mutation->representation().size();
         _schema = std::move(fm_a_s.s);
     }
-    explicit shared_mutation(const mutation& m) : shared_mutation(frozen_mutation_and_schema{freeze(m), m.schema()}) {
+    explicit single_mutation_holder(const mutation& m) : single_mutation_holder(frozen_mutation_and_schema{freeze(m), m.schema()}) {
     }
     virtual bool store_hint(db::hints::manager& hm, locator::host_id hid, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) override {
@@ -1504,12 +1503,27 @@ public:
                 *_mutation, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(),
                 response_id, rate_limit_info, fence);
     }
-    virtual bool is_shared() override {
-        return true;
-    }
     virtual void release_mutation() override {
         _mutation.release();
     }
+};
+
+// same mutation for each destination
+class shared_mutation : public single_mutation_holder {
+public:
+    using single_mutation_holder::single_mutation_holder;
+    bool is_shared() override {
+        return true;
+    }
+};
+
+// A full reconciled mutation used for read-repair writes.
+// is_shared() returns false so that read_repair_write() identifies
+// these writes for metrics and cross-DC forwarding classification.
+class read_repair_reconciled_mutation : public single_mutation_holder {
+public:
+    using single_mutation_holder::single_mutation_holder;
+    bool is_shared() override { return false; }
 };
 
 // shared mutation, but gets sent as a hint
@@ -1669,7 +1683,7 @@ public:
         return sp.remote().send_paxos_learn(ep, timeout, tracing::make_trace_info(tr_state),
                 *_proposal, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(), response_id, fence);
     }
-    virtual bool is_shared() override {
+    bool is_shared() override {
         return true;
     }
     virtual void release_mutation() override {
@@ -2005,6 +2019,17 @@ public:
     }
     storage_proxy::write_stats& stats() {
         return _stats;
+    }
+    // For read-repair: count replicas that already hold the reconciled
+    // data as implicit acknowledgements toward the write CL.
+    void add_read_repair_implicit_acks(size_t nr) {
+        if (!nr) {
+            return;
+        }
+        SCYLLA_ASSERT(read_repair_write());
+        SCYLLA_ASSERT(_cl != db::consistency_level::EACH_QUORUM);
+        _total_endpoints += nr;
+        signal(nr);
     }
     friend storage_proxy;
 
@@ -3291,6 +3316,18 @@ struct read_repair_mutation {
     locator::effective_replication_map_ptr ermp;
 };
 
+struct read_repair_reconciled_write {
+    mutation mut;
+    locator::effective_replication_map_ptr ermp;
+    // Replicas whose mutation-data digest was missing or differed from the
+    // reconciled digest. They receive the full reconciled mutation.
+    lw_shared_ptr<const host_id_vector_replica_set> repair_targets;
+    // Replicas whose mutation-data digest already matched the reconciled digest.
+    // They do not receive a repair mutation, but count as immediate acks toward
+    // the original read CL.
+    size_t implicit_acks = 0;
+};
+
 }
 
 template <> struct fmt::formatter<service::hint_wrapper> : fmt::formatter<string_view> {
@@ -3848,6 +3885,18 @@ storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db
 
     // No rate limiting for read repair
     return make_write_response_handler(std::move(mut.ermp), cl, type, std::move(mh), std::move(endpoints), host_id_vector_topology_change(), host_id_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate(), is_cancellable::no);
+}
+
+result<storage_proxy::response_id_type>
+storage_proxy::create_write_response_handler(const read_repair_reconciled_write& repair, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit, coordinator_mutate_options) {
+    auto r = make_write_response_handler(repair.ermp, cl, type,
+            std::make_unique<read_repair_reconciled_mutation>(repair.mut), *repair.repair_targets,
+            host_id_vector_topology_change{}, host_id_vector_topology_change{}, std::move(tr_state), get_stats(), std::move(permit), std::monostate(), is_cancellable::no);
+    if (!r) {
+        return r;
+    }
+    get_write_response_handler(r.value())->add_read_repair_implicit_acks(repair.implicit_acks);
+    return r;
 }
 
 result<storage_proxy::response_id_type>
@@ -5130,7 +5179,7 @@ class data_read_resolver : public abstract_read_resolver {
     query::short_read _is_short_read;
     std::vector<reply> _data_results;
     size_t _block_for;
-    mutations_per_partition_key_map _diffs;
+    utils::chunked_vector<mutation> _reconciled_mutations;
 private:
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _block_for, response_count() != 0));
@@ -5338,8 +5387,7 @@ private:
     }
 public:
     data_read_resolver(schema_ptr schema, db::consistency_level cl, size_t targets_count, size_t block_for, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, targets_count, timeout),
-    _block_for(block_for),
-    _diffs(10, partition_key::hashing(*_schema), partition_key::equality(*_schema)) {
+    _block_for(block_for) {
         _data_results.reserve(targets_count);
     }
     void add_mutate_data(locator::host_id from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
@@ -5487,46 +5535,9 @@ public:
         }
         _partition_count = reconciled_partitions.size();
 
-        bool has_diff = false;
-
-        // Сalculate differences: iterate over the versions from all the nodes and calculate the difference with the reconciled result.
-        for (auto z : std::views::zip(versions, reconciled_partitions)) {
-            const mutation& m = std::get<1>(z).mut;
-            for (const version& v : std::get<0>(z)) {
-                auto diff = v.par
-                          ? m.partition().difference(schema, (co_await unfreeze_gently(v.par->mut(), _schema)).partition())
-                          : mutation_partition(schema, m.partition());
-                std::optional<mutation> mdiff;
-                if (!diff.empty()) {
-                    has_diff = true;
-                    mdiff = mutation(_schema, m.decorated_key(), std::move(diff));
-                }
-                if (auto [it, added] = _diffs[m.key()].try_emplace(v.from, std::move(mdiff)); !added) {
-                    // A collision could happen only in 2 cases:
-                    // 1. We have 2 versions for the same node.
-                    // 2. `versions` (and or) `reconciled_partitions` are not unique per partition key.
-                    // Both cases are not possible unless there is a bug in the reconcilliation code.
-                    on_internal_error(slogger, fmt::format("Partition key conflict, key: {}, node: {}, table: {}.", m.key(), v.from, schema.ks_name()));
-                }
-                co_await coroutine::maybe_yield();
-            }
-        }
-
-        if (has_diff) {
-            if (got_incomplete_information(schema, cmd, original_row_limit, original_per_partition_limit,
-                                           original_partition_limit, reconciled_partitions, versions)) {
-                co_return std::nullopt;
-            }
-            // filter out partitions with empty diffs
-            for (auto it = _diffs.begin(); it != _diffs.end();) {
-                if (std::ranges::none_of(it->second | std::views::values, std::mem_fn(&std::optional<mutation>::operator bool))) {
-                    it = _diffs.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        } else {
-            _diffs.clear();
+        if (got_incomplete_information(schema, cmd, original_row_limit, original_per_partition_limit,
+                                       original_partition_limit, reconciled_partitions, versions)) {
+            co_return std::nullopt;
         }
 
         find_short_partitions(reconciled_partitions, versions, original_per_partition_limit, original_row_limit, original_partition_limit);
@@ -5548,13 +5559,34 @@ public:
             co_await coroutine::maybe_yield();
         }
 
+        // Store reconciled mutations for the repair write phase.
+        _reconciled_mutations.reserve(reconciled_partitions.size());
+        for (auto& m_a_rc : reconciled_partitions) {
+            _reconciled_mutations.push_back(std::move(m_a_rc.mut));
+        }
+
         co_return reconcilable_result(_total_live_count, std::move(vec), _is_short_read);
     }
     auto total_live_count() const {
         return _total_live_count;
     }
-    auto get_diffs_for_repair() {
-        return std::move(_diffs);
+    auto get_reconciled_mutations() {
+        return std::move(_reconciled_mutations);
+    }
+    // Compute a digest for each replica's mutation-data response.
+    // Must be called BEFORE resolve(), which destructively mutates _data_results.
+    future<std::unordered_map<locator::host_id, query::result_digest>>
+    get_reply_digests(const query::read_command& cmd, query::digest_algorithm da) {
+        std::unordered_map<locator::host_id, query::result_digest> digests;
+        digests.reserve(_data_results.size());
+        for (const auto& r : _data_results) {
+            auto qr = co_await to_data_query_result(
+                    *r.result, _schema, cmd.slice,
+                    cmd.get_row_limit(), cmd.partition_limit,
+                    query::result_options::only_digest(da));
+            digests.emplace(r.from, *qr.digest());
+        }
+        co_return digests;
     }
 };
 
@@ -5811,6 +5843,12 @@ protected:
                     on_read_resolved();
                     co_return;
                 }
+
+                // Compute per-replica digests. Must be called before resolve()
+                // which destructively sorts and mutates _data_results.
+                auto replica_digests = co_await data_resolver->get_reply_digests(
+                        *cmd, digest_algorithm(*_proxy));
+
                 auto rr_opt = co_await data_resolver->resolve(*cmd, original_row_limit(), original_per_partition_row_limit(), original_partition_limit()); // reconciliation happens here
 
                 // We generate a retry if at least one node reply with count live columns but after merge we have less
@@ -5826,32 +5864,57 @@ protected:
                     mlogger.trace("reconciled: {}", rr_opt->pretty_printer(_schema));
 
                     auto result = ::make_foreign(::make_lw_shared<query::result>(
-                            co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), _cmd->partition_limit)));
+                            co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice,
+                            _cmd->get_row_limit(), _cmd->partition_limit,
+                            query::result_options{query::result_request::result_and_digest,
+                                                  digest_algorithm(*_proxy)})));
                     qlogger.trace("reconciled: {}", result->pretty_printer(_schema, _cmd->slice));
 
-                    // Un-reverse mutations for reversed queries. When a mutation comes from a node in mixed-node cluster
-                    // it is reversed in make_mutation_data_request(). So we always deal here with reversed mutations for
-                    // reversed queries. No matter what format. Forward mutations are sent to spare replicas from reversing
-                    // them in the write-path.
-                    auto diffs = data_resolver->get_diffs_for_repair();
-                    if (_cmd->slice.is_reversed()) {
-                        for (auto&& [token, diff] : diffs) {
-                            for (auto&& [address, opt_mut] : diff) {
-                                if (opt_mut) {
-                                    opt_mut = reverse(std::move(opt_mut.value()));
-                                    co_await coroutine::maybe_yield();
-                                }
-                            }
+                    // Classify replicas by comparing digests.
+                    auto reconciled_digest = *result->digest();
+                    host_id_vector_replica_set repair_replicas;
+                    size_t implicit_acks = 0;
+                    for (auto& ep : _all_replicas) {
+                        auto it = replica_digests.find(ep);
+                        if (it != replica_digests.end() && it->second == reconciled_digest) {
+                            ++implicit_acks;
+                        } else {
+                            repair_replicas.push_back(ep);
                         }
                     }
 
-                    // wait for write to complete before returning result to prevent multiple concurrent read requests to
-                    // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
-                    // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
+                    tracing::trace(_trace_state, "read-repair: {} replicas need repair, {} implicit acks",
+                                   repair_replicas.size(), implicit_acks);
+
+                    // Un-reverse reconciled mutations for reversed queries.
+                    auto reconciled_mutations = data_resolver->get_reconciled_mutations();
+                    if (_cmd->slice.is_reversed()) {
+                        for (auto& m : reconciled_mutations) {
+                            m = reverse(std::move(m));
+                            co_await coroutine::maybe_yield();
+                        }
+                    }
+
+                    utils::chunked_vector<read_repair_reconciled_write> repairs;
+                    repairs.reserve(reconciled_mutations.size());
+                    auto repair_targets = make_lw_shared<const host_id_vector_replica_set>(std::move(repair_replicas));
+                    for (auto& m : reconciled_mutations) {
+                        repairs.emplace_back(read_repair_reconciled_write{
+                                .mut = std::move(m),
+                                .ermp = _effective_replication_map_ptr,
+                                .repair_targets = repair_targets,
+                                .implicit_acks = implicit_acks,
+                        });
+                    }
+
                     // Waited on indirectly.
-                    (void)_proxy->schedule_repair(_effective_replication_map_ptr, std::move(diffs), _cl, _trace_state, _permit).then(utils::result_wrap([this, result = std::move(result)] () mutable {
-                        _result_promise.set_value(std::move(result));
-                        return make_ready_future<::result<>>(bo::success());
+                    (void)_proxy->mutate_prepare(std::move(repairs), _cl, db::write_type::SIMPLE, _trace_state, _permit,
+                            db::allow_per_partition_rate_limit::no, storage_proxy::coordinator_mutate_options{})
+                    .then(utils::result_wrap([this, result = std::move(result)] (storage_proxy::unique_response_handler_vector ids) mutable {
+                        return _proxy->mutate_begin(std::move(ids), _cl, _trace_state).then(utils::result_wrap([this, result = std::move(result)] () mutable {
+                            _result_promise.set_value(std::move(result));
+                            return make_ready_future<::result<>>(bo::success());
+                        }));
                     })).then_wrapped([this, exec] (future<::result<>>&& f) {
                         // All errors are handled, it's OK to discard the result.
                         (void)utils::result_try([&] {

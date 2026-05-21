@@ -100,6 +100,7 @@ class migration_manager;
 struct hint_wrapper;
 struct batchlog_replay_mutation;
 struct read_repair_mutation;
+struct read_repair_reconciled_write;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
 using mutations_per_partition_key_map =
@@ -387,6 +388,7 @@ private:
     result<response_id_type> create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
     result<response_id_type> create_write_response_handler(const batchlog_replay_mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
     result<response_id_type> create_write_response_handler(const read_repair_mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
+    result<response_id_type> create_write_response_handler(const read_repair_reconciled_write&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
     result<response_id_type> create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>& proposal,
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
     result<response_id_type> create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token, host_id_vector_replica_set>& meta,
@@ -895,7 +897,7 @@ public:
     friend class paxos_response_handler;
     friend class mutation_holder;
     friend class per_destination_mutation;
-    friend class shared_mutation;
+    friend class single_mutation_holder;
     friend class hint_mutation;
     friend class cas_mutation;
 };
