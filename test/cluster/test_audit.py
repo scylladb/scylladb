@@ -47,6 +47,8 @@ from test.pylib.scylla_cluster import ScyllaVersionDescription
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 # Stable socket path for syslog backends, shared across tests to enable server reuse.
 syslog_socket_path = tempfile.mktemp(prefix="/tmp/scylla-audit-", suffix=".socket")
 
@@ -1949,6 +1951,7 @@ async def test_audit_table_auth(manager: ManagerClient):
 
 # AuditBackendTable, auth (cassandra), rf=3
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 async def test_audit_table_auth_multinode(manager: ManagerClient):
     """Table backend, auth enabled, multi-node (rf=3)."""
     t = CQLAuditTester(manager)
@@ -1987,11 +1990,13 @@ async def test_audit_categories_invalid_standalone(manager: ManagerClient):
     await CQLAuditTester(manager)._test_audit_categories_invalid()
 
 
+@pytest.mark.scylla_resources(cpu=14, mem="7G")
 async def test_insert_failure_standalone(manager: ManagerClient):
     """7-node topology, audit=table, no auth — standalone due to unique topology."""
     await CQLAuditTester(manager)._test_insert_failure_doesnt_report_success()
 
 
+@pytest.mark.scylla_resources(cpu=1, mem="1G")
 async def test_service_level_statements_standalone(manager: ManagerClient):
     """audit=table, auth, cmdline=--smp 1 — standalone due to special cmdline."""
     await CQLAuditTester(manager)._test_service_level_statements()
@@ -2067,6 +2072,7 @@ _syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
 _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_path)
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.parametrize("helper_class,config_changer", [
     pytest.param(AuditBackendTable, CQLAuditTester.AuditSighupConfigChanger, id="table-sighup"),
     pytest.param(AuditBackendTable, CQLAuditTester.AuditCqlConfigChanger, id="table-cql"),
@@ -2080,6 +2086,7 @@ async def test_config_no_liveupdate(manager: ManagerClient, helper_class, config
     await CQLAuditTester(manager)._test_config_no_liveupdate(helper_class, config_changer)
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.parametrize("helper_class,config_changer", [
     pytest.param(AuditBackendTable, CQLAuditTester.AuditSighupConfigChanger, id="table-sighup"),
     pytest.param(AuditBackendTable, CQLAuditTester.AuditCqlConfigChanger, id="table-cql"),
@@ -2093,6 +2100,7 @@ async def test_config_liveupdate(manager: ManagerClient, helper_class, config_ch
     await CQLAuditTester(manager)._test_config_liveupdate(helper_class, config_changer)
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.parametrize("helper_class", [
     pytest.param(AuditBackendTable, id="table"),
     pytest.param(_syslog, id="syslog"),

@@ -218,6 +218,16 @@ def test_update_cmdline_allows_removing_memory_override_without_introducing_one(
 
 # Regression: rejecting a server-add request because of the resource budget must not dirty the cluster.
 @pytest.mark.asyncio
+async def test_add_server_rejects_unannotated_provisioning_without_dirtying_cluster() -> None:
+    cluster = ScyllaCluster(logging.getLogger(__name__), None, 0, lambda params: None)
+
+    with pytest.raises(RuntimeError, match="Scylla provisioning requires"):
+        await cluster.add_server(cmdline=["--smp", "1"])
+
+    assert not cluster.is_dirty
+
+
+@pytest.mark.asyncio
 async def test_add_server_rejects_resource_limit_without_dirtying_cluster() -> None:
     cluster = ScyllaCluster(logging.getLogger(__name__), None, 0, lambda params: None)
     cluster.resource_limit = ScyllaResourceLimit(cores=0, memory_bytes=0)

@@ -20,6 +20,8 @@ from test.cluster.util import delete_discovery_state_and_group0_id, delete_raft_
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 
 def check_tombstone_gc_mode(cql, table, mode):
     s = list(cql.execute(f"DESC {table}"))[0].create_statement
@@ -52,6 +54,7 @@ async def test_default_tombstone_gc_does_not_override(manager: ManagerClient, rf
 
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 async def test_group0_tombstone_gc(manager: ManagerClient):
     """
     Regression test for #15607.
@@ -267,6 +270,7 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason="test only needs to run once - allowing only the 'dev' mode")
 @pytest.mark.skip_mode(mode='debug', reason="test only needs to run once - allowing only the 'dev' mode")
+@pytest.mark.scylla_resources(cpu=2, mem="1G")
 async def test_group0_state_id_failure(manager: ManagerClient):
     """
     Issue #21117 regression test.

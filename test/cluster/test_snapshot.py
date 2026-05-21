@@ -14,7 +14,10 @@ from cassandra.query import SimpleStatement              # type: ignore # pylint
 
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_racks_cluster
+pytestmark = [
+    pytest.mark.prepare_3_racks_cluster,
+    pytest.mark.scylla_resources(cpu=8, mem="4G"),
+]
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,8 @@ import logging
 from test.pylib.tablets import get_tablet_count, get_tablet_replica
 from test.pylib.util import wait_for
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

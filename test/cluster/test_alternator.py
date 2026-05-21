@@ -36,6 +36,8 @@ from test.pylib.tablets import get_tablet_replica
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 # Convenience function to open a connection to Alternator usable by the
 # AWS SDK.
 alternator_config = {
@@ -431,6 +433,7 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
         assert 'Failed to add server' in str(e)
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=16, mem="8G")
 async def test_localnodes_multi_dc_multi_rack(manager: ManagerClient):
     """A test for /localnodes on a more general setup, with multiple DCs and
        multiple racks - an 8-node setup with two DCs, two racks in each, and
@@ -737,6 +740,7 @@ async def test_index_in_rf_rack_valid_keyspace_does_not_require_rf_rack_flag(man
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_index_requires_rf_rack_valid_keyspace(manager: ManagerClient):
     """
     Verify that creating a table with GSI or LSI and adding GSI to an existing table fails if
@@ -842,6 +846,7 @@ async def test_index_requires_rf_rack_valid_keyspace(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_rf_rack_flag_enforces_rf_rack_validity(manager: ManagerClient):
     """
     Verify that the flag `rf_rack_valid_keyspaces` enforces RF-rack-validity.
@@ -1156,6 +1161,7 @@ async def nodes_with_data(manager, ks, cf, host):
 
 @pytest.mark.parametrize("tablets", [True, False])
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=10, mem="5G")
 async def test_zero_token_node_load_balancer(manager, tablets):
     """Test that a zero-token node (a.k.a. coordinator-only or proxy node),
        can be used as an Alternator server-side load balancer as proposed in

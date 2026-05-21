@@ -22,6 +22,8 @@ from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
 import statistics
 
+pytestmark = pytest.mark.scylla_resources(cpu=16, mem="8G")
+
 logger = logging.getLogger(__name__)
 
 

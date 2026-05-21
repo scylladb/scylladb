@@ -10,7 +10,10 @@ import time
 from test.cluster.util import wait_for_token_ring_and_group0_consistency
 import pytest
 
-pytestmark = pytest.mark.prepare_3_racks_cluster
+pytestmark = [
+    pytest.mark.prepare_3_racks_cluster,
+    pytest.mark.scylla_resources(cpu=8, mem="4G"),
+]
 
 
 @pytest.mark.asyncio

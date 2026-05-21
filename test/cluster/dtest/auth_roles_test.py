@@ -18,6 +18,8 @@ from dtest_class import Tester
 from tools.assertions import assert_all, assert_invalid, assert_one
 from tools.log_utils import wait_for_any_log
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__name__)
 
 

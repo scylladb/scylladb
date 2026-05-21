@@ -11,6 +11,8 @@ import pytest
 import logging
 import asyncio
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 GB = 1024 * 1024 * 1024

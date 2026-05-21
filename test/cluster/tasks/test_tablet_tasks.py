@@ -21,6 +21,8 @@ from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.tasks.task_manager_types import TaskStatus, TaskStats
 from test.cluster.tasks import extra_scylla_cmdline_options
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 async def enable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
     for server in servers:
         await manager.api.enable_injection(server.ip_addr, injection, False)

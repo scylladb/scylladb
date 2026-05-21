@@ -32,6 +32,8 @@ from tools.metrics import get_node_metrics
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 
 @pytest.mark.single_node
 class TestCommitLog(Tester):

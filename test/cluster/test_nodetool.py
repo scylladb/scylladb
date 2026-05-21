@@ -4,7 +4,10 @@ import subprocess
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_first_completed
 
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = [
+    pytest.mark.prepare_3_nodes_cluster,
+    pytest.mark.scylla_resources(cpu=10, mem="5G"),
+]
 
 
 async def validate_status_operation(result: str, live_eps: list, down_eps: list, leaving: list, joining: list,

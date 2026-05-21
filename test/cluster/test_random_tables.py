@@ -10,7 +10,10 @@ from cassandra.protocol import InvalidRequest, ReadFailure                      
 from cassandra.query import SimpleStatement                                        # type: ignore
 from test.cluster.util import wait_for_token_ring_and_group0_consistency
 
-pytestmark = pytest.mark.prepare_3_racks_cluster
+pytestmark = [
+    pytest.mark.prepare_3_racks_cluster,
+    pytest.mark.scylla_resources(cpu=6, mem="3G"),
+]
 
 
 # Simple test of schema helper

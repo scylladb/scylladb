@@ -20,6 +20,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for_first_completed
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 logger = logging.getLogger(__name__)
 
 

@@ -22,6 +22,8 @@ import socket
 import time
 from typing import TypeAlias
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

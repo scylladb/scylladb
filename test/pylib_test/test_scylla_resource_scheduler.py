@@ -32,7 +32,7 @@ from test.pylib.scylla_resource_scheduler import (
     scylla_resource_metadata_for_item,
     scylla_resource_timeline_path,
 )
-from test.pylib.scylla_resources import scylla_resource_limit_from_markers
+from test.pylib.scylla_resources import ScyllaResourceLimit, scylla_resource_limit_from_markers, scylla_resource_runtime_limit
 from test.pylib.session_services import SessionServiceManager
 
 
@@ -53,6 +53,22 @@ class FakeItem(FakeMarkedNode):
         self.nodeid = nodeid
         self.path = pathlib.Path(nodeid.split("::", 1)[0])
         self.config = config
+
+
+class IterOnlyMarkedNode:
+    def __init__(self, *marks) -> None:
+        self._marks = {mark.name: mark for mark in marks}
+
+    def get_closest_marker(self, name: str):
+        return None
+
+    def iter_markers(self, name: str | None = None):
+        if name is None:
+            values = self._marks.values()
+        else:
+            mark = self._marks.get(name)
+            values = () if mark is None else (mark,)
+        return iter(values)
 
 
 class FakeSuiteConfig:
@@ -180,6 +196,22 @@ def make_scheduler(
     return scheduler, node1, node2
 
 
+def make_single_node_scheduler(
+        collection: list[str],
+        metadata: dict[str, ScyllaResourceMetadata],
+        cpus: int = 2,
+        tmpdir: pathlib.Path | None = None) -> tuple[ScyllaResourceScheduler, FakeWorker]:
+    scheduler = ScyllaResourceScheduler(FakeConfig(cpus=cpus, tmpdir=tmpdir), numnodes=1, resource_metadata=metadata)
+    node = FakeWorker("gw0")
+    scheduler.add_node(node)
+    scheduler.add_node_collection(node, collection)
+    return scheduler, node
+
+
+def sent_indexes(worker: FakeWorker) -> list[int]:
+    return [index for batch in worker.sent for index in batch]
+
+
 def write_test_sample(
         writer: SQLiteWriter,
         directory: str,
@@ -256,6 +288,41 @@ def test_scylla_resources_unbounded_marker_parsing() -> None:
         "allow_memory_override": True,
         "enforce_usage_limits": False,
     }
+
+
+def test_scylla_resources_marker_lookup_uses_iter_markers() -> None:
+    # Regression test for module-level pytestmark visibility in the scheduler path.
+    limit = scylla_resource_limit_from_markers(IterOnlyMarkedNode(mark("scylla_resources", cpu=6, mem="3G")))
+
+    assert limit == ScyllaResourceLimit(cores=6, memory_bytes=3 * GIB, allow_memory_override=True, enforce_usage_limits=True)
+
+
+def test_unmarked_tests_get_no_runtime_resource_limit() -> None:
+    limit = scylla_resource_runtime_limit(FakeMarkedNode())
+
+    assert limit is None
+
+
+def test_allow_unannotated_provisioning_marker_gets_unbounded_runtime_limit() -> None:
+    limit = scylla_resource_runtime_limit(FakeMarkedNode(mark("allow_unannotated_scylla_provisioning")))
+
+    assert limit == ScyllaResourceLimit(allow_memory_override=False, enforce_usage_limits=False)
+
+
+def test_allow_unannotated_provisioning_marker_rejects_explicit_resource_marker() -> None:
+    with pytest.raises(pytest.UsageError, match="allow_unannotated_scylla_provisioning"):
+        scylla_resource_runtime_limit(
+            FakeMarkedNode(
+                mark("allow_unannotated_scylla_provisioning"),
+                mark("scylla_resources", cpu=6, mem="3G"),
+            )
+        )
+
+
+def test_explicit_marker_overrides_default_runtime_resource_limit() -> None:
+    limit = scylla_resource_runtime_limit(FakeMarkedNode(mark("scylla_resources", cpu=6, mem="3G")))
+
+    assert limit == ScyllaResourceLimit(cores=6, memory_bytes=3 * GIB, allow_memory_override=True, enforce_usage_limits=True)
 
 
 def test_unbounded_resources_still_charge_scheduler() -> None:
@@ -346,6 +413,46 @@ def test_cluster_profile_service_phase_stays_itemized() -> None:
 
     assert list(workqueue) == ["plain", "s3"]
     assert [item_metadata.services for item_metadata in workqueue.values()] == [frozenset(), frozenset({"s3"})]
+
+
+def test_cluster_profile_items_stay_on_same_worker_in_order() -> None:
+    collection = ["a", "b", "c"]
+    metadata = {
+        nodeid: ScyllaResourceMetadata(
+            "cluster:key",
+            SchedulerResource(cores=1, memory_bytes=GIB),
+            cluster_profile_key="key",
+            cluster_reuse="sequential",
+        )
+        for nodeid in collection
+    }
+
+    scheduler, node1, node2 = make_scheduler(collection, metadata, cpus=2)
+
+    scheduler.schedule()
+
+    assert sent_indexes(node1) == [0, 1, 2]
+    assert node2.sent == []
+    assert node1.shutting_down is True
+
+
+def test_scheduler_sends_shutdown_when_only_assigned_work_remains() -> None:
+    collection = ["a", "b", "c"]
+    metadata = {
+        nodeid: ScyllaResourceMetadata(
+            f"item:{nodeid}",
+            SchedulerResource(cores=1, memory_bytes=GIB),
+        )
+        for nodeid in collection
+    }
+
+    scheduler, node = make_single_node_scheduler(collection, metadata, cpus=4)
+
+    scheduler.schedule()
+
+    assert node.shutting_down is True
+    assert sent_indexes(node) == [0, 1, 2]
+    assert len(scheduler.assigned_work[node]) == 3
 
 
 def test_service_requirements_from_marker_and_suite_config() -> None:
@@ -452,10 +559,10 @@ def test_scheduler_only_dispatches_fitting_work() -> None:
 
     scheduler.schedule()
 
-    assert node1.sent == [[0], [1]]
+    assert node1.sent == [[0, 1]]
     assert node2.sent == []
-    assert node1.shutting_down
-    assert node2.shutting_down
+    assert node1.shutting_down is True
+    assert node2.shutting_down is True
 
 
 def test_scheduler_releases_resources_after_completion() -> None:
@@ -468,9 +575,30 @@ def test_scheduler_releases_resources_after_completion() -> None:
     scheduler, node1, node2 = make_scheduler(collection, metadata, cpus=2)
     scheduler.schedule()
 
+    assert node1.sent == [[0, 1, 2]]
+
     scheduler.mark_test_complete(node1, 0)
 
-    assert [2] in node1.sent or [2] in node2.sent
+    assert scheduler._resource_usage_in_use() == SchedulerResource(cores=1, memory_bytes=GIB)
+
+
+def test_scheduler_sends_shutdown_for_single_dispatched_item() -> None:
+    collection = ["a"]
+    metadata = {
+        nodeid: ScyllaResourceMetadata(
+            nodeid,
+            SchedulerResource(cores=1, memory_bytes=GIB),
+        )
+        for nodeid in collection
+    }
+
+    scheduler, node = make_single_node_scheduler(collection, metadata, cpus=4)
+
+    scheduler.schedule()
+
+    assert node.sent == [[0]]
+    assert node.shutting_down is True
+    assert list(scheduler.assigned_work[node]) == ["a"]
 
 
 def test_scheduler_tracks_resource_usage_incrementally() -> None:
@@ -509,7 +637,7 @@ def test_scheduler_dispatch_uses_cached_worker_indexes() -> None:
 
     scheduler.schedule()
 
-    assert node1.sent == [[0], [1]]
+    assert node1.sent == [[0, 1]]
     assert node2.sent == []
 
 
@@ -536,7 +664,7 @@ def test_scheduler_prioritizes_lingering_low_cpu_items() -> None:
 
     scheduler.schedule()
 
-    assert node.sent == [[1], [0]]
+    assert node.sent == [[1, 0]]
 
 
 def test_historical_resource_db_archive_roundtrip(tmp_path: pathlib.Path) -> None:
@@ -764,7 +892,7 @@ def test_wait_heavy_tail_prefetch_behavior(monkeypatch: pytest.MonkeyPatch) -> N
 
     balanced_scheduler.schedule()
 
-    assert balanced_node.sent == [[0], [1]]
+    assert balanced_node.sent == [[0, 1]]
 
     wait_heavy_metadata = {
         nodeid: ScyllaResourceMetadata(
@@ -782,7 +910,7 @@ def test_wait_heavy_tail_prefetch_behavior(monkeypatch: pytest.MonkeyPatch) -> N
 
     wait_heavy_scheduler.schedule()
 
-    assert wait_heavy_node.sent == [[0], [1], [2]]
+    assert wait_heavy_node.sent == [[0, 1, 2]]
 
 
 def test_scheduler_writes_jsonl_timeline(tmp_path: pathlib.Path) -> None:
@@ -851,13 +979,79 @@ def test_scheduler_runs_service_phase_after_service_free_phase() -> None:
     complete(0)
 
     assert service_manager.transitions[0] == frozenset({"s3"})
-    assert [1] in node1.sent or [1] in node2.sent
-    assert [2] in node1.sent or [2] in node2.sent
+    assert [1, 2] in node1.sent or [1, 2] in node2.sent
 
     complete(1)
     complete(2)
 
     assert service_manager.transitions[-1] == frozenset()
+
+
+def test_scheduler_shutdown_unblocks_last_service_free_item_before_phase_shift() -> None:
+    collection = ["test_plain_a", "test_plain_b", "test_s3"]
+    metadata = {
+        "test_plain_a": ScyllaResourceMetadata("test_plain_a", SchedulerResource(cores=1, memory_bytes=GIB)),
+        "test_plain_b": ScyllaResourceMetadata("test_plain_b", SchedulerResource(cores=1, memory_bytes=GIB)),
+        "test_s3": ScyllaResourceMetadata("test_s3", SchedulerResource(cores=1, memory_bytes=GIB), frozenset({"s3"})),
+    }
+    service_manager = FakeServiceManager()
+    scheduler, node1, node2 = make_scheduler(collection, metadata, cpus=2, service_manager=service_manager)
+
+    scheduler.schedule()
+
+    node = node1 if node1.sent else node2
+    other = node2 if node is node1 else node1
+
+    assert node.sent == [[0, 1]]
+    assert other.sent == []
+    assert node.shutting_down is False
+    assert service_manager.transitions == []
+
+    scheduler.mark_test_complete(node, 0)
+
+    # The remaining service-free item cannot start unless the worker gets a
+    # shutdown marker, because the next phase is still blocked on that item.
+    assert node.shutting_down is True
+    assert service_manager.transitions == []
+
+    scheduler.mark_test_complete(node, 1)
+
+    assert service_manager.transitions == [frozenset({"s3"})]
+    assert other.sent == [[2]]
+
+
+def test_deadlock_breaker_retires_only_one_worker_at_a_time() -> None:
+    service_manager = FakeServiceManager()
+    collection = ["plain_a", "plain_b", "test_s3"]
+    metadata = {
+        "plain_a": ScyllaResourceMetadata("plain_a", SchedulerResource(cores=1, memory_bytes=GIB)),
+        "plain_b": ScyllaResourceMetadata("plain_b", SchedulerResource(cores=1, memory_bytes=GIB)),
+        "test_s3": ScyllaResourceMetadata("test_s3", SchedulerResource(cores=1, memory_bytes=GIB), frozenset({"s3"})),
+    }
+    scheduler, node1, node2 = make_scheduler(collection, metadata, cpus=2, service_manager=service_manager)
+
+    scheduler.collection = collection
+    scheduler.total_items = len(collection)
+    scheduler.assigned_work[node1].clear()
+    scheduler.assigned_work[node2].clear()
+    scheduler.assigned_work[node1]["plain_a"] = metadata["plain_a"]
+    scheduler.assigned_work[node2]["plain_b"] = metadata["plain_b"]
+    scheduler._refresh_node_reservation(node1)
+    scheduler._refresh_node_backlog_seconds(node1)
+    scheduler._refresh_node_reservation(node2)
+    scheduler._refresh_node_backlog_seconds(node2)
+    scheduler._set_workqueue(queue_items_from_collection(["test_s3"], metadata))
+    scheduler.active_services = frozenset()
+
+    scheduler._reschedule_all()
+
+    assert len(scheduler.deadlock_break_nodes) == 1
+    assert sum(int(node.shutting_down) for node in (node1, node2)) == 1
+
+    scheduler._reschedule_all()
+
+    assert len(scheduler.deadlock_break_nodes) == 1
+    assert sum(int(node.shutting_down) for node in (node1, node2)) == 1
 
 
 def test_scheduler_merges_service_sets_into_shared_phase() -> None:
@@ -871,11 +1065,11 @@ def test_scheduler_merges_service_sets_into_shared_phase() -> None:
 
     scheduler.schedule()
 
-    assert sorted(node1.sent + node2.sent) == [[0], [1]]
+    assert sorted(sent_indexes(node1) + sent_indexes(node2)) == [0, 1]
     assert service_manager.transitions == [frozenset({"ldap", "s3"})]
 
-    first_node = node1 if [0] in node1.sent else node2
-    second_node = node1 if [1] in node1.sent else node2
+    first_node = node1 if any(0 in sent for sent in node1.sent) else node2
+    second_node = node1 if any(1 in sent for sent in node1.sent) else node2
     scheduler.mark_test_complete(first_node, 0)
     scheduler.mark_test_complete(second_node, 1)
 
@@ -1066,7 +1260,6 @@ def test_scheduler_serializes_oversized_work_units() -> None:
     scheduler.mark_test_complete(active_node, 0)
 
     assert sorted(node1.sent + node2.sent) == [[0], [1]]
-    assert (node1.sent == [[0], [1]] and node2.sent == []) or (node1.sent == [] and node2.sent == [[0], [1]])
 
 
 def test_oversized_work_unit_waits_for_idle_worker() -> None:

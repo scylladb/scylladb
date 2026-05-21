@@ -9,6 +9,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
 
 def verify_data(response, expected_data):
     try:

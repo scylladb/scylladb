@@ -17,6 +17,8 @@ import random
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest, Unauthorized
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 async def inject_error_one_shot_on(manager, error_name, servers):

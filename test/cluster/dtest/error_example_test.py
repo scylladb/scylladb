@@ -4,7 +4,11 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import pytest
+
 from dtest_class import Tester, create_ks
+
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 
 MY_NODE = 0

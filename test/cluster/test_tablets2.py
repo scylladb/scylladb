@@ -30,6 +30,8 @@ import re
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 
 async def inject_error_one_shot_on(manager, error_name, servers):
     errs = [inject_error_one_shot(manager.api, s.ip_addr, error_name) for s in servers]
@@ -195,6 +197,7 @@ async def test_table_drop_with_auto_snapshot(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=10, mem="5G")
 async def test_topology_changes(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     servers = await manager.servers_add(3)
@@ -616,7 +619,7 @@ async def test_tablet_cleanup_failure(manager: ManagerClient):
         assert len(ssts) == 0
 
 @pytest.mark.asyncio
-@pytest.mark.scylla_resources(cpu=3, mem="2G")
+@pytest.mark.scylla_resources(cpu=3, mem="1G")
 async def test_tablet_resharding(manager: ManagerClient):
     cmdline = ['--smp=3']
     config = {'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -928,6 +931,7 @@ def get_shard_that_has_tablets(tablet_count_per_shard: list[int]) -> int:
     return -1
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=8, mem="3G")
 async def test_tablet_count_metric_per_shard(manager: ManagerClient):
     # Given two running servers
     shards_count = 4
@@ -1116,6 +1120,7 @@ async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_on
     await asyncio.gather(*[cql.run_async(f"drop keyspace {i}") for i in [ks, ks2]])
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=8, mem="3G")
 async def test_storage_service_api_uneven_ownership_keyspace_and_table_params_used(manager: ManagerClient):
     # Given two running servers
     shards_count = 4
@@ -1385,6 +1390,7 @@ def verify_replicas_per_server(desc: str, expected_replicas_per_server: dict[Ser
 
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_decommission_rack_basic(manager: ManagerClient):
     """
     Test decommissioning of all nodes in a rack
@@ -1427,6 +1433,7 @@ async def test_decommission_rack_basic(manager: ManagerClient):
         verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=16, mem="8G")
 async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
     """
     Test decommissioning a rack, after a rack with new nodes is added
@@ -1480,6 +1487,7 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
         verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_decommission_not_enough_racks(manager: ManagerClient):
     """
     Test that decommissioning a rack fails if the number of rack is
@@ -1672,6 +1680,7 @@ async def test_drop_table_during_streaming(manager: ManagerClient, streaming_mod
 @pytest.mark.asyncio
 @pytest.mark.nightly
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_truncate_during_topology_change(manager: ManagerClient):
     """Test truncate operation during topology change."""
 
@@ -2303,7 +2312,7 @@ async def test_split_and_intranode_synchronization(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.scylla_resources(cpu=2, mem="1G")
+@pytest.mark.scylla_resources(cpu=1, mem="1G")
 async def test_split_stopped_on_shutdown(manager: ManagerClient):
     logger.info('Bootstrapping cluster')
     cfg = { 'enable_tablets': True,

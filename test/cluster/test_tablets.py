@@ -32,6 +32,8 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 # The glob below is designed to match the version-generation-format-component.extension format, e.g.
 # da-3gqu_1hke_4919c2kfgur9y2bm77-bti-Data.db
 # me-1-big-TOC.txt
@@ -76,6 +78,7 @@ async def test_tablet_scaling_option_is_respected(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_tablet_cannot_decommision_below_replication_factor(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -248,6 +251,7 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
 # information that's consistent with system.tablets contents
 @pytest.mark.parametrize("endpoint", ["describe_ring", "range_to_endpoint", "tokens_endpoint"])
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_tablets_api_consistency(manager: ManagerClient, endpoint):
     servers = []
     servers += await manager.servers_add(2, property_file={'dc': f'dc1', 'rack': 'rack1'})
@@ -328,6 +332,7 @@ async def test_singledc_alter_tablets_rf(manager: ManagerClient):
             await change_rf(0) # Trying to decrease the RF by more than 2 should fail.
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=10, mem="5G")
 async def test_arbitrary_multi_rf_change_fails(manager: ManagerClient):
     config = {"rf_rack_valid_keyspaces": "false", "enable_tablets": "true", "tablet_load_stats_refresh_interval_in_seconds": 1}
     cmdline = ['--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
@@ -393,6 +398,7 @@ async def test_arbitrary_multi_rf_change_fails(manager: ManagerClient):
         await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1'], 'dc2': 0, 'dc3': ['r7']}}")
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled"}
 
@@ -435,6 +441,7 @@ async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager:
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     async def get_replication_options(ks: str, host, ip_addr):
         await read_barrier(manager.api, ip_addr)
@@ -539,6 +546,7 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=10, mem="5G")
 async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     async def get_replication_options(ks: str, host, ip_addr):
         await read_barrier(manager.api, ip_addr)
@@ -650,6 +658,7 @@ async def check_system_schema_keyspaces(manager, keyspace, replication, next_rep
         assert res[0].next_replication is None
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_multi_rf_change_multi_dc_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """Test RF changes where each DC transitions only between 0 and N replicas."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -711,6 +720,7 @@ async def test_multi_rf_change_multi_dc_0_N(request: pytest.FixtureRequest, mana
         assert t.replicas[0][0] in dc2_host_ids
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_multi_rf_change_colocated_tables_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """Test RF changes with colocated tables where each DC transitions only between 0 and N replicas."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -759,6 +769,7 @@ async def test_multi_rf_change_colocated_tables_0_N(request: pytest.FixtureReque
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enforce_rack_list", ['false', 'true'])
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: ManagerClient, enforce_rack_list) -> None:
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
     cmdline = ["--enforce-rack-list", enforce_rack_list, "--smp", "2", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
@@ -788,6 +799,7 @@ async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: Mana
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """Test aborting a 0->N RF increase (adding a new DC)."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -866,6 +878,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """Test aborting an N->0 RF decrease (removing a DC). Abort should not be allowed."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -938,6 +951,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """Test concurrent 0->N RF changes across multiple keyspaces."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -1025,6 +1039,7 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """Test aborting an RF change that involves both 0->N increase and N->0 decrease across DCs."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -1671,6 +1686,7 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
     """
     Reproducer for #21826
@@ -1714,6 +1730,7 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_excludenode(manager: ManagerClient):
     """
     Verifies recovery scenario involving marking the node as excluded using excludenode.
@@ -1796,6 +1813,7 @@ async def test_excludenode_shrink_rf(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_token_node: bool):
     """
     Verify that a node cannot be removed with tablets when

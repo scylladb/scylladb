@@ -21,6 +21,9 @@ from cassandra.query import SimpleStatement, BoundStatement # type: ignore
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 # In the test, we create a table and perform a pair of writes to it. The
 # second write should fail due to admission control. We check that this
 # is indeed the error thrown.
@@ -64,6 +67,7 @@ async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
 # write on the slow node.
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_mv_retried_writes_reach_all_replicas(manager: ManagerClient) -> None:
     node_count = 4
     cfg = {'error_injections_at_startup': ['update_backlog_immediately'], 'tablets_mode_for_new_keyspaces': 'enabled'}

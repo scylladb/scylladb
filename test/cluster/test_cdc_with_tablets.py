@@ -20,6 +20,7 @@ import time
 import pytest
 from enum import IntEnum
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
 
 logger = logging.getLogger(__name__)
 

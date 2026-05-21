@@ -17,6 +17,7 @@ from cassandra import ConsistencyLevel
 import pytest
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 
 async def get_snapshot_path(manager:ManagerClient, server, keyspace:str, table:str, snapshot_name:str):

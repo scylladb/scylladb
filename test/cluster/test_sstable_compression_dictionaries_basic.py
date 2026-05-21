@@ -13,6 +13,8 @@ from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.rest_client import read_barrier, ScyllaMetrics
 from cassandra.cluster import ConsistencyLevel, Session as CassandraSession
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 async def get_metrics(manager: ManagerClient, servers: list[ServerInfo]) -> list[ScyllaMetrics]:

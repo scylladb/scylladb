@@ -16,6 +16,8 @@ from dtest_class import Tester, create_cf, create_ks, get_ip_from_node, chosen_s
 from tools.data import create_c1c2_table, insert_c1c2
 from tools.metrics import get_node_metrics
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__file__)
 NUM_OF_QUERY_EXECUTIONS = 100
 

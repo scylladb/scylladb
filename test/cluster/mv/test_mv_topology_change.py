@@ -21,6 +21,7 @@ from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_view
 from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
 
 logger = logging.getLogger(__name__)
 

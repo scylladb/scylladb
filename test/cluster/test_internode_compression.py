@@ -5,6 +5,7 @@
 #
 import logging
 import asyncio
+import pytest
 
 from test.pylib.host_registry import HostRegistry
 from test.pylib.manager_client import ManagerClient
@@ -13,6 +14,7 @@ from test.cluster.util import new_test_keyspace, new_test_table
 from cassandra.cluster import ConsistencyLevel
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 # Refs #27429
 # Transposed/adapted from dtest with same name
@@ -191,4 +193,3 @@ async def test_internode_compression_between_datacenters(request, manager: Manag
         assert max_intra_pkg > msg_size
 
     await do_test_internode_compression_between_datacenters(manager, "dc", check_expected)
-

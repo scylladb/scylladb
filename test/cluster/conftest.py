@@ -26,7 +26,7 @@ from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster_profile import scylla_cluster_profile_from_node
-from test.pylib.scylla_resources import scylla_resource_limit_from_markers
+from test.pylib.scylla_resources import scylla_resource_runtime_limit
 from test.pylib.scylla_cluster import ScyllaClusterManager, ScyllaVersionDescription, get_scylla_2025_1_description
 from test.pylib.suite.base import get_testpy_test
 from test.pylib.suite.python import add_cql_connection_options
@@ -257,7 +257,7 @@ async def manager(request: pytest.FixtureRequest,
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
     cluster_profile = scylla_cluster_profile_from_node(request.node, testpy_test.suite)
-    resource_limit = scylla_resource_limit_from_markers(request.node)
+    resource_limit = scylla_resource_runtime_limit(request.node)
     try:
         if resource_limit is not None:
             await manager_client.set_scylla_resource_limit(**resource_limit.as_manager_kwargs())

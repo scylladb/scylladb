@@ -18,6 +18,8 @@ import cassandra.protocol
 logger = logging.getLogger(__name__)
 CLIENT_ROUTES_CHANGE_EVENT_NAME = "CLIENT_ROUTES_CHANGE"
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 async def wait_for_expected_client_routes_size(cql, expected_routes_size):
     async def expected_client_routes_size(cql, expected_size):
         client_routes = await cql.run_async("SELECT * FROM system.client_routes")
@@ -45,6 +47,7 @@ def generate_client_routes_entry(i):
         "alternator_https_port": 8004
     }
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_client_routes(request, manager: ManagerClient):
     num_servers = 3
@@ -72,6 +75,7 @@ async def test_client_routes(request, manager: ManagerClient):
     await manager.api.client.delete("/v2/client-routes", host=running_server.ip_addr, json=[generate_client_routes_entry(0)])
     await wait_for_expected_client_routes_size(cql, num_servers)
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_client_routes_node_restart(request, manager: ManagerClient):
     """
@@ -135,6 +139,7 @@ async def test_client_routes_upgrade(request, manager: ManagerClient):
     await wait_for(client_routes_ready, time.time() + 60)
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_client_routes_lost_quorum(request, manager: ManagerClient):
     """
@@ -234,6 +239,7 @@ async def test_events(request, manager: ManagerClient, monkeypatch):
     assert received_events[2]["connection_ids"] == [generate_connection_id(0)]
     assert received_events[2]["host_ids"] == [generate_host_id(0)]
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_client_routes_snapshot_transfer(request, manager: ManagerClient, monkeypatch):

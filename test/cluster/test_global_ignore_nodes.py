@@ -10,7 +10,10 @@ import uuid
 import logging
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_racks_cluster
+pytestmark = [
+    pytest.mark.prepare_3_racks_cluster,
+    pytest.mark.scylla_resources(cpu=10, mem="5G"),
+]
 
 
 @pytest.mark.asyncio
@@ -38,5 +41,4 @@ async def test_global_ignored_nodes_list(manager: ManagerClient, random_tables) 
     await manager.server_stop_gracefully(servers[2].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[2].server_id, reuse_ip_addr = False, use_host_id = True)
     await manager.server_add(start=False, replace_cfg=replace_cfg, property_file=servers[2].property_file())
-
 

@@ -11,6 +11,7 @@ from test.cluster.util import new_test_keyspace, new_test_table
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")

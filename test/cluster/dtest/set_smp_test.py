@@ -11,6 +11,7 @@ import pytest
 from dtest_class import Tester
 
 logger = logging.getLogger(__file__)
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 
 @pytest.mark.single_node

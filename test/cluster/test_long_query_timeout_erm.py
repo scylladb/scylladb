@@ -13,6 +13,8 @@ import pytest
 import logging
 import time
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 logger = logging.getLogger(__name__)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio

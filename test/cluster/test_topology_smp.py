@@ -16,6 +16,8 @@ import pytest
 from pytest import FixtureRequest
 import platform
 
+pytestmark = pytest.mark.scylla_resources(cpu=12, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 

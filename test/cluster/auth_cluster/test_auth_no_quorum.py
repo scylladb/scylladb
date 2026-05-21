@@ -14,6 +14,7 @@ from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.cluster.util import trigger_snapshot
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 """
 Tests how cluster behaves when lost quorum. Ideally for operations with CL=1 live part of the

@@ -21,6 +21,8 @@ from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_tablet_count
 from test.pylib.tablets import get_tablet_replicas
 
+pytestmark = pytest.mark.scylla_resources(cpu=12, mem="6G")
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 

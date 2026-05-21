@@ -15,6 +15,8 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import ScyllaMetrics
 
+pytestmark = pytest.mark.scylla_resources(cpu=1, mem="1G")
+
 # main logger
 logger = logging.getLogger(__name__)
 

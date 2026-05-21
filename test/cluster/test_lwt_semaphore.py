@@ -12,6 +12,7 @@ import pytest
 from cassandra.protocol import WriteTimeout
 from test.cluster.util import new_test_keyspace
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')

@@ -15,6 +15,7 @@ from test.pylib.util import unique_name
 from test.cluster.conftest import cluster_con
 from test.cluster.util import create_new_test_keyspace
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 @pytest.mark.asyncio
 async def test_zero_token_nodes_no_replication(manager: ManagerClient):

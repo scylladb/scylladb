@@ -357,17 +357,24 @@ void audit::update_config(const sstring & new_value, std::function<T(const sstri
     // But logging the invalid value must be avoided later, when a different configuration parameter is changed to a correct value.
     // That's why values from _audited_{categories, keyspaces, tables} are logged instead of _cfg.audit_{categories, keyspaces, tables}
 
+    std::vector<std::string> category_entries;
+    for (const auto category : _audited_categories) {
+        category_entries.emplace_back(category_to_string(category));
+    }
+
     // Each table as "keyspace.table_name" like in the configuration file
-    auto table_entries = _audited_tables | std::views::transform([](const auto& pair) {
-        return pair.second | std::views::transform([&](const std::string& table_name) {
-            return fmt::format("{}.{}", pair.first, table_name);
-        });
-    }) | std::views::join;
+    std::vector<std::string> table_entries;
+    for (const auto& [keyspace_name, table_names] : _audited_tables) {
+        table_entries.reserve(table_entries.size() + table_names.size());
+        for (const auto& table_name : table_names) {
+            table_entries.emplace_back(fmt::format("{}.{}", keyspace_name, table_name));
+        }
+    }
 
     logger.info(
         "Audit configuration is updated. Auditing to: \"{}\", with the following categories: \"{}\", keyspaces: \"{}\", and tables: \"{}\".",
         _cfg.audit(),
-        fmt::join(std::views::transform(_audited_categories, category_to_string), ","),
+        fmt::join(category_entries, ","),
         fmt::join(_audited_keyspaces, ","),
         fmt::join(table_entries, ","));
 }

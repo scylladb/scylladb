@@ -22,6 +22,8 @@ from test.cluster.util import new_test_keyspace, wait_for
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 
 @pytest.mark.asyncio
 @pytest.mark.nightly

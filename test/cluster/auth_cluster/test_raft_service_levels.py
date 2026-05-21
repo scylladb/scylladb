@@ -25,6 +25,8 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 logger = logging.getLogger(__name__)
 DRIVER_SL_NAME = "driver"
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 @pytest.mark.asyncio
 async def test_service_levels_snapshot(manager: ManagerClient):
     """

@@ -12,6 +12,8 @@ import pytest
 
 from dtest_class import Tester, create_cf, create_ks
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 
 @pytest.mark.single_node
 class TestCFID(Tester):

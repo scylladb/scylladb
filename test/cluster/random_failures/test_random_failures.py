@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from test.pylib.manager_client import ManagerClient
     from test.cluster.random_failures.cluster_events import ClusterEventType
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
 
 TESTS_COUNT = 1  # number of tests from the whole matrix to run, None to run the full matrix.
 

@@ -17,6 +17,8 @@ import random
 import glob
 import os
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

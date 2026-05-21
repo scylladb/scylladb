@@ -17,6 +17,8 @@ from test.pylib.manager_client import ManagerClient, wait_for_cql_and_get_hosts
 from test.pylib.util import unique_name
 from test.cluster.util import new_test_keyspace
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 

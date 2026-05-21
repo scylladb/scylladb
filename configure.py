@@ -236,12 +236,9 @@ def find_headers(repodir, excluded_dirs):
     walker = os.walk(repodir)
 
     _, dirs, files = next(walker)
-    for excl_dir in excluded_dirs:
-        try:
-            dirs.remove(excl_dir)
-        except ValueError:
-            # Ignore complaints about excl_dir not being in dirs
-            pass
+    excluded = set(excluded_dirs)
+    excluded.update({'branch-run-artifacts', '.venv'})
+    dirs[:] = [d for d in dirs if d not in excluded and not d.startswith('testlog')]
 
     is_hh = lambda f: f.endswith('.hh')
     headers = list(filter(is_hh, files))
@@ -1840,6 +1837,13 @@ def get_warning_options(cxx):
         '-Wno-enum-constexpr-conversion',
     ]
 
+    if 'g++' in os.path.basename(cxx) or os.path.basename(cxx).startswith('gcc'):
+        warnings += [
+            '-Wno-error=non-template-friend',
+            '-Wno-error=type-limits',
+            '-Wno-error=narrowing',
+        ]
+
     warnings = [w
                 for w in warnings
                 if flag_supported(flag=w, compiler=cxx)]
@@ -1962,7 +1966,8 @@ user_cflags = args.user_cflags + f" -ffile-prefix-map={curdir}=."
 user_cflags += ' -DSEASTAR_NO_EXCEPTION_HACK'
 
 # https://github.com/llvm/llvm-project/issues/163007
-user_cflags += ' -fextend-variable-liveness=none'
+if 'clang' in os.path.basename(args.cxx):
+    user_cflags += ' -fextend-variable-liveness=none'
 
 if args.target != '':
     user_cflags += ' -march=' + args.target
@@ -2142,6 +2147,9 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
     # sources) is excluded from the first rule.
     seastar_build_dir = os.path.join(build_dir, mode, 'seastar')
     extra_file_prefix_map = f' -ffile-prefix-map={seastar_build_dir}=. -ffile-prefix-map={seastar_build_dir}/=seastar/'
+    host_ids = get_os_ids()
+    use_io_uring = not ('clang' in os.path.basename(args.cxx) and any(os_id in {'ubuntu', 'debian'} for os_id in host_ids))
+
     seastar_cmake_args = [
         '-DCMAKE_BUILD_TYPE={}'.format(mode_config['cmake_build_type']),
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
@@ -2156,7 +2164,7 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
         '-DSeastar_SCHEDULING_GROUPS_COUNT=24',
-        '-DSeastar_IO_URING=ON',
+        '-DSeastar_IO_URING={}'.format('ON' if use_io_uring else 'OFF'),
     ]
 
     if compiler_cache:
@@ -2323,8 +2331,7 @@ def kmiplib():
     for id in os_ids:
         if id in { 'centos', 'fedora', 'rhel' }:
             return 'rhel84'
-    print('Could not resolve libkmip.a for platform {}'.format(os_ids))
-    sys.exit(1)
+    return None
 
 def target_cpu():
     cpu, _, _ = subprocess.check_output([cxx, '-dumpmachine']).decode('utf-8').partition('-')
@@ -2336,11 +2343,17 @@ def kmip_arch():
         return '64'
     return arch 
 
-kmipc_dir = f'kmipc/kmipc-2.1.0t-{kmiplib()}_{kmip_arch()}'
-kmipc_lib = f'{kmipc_dir}/lib/libkmip.a'
-if os.path.exists(kmipc_lib):
-    libs += f' {kmipc_lib}'
-    user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
+kmip_distrib = kmiplib()
+if kmip_distrib is not None:
+    kmipc_dir = f'kmipc/kmipc-2.1.0t-{kmip_distrib}_{kmip_arch()}'
+    kmipc_lib = f'{kmipc_dir}/lib/libkmip.a'
+    if os.path.exists(kmipc_lib):
+        libs += f' {kmipc_lib}'
+        user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
+    else:
+        print(f'Note: KMIP support disabled, missing optional bundle {kmipc_lib}')
+else:
+    print(f'Note: KMIP support disabled on platform {get_os_ids()}')
 
 def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags = [
@@ -2810,7 +2823,7 @@ def write_build_file(f,
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} || {" ".join(serializers)}\n')
-                flags = '-Wno-parentheses-equality'
+                flags = '-Wno-parentheses-equality' if 'clang' in os.path.basename(args.cxx) else ''
                 if cc.endswith('Parser.cpp'):
                     # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
                     flags += ' -O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''

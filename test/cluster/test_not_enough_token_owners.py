@@ -11,6 +11,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
 
 @pytest.mark.asyncio
 async def test_not_enough_token_owners(manager: ManagerClient):

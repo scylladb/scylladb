@@ -13,6 +13,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError
 from test.pylib.util import wait_for
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

@@ -11,6 +11,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import create_new_test_keyspace
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("mode", ['vnode', 'tablet'])

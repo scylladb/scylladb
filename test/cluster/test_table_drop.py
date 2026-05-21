@@ -7,6 +7,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import unique_name
 import pytest
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

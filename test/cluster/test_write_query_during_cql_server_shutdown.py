@@ -16,6 +16,8 @@ from test.cluster.util import new_test_keyspace
 from test.cluster.test_tablets2 import inject_error_on
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
@@ -91,5 +93,4 @@ async def test_write_query_during_cql_server_shutdown(request: pytest.FixtureReq
 
         logger.info("Waiting for the shutdown to complete")
         await shutdown_task
-
 

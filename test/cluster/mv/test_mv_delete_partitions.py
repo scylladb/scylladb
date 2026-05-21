@@ -13,6 +13,8 @@ from test.pylib.util import wait_for_view
 from test.cluster.util import new_test_keyspace, new_test_table, new_materialized_view
 from cassandra.cqltypes import Int32Type
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 async def insert_with_concurrency(cql, table, value_count, concurrency):

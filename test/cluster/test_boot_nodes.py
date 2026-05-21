@@ -7,6 +7,9 @@
 import pytest
 import time
 import logging
+
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

@@ -11,7 +11,10 @@ import logging
 import asyncio
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = [
+    pytest.mark.prepare_3_nodes_cluster,
+    pytest.mark.scylla_resources(cpu=10, mem="5G"),
+]
 
 
 @pytest.mark.asyncio

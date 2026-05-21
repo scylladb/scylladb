@@ -30,6 +30,7 @@ from cassandra.auth import PlainTextAuthProvider
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 logger = logging.getLogger(__name__)
 

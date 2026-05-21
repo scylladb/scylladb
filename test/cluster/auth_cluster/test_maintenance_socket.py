@@ -20,6 +20,8 @@ import time
 from collections.abc import Generator
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__name__)
 
 CqlClusters = list[Cluster]

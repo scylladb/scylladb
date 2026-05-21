@@ -944,9 +944,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // Maintenance supergroup -- the collection of background low-prio activities
             auto maintenance_supergroup = create_scheduling_supergroup(200).get();
-            auto bandwidth_updater = io_throughput_updater("maintenance supergroup", maintenance_supergroup,
-                    cfg->maintenance_io_throughput_mb_per_sec.is_set() ? cfg->maintenance_io_throughput_mb_per_sec : cfg->stream_io_throughput_mb_per_sec);
             auto maintenance_scheduling_group = create_scheduling_group("maintenance", "mant", 200, maintenance_supergroup).get();
+            auto bandwidth_updater = io_throughput_updater("maintenance scheduling group", maintenance_scheduling_group,
+                    cfg->maintenance_io_throughput_mb_per_sec.is_set() ? cfg->maintenance_io_throughput_mb_per_sec : cfg->stream_io_throughput_mb_per_sec);
 
             smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
                 logalloc::tracker::config st_cfg;

@@ -19,6 +19,8 @@ from test.cluster.util import new_test_keyspace
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_count
 
+pytestmark = pytest.mark.scylla_resources(cpu=12, mem="6G")
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 

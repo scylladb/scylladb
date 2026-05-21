@@ -22,6 +22,7 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 from test.pylib.manager_client import ManagerClient, safe_driver_shutdown
 from test.pylib.util import unique_name
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 class _UseMetadataId(ApplicationInfoBase):
     def add_startup_options(self, options: dict) -> None:

@@ -10,6 +10,8 @@ import pytest
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import wait_for_token_ring_and_group0_consistency
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 

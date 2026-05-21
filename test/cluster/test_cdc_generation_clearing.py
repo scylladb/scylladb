@@ -19,6 +19,7 @@ import logging
 import time
 from typing import Optional
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
 
 logger = logging.getLogger(__name__)
 

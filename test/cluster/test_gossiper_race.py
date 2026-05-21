@@ -11,6 +11,7 @@ import pytest
 from test.cluster.util import get_coordinator_host
 from test.pylib.manager_client import ManagerClient
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')

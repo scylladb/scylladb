@@ -18,6 +18,7 @@ from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 
 async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: list[tuple[str]]):

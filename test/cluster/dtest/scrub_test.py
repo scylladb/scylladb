@@ -25,6 +25,7 @@ from dtest_class import Tester, create_cf, create_ks
 
 logger = logging.getLogger(__name__)
 KEYSPACE = "ks"
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 
 class TestHelper(Tester):

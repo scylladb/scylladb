@@ -17,6 +17,8 @@ from test.pylib.scylla_cluster import gather_safely
 from test.pylib.tablets import get_replica_count_by_host
 from test.pylib.util import wait_for
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
+
 logger = logging.getLogger(__name__)
 
 

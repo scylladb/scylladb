@@ -15,6 +15,7 @@ from test.pylib.rest_client import ScyllaMetrics, inject_error
 from .util import new_test_keyspace, new_test_table
 
 CPP_EXCEPTIONS_METRIC_NAME = "scylla_reactor_cpp_exceptions"
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 class Measurement(NamedTuple):
     run_count: int = 1000

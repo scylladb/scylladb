@@ -21,6 +21,9 @@ import time
 
 from test.cluster.tasks.task_manager_types import TaskID, TaskStats, TaskStatus
 from test.cluster.tasks import extra_scylla_cmdline_options as cmdline
+
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 async def get_status_allow_peer_connection_failure(tm: TaskManagerClient, node_ip: IPAddress, task_id: TaskID) -> Optional[TaskStatus]:

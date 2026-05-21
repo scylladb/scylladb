@@ -18,6 +18,7 @@ import time
 import os
 import threading
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
 
 logger = logging.getLogger(__name__)
 

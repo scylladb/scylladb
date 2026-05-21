@@ -13,6 +13,7 @@ from test.pylib.manager_client import ManagerClient, ServerUpState
 from test.pylib.util import wait_for
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 async def repeat_if_host_unavailable(f):
     async def try_execute(f):
@@ -52,4 +53,3 @@ async def test_auth_password_ensured(manager: ManagerClient) -> None:
 
     logging.info("Run CREATE USER to confirm successful superuser authentication")
     await cql.run_async("CREATE USER normal WITH PASSWORD '123456' NOSUPERUSER")
-

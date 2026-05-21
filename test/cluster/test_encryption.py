@@ -35,6 +35,8 @@ from cassandra.auth import PlainTextAuthProvider
 
 import pytest
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.fixture(scope="function")
@@ -270,6 +272,7 @@ async def test_encryption_table_compression(manager, tmpdir, compression, scylla
                           compression=compression)
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 async def test_reboot(manager, key_provider):
     """Tests SIGKILL restart of 3-node cluster"""
     async def restart(manager: ManagerClient, servers: list[ServerInfo], table_names: list[str]):

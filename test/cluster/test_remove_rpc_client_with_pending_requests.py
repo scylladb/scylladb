@@ -14,6 +14,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, Column, TextType
 from test.pylib.util import wait_for_cql_and_get_hosts
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 

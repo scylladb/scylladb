@@ -19,6 +19,9 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
         reconnect_driver, wait_for_cdc_generations_publishing
 
+
+pytestmark = pytest.mark.scylla_resources(cpu=12, mem="6G")
+
 async def get_group0_schema_version(cql: Session, h: Host) -> UUID | None:
     rs = await cql.run_async("select value from system.scylla_local where key = 'group0_schema_version'", host=h)
     if rs:

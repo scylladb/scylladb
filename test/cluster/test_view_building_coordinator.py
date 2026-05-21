@@ -26,6 +26,8 @@ from cassandra.query import SimpleStatement, BoundStatement # type: ignore
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 VIEW_BUILDING_COORDINATOR_PAUSE_MAIN_LOOP = "view_building_coordinator_pause_main_loop"
 VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK = "view_building_worker_pause_build_range_task"
 
@@ -343,6 +345,7 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
 @pytest.mark.parametrize("operation", ["add", "remove", "decommission", "replace"])
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_node_operation_during_view_building(manager: ManagerClient, operation: str):
     if operation == "remove" or operation == "decommission":
         node_count = 4
@@ -566,6 +569,7 @@ async def test_view_building_failure(manager: ManagerClient):
 
 # Reproduces scylladb/scylladb#25912
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_concurrent_tablet_migrations(manager: ManagerClient):
     """
     The test creates a situation where a single tablet is replicated across

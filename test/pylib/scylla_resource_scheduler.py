@@ -803,6 +803,8 @@ class ScyllaResourceScheduler:
         self.worker_collection_indexes: dict[Any, dict[str, int]] = {}
         self.node_reservations: dict[Any, SchedulerResource] = {}
         self.node_backlog_seconds: dict[Any, float] = {}
+        self.cluster_profile_owners: dict[str, Any] = {}
+        self.deadlock_break_nodes: set[Any] = set()
         self.resource_usage_in_use: SchedulerResource = SchedulerResource()
         self.config = config
         self.resource_metadata = resource_metadata
@@ -869,6 +871,9 @@ class ScyllaResourceScheduler:
         )
         self._record_timeline("item_complete", node=self._node_name(node), nodeid=nodeid)
 
+        self._release_cluster_profile_owner_if_idle(item_metadata.cluster_profile_key)
+        if not workload:
+            self.deadlock_break_nodes.discard(node)
         self._refresh_node_reservation(node)
         self._refresh_node_backlog_seconds(node)
         self._reschedule_after_completion(node)
@@ -907,6 +912,8 @@ class ScyllaResourceScheduler:
         self.worker_collection_indexes.pop(node, None)
         self._drop_node_reservation(node)
         self.node_backlog_seconds.pop(node, None)
+        self._release_cluster_profile_owners_for_node(node)
+        self.deadlock_break_nodes.discard(node)
         if not workload:
             return None
 
@@ -1008,6 +1015,47 @@ class ScyllaResourceScheduler:
             if item_metadata.services.issubset(active_services)
         ]
 
+    def _cluster_profile_owner(self, cluster_profile_key: str | None) -> Any | None:
+        if cluster_profile_key is None:
+            return None
+        return self.cluster_profile_owners.get(cluster_profile_key)
+
+    def _item_locked_to_other_node(self, node: Any, item_metadata: ScyllaResourceMetadata) -> bool:
+        owner = self._cluster_profile_owner(item_metadata.cluster_profile_key)
+        return owner is not None and owner is not node
+
+    def _owned_ready_items(self, node: Any) -> list[tuple[str, ScyllaResourceMetadata]]:
+        active_services = self.active_services or frozenset()
+        return [
+            (nodeid, item_metadata)
+            for nodeid, item_metadata in self.workqueue.items()
+            if item_metadata.cluster_profile_key is not None
+            and self._cluster_profile_owner(item_metadata.cluster_profile_key) is node
+            and item_metadata.services.issubset(active_services)
+        ]
+
+    def _claim_cluster_profile_owner(self, node: Any, cluster_profile_key: str | None) -> None:
+        if cluster_profile_key is None:
+            return
+        owner = self.cluster_profile_owners.get(cluster_profile_key)
+        if owner is None or owner is node:
+            self.cluster_profile_owners[cluster_profile_key] = node
+
+    def _release_cluster_profile_owner_if_idle(self, cluster_profile_key: str | None) -> None:
+        if cluster_profile_key is None:
+            return
+        for workload in self.assigned_work.values():
+            if any(item_metadata.cluster_profile_key == cluster_profile_key for item_metadata in workload.values()):
+                return
+        if any(item_metadata.cluster_profile_key == cluster_profile_key for item_metadata in self.workqueue.values()):
+            return
+        self.cluster_profile_owners.pop(cluster_profile_key, None)
+
+    def _release_cluster_profile_owners_for_node(self, node: Any) -> None:
+        for cluster_profile_key, owner in list(self.cluster_profile_owners.items()):
+            if owner is node:
+                self.cluster_profile_owners.pop(cluster_profile_key, None)
+
     def _tail_item_priority_key(self, fallback_index: int, item_metadata: ScyllaResourceMetadata) -> tuple[float, int, int]:
         return (
             -self._estimated_duration_seconds(item_metadata),
@@ -1072,12 +1120,24 @@ class ScyllaResourceScheduler:
         self._advance_service_phase_if_needed()
         oversized_nodeid: str | None = None
         fit_budget = self._fit_budget_for_node(node)
+
+        for nodeid, item_metadata in self._owned_ready_items(node):
+            resources = item_metadata.resources
+            if not resources.fits_in(self.total_resources):
+                oversized_nodeid = oversized_nodeid or nodeid
+                continue
+            if not resources.fits_in(fit_budget):
+                continue
+            return nodeid
+
         if self._tail_mode():
             ready_items = sorted(
                 enumerate(self._ready_items()),
                 key=lambda item: self._tail_item_priority_key(item[0], item[1][1]),
             )
             for _, (nodeid, item_metadata) in ready_items:
+                if self._item_locked_to_other_node(node, item_metadata):
+                    continue
                 resources = item_metadata.resources
                 if not resources.fits_in(self.total_resources):
                     oversized_nodeid = oversized_nodeid or nodeid
@@ -1102,7 +1162,11 @@ class ScyllaResourceScheduler:
                     continue
                 if not resources.fits_in(fit_budget):
                     continue
-                return bucket[0]
+                for nodeid in bucket:
+                    item_metadata = self.workqueue[nodeid]
+                    if self._item_locked_to_other_node(node, item_metadata):
+                        continue
+                    return nodeid
         if (
             oversized_nodeid is not None
             and self._pending_of(self.assigned_work[node]) == 0
@@ -1111,47 +1175,55 @@ class ScyllaResourceScheduler:
             return oversized_nodeid
         return None
 
-    def _assign_item(self, node: Any, nodeid: str) -> None:
+    def _assign_item(self, node: Any, nodeid: str) -> ScyllaResourceMetadata:
         item_metadata = self.workqueue.pop(nodeid)
         self._remove_item_from_indexes(nodeid, item_metadata)
+        self._claim_cluster_profile_owner(node, item_metadata.cluster_profile_key)
         self.assigned_work[node][nodeid] = item_metadata
         self._refresh_node_reservation(node)
         self._refresh_node_backlog_seconds(node)
-        self._send_item(node, nodeid, item_metadata)
+        return item_metadata
 
-    def _send_item(self, node: Any, nodeid: str, item_metadata: ScyllaResourceMetadata) -> None:
+    def _send_items(self, node: Any, assignments: list[tuple[str, ScyllaResourceMetadata]]) -> None:
         worker_collection_indexes = self.worker_collection_indexes[node]
-        item_index = worker_collection_indexes[nodeid]
-        node.send_runtest_some([item_index])
-        self._record_timeline(
-            "dispatch",
-            node=self._node_name(node),
-            item_index=item_index,
-            nodeid=nodeid,
-            nodeids=[nodeid],
-            resources=item_metadata.resources.to_json(),
-            exceeds_budget=self._item_exceeds_budget(item_metadata),
-            services=sorted(item_metadata.services),
-            active_services=sorted(self.active_services or ()),
-            workqueue_items=len(self.workqueue),
-            resource_in_use=self._resource_usage_in_use().to_json(),
-        )
+        item_indexes = [worker_collection_indexes[nodeid] for nodeid, _ in assignments]
+        node.send_runtest_some(item_indexes)
+        for item_index, (nodeid, item_metadata) in zip(item_indexes, assignments):
+            self._record_timeline(
+                "dispatch",
+                node=self._node_name(node),
+                item_index=item_index,
+                nodeid=nodeid,
+                nodeids=[nodeid],
+                resources=item_metadata.resources.to_json(),
+                exceeds_budget=self._item_exceeds_budget(item_metadata),
+                services=sorted(item_metadata.services),
+                active_services=sorted(self.active_services or ()),
+                workqueue_items=len(self.workqueue),
+                resource_in_use=self._resource_usage_in_use().to_json(),
+            )
 
-    def _reschedule(self, node: Any) -> bool:
+    def _dispatch_ready(self, node: Any) -> bool:
         if getattr(node, "shutting_down", False):
             return False
-        if self._prefetch_saturated(node):
-            return False
-        if not self.workqueue:
-            if self._can_shutdown_nodes():
-                self._shutdown_node(node)
-            return False
+        assignments: list[tuple[str, ScyllaResourceMetadata]] = []
+        while True:
+            if self._prefetch_saturated(node):
+                break
+            if not self.workqueue:
+                if not assignments and self._can_shutdown_nodes():
+                    self._shutdown_node(node)
+                break
 
-        nodeid = self._next_fitting_nodeid(node)
-        if nodeid is None:
-            return False
-        self._assign_item(node, nodeid)
-        return True
+            nodeid = self._next_fitting_nodeid(node)
+            if nodeid is None:
+                break
+            assignments.append((nodeid, self._assign_item(node, nodeid)))
+
+        if assignments:
+            self._send_items(node, assignments)
+            return True
+        return False
 
     def _reschedule_all(self) -> None:
         self._advance_service_phase_if_needed()
@@ -1159,10 +1231,28 @@ class ScyllaResourceScheduler:
         while made_progress:
             made_progress = False
             for node in self.nodes:
-                while self._reschedule(node):
+                while self._dispatch_ready(node):
                     made_progress = True
             self._advance_service_phase_if_needed()
             self._send_service_phase_lookahead()
+
+        if self.workqueue and not self.deadlock_break_nodes:
+            available_nodes = [node for node in self.nodes if not getattr(node, "shutting_down", False)]
+            for node in self.nodes:
+                if getattr(node, "shutting_down", False):
+                    continue
+                if len(available_nodes) <= 1:
+                    break
+                if self._pending_of(self.assigned_work[node]) != 1:
+                    continue
+                # xdist will not start a worker's last queued item until it
+                # receives either another queued test or a shutdown marker.
+                # When the scheduler is otherwise stuck, retire one blocked
+                # worker to let that final item run and free resources/services
+                # for the next reschedule pass.
+                self.deadlock_break_nodes.add(node)
+                self._shutdown_node(node)
+                break
 
         if not self.workqueue and self._can_shutdown_nodes():
             for node in self.nodes:
@@ -1174,25 +1264,7 @@ class ScyllaResourceScheduler:
         self.log("Scylla resource scheduler waiting items:", len(self.workqueue), "in-use:", self._resource_usage_in_use())
 
     def _reschedule_after_completion(self, node: Any) -> None:
-        previous_services = self.active_services
-        self._advance_service_phase_if_needed()
-        while self._reschedule(node):
-            pass
-        if self.active_services != previous_services:
-            for other in self.nodes:
-                if other is node:
-                    continue
-                while self._reschedule(other):
-                    pass
-
-        if not self.workqueue and self._can_shutdown_nodes():
-            for candidate in self.nodes:
-                if not getattr(candidate, "shutting_down", False):
-                    self._shutdown_node(candidate)
-
-        self._record_finish_if_done()
-
-        self.log("Scylla resource scheduler waiting items:", len(self.workqueue), "in-use:", self._resource_usage_in_use())
+        self._reschedule_all()
 
     def _advance_service_phase_if_needed(self) -> None:
         if self._has_service_free_remaining():

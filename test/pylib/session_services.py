@@ -232,6 +232,8 @@ class SessionServiceManager:
                 ),
             )
             await minio.start()
+            if minio.port is None:
+                raise RuntimeError("Minio server did not report a listening port")
             self._minio_server = minio
 
             mock_s3_server = MockS3Server(
@@ -245,7 +247,7 @@ class SessionServiceManager:
             await mock_s3_server.start()
             self._mock_s3_server = mock_s3_server
 
-            minio_uri = f"http://{os.environ[minio.ENV_ADDRESS]}:{os.environ[minio.ENV_PORT]}"
+            minio_uri = f"http://{minio.address}:{minio.port}"
             proxy_s3_server = S3ProxyServer(
                 host=await self._lease_host("s3_proxy"),
                 port=9002,

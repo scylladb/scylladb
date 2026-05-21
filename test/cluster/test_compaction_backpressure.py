@@ -14,6 +14,8 @@ import pytest
 import asyncio
 import logging
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__name__)
 
 

@@ -8,6 +8,8 @@ import pytest
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")

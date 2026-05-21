@@ -44,6 +44,8 @@ from tools.retrying import retrying
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 
 class SlowQueriesLoggingError(Exception):
     pass
@@ -114,6 +116,7 @@ class TesterAlternator(BaseAlternator):
         diff = self.compare_table_data(table_name=table_name, expected_table_data=data_before_refresh, node=node1)
         assert not diff, f"The following items are missing:\n{pformat(diff)}"
 
+    @pytest.mark.scylla_resources(cpu=8, mem="4G")
     def test_dynamo_gsi(self):
         self.prepare_dynamodb_cluster(num_of_nodes=4)
         node1 = self.cluster.nodelist()[0]
@@ -201,6 +204,7 @@ class TesterAlternator(BaseAlternator):
         logger.info(f"Reading Alternator queries from node {node2.name}")
         self.get_table_items(table_name=TABLE_NAME, node=node2)
 
+    @pytest.mark.scylla_resources(cpu=12, mem="6G")
     def test_dynamo_queries_on_multi_dc(self):
         self.prepare_dynamodb_cluster(num_of_nodes=3, is_multi_dc=True)
         dc1_node = self.cluster.nodelist()[0]
@@ -214,6 +218,7 @@ class TesterAlternator(BaseAlternator):
         logger.info(f"Reading Alternator queries from node {dc2_node.name} on data-center {dc2_node.data_center}")
         wait_for(func=lambda: not self.compare_table_data(expected_table_data=items, table_name=TABLE_NAME, node=dc2_node, consistent_read=False), timeout=5 * 60, text="Waiting until the DC2 will contain all items that insert in DC1")
 
+    @pytest.mark.scylla_resources(cpu=8, mem="4G")
     def test_dynamo_reads_after_new_node_repair(self):
         num_of_nodes = self._num_of_nodes_for_test(rf=3)
         self.prepare_dynamodb_cluster(num_of_nodes=num_of_nodes)
@@ -249,6 +254,7 @@ class TesterAlternator(BaseAlternator):
                 batch.put_item({"pk": random_string(length=DEFAULT_STRING_LENGTH), "c": i, "a": load})
         self.delete_table(TABLE_NAME, node1)
 
+    @pytest.mark.scylla_resources(cpu=12, mem="6G")
     def test_update_condition_unused_entries_short_circuit(self):
         """
         A test for https://github.com/scylladb/scylla/issues/6572 plus a multi DC configuration
@@ -610,6 +616,7 @@ class TesterAlternator(BaseAlternator):
             if not self.is_found_in_slow_queries_log(name=table, log_result=create_table_results):
                 raise SlowQueriesLoggingError(f"Table {table} not found in slow-query-log full-scan")
 
+    @pytest.mark.scylla_resources(cpu=8, mem="4G")
     def test_slow_query_logging(self):
         """
         Test slow query logging for alternator queries.
@@ -648,6 +655,7 @@ class TesterAlternator(BaseAlternator):
         stress_thread.join()
         decommission_thread.join()
 
+    @pytest.mark.scylla_resources(cpu=8, mem="4G")
     def test_delete_elements_from_a_set(self):
         """
         Verifies https://github.com/scylladb/scylla/commit/253387ea07962d4fd8cb221eb90298b9127caf9f
@@ -678,6 +686,7 @@ class TesterAlternator(BaseAlternator):
         items = self.get_table_items(table_name=TABLE_NAME, node=node1, consistent_read=False, num_of_items=num_of_items)
         assert [item for item in items if NUM_OF_ELEMENTS_IN_SET > len(item["Item"]["hello_set"]) > 0]
 
+    @pytest.mark.scylla_resources(cpu=8, mem="4G")
     def test_ttl_with_load_and_decommission(self):
         """
         1. Configure a table with TTL enabled and an 'expiration' column.

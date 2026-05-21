@@ -23,6 +23,8 @@ import time
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 # This convenience function assumes a table has RF=1 and only a single tablet,
 # and moves it to one specific node "server" - and pins it there (disabling
 # further tablet load-balancing). It is not specified which *shard* on that
@@ -95,6 +97,7 @@ async def test_tablet_mv_simple(manager: ManagerClient):
         assert [(3,2)] == list(await cql.run_async(f"SELECT * FROM {ks}.tv WHERE c=3"))
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_tablet_mv_simple_6node(manager: ManagerClient):
     """A simple reproducer for a bug of forgetting that the view table has a
        different tablet mapping from the base: Using the wrong tablet mapping

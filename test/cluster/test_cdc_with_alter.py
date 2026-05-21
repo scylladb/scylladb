@@ -16,6 +16,9 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
     """ Test writing to a table with CDC enabled while adding and dropping a column.
@@ -131,6 +134,7 @@ async def test_recreate_column_too_soon(manager: ManagerClient):
         with pytest.raises(Exception, match="a column with the same name was dropped too recently"):
             await cql.run_async(f"ALTER TABLE {ks}.test ADD dropped_col int")
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_concurrent_writes_and_drop_column_with_cdc_preimage(manager: ManagerClient):
     """ Test concurrent writes and column drop with CDC preimage enabled.

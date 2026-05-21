@@ -9,6 +9,8 @@ import logging
 import pytest
 from test.pylib.manager_client import ManagerClient
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__name__)
 
 

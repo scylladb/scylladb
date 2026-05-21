@@ -22,6 +22,7 @@ from test.pylib.util import gather_safely, wait_for
 from test.cqlpy import nodetool
 from test.cluster.util import get_topology_coordinator, find_server_by_host_id, keyspace_has_tablets, new_test_keyspace, new_test_table
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
 
 logger = logging.getLogger(__name__)
 

@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 from typing import Optional
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 logger = logging.getLogger(__name__)
 

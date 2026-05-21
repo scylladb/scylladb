@@ -23,6 +23,8 @@ import contextlib
 import typing
 import functools
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 logger = logging.getLogger(__name__)
 
 async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: str):

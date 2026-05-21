@@ -21,10 +21,14 @@ import pytest
 
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_racks_cluster
+pytestmark = [
+    pytest.mark.prepare_3_racks_cluster,
+    pytest.mark.scylla_resources(cpu=6, mem="3G"),
+]
 
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_remove_node_add_column(manager: ManagerClient, random_tables: RandomTables):
     """Add a node, remove an original node, add a column"""
     servers = await manager.running_servers()
@@ -38,6 +42,7 @@ async def test_remove_node_add_column(manager: ManagerClient, random_tables: Ran
 
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_decommission_node_add_column(manager: ManagerClient, random_tables: RandomTables):
     """Add a node, remove an original node, add a column"""
     table = await random_tables.add_table(ncolumns=5)
@@ -155,6 +160,7 @@ async def test_concurrent_removenode_two_initiators_one_dead_node(manager: Manag
         raise Exception("concurrent removenode request should result in a failure, but unexpectedly succeeded")
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=10, mem="5G")
 async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: ManagerClient):
     """
     Tests the execution flow in case of performing remove node
@@ -174,6 +180,7 @@ async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: Manag
             manager.remove_node(servers[0].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=10, mem="5G")
 async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: ManagerClient):
     """
     Tests the execution flow in case of performing remove node
@@ -195,6 +202,7 @@ async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: Mana
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injection is not supported in release mode')
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_decommission_left_token_ring_retry(manager: ManagerClient):
     """
     Tests the execution flow in case of performing decommission node

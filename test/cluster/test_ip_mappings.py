@@ -16,6 +16,8 @@ from test.cluster.util import disable_schema_agreement_wait, new_test_keyspace, 
 
 from cassandra.cluster import ConsistencyLevel, SimpleStatement
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

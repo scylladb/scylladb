@@ -21,7 +21,10 @@ from test.pylib.skip_types import skip_bug
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
+
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.parametrize('replication_factor', [1, 3])
 @pytest.mark.parametrize('mode', ['normal', 'encrypted'])
 @pytest.mark.asyncio
@@ -354,4 +357,3 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     print('Verify all data is intact')
     rows = {r.name: r.value for r in cql.execute(f'SELECT * FROM random_ks.test;')}
     assert rows == {'test_key': 123, 'after_reconfig': 456}, f'Unexpected table content: {rows}'
-

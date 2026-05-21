@@ -34,6 +34,7 @@ from tools.cluster import new_node
 from tools.cluster_topology import generate_cluster_topology
 from tools.log_utils import wait_for_any_log
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
 
 logger = logging.getLogger(__file__)
 

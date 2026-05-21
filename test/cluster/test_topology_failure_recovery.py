@@ -14,6 +14,8 @@ import asyncio
 import random
 import sys
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 def init_random_seed():
@@ -77,6 +79,7 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
 @pytest.mark.asyncio
 @pytest.mark.prepare_3_nodes_cluster
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=8, mem="4G")
 async def test_topology_streaming_failure(request, manager: ManagerClient):
     """Fail streaming while doing a topology operation"""
     init_random_seed()

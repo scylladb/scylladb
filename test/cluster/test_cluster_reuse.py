@@ -110,6 +110,7 @@ async def _first_server_workdir(manager) -> str:
 
 
 @pytest.mark.scylla_cluster(nodes=1)
+@pytest.mark.scylla_resources(cpu=2, mem="1G")
 async def test_profile_cluster_reuses_same_clean_cluster(manager, request: pytest.FixtureRequest) -> None:
     state = _read_profile_state(request)
 

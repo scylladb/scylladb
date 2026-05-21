@@ -24,6 +24,8 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name
 from test.cluster.conftest import cluster_con
 
+pytestmark = pytest.mark.scylla_resources(cpu=14, mem="7G")
+
 logger = logging.getLogger(__name__)
 CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch"}
 

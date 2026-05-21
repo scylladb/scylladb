@@ -12,6 +12,8 @@ import pytest
 import asyncio
 import logging
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -65,4 +67,3 @@ async def test_cleanup_stop(manager: ManagerClient):
 
         await check(keys)
         assert caught_exception == True
-

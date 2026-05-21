@@ -15,6 +15,8 @@ from test.cluster.conftest import cluster_con
 from time import time
 import os
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 # The following test verifies that Scylla avoids making an oversized allocation
 # when generating a large create statement when performing a DESCRIBE statement.
 # The threshold for generating a warning about an oversized allocation is set

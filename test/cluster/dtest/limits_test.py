@@ -14,6 +14,7 @@ from dtest_class import Tester, create_ks
 from test.pylib.skip_types import skip_env
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 # Those are ideal values according to c* specifications
 # they should pass
 
@@ -271,13 +272,13 @@ class TestLimits(Tester):
 
         session.execute("""DROP TABLE test1""")
 
-    @pytest.mark.scylla_resources(cpu=1, mem="2G")
+    @pytest.mark.scylla_resources(cpu=1, mem="3G")
     def test_max_cells(self):
         if self.cluster.scylla_mode == "debug":
             skip_env("client times out in debug mode")
         cluster = self.prepare()
         cluster.set_configuration_options(values={"query_tombstone_page_limit": 9999999, "batch_size_warn_threshold_in_kb": 1024 * 1024, "batch_size_fail_threshold_in_kb": 1024 * 1024, "commitlog_segment_size_in_mb": 64})
-        cluster.populate(1).start(jvm_args=["--smp", "1", "--memory", "2G", "--logger-log-level", "lsa-timing=debug"])
+        cluster.populate(1).start(jvm_args=["--smp", "1", "--memory", "3G", "--logger-log-level", "lsa-timing=debug"])
         node = cluster.nodelist()[0]
 
         session = self.patient_cql_connection(node)

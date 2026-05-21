@@ -25,6 +25,7 @@ import uuid
 import random
 import asyncio
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +237,7 @@ async def test_basic_write_read(manager: ManagerClient):
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=12, mem="5G")
 async def test_multi_shard_write_read(manager: ManagerClient):
     """
     Verify that strongly consistent tables work correctly on non-shard-0.

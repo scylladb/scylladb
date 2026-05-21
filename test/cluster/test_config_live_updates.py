@@ -5,6 +5,7 @@
 import pytest
 from test.pylib.util import wait_for
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 @pytest.mark.asyncio
 async def test_config_live_updates(manager):

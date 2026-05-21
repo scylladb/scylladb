@@ -16,6 +16,8 @@ import time
 import pytest
 import logging
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
@@ -87,4 +89,3 @@ async def test_topology_ops_encrypted(request, manager: ManagerClient, tablets_e
 
     for server in servers:
         await check_node_log_for_failed_mutations(manager, server)
-

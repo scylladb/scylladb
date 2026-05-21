@@ -24,6 +24,8 @@ from cassandra.auth import PlainTextAuthProvider
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace, new_test_table
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 async def get_cpu_metrics(manager: ManagerClient):
     """Utility function for getting the current amount of work (in CPU ms)
        done across all nodes and shards in different scheduling groups.
@@ -280,6 +282,7 @@ async def test_row_ttl_upgrade(manager: ManagerClient):
     assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM ks.tbl2', consistency_level=ConsistencyLevel.QUORUM))))
 
 
+@pytest.mark.scylla_resources(cpu=12, mem="6G")
 async def test_row_ttl_multi_dc(manager: ManagerClient):
     """Check that the TTL feature works correctly on a setup with multiple
        data centers. Rows added in one DC will, of course, get copied to all

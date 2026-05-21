@@ -15,6 +15,9 @@ from test.cluster.util import new_test_keyspace
 from test.cluster.test_view_building_coordinator import mark_all_servers, pause_view_building_tasks, \
         unpause_view_building_tasks, wait_for_some_view_build_tasks_to_get_stuck
 
+
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
+
 async def create_keyspace(cql, disable_tablets=False):
     ks_options = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
     if disable_tablets:

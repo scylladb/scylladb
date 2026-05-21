@@ -15,6 +15,9 @@ from test.cluster.util import new_test_keyspace, reconnect_driver, wait_for_cql_
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> None:
@@ -76,6 +79,7 @@ async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> N
                 return True
         await wait_for(batchlog_empty, time.time() + 60)
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> None:
@@ -140,6 +144,7 @@ async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> No
                 return True
         await wait_for(batchlog_empty, time.time() + 60)
 
+@pytest.mark.scylla_resources(cpu=2, mem="1G")
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_replay_includes_cdc(manager: ManagerClient) -> None:

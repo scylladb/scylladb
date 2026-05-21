@@ -19,6 +19,9 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
         reconnect_driver, wait_for_cdc_generations_publishing
 
 
+pytestmark = pytest.mark.scylla_resources(cpu=14, mem="7G")
+
+
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_raft_recovery_during_join(manager: ManagerClient):

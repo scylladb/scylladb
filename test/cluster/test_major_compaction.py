@@ -12,6 +12,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 async def disable_autocompaction_across_keyspaces(manager: ManagerClient, server_ip_addr: str, *keyspace_list):
@@ -291,4 +293,3 @@ async def test_disable_autocompaction_during_major_compaction(manager: ManagerCl
         await manager.api.message_injection(server.ip_addr, injection)
         await compaction_task
         await log.wait_for(f"Major {ks}.{cf} .* Compacted .*", from_mark=mark, timeout=30)
-

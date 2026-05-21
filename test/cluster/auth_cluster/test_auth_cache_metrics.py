@@ -10,6 +10,8 @@ from test.pylib.manager_client import ManagerClient
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 from cassandra.auth import PlainTextAuthProvider
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="1G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

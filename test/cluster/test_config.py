@@ -13,6 +13,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 async def wait_for_config(manager, server, config_name, value):
     async def config_value_equal():
         await read_barrier(manager.api, server.ip_addr)

@@ -23,6 +23,7 @@ from test.pylib.internal_types import ServerUpState
 from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 # Proxy protocol v2 signature (12 bytes)
 PROXY_V2_SIGNATURE = b'\x0d\x0a\x0d\x0a\x00\x0d\x0a\x51\x55\x49\x54\x0a'

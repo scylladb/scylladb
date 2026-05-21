@@ -19,6 +19,7 @@ from test.pylib.rest_client import inject_error
 
 from .util import new_test_keyspace, new_test_table
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 COORDINATOR_WRITE_TIMEOUTS_METRIC = "scylla_storage_proxy_coordinator_write_timeouts"
 

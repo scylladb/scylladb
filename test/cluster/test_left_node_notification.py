@@ -10,6 +10,8 @@ import asyncio
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import check_token_ring_and_group0_consistency
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 

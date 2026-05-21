@@ -13,6 +13,8 @@ from test.cluster.dtest.alternator_utils import random_string
 from test.cluster.util import new_test_keyspace
 from test.pylib.manager_client import ManagerClient
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 logger = logging.getLogger(__name__)
 
 

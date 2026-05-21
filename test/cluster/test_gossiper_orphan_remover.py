@@ -13,6 +13,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
 from test.pylib.internal_types import ServerInfo
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 logger = logging.getLogger(__name__)
 
 

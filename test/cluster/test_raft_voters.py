@@ -17,6 +17,7 @@ from test.pylib.rest_client import read_barrier
 from test.cluster.conftest import cluster_con
 from test.cluster.util import get_coordinator_host_ids, get_current_group0_config
 
+pytestmark = pytest.mark.scylla_resources(cpu=16, mem="8G")
 
 GROUP0_VOTERS_LIMIT = 5
 
@@ -36,6 +37,7 @@ async def get_number_of_voters(manager: ManagerClient, srv: ServerInfo):
                  marks=pytest.mark.skip_mode(mode='debug', reason='larger topology case is too slow in debug on minipcs')),
 ])
 @pytest.mark.parametrize('stop_gracefully', [True, False])
+@pytest.mark.scylla_resources(cpu=24, mem="12G")
 async def test_raft_voters_multidc_kill_dc(
         manager: ManagerClient, dc1_nodes: int, dc2_nodes: int, dc3_nodes: int, stop_gracefully: bool):
     """

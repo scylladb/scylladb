@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 N_SERVERS = 2
 
 @pytest.fixture

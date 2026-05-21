@@ -229,7 +229,7 @@ class MinioServer:
     async def start(self):
         if self.srv_exe is None:
             self.logger.error("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
-            return
+            raise RuntimeError("Minio executable not found in PATH")
 
         self.log_file = self.log_filename.open("wb")
         os.mkdir(self.rootdir)
@@ -245,7 +245,7 @@ class MinioServer:
                 break
         else:
             self.logger.error("Failed to start Minio server")
-            return
+            raise RuntimeError("Failed to start Minio server")
 
         self._set_environ()
 

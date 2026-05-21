@@ -16,6 +16,8 @@ from test.pylib.random_tables import Column, TextType
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_reboot(request, manager: ManagerClient):

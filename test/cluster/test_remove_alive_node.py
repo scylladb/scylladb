@@ -9,6 +9,7 @@ import asyncio
 import logging
 import pytest
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 @pytest.mark.asyncio
 async def test_removing_alive_node_fails(manager: ManagerClient) -> None:

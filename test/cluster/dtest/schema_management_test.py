@@ -26,6 +26,8 @@ from tools.data import create_c1c2_table, insert_c1c2, query_c1c2, rows_to_list
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 class TestSchemaManagement(Tester):
     def prepare(self, racks_num: int, has_config: bool = True):
         cluster = self.cluster
@@ -43,6 +45,7 @@ class TestSchemaManagement(Tester):
         return cluster
 
 
+    @pytest.mark.scylla_resources(cpu=6, mem="3G")
     def test_prepared_statements_work_after_node_restart_after_altering_schema_without_changing_columns(self):
         cluster = self.prepare(racks_num=3)
 

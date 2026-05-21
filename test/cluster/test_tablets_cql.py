@@ -14,6 +14,9 @@ from test.pylib.rest_client import inject_error_one_shot
 from test.cluster.util import disable_schema_agreement_wait, parse_replication_options, create_new_test_keyspace, \
     new_test_keyspace, get_replication
 
+
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 

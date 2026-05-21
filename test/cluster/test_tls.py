@@ -13,7 +13,10 @@ import logging
 import pytest
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_racks_cluster
+pytestmark = [
+    pytest.mark.prepare_3_racks_cluster,
+    pytest.mark.scylla_resources(cpu=6, mem="3G"),
+]
 
 
 @pytest.mark.asyncio
@@ -100,4 +103,3 @@ async def test_upgrade_to_ssl(manager: ManagerClient) -> None:
             await cql.run_async(f"TRUNCATE {ks}.{cf}")
 
         await cql.run_async(f"DROP TABLE {ks}.{cf};")
-

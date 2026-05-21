@@ -9,6 +9,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import tempfile
 import uuid
 
 from typing import Callable
@@ -23,29 +24,49 @@ from test.pylib.util import gather_safely
 @pytest.fixture(scope="function")
 def volumes_factory(pytestconfig, build_mode, request):
     hash = str(uuid.uuid4())
-    base = pathlib.Path(f"{pytestconfig.getoption("tmpdir")}/{build_mode}/volumes/{hash}")
+    artifact_base = pathlib.Path(f"{pytestconfig.getoption("tmpdir")}/{build_mode}/volumes/{hash}")
+    artifact_base.mkdir(parents=True, exist_ok=True)
+    base = pathlib.Path(tempfile.mkdtemp(prefix=f"scylla-volumes-{hash}-"))
     volumes = []
 
     @dataclass
     class VolumeInfo:
         img: pathlib.Path
         mount: pathlib.Path
+        real_mount: pathlib.Path
         log: pathlib.Path
 
     @contextmanager
     def wrapper(sizes: list[str]):
         try:
             for id, size in enumerate(sizes):
-                path = base / f"scylla-{id}"
-                path.mkdir(parents=True)
+                real_mount = base / f"scylla-{id}"
+                real_mount.mkdir(parents=True)
+                path = artifact_base / f"scylla-{id}"
+                path.symlink_to(real_mount, target_is_directory=True)
 
-                volume = VolumeInfo(path.with_name(f"{path.name}.img"), path, path.with_name(f"{path.name}.log"))
+                volume = VolumeInfo(
+                    real_mount.with_name(f"{real_mount.name}.img"),
+                    path,
+                    real_mount,
+                    path.with_name(f"{path.name}.volume.log"),
+                )
 
                 subprocess.run(["truncate", "-s", size, volume.img], check=True)
-                subprocess.run(["mkfs.ext4", volume.img], check=True, stdout=subprocess.DEVNULL)
-                # -o uid=... and -o gid=... to avoid root:root ownership of mounted files
-                # -o fakeroot to avoid permission denied errors on creating files inside docker
-                subprocess.run(["fuse2fs", "-o", f"uid={os.getuid()}", "-o", f"gid={os.getgid()}", "-o", "fakeroot", volume.img, volume.mount], check=True)
+                with volume.log.open("a", encoding="utf-8") as log:
+                    subprocess.run(["mkfs.ext4", volume.img], check=True, stdout=subprocess.DEVNULL, stderr=log)
+                    # -o uid=... and -o gid=... to avoid root:root ownership of mounted files
+                    # -o fakeroot to avoid permission denied errors on creating files inside docker
+                    subprocess.run([
+                        "fuse2fs",
+                        "-o", f"uid={os.getuid()}",
+                        "-o", f"gid={os.getgid()}",
+                        "-o", "fakeroot",
+                        volume.img,
+                        volume.real_mount,
+                    ], check=True, stdout=log, stderr=log)
+                if not os.path.ismount(volume.real_mount):
+                    raise RuntimeError(f"fuse2fs did not mount {volume.img} on {volume.real_mount}")
                 volumes.append(volume)
             yield volumes
         finally:
@@ -61,11 +82,14 @@ def volumes_factory(pytestconfig, build_mode, request):
 
     for id, volume in enumerate(volumes):
         if preserve_data:
-            shutil.copytree(volume.mount, base.parent.parent / f"scylla-{hash}-{id}", ignore=shutil.ignore_patterns('commitlog*', 'lost+found*'))
-            shutil.copyfile(volume.log, base.parent.parent / f"scylla-{hash}-{id}.log")
+            shutil.copytree(volume.mount, artifact_base.parent.parent / f"scylla-{hash}-{id}", ignore=shutil.ignore_patterns('commitlog*', 'lost+found*'))
+            shutil.copyfile(volume.log, artifact_base.parent.parent / f"scylla-{hash}-{id}.log")
 
-        subprocess.run(["fusermount3", "-u", volume.mount], check=True)
+        if os.path.ismount(volume.real_mount):
+            subprocess.run(["fusermount3", "-u", volume.real_mount], check=True)
         os.unlink(volume.img)
+
+    shutil.rmtree(base, ignore_errors=True)
 
 
 @asynccontextmanager

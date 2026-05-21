@@ -14,6 +14,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
 from test.cluster.util import new_test_keyspace
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 logger = logging.getLogger(__name__)
 

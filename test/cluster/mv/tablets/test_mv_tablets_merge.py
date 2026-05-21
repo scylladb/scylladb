@@ -12,6 +12,8 @@ from test.cluster.util import new_test_keyspace, new_test_table, new_materialize
 from test.pylib.tablets import get_tablet_count
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__name__)
 
 

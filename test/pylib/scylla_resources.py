@@ -153,6 +153,30 @@ def _bool_flag(value: object, marker_name: str, field_name: str) -> bool:
     raise pytest.UsageError(f"@pytest.mark.{marker_name} {field_name} must be a boolean")
 
 
+def _marker_from_node(node: Node, name: str):
+    iter_markers = getattr(node, "iter_markers", None)
+    if iter_markers is not None:
+        marker = next(iter_markers(name), None)
+        if marker is not None:
+            return marker
+
+    return node.get_closest_marker(name)
+
+
+def _allow_unannotated_scylla_provisioning(node: Node, explicit_limit: ScyllaResourceLimit | None = None) -> bool:
+    marker = _marker_from_node(node, "allow_unannotated_scylla_provisioning")
+    if marker is None:
+        return False
+    if marker.args or marker.kwargs:
+        raise pytest.UsageError("@pytest.mark.allow_unannotated_scylla_provisioning does not take arguments")
+    if explicit_limit is not None:
+        raise pytest.UsageError(
+            "Use either @pytest.mark.scylla_cores/@pytest.mark.scylla_resources or "
+            "@pytest.mark.allow_unannotated_scylla_provisioning, not both"
+        )
+    return True
+
+
 def default_scylla_resource_cpus() -> int:
     try:
         return max(1, len(os.sched_getaffinity(0)))
@@ -286,8 +310,8 @@ def scylla_resource_limit_from_payload(payload: dict[str, object] | None) -> Scy
 
 def scylla_resource_limit_from_markers(node: Node) -> ScyllaResourceLimit | None:
     """Return the explicit Scylla resource limit declared on a pytest node."""
-    cores_marker = node.get_closest_marker("scylla_cores")
-    resources_marker = node.get_closest_marker("scylla_resources")
+    cores_marker = _marker_from_node(node, "scylla_cores")
+    resources_marker = _marker_from_node(node, "scylla_resources")
     if cores_marker is not None and resources_marker is not None:
         raise pytest.UsageError("Use either @pytest.mark.scylla_cores or @pytest.mark.scylla_resources, not both")
 
@@ -336,4 +360,14 @@ def scylla_resource_limit_from_markers(node: Node) -> ScyllaResourceLimit | None
             enforce_usage_limits=not unbounded,
         )
 
+    return None
+
+
+def scylla_resource_runtime_limit(node: Node) -> ScyllaResourceLimit | None:
+    """Return the runtime Scylla resource limit enforced for a test node."""
+    explicit_limit = scylla_resource_limit_from_markers(node)
+    if _allow_unannotated_scylla_provisioning(node, explicit_limit):
+        return ScyllaResourceLimit(enforce_usage_limits=False)
+    if explicit_limit is not None:
+        return explicit_limit
     return None

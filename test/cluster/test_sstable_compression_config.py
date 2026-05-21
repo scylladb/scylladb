@@ -19,6 +19,8 @@ from test.cluster.test_alternator import alternator_config, get_alternator
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 
 def yaml_to_cmdline(config):
     cmdline = []
@@ -239,6 +241,7 @@ async def test_cql_base_tables_respect_compression_config(manager: ManagerClient
     """
     Check that the default compression settings for CQL base tables are taken
     from the `sstable_compression_user_table_options` config option.
+
     """
     compression_config = {
         'sstable_compression_user_table_options': {

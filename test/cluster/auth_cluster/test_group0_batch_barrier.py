@@ -13,6 +13,7 @@ from test.pylib.scylla_cluster import ScyllaVersionDescription
 from test.pylib.util import unique_name, wait_for
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')

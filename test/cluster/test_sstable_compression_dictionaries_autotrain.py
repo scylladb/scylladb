@@ -13,6 +13,8 @@ from test.pylib.rest_client import read_barrier
 from cassandra.cluster import ConsistencyLevel
 from test.pylib.rest_client import ScyllaMetrics
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 TIMEOUT = 600

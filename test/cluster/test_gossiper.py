@@ -7,7 +7,10 @@
 from test.pylib.manager_client import ManagerClient
 import pytest
 
-pytestmark = pytest.mark.prepare_3_racks_cluster
+pytestmark = [
+    pytest.mark.prepare_3_racks_cluster,
+    pytest.mark.scylla_resources(cpu=6, mem="3G"),
+]
 
 
 @pytest.mark.asyncio

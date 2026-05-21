@@ -421,6 +421,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "scylla_cluster(nodes, config=None, cmdline=None, property_file=None, auto_rack_dc=None, server_encryption='none', reuse='sequential'): "
         "declare a reusable topology-test cluster profile",
     )
+    config.addinivalue_line(
+        "markers",
+        "allow_unannotated_scylla_provisioning: allow tests to exercise provisioning APIs without a declared Scylla resource budget",
+    )
     config.addinivalue_line("markers", "prepare_3_nodes_cluster: prepare and reuse a default 3-node cluster")
     config.addinivalue_line("markers", "prepare_3_racks_cluster: prepare and reuse a default 3-node, 3-rack cluster")
 

@@ -7,6 +7,7 @@ import pytest
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
 
+pytestmark = pytest.mark.scylla_resources(cpu=16, mem="8G")
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("join_ring", [True, False])

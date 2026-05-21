@@ -12,6 +12,8 @@ import os
 import glob
 import requests
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 def disable_auto_compaction(ip_addr, ks_name, cf_name):

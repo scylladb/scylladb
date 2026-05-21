@@ -8,6 +8,8 @@ from test.pylib.manager_client import ManagerClient
 import pytest
 import logging
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
+
 logger = logging.getLogger(__name__)
 
 

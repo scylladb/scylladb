@@ -28,6 +28,8 @@ import re
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 async def inject_error_on(manager, error_name, servers, params = {}):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False, params) for s in servers]
     await asyncio.gather(*errs)

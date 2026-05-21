@@ -24,24 +24,79 @@ from test.cluster.storage.conftest import space_limited_servers
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 
 def write_generator(table, size_in_kb: int):
     for idx in range(size_in_kb):
         yield f"INSERT INTO {table} (pk, t) VALUES ({idx}, '{'x' * 1020}')"
 
 
+def write_blob_generator(table, start_pk: int, rows: int, value_size: int = 1000):
+    for pk in range(start_pk, start_pk + rows):
+        yield f"INSERT INTO {table} (pk, t) VALUES ({pk}, 0x{os.urandom(value_size).hex()})"
+
+
 class random_content_file:
-    def __init__(self, path: str, size_in_bytes: int):
+    def __init__(self, path: str, size_in_bytes: int | float):
         path = pathlib.Path(path)
         self.filename = path if path.is_file() else path / str(uuid.uuid4())
-        self.size = size_in_bytes if size_in_bytes > 0 else 0
+        self.size = size_in_bytes
+        self._fh = None
+
+    def _fill_exact_size(self, fh, size_in_bytes: int) -> None:
+        if size_in_bytes <= 0:
+            return
+        chunk = os.urandom(min(size_in_bytes, 1024 * 1024))
+        remaining = size_in_bytes
+        while remaining > 0:
+            size = min(len(chunk), remaining)
+            fh.write(chunk[:size])
+            remaining -= size
+
+    def _fill_to_utilization(self, fh, target_ratio: float) -> None:
+        target_ratio = max(0.0, min(target_ratio, 1.0))
+        chunk = os.urandom(1024 * 1024)
+        while True:
+            usage = psutil.disk_usage(self.filename.parent)
+            if usage.used / usage.total >= target_ratio:
+                return
+            remaining = int((target_ratio * usage.total) - usage.used)
+            self._fill_exact_size(fh, min(len(chunk), max(1, remaining)))
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    def open(self):
+        self._fh = open(self.filename, 'wb')
+        if isinstance(self.size, float):
+            self._fill_to_utilization(self._fh, self.size)
+        else:
+            self.append(self.size if self.size > 0 else 0)
+        return self
+
+    def append(self, size_in_bytes: int) -> None:
+        if size_in_bytes <= 0:
+            return
+        if self._fh is None:
+            raise RuntimeError("random_content_file is not open")
+        self._fill_exact_size(self._fh, size_in_bytes)
+        self._fh.flush()
+        os.fsync(self._fh.fileno())
 
     def __enter__(self):
-        with open(self.filename, 'wb') as fh:
-            fh.write(os.urandom(self.size))
+        return self.open()
+
+    def close(self) -> None:
+        if self._fh is not None and not self._fh.closed:
+            self._fh.close()
+        try:
+            os.unlink(self.filename)
+        except FileNotFoundError:
+            pass
+        os.sync()
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
-        os.unlink(self.filename)
+        self.close()
 
 
 async def validate_data_existence(cql, successful_hosts: list[Host], failed_hosts: list[Host], cf: str, pk: int) -> None:
@@ -70,6 +125,34 @@ global_cmdline = ["--disk-space-monitor-normal-polling-interval-in-seconds", "1"
                   ]
 
 
+async def fill_disk_until_critical(log, from_mark: int, workdir: str,
+                                   ceiling_ratio: float = DISK_FILL_TARGET_RATIO,
+                                   chunk_size: int = 256 * 1024) -> tuple[random_content_file, int]:
+    filler = random_content_file(workdir, 0).open()
+    try:
+        while True:
+            try:
+                mark, _ = await log.wait_for("Reached the critical disk utilization level",
+                                             from_mark=from_mark, timeout=0.1)
+                return filler, mark
+            except TimeoutError:
+                pass
+
+            usage = psutil.disk_usage(workdir)
+            if usage.used / usage.total >= ceiling_ratio:
+                mark, _ = await log.wait_for("Reached the critical disk utilization level",
+                                             from_mark=from_mark, timeout=30)
+                return filler, mark
+
+            remaining = int((ceiling_ratio * usage.total) - usage.used)
+            filler.append(min(chunk_size, max(4096, remaining)))
+            await asyncio.sleep(0.05)
+    except Exception:
+        filler.close()
+        raise
+
+
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
@@ -87,8 +170,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
                 wgen = write_generator(cf, 3)
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
+                with random_content_file(workdir, DISK_FILL_TARGET_RATIO):
                     mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
                     for _ in range(2):
                         mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
@@ -122,6 +204,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
                 await cql.run_async(SimpleStatement(next(wgen), consistency_level=ConsistencyLevel.ALL))
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_autotoggle_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
     cmdline = [*global_cmdline,
@@ -145,8 +228,7 @@ async def test_autotoggle_compaction(manager: ManagerClient, volumes_factory: Ca
                     await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
+                with random_content_file(workdir, DISK_FILL_TARGET_RATIO):
                     mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
                     for _ in range(2):
                         mark, _ = await log.wait_for("compaction_manager - Drained", from_mark=mark)
@@ -168,6 +250,7 @@ async def test_autotoggle_compaction(manager: ManagerClient, volumes_factory: Ca
                 await log.wait_for(rf"Major {ks}\.{table} .* Compacted .* sstables to .*", from_mark=mark)
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_critical_utilization_during_decommission(manager: ManagerClient, volumes_factory: Callable) -> None:
@@ -210,8 +293,7 @@ async def test_critical_utilization_during_decommission(manager: ManagerClient, 
                 mark, _ = await log.wait_for("Will set .* stage to streaming", from_mark=mark)
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
+                with random_content_file(workdir, DISK_FILL_TARGET_RATIO):
                     mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
                     mark, _ = await log.wait_for("Refreshing table load stats", from_mark=mark)
                     mark, _ = await log.wait_for("Refreshed table load stats", from_mark=mark)
@@ -223,6 +305,7 @@ async def test_critical_utilization_during_decommission(manager: ManagerClient, 
 
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: Callable) -> None:
@@ -234,9 +317,10 @@ async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: 
         mark = await log.mark()
 
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
-            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
-                for _ in range(30):
-                    await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 100)])
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t blob",
+                                      " WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1") as cf:
+                await asyncio.gather(*[cql.run_async(query) for query in write_blob_generator(cf, 0, 60)])
+                await manager.api.flush_keyspace(servers[0].ip_addr, ks)
                 await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 logger.info("Trigger split compaction")
@@ -246,12 +330,13 @@ async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: 
                 mark, _ = await log.wait_for("split_sstable_rewrite: waiting", from_mark=mark)
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
+                with random_content_file(workdir, DISK_FILL_TARGET_RATIO):
                     mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
-                    await log.wait_for(f"Split task .* for table {cf} .* stopped, reason: Compaction for {cf} was stopped due to: drain", from_mark=mark)
+                    await asyncio.sleep(2)
+                    assert await log.grep(f"compaction.*Split {cf}", from_mark=mark) == []
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
@@ -266,14 +351,13 @@ async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_fa
         s2_log = await manager.server_open_log(servers[1].server_id)
 
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
-            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
-                for _ in range(30):
-                    await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 100)])
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t blob",
+                                      " WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1") as cf:
+                await asyncio.gather(*[cql.run_async(query) for query in write_blob_generator(cf, 0, 60)])
                 await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
+                with random_content_file(workdir, DISK_FILL_TARGET_RATIO):
                     s1_mark, _ = await s1_log.wait_for("Reached the critical disk utilization level", from_mark=s1_mark)
                     for _ in range(2):
                         s1_mark, _ = await s1_log.wait_for("compaction_manager - Drained", from_mark=s1_mark)
@@ -286,9 +370,10 @@ async def test_split_compaction_not_triggered(manager: ManagerClient, volumes_fa
                     assert await s1_log.grep(f"compaction.*Split {cf}", from_mark=s1_mark) == []
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) -> None:
-    async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
+    async with space_limited_servers(manager, volumes_factory, ["30M"]*3, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
         workdir = await manager.server_get_workdir(servers[0].server_id)
@@ -310,9 +395,8 @@ async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) 
                 await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
-                    mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
+                filler, mark = await fill_disk_until_critical(log, mark, workdir)
+                try:
                     for _ in range(2):
                         mark, _ = await log.wait_for("repair - Drained", from_mark=mark)
 
@@ -347,15 +431,18 @@ async def test_tablet_repair(manager: ManagerClient, volumes_factory: Callable) 
                     mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
                     for _ in range(2):
                         mark, _ = await log.wait_for("repair - Drained", from_mark=mark)
+                finally:
+                    filler.close()
 
                 logger.info("With blob file removed, wait for the tablet repair to succeed")
                 mark, _ = await log.wait_for("Dropped below the critical disk utilization level", from_mark=mark)
                 await manager.api.wait_task(servers[0].ip_addr, task_id)
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_autotoggle_reject_incoming_migrations(manager: ManagerClient, volumes_factory: Callable) -> None:
-    async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
+    async with space_limited_servers(manager, volumes_factory, ["30M"]*3, cmdline=global_cmdline) as servers:
         await manager.disable_tablet_balancing()
 
         cql, _ = await manager.get_ready_cql(servers)
@@ -389,9 +476,8 @@ async def test_autotoggle_reject_incoming_migrations(manager: ManagerClient, vol
                 log = await manager.server_open_log(target_server.server_id)
                 mark = await log.mark()
 
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
-                    mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
+                filler, mark = await fill_disk_until_critical(log, mark, workdir)
+                try:
                     for _ in range(2):
                         mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
 
@@ -400,6 +486,8 @@ async def test_autotoggle_reject_incoming_migrations(manager: ManagerClient, vol
                                                 src_shard=source_shard, dst_host=target_host, dst_shard=target_shard,
                                                 token=tablet_info.last_token)
                     mark, _ = await log.wait_for("Streaming for tablet migration .* failed", from_mark=mark)
+                finally:
+                    filler.close()
 
                 logger.info("With blob file removed, wait for DB to drop below the critical disk utilization level")
                 mark, _ = await log.wait_for("Dropped below the critical disk utilization level", from_mark=mark)
@@ -413,11 +501,12 @@ async def test_autotoggle_reject_incoming_migrations(manager: ManagerClient, vol
                 mark, _ = await log.wait_for("Streaming for tablet migration .* successful", from_mark=mark)
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
-    async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=cmd) as servers:
+    async with space_limited_servers(manager, volumes_factory, ["30M"]*3, cmdline=cmd) as servers:
         cql, _ = await manager.get_ready_cql(servers)
         workdir = await manager.server_get_workdir(servers[0].server_id)
         log = await manager.server_open_log(servers[0].server_id)
@@ -425,30 +514,28 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
 
         logger.info("Create and populate test table")
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
-            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t blob",
+                                      " WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1") as cf:
                 table = cf.split('.')[-1]
                 table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{table}'"))[0].id
 
-                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 64)])
+                await asyncio.gather(*[cql.run_async(query) for query in write_blob_generator(cf, 0, 64)])
                 await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 # Ensure that the topology state update reaches the node. We should never reach 5s timeout here.
                 # But one call to retrieve resize_task_info may not be enough as the entry to system.tablets might
                 # not be there yet.
-                async def assert_resize_task_info(table_id, cb):
+                async def wait_for_resize_task_info(table_id, cb):
                     async with asyncio.timeout(5):
-                        while (response := await cql.run_async(f"SELECT resize_task_info from system.tablets where table_id = {table_id};")):
-                            try:
-                                assert cb(response)
-                            except AssertionError:
-                                await asyncio.sleep(0.1)
-                            else:
-                                break
+                        while True:
+                            response = await cql.run_async(f"SELECT resize_task_info from system.tablets where table_id = {table_id};")
+                            if response and cb(response):
+                                return response
+                            await asyncio.sleep(0.1)
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
-                    mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
+                filler, mark = await fill_disk_until_critical(log, mark, workdir)
+                try:
                     for _ in range(2):
                         mark, _ = await log.wait_for("compaction_manager - Drained", from_mark=mark)
 
@@ -468,25 +555,36 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
                     mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
 
                     logger.info("Check if tablet split happened")
-                    await assert_resize_task_info(table_id, lambda response: len(response) == 1 and response[0].resize_task_info is not None)
+                    response = await wait_for_resize_task_info(
+                        table_id,
+                        lambda rows: (
+                            len(rows) == 1 and rows[0].resize_task_info is not None
+                        ) or (
+                            len(rows) == 2 and all(r.resize_task_info is None for r in rows)
+                        ),
+                    )
 
-                    time.sleep(1) # Let the cluster run for a sec to grep for potential errors
-                    assert await log.grep(f"compaction.*Split {cf}", from_mark=mark) == []
+                    if len(response) == 1:
+                        time.sleep(1) # Let the cluster run for a sec to grep for potential errors
+                        assert await log.grep(f"compaction.*Split {cf}", from_mark=mark) == []
+                finally:
+                    filler.close()
 
                 logger.info("With blob file removed, wait for DB to drop below the critical disk utilization level")
                 mark, _ = await log.wait_for("Dropped below the critical disk utilization level", from_mark=mark)
                 for _ in range(2):
                     mark, _ = await log.wait_for("compaction_manager - Enabled", from_mark=mark)
                 mark, _ = await log.wait_for(f"Detected tablet split for table {cf}, increasing from 1 to 2 tablets", from_mark=mark)
-                await assert_resize_task_info(table_id, lambda response: len(response) == 2 and all(r.resize_task_info is None for r in response))
+                await wait_for_resize_task_info(table_id, lambda response: len(response) == 2 and all(r.resize_task_info is None for r in response))
 
 # Verify that new sstable produced by repair cannot be split, if disk utilization level is critical.
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
-    async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=cmd) as servers:
+    async with space_limited_servers(manager, volumes_factory, ["30M"]*3, cmdline=cmd) as servers:
         cql, _ = await manager.get_ready_cql(servers)
         workdir = await manager.server_get_workdir(servers[0].server_id)
         log = await manager.server_open_log(servers[0].server_id)
@@ -494,11 +592,12 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
 
         logger.info("Create and populate test table")
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 2}") as ks:
-            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t blob",
+                                      " WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1") as cf:
                 table = cf.split('.')[-1]
                 table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{table}'"))[0].id
 
-                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 64)])
+                await asyncio.gather(*[cql.run_async(query) for query in write_blob_generator(cf, 0, 64)])
                 await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
                 coord = await get_topology_coordinator(manager)
@@ -519,7 +618,7 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
 
                     await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": table, "what": "throw"})
                     pks = range(256, 512)
-                    await asyncio.gather(*[cql.run_async(insert_stmt, (k, f'{k}')) for k in pks])
+                    await asyncio.gather(*[cql.run_async(insert_stmt, (k, os.urandom(1000))) for k in pks])
                     await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
 
                 await generate_repair_work()
@@ -535,9 +634,8 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
                 await manager.api.disable_injection(coord_serv.ip_addr, "tablet_resize_finalization_postpone")
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
-                    mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
+                filler, mark = await fill_disk_until_critical(log, mark, workdir)
+                try:
                     for _ in range(2):
                         mark, _ = await log.wait_for("compaction_manager - Drained", from_mark=mark)
 
@@ -545,9 +643,9 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
 
                     # Expect repair to fail when splitting new sstables
                     await log.wait_for("Repair for tablet migration of .* failed", from_mark=mark)
-                    await log.wait_for(r"Failed to load SSTable.*\(critical disk utilization\)", from_mark=mark)
-
                     assert await log.grep(f"compaction.*Split {cf}", from_mark=mark) == []
+                finally:
+                    filler.close()
 
                 logger.info("With blob file removed, wait for DB to drop below the critical disk utilization level")
                 mark, _ = await log.wait_for("Dropped below the critical disk utilization level", from_mark=mark)
@@ -589,8 +687,8 @@ async def test_sstables_incrementally_released_during_streaming(manager: Manager
                "--logger-log-level", "load_balancer=debug",
                "--logger-log-level", "debug_error_injection=debug"
                ]
-    # the coordinator needs more space, so creating a 40M volume for it.
-    async with space_limited_servers(manager, volumes_factory, ["40M", "20M"], cmdline=cmdline,
+    # The baseline major compaction also needs some headroom on the source node.
+    async with space_limited_servers(manager, volumes_factory, ["40M", "30M"], cmdline=cmdline,
                                      property_file=[{"dc": "dc1", "rack": "r1"}]*2) as servers:
         cql, _ = await manager.get_ready_cql(servers)
 
@@ -631,8 +729,7 @@ async def test_sstables_incrementally_released_during_streaming(manager: Manager
                 await manager.enable_tablet_balancing()
                 mark, _ = await log.wait_for("tablet_stream_files_end_wait: waiting", from_mark=mark)
 
-                disk_info = psutil.disk_usage(workdir)
-                with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
+                with random_content_file(workdir, 0.85):
                     disk_info = psutil.disk_usage(workdir)
                     logger.info(f"Percent used before major {disk_info.percent}")
 
@@ -649,6 +746,7 @@ async def test_sstables_incrementally_released_during_streaming(manager: Manager
                     await decomm_task
 
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_load_and_stream_rejected_on_critical_disk(manager: ManagerClient, volumes_factory: Callable) -> None:
@@ -763,8 +861,7 @@ async def test_load_and_stream_rejected_on_critical_disk(manager: ManagerClient,
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir_target)
-                filler_size = int(disk_info.total * DISK_FILL_TARGET_RATIO) - disk_info.used
-                with random_content_file(workdir_target, filler_size):
+                with random_content_file(workdir_target, DISK_FILL_TARGET_RATIO):
                     mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
                     for _ in range(2):
                         mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)

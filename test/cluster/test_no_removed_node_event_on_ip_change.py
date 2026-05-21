@@ -15,6 +15,8 @@ from test.pylib.internal_types import ServerInfo, IPAddress
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.conftest import cluster_con
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 

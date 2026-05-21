@@ -13,6 +13,7 @@ import pytest
 
 from dtest_class import Tester
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
 
 logger = logging.getLogger(__name__)
 

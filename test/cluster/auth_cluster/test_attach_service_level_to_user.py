@@ -13,6 +13,8 @@ from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.pylib.manager_client import ManagerClient
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 @pytest.mark.asyncio
 async def test_attach_service_level_to_user(request, manager: ManagerClient):
     user = f"test_user_{unique_name()}"

@@ -16,6 +16,8 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import start_writes
 from test.cluster.util import create_new_test_keyspace, get_topology_coordinator
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
+
 logger = logging.getLogger(__name__)
 
 

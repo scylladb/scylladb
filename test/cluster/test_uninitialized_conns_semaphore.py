@@ -11,6 +11,8 @@ import pytest
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerUpState
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 CQL_PORT = 9042
 SHARD_AWARE_PORT = 19042
 

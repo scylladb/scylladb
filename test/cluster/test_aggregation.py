@@ -17,7 +17,10 @@ from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace, new_test_table
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_racks_cluster
+pytestmark = [
+    pytest.mark.prepare_3_racks_cluster,
+    pytest.mark.scylla_resources(cpu=6, mem="3G"),
+]
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,8 @@ import logging
 
 from test.pylib.rest_client import read_barrier
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 

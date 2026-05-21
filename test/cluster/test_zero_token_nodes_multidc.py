@@ -15,6 +15,7 @@ from test.pylib.util import unique_name
 from test.cluster.conftest import cluster_con
 from test.cluster.util import create_new_test_keyspace
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('zero_token_nodes', [1, 2])

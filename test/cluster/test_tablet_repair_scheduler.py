@@ -24,6 +24,8 @@ import datetime
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 
 async def inject_error_one_shot_on(manager, error_name, servers):
     errs = [inject_error_one_shot(manager.api, s.ip_addr, error_name) for s in servers]

@@ -14,6 +14,8 @@ from cassandra.protocol import InvalidRequest
 from test.pylib.async_cql import _wrap_future
 from test.pylib.manager_client import ManagerClient
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

@@ -11,6 +11,8 @@ import time
 
 from test.pylib.rest_client import HTTPError
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
@@ -60,4 +62,3 @@ async def test_rest_api_on_startup(request, manager: ManagerClient):
     logger.info("Stopping the loop")
     stop_loop = True
     await fut
-

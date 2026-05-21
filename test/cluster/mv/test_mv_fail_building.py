@@ -12,8 +12,9 @@ from test.cluster.util import new_test_keyspace, reconnect_driver
 from cassandra.cluster import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 
-pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 # This test makes sure that even if the view building encounter errors, the view building is eventually finished
 # and the view is consistent with the base table.
 # Reproduces the scenario in #19261

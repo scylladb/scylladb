@@ -20,6 +20,8 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.cluster.util import get_topology_coordinator
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

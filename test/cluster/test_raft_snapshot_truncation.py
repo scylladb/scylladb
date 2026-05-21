@@ -14,6 +14,8 @@ from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id, create_new_test_keyspace
 from test.pylib.rest_client import inject_error_one_shot
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

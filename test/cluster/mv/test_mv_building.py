@@ -15,7 +15,7 @@ from test.cluster.util import get_topology_coordinator, new_test_keyspace, recon
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 # This test makes sure that view building is done mainly in the streaming
 # scheduling group. We check that by grepping all relevant logs in TRACE mode
@@ -112,6 +112,7 @@ async def test_view_building_during_drop_index(manager: ManagerClient):
 
     await cql.run_async("DROP TABLE ks.tab")
 
+@pytest.mark.scylla_resources(cpu=4, mem="1G")
 # Start view building and interrupt it while some shards started and registered their
 # view building status and some shards didn't. Specifically, the last shard is paused.
 # We restart the node in this state and verify that when it comes up the view building
@@ -200,6 +201,7 @@ async def test_empty_build_step_after_reshard(manager: ManagerClient):
     mv2_rows = await cql.run_async(f"SELECT * FROM ks.mv2")
     assert len(base_rows) == len(mv_rows) == len(mv2_rows) == 129
 
+@pytest.mark.scylla_resources(cpu=4, mem="2G")
 # It may happen that a node fails to process an RPC request from the coordinator.
 # In that case, we would like to prevent sending more requests to it because
 # they're most likely going to fail as well. Verify that that's the case.

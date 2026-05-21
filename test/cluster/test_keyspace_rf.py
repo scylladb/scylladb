@@ -17,6 +17,7 @@ from test.cluster.util import create_new_test_keyspace, get_replication, get_rep
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 @pytest.mark.parametrize("rf_rack_valid_keyspaces", [False, True])
+@pytest.mark.scylla_resources(cpu=14, mem="7G")
 async def test_create_keyspace_with_default_replication_factor(manager: ManagerClient, tablets_enabled: bool, rf_rack_valid_keyspaces: bool):
     def get_pf(dc: str, rack: str) -> dict:
         return {'dc': dc, 'rack': rack}

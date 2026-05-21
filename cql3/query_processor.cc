@@ -782,7 +782,7 @@ query_processor::get_statement(const std::string_view& query, const service::cli
     // Measuring allocation cost requires that no yield points exist
     // between bytes_before and bytes_after. It needs fixing if this
     // function is ever futurized.
-    auto bytes_before = seastar::memory::stats().total_bytes_allocated();
+    auto bytes_before = seastar::memory::stats().allocated_memory();
     std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
 
     // Set keyspace for statement that require login
@@ -798,7 +798,7 @@ query_processor::get_statement(const std::string_view& query, const service::cli
         audit_info->set_query_string(query);
         p->statement->sanitize_audit_info();
     }
-    auto bytes_after = seastar::memory::stats().total_bytes_allocated();
+    auto bytes_after = seastar::memory::stats().allocated_memory();
     _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
     return p;
 }

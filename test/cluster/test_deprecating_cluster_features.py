@@ -10,6 +10,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 import pytest
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
 
 TEST_FEATURE_ENABLE_ERROR_INJECTION = "features_enable_test_feature"
 TEST_FEATURE_ENABLE_AS_DEPRECATED_ERROR_INJECTION = "features_enable_test_feature_as_deprecated"

@@ -9,12 +9,16 @@ from test.pylib.manager_client import ManagerClient
 import pytest
 
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
+
 @pytest.mark.asyncio
 async def test_different_group0_ids(manager: ManagerClient):
     """
     The test starts two single-node clusters (with different group0_ids). Node B (the
     node from the second cluster) is restarted with seeds containing node A (the node
     from the first cluster), and thus it tries to gossip node A. The test checks that
+
     node A rejects gossip_digest_syn.
 
     Note: this test relies on the fact that the only node in a single-node cluster

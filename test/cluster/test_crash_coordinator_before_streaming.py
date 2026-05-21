@@ -15,6 +15,9 @@ from test.cluster.util import (check_token_ring_and_group0_consistency, wait_for
                                wait_for_no_pending_topology_transition)
 
 
+pytestmark = pytest.mark.scylla_resources(cpu=12, mem="6G")
+
+
 logger = logging.getLogger(__name__)
 
 

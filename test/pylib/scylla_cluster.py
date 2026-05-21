@@ -11,7 +11,7 @@ import asyncio
 import concurrent.futures
 from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
-from collections import ChainMap
+from collections import ChainMap, deque
 from dataclasses import dataclass
 import itertools
 import threading
@@ -75,6 +75,26 @@ io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 async def async_rmtree(directory, *args, **kwargs):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(io_executor, partial(shutil.rmtree, directory, *args, **kwargs))
+
+
+def read_log_tail(path: pathlib.Path, lines: int = 80) -> str:
+    """Read the last ``lines`` lines from a log file for failure diagnostics."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as log_file:
+            return ''.join(deque(log_file, maxlen=lines)).rstrip() or '<empty>'
+    except Exception as exc:
+        return f"Exception when reading server log tail {path}: {exc}"
+
+
+def read_interesting_log_lines(path: pathlib.Path, limit: int = 120) -> str:
+    """Return recent warning/error lines and common failure signatures from a log file."""
+    pattern = re.compile(r"ERROR|WARN|exception|fail|bootstrap|stream|topology|abort", re.IGNORECASE)
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as log_file:
+            matches = [line.rstrip() for line in log_file if pattern.search(line)]
+        return '\n'.join(matches[-limit:]) or '<no matching lines>'
+    except Exception as exc:
+        return f"Exception when reading server log matches {path}: {exc}"
 
 
 class ReplaceConfig(NamedTuple):
@@ -984,6 +1004,8 @@ class ScyllaServer:
                 message += f", the node log was expected to contain the string [{expected_error}]"
             self.logger.error(message)
             self.logger.error("last line of %s:\n%s", self.log_filename, read_last_line(self.log_filename))
+            self.logger.error("tail of %s:\n%s", self.log_filename, read_log_tail(self.log_filename))
+            self.logger.error("interesting lines from %s:\n%s", self.log_filename, read_interesting_log_lines(self.log_filename))
             log_handler = logging.getLogger().handlers[0]
             if hasattr(log_handler, 'baseFilename'):
                 logpath = log_handler.baseFilename   # type: ignore
@@ -1300,6 +1322,13 @@ class ScyllaCluster:
             for server in itertools.chain(self.running.values(), self.starting.values())
         )
 
+    def _check_provisioning_allowed(self) -> None:
+        if self.resource_limit is None:
+            raise RuntimeError(
+                "Scylla provisioning requires @pytest.mark.scylla_resources(cpu=..., mem=...), "
+                "@pytest.mark.scylla_cores(...), or @pytest.mark.allow_unannotated_scylla_provisioning"
+            )
+
     def _check_resource_limit(self, additional: ScyllaResourceUsage, has_memory_override: bool) -> None:
         if has_memory_override and (self.resource_limit is None or not self.resource_limit.allow_memory_override):
             raise RuntimeError("Scylla memory overrides (-m/--memory) require @pytest.mark.scylla_resources(cpu=..., mem=...)")
@@ -1402,6 +1431,7 @@ class ScyllaCluster:
         assert start or not expected_error, \
             f"add_server: cannot add a stopped server and expect an error"
 
+        self._check_provisioning_allowed()
         resource_usage = self._resource_usage_from_test_cmdline(cmdline, version)
         has_memory_override = self._has_memory_override_from_test_cmdline(cmdline, version)
         self._check_resource_limit(resource_usage if start else ScyllaResourceUsage(), has_memory_override)
@@ -1508,6 +1538,7 @@ class ScyllaCluster:
                           expected_error: Optional[str] = None) -> List[ServerInfo]:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
+        self._check_provisioning_allowed()
 
         def get_property_file(i) -> Optional[dict[str, Any]]:
             if property_file is None:

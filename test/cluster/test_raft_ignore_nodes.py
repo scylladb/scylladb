@@ -60,6 +60,7 @@ async def make_servers(manager: ManagerClient, servers_num: int,
 
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=14, mem="7G")
 async def test_raft_replace_ignore_nodes(manager: ManagerClient, failure_detector_timeout) -> None:
     """Replace 3 dead nodes.
 
@@ -97,6 +98,7 @@ async def test_raft_replace_ignore_nodes(manager: ManagerClient, failure_detecto
 
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=14, mem="7G")
 async def test_raft_remove_ignore_nodes(manager: ManagerClient) -> None:
     """Remove 3 dead nodes.
 

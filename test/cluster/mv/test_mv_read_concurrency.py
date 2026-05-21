@@ -13,6 +13,8 @@ from test.pylib.util import wait_for_view
 from test.cluster.util import new_test_keyspace
 from cassandra import ReadTimeout, WriteTimeout
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 # This test verifies that the writes causing view updates don't impact the latency of regular reads

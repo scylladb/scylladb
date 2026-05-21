@@ -16,6 +16,7 @@ import asyncio
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.random_tables import RandomTables, Column, TextType
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
 
 logger = logging.getLogger(__name__)
 

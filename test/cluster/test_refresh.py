@@ -25,6 +25,8 @@ from test.cluster.util import new_test_keyspace
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,6 +100,7 @@ class SSTablesOnLocalStorage:
         topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
         topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
     ])
+@pytest.mark.scylla_resources(cpu=16, mem="8G")
 async def test_refresh_with_streaming_scopes(build_mode: str, manager: ManagerClient, topology):
     '''Check that refreshing of a cluster with stream scopes works'''
     await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnLocalStorage())

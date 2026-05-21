@@ -12,6 +12,8 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 
 import pytest
 
+pytestmark = pytest.mark.scylla_resources(cpu=2, mem="1G")
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio

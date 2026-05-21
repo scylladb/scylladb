@@ -14,6 +14,8 @@ from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet
 from test.pylib.tablets import get_tablet_replica
 from test.cluster.util import new_test_keyspace
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 # due to the write.
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
+@pytest.mark.scylla_resources(cpu=10, mem="3G")
 async def test_view_backlog_increased_after_write(manager: ManagerClient) -> None:
     node_count = 2
     # Use a higher smp to make it more likely that the writes go to a different shard than the coordinator.

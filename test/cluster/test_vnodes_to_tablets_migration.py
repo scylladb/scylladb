@@ -19,6 +19,8 @@ from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace, reconnect_driver
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
 logger = logging.getLogger(__name__)
 
 # Largest token that can be associated with a partition key (int64 max).

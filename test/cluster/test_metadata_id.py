@@ -12,6 +12,8 @@ from test.cluster.util import new_test_keyspace, new_test_table
 from test.cluster.conftest import cluster_con
 from cassandra.policies import WhiteListRoundRobinPolicy
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 logger = logging.getLogger(__name__)
 
 async def create_server_and_cqls(manager, cqls_num):

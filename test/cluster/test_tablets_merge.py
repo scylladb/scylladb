@@ -19,6 +19,8 @@ import random
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
+
 async def inject_error_one_shot_on(manager, error_name, servers):
     errs = [inject_error_one_shot(manager.api, s.ip_addr, error_name) for s in servers]
     await asyncio.gather(*errs)
@@ -325,6 +327,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
 @pytest.mark.parametrize("racks", [2, 3])
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=18, mem="9G")
 async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks):
     cmdline = ['--target-tablet-size-in-bytes', '30000',]
     config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
