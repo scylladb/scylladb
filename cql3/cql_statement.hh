@@ -15,6 +15,7 @@
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
 
+
 namespace service {
 
 class storage_proxy;
@@ -132,6 +133,18 @@ public:
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
 
     virtual void sanitize_audit_info() {}
+
+    /// Returns the in-object (sizeof) size of the statement. Statement types
+    /// whose instances are sized for the prepared-statements cache budget
+    /// (the DML statements: SELECT/INSERT/UPDATE/DELETE/BATCH and the selection
+    /// objects they own) override this to report sizeof of their own dynamic
+    /// type. The default returns sizeof(cql_statement); statement types that do
+    /// not override it (e.g. DDL/auth/use/truncate) are sized approximately —
+    /// they are not the cache's memory-budget drivers.
+    virtual size_t object_size() const { return sizeof(*this); }
+
+    /// Returns heap memory owned by this statement beyond sizeof(*this).
+    virtual size_t external_memory_usage() const;
 };
 
 class cql_statement_no_metadata : public cql_statement {

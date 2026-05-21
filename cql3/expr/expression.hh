@@ -179,6 +179,9 @@ public:
     };
 
     friend bool operator==(const expression& e1, const expression& e2);
+
+    /// Returns heap memory owned by this expression beyond sizeof(expression).
+    size_t external_memory_usage() const;
 };
 
 /// Checks if two expressions are equal. If they are, they definitely

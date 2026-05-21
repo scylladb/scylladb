@@ -10,6 +10,8 @@
 
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/column_specification.hh"
+#include "cql3/memory_usage.hh"
 
 #include <seastar/core/on_internal_error.hh>
 
@@ -2761,6 +2763,106 @@ convert_extended_property_map(const collection_constructor& map, error_sink_fn a
         }
     }
     return res;
+}
+
+size_t expression::external_memory_usage() const {
+    if (!_v) {
+        return 0;
+    }
+    size_t base = sizeof(impl);
+    size_t payload = std::visit(overloaded_functor{
+        [](const conjunction& e) -> size_t {
+            size_t s = vector_external_memory_usage(e.children);
+            for (const auto& child : e.children) {
+                s += child.external_memory_usage();
+            }
+            return s;
+        },
+        [](const binary_operator& e) -> size_t {
+            return e.lhs.external_memory_usage() + e.rhs.external_memory_usage();
+        },
+        [](const unary_operator& e) -> size_t {
+            return e.operand.external_memory_usage();
+        },
+        [](const column_value&) -> size_t {
+            return 0;
+        },
+        [](const subscript& e) -> size_t {
+            return e.val.external_memory_usage() + e.sub.external_memory_usage();
+        },
+        [](const unresolved_identifier&) -> size_t {
+            return 0;
+        },
+        [](const column_mutation_attribute& e) -> size_t {
+            return e.column.external_memory_usage();
+        },
+        [](const function_call& e) -> size_t {
+            size_t s = vector_external_memory_usage(e.args);
+            for (const auto& arg : e.args) {
+                s += arg.external_memory_usage();
+            }
+            // function_name has two sstrings; shared_ptr variant is shared, don't count
+            if (auto* fname = std::get_if<functions::function_name>(&e.func)) {
+                s += sstring_external_memory_usage(fname->keyspace);
+                s += sstring_external_memory_usage(fname->name);
+            }
+            return s;
+        },
+        [](const cast& e) -> size_t {
+            return e.arg.external_memory_usage();
+        },
+        [](const field_selection& e) -> size_t {
+            return e.structure.external_memory_usage();
+        },
+        [](const bind_variable& e) -> size_t {
+            // The receiver's column_specification is intentionally not counted here.
+            // For positional bind markers (the common case) prepare_context::
+            // add_variable_specification() stores this very same lw_shared_ptr in
+            // the prepared_statement's bound_names, where it is already accounted
+            // for; counting it again would double-count the allocation. For named
+            // bind markers bound_names holds a separate renamed copy and the small
+            // original receiver spec is treated as negligible, keeping the estimate
+            // free of double counting.
+            return 0;
+        },
+        [](const untyped_constant& e) -> size_t {
+            // raw_text is a chunked_string backed by managed_bytes.
+            return e.raw_text.data().external_memory_usage();
+        },
+        [](const constant& e) -> size_t {
+            if (e.value.is_null()) {
+                return 0;
+            }
+            return e.value.view().size_bytes();
+        },
+        [](const tuple_constructor& e) -> size_t {
+            size_t s = vector_external_memory_usage(e.elements);
+            for (const auto& elem : e.elements) {
+                s += elem.external_memory_usage();
+            }
+            return s;
+        },
+        [](const collection_constructor& e) -> size_t {
+            size_t s = vector_external_memory_usage(e.elements);
+            for (const auto& elem : e.elements) {
+                s += elem.external_memory_usage();
+            }
+            return s;
+        },
+        [](const usertype_constructor& e) -> size_t {
+            size_t s = unordered_map_node_external_memory_usage(e.elements);
+            for (const auto& [id, expr] : e.elements) {
+                s += basic_sstring_external_memory_usage(id.bytes_);
+                s += sstring_external_memory_usage(id.text());
+                s += expr.external_memory_usage();
+            }
+            return s;
+        },
+        [](const temporary&) -> size_t {
+            return 0;
+        },
+    }, _v->v);
+    return base + payload;
 }
 
 } // namespace expr

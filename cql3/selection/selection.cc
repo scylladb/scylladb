@@ -10,6 +10,7 @@
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
+#include "cql3/memory_usage.hh"
 #include "cql3/result_set.hh"
 #include "cql3/query_options.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -159,6 +160,8 @@ protected:
     std::unique_ptr<selectors> new_selectors() const override {
         return std::make_unique<simple_selectors>();
     }
+
+    size_t object_size() const override { return sizeof(*this); }
 };
 
 shared_ptr<selection>
@@ -463,6 +466,31 @@ protected:
 
     std::unique_ptr<selectors> new_selectors() const override  {
         return std::make_unique<selectors_with_processing>(*this);
+    }
+
+    size_t object_size() const override { return sizeof(*this); }
+
+    size_t external_memory_usage() const override {
+        size_t s = selection::external_memory_usage();
+        s += vector_external_memory_usage(_selectors);
+        for (const auto& e : _selectors) {
+            s += e.external_memory_usage();
+        }
+        s += vector_external_memory_usage(_inner_loop);
+        for (const auto& e : _inner_loop) {
+            s += e.external_memory_usage();
+        }
+        s += vector_external_memory_usage(_outer_loop);
+        for (const auto& e : _outer_loop) {
+            s += e.external_memory_usage();
+        }
+        s += _initial_values_for_temporaries.capacity() * sizeof(raw_value);
+        for (const auto& v : _initial_values_for_temporaries) {
+            if (v.is_value()) {
+                s += v.view().size_bytes();
+            }
+        }
+        return s;
     }
 };
 
@@ -873,6 +901,17 @@ size_t result_set_builder::result_set_size() const {
 
 bytes_opt result_set_builder::get_value(data_type t, query::result_atomic_cell_view c) {
     return {c.value().linearize()};
+}
+
+size_t selection::external_memory_usage() const {
+    size_t s = 0;
+    s += _columns.capacity() * sizeof(const column_definition*);
+    if (_metadata) {
+        s += sizeof(metadata);
+        s += sizeof(metadata::column_info);
+        s += _metadata->get_names().capacity() * sizeof(lw_shared_ptr<column_specification>);
+    }
+    return s;
 }
 
 }

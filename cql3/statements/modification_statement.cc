@@ -10,6 +10,7 @@
 
 #include "utils/assert.hh"
 #include "cql3/cql_statement.hh"
+#include "cql3/attributes.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/broadcast_modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
@@ -885,6 +886,33 @@ const statement_type statement_type::INSERT = statement_type(statement_type::typ
 const statement_type statement_type::UPDATE = statement_type(statement_type::type::update);
 const statement_type statement_type::DELETE = statement_type(statement_type::type::del);
 const statement_type statement_type::SELECT = statement_type(statement_type::type::select);
+
+size_t modification_statement::external_memory_usage() const {
+    size_t s = cql_statement::external_memory_usage();
+
+    // _column_operations: vector of shared_ptr<operation>
+    s += _column_operations.capacity() * sizeof(::shared_ptr<operation>);
+    for (const auto& op : _column_operations) {
+        if (op) {
+            s += op->object_size() + op->external_memory_usage();
+        }
+    }
+
+    // _condition (expression)
+    s += _condition.external_memory_usage();
+
+    // _restrictions
+    if (_restrictions) {
+        s += sizeof(restrictions::statement_restrictions) + _restrictions->external_memory_usage();
+    }
+
+    // attrs
+    if (attrs) {
+        s += sizeof(attributes) + attrs->external_memory_usage();
+    }
+
+    return s;
+}
 
 namespace raw {
 
