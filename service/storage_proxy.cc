@@ -6097,6 +6097,21 @@ static host_id_vector_replica_set filter_for_dc(db::consistency_level cl, const 
     return endpoints;
 }
 
+static void maybe_force_read_target(host_id_vector_replica_set& targets, const host_id_vector_replica_set& all_replicas) {
+    if (utils::get_local_injector().is_enabled("force_read_target")) {
+        auto params = utils::get_local_injector().get_injection_parameters("force_read_target");
+        auto it = params.find("host_id");
+        if (it != params.end()) {
+            auto forced_host = locator::host_id(utils::UUID(it->second));
+            auto in_all = std::find(all_replicas.begin(), all_replicas.end(), forced_host) != all_replicas.end();
+            auto in_targets = std::find(targets.begin(), targets.end(), forced_host) != targets.end();
+            if (in_all && !in_targets && !targets.empty()) {
+                targets.back() = forced_host;
+            }
+        }
+    }
+}
+
 result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd,
         locator::effective_replication_map_ptr erm,
         schema_ptr schema,
@@ -6130,6 +6145,12 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
 
     slogger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
     tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} repair decision: {}", token, all_replicas, target_replicas, repair_decision);
+
+    // Error injection: force a specific host into the read targets.
+    // If the specified host is in all_replicas but was not selected
+    // as a target, replace the last target with it.
+    // This ensures deterministic read-repair behavior in tests.
+    maybe_force_read_target(target_replicas, all_replicas);
 
     // Throw UAE early if we don't have enough replicas.
     try {
@@ -6557,6 +6578,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             }
 
             auto filtered_replicas = filter_for_dc(cl, erm->get_topology(), std::move(live_endpoints));
+            maybe_force_read_target(filtered_endpoints, filtered_replicas);
             exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), std::move(filtered_replicas), trace_state, permit, std::monostate()));
             ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
         }
