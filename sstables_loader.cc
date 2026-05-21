@@ -1198,7 +1198,12 @@ protected:
 
         auto& db = loader._db.local();
         auto s = db.find_schema(_tid);
-        const auto& topo = db.get_token_metadata().get_topology();
+        // Hold the token_metadata_ptr on the coroutine frame so the ref count keeps it alive
+        // across co_await suspension points. Without this, token_metadata can be replaced and
+        // cleared (via clear_gently) while the loop iterator still references its topology data.
+        // Fixes: https://scylladb.atlassian.net/browse/SCYLLADB-2149
+        auto md = db.get_token_metadata_ptr();
+        const auto& topo = md->get_topology();
         auto dc = topo.get_datacenter();
 
         for (const auto& rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
