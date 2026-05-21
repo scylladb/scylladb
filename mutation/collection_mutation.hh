@@ -122,13 +122,15 @@ public:
 //  for user types: the key is an index identifying the field, the cell contains the value of the field.
 //  The mutation may also contain a collection-wide tombstone.
 class collection_mutation {
-public:
     managed_bytes _data;
 
+public:
     collection_mutation();
     collection_mutation(collection_mutation_view);
     collection_mutation(managed_bytes);
     operator collection_mutation_view() const;
+
+    managed_bytes&& data() && { return std::move(_data); }
 };
 
 class collection_mutation_writer {

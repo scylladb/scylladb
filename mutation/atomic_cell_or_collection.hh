@@ -31,7 +31,7 @@ public:
     static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
     atomic_cell_view as_atomic_cell(const column_definition& cdef) const { return atomic_cell_view::from_bytes(_data); }
     atomic_cell_mutable_view as_mutable_atomic_cell(const column_definition& cdef) { return atomic_cell_mutable_view::from_bytes(_data); }
-    atomic_cell_or_collection(collection_mutation cm) : _data(std::move(cm._data)) { }
+    atomic_cell_or_collection(collection_mutation cm) : _data(std::move(cm).data()) { }
     atomic_cell_or_collection copy(const abstract_type&) const;
     explicit operator bool() const {
         return !_data.empty();
@@ -39,7 +39,7 @@ public:
     static constexpr bool can_use_mutable_view() {
         return true;
     }
-    static atomic_cell_or_collection from_collection_mutation(collection_mutation data) { return std::move(data._data); }
+    static atomic_cell_or_collection from_collection_mutation(collection_mutation data) { return std::move(data).data(); }
     collection_mutation_view as_collection_mutation() const;
     bytes_view serialize() const;
     bool equals(const abstract_type& type, const atomic_cell_or_collection& other) const;
