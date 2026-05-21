@@ -1397,23 +1397,23 @@ void writer::write_collection(bytes_ostream& writer, const clustering_key_prefix
         bool has_complex_deletion) {
     uint64_t current_pos = writer.size();
     uint64_t collection_elements = 0;
-    collection.with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
-        if (has_complex_deletion) {
-            write_delta_deletion_time(writer, mview.tomb);
-            _c_stats.update(mview.tomb);
-        }
-
-        collection_elements = mview.cells.size();
-        write_vint(writer, collection_elements);
-        if (!mview.cells.empty()) {
-            ++_c_stats.column_count;
-        }
-        for (const auto& [cell_path, cell]: mview.cells) {
-            write_cell(writer, clustering_key, cell, cdef, properties, cell_path);
-            thread::maybe_yield();
-        }
-        _c_stats.cells_count += collection_elements;
-    });
+    auto tomb = collection.tomb();
+    if (has_complex_deletion) {
+        write_delta_deletion_time(writer, tomb);
+        _c_stats.update(tomb);
+    }
+    collection_elements = collection.size();
+    write_vint(writer, collection_elements);
+    if (collection_elements > 0) {
+        ++_c_stats.column_count;
+    }
+    for (const auto& [cell_path, cell] : collection) {
+        cell_path.with_linearized([&](bytes_view path) {
+            write_cell(writer, clustering_key, cell, cdef, properties, path);
+        });
+        thread::maybe_yield();
+    }
+    _c_stats.cells_count += collection_elements;
     uint64_t size = writer.size() - current_pos;
     maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size, collection_elements);
 }
@@ -1475,12 +1475,11 @@ static bool row_has_complex_deletion(const schema& s, const row& r, column_kind 
         if (cdef.is_atomic()) {
             return stop_iteration::no;
         }
-        return c.as_collection_mutation().with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
-            if (mview.tomb) {
-                result = true;
-            }
-            return stop_iteration(static_cast<bool>(mview.tomb));
-        });
+        auto tomb = c.as_collection_mutation().tomb();
+        if (tomb) {
+            result = true;
+        }
+        return stop_iteration(static_cast<bool>(tomb));
     });
 
     return result;

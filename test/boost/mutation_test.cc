@@ -210,21 +210,154 @@ SEASTAR_TEST_CASE(test_row_tombstone_updates) {
     return make_ready_future<>();
 }
 
-collection_mutation_description make_collection_mutation(tombstone t, bytes key, atomic_cell cell)
+collection_mutation make_collection_mutation(tombstone t, bytes key, atomic_cell cell)
 {
-    collection_mutation_description m;
-    m.tomb = t;
-    m.cells.emplace_back(std::move(key), std::move(cell));
-    return m;
+    collection_mutation_writer w(t);
+    w.push_back(bytes_view(key), atomic_cell_view(cell));
+    return std::move(w).finish();
 }
 
-collection_mutation_description make_collection_mutation(tombstone t, bytes key1, atomic_cell cell1,  bytes key2, atomic_cell cell2)
+collection_mutation make_collection_mutation(tombstone t, bytes key1, atomic_cell cell1,  bytes key2, atomic_cell cell2)
 {
-    collection_mutation_description m;
-    m.tomb = t;
-    m.cells.emplace_back(std::move(key1), std::move(cell1));
-    m.cells.emplace_back(std::move(key2), std::move(cell2));
-    return m;
+    collection_mutation_writer w(t);
+    w.push_back(bytes_view(key1), atomic_cell_view(cell1));
+    w.push_back(bytes_view(key2), atomic_cell_view(cell2));
+    return std::move(w).finish();
+}
+
+// Unit tests for collection_mutation_writer and collection_mutation_view::iterator,
+// which provide direct, zero-copy access to the serialized collection format.
+
+// Verifies that collection_mutation_writer correctly serializes a collection
+// and that collection_mutation_view (size(), tomb(), empty()) reads it back faithfully.
+SEASTAR_THREAD_TEST_CASE(test_collection_mutation_writer) {
+    // empty() with no tombstone and no cells
+    {
+        collection_mutation_writer w({});
+        BOOST_REQUIRE(w.empty());
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(cmv.empty());
+        BOOST_REQUIRE(!cmv.tomb());
+        BOOST_REQUIRE_EQUAL(cmv.size(), 0u);
+    }
+
+    // empty() is false when a tombstone is present even if there are no cells
+    {
+        tombstone t(api::new_timestamp(), gc_clock::now());
+        collection_mutation_writer w(t);
+        BOOST_REQUIRE(!w.empty());
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(!cmv.empty());
+        BOOST_REQUIRE_EQUAL(cmv.tomb(), t);
+        BOOST_REQUIRE_EQUAL(cmv.size(), 0u);
+    }
+
+    // size() and tomb() after pushing cells
+    {
+        auto key1 = int32_type->decompose(1);
+        auto key2 = int32_type->decompose(2);
+        auto key3 = int32_type->decompose(3);
+
+        auto cell1 = atomic_cell::make_live(*bytes_type, 1, bytes("v1"), atomic_cell::collection_member::yes);
+        auto cell2 = atomic_cell::make_live(*bytes_type, 2, bytes("v2"), atomic_cell::collection_member::yes);
+        auto cell3 = atomic_cell::make_dead(3, gc_clock::now());
+
+        tombstone t(api::new_timestamp(), gc_clock::now());
+        collection_mutation_writer w(t);
+        w.push_back(bytes_view(key1), atomic_cell_view(cell1));
+        w.push_back(bytes_view(key2), atomic_cell_view(cell2));
+        w.push_back(bytes_view(key3), atomic_cell_view(cell3));
+        BOOST_REQUIRE(!w.empty());
+
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+
+        BOOST_REQUIRE(!cmv.empty());
+        BOOST_REQUIRE_EQUAL(cmv.tomb(), t);
+        BOOST_REQUIRE_EQUAL(cmv.size(), 3u);
+    }
+}
+
+// Verifies the collection_mutation_view accessors (tomb(), size(), empty(),
+// begin()/end()) across all variants: default-constructed, tombstone only,
+// cells only, and tombstone with cells.
+SEASTAR_THREAD_TEST_CASE(test_collection_mutation_view) {
+    auto cells_equal = [] (const auto& c1, const auto& c2) {
+        return c1.first == c2.first && c1.second.value().linearize() == c2.second.value().linearize();
+    };
+
+    // default-constructed collection_mutation is semantically empty
+    {
+        collection_mutation cm;
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(cmv.empty());
+        BOOST_REQUIRE(!cmv.tomb());
+        BOOST_REQUIRE_EQUAL(cmv.size(), 0u);
+        BOOST_REQUIRE(cmv.begin() == cmv.end());
+    }
+
+    // Iterating an empty collection produces no elements
+    {
+        collection_mutation_writer w({});
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(cmv.begin() == cmv.end());
+    }
+
+    // Iterating with a tombstone but no cells also produces no elements
+    {
+        tombstone t(api::new_timestamp(), gc_clock::now());
+        collection_mutation_writer w(t);
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(cmv.begin() == cmv.end());
+    }
+
+    // Round-trip: cells written by the writer are produced by the iterator
+    // in the same order with the same key and value.
+    {
+        auto key1 = int32_type->decompose(10);
+        auto key2 = int32_type->decompose(20);
+        auto key3 = int32_type->decompose(30);
+
+        auto cell1 = atomic_cell::make_live(*bytes_type, 1, bytes("value1"), atomic_cell::collection_member::yes);
+        auto cell2 = atomic_cell::make_live(*bytes_type, 2, bytes("value2"), atomic_cell::collection_member::yes);
+        auto cell3 = atomic_cell::make_live(*bytes_type, 3, bytes("value3"), atomic_cell::collection_member::yes);
+
+        collection_mutation_writer w({});
+        w.push_back(bytes_view(key1), atomic_cell_view(cell1));
+        w.push_back(bytes_view(key2), atomic_cell_view(cell2));
+        w.push_back(bytes_view(key3), atomic_cell_view(cell3));
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+
+        BOOST_REQUIRE_EQUAL(cmv.size(), 3u);
+
+        auto it = cmv.begin();
+        BOOST_REQUIRE(it != cmv.end());
+        BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(bytes_view(key1), cell1)));
+
+        ++it;
+        BOOST_REQUIRE(it != cmv.end());
+        BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(bytes_view(key2), cell2)));
+
+        ++it;
+        BOOST_REQUIRE(it != cmv.end());
+        BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(bytes_view(key3), cell3)));
+
+        ++it;
+        BOOST_REQUIRE(it == cmv.end());
+
+        // A second traversal of the same view yields the same results
+        size_t count = 0;
+        for (auto& [k, v] : cmv) {
+            (void)k; (void)v;
+            ++count;
+        }
+        BOOST_REQUIRE_EQUAL(count, 3u);
+    }
 }
 
 SEASTAR_TEST_CASE(test_map_mutations) {
@@ -242,28 +375,26 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         auto& column = *s->get_column_definition("s1");
         auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_collection_member(utf8_type, sstring("101")));
         mutation m1(s, key);
-        m1.set_static_cell(column, mmut1.serialize(*my_map_type));
+        m1.set_static_cell(column, std::move(mmut1));
         mt->apply(m1);
         auto mmut2 = make_collection_mutation({}, int32_type->decompose(102), make_collection_member(utf8_type, sstring("102")));
         mutation m2(s, key);
-        m2.set_static_cell(column, mmut2.serialize(*my_map_type));
+        m2.set_static_cell(column, std::move(mmut2));
         mt->apply(m2);
         auto mmut3 = make_collection_mutation({}, int32_type->decompose(103), make_collection_member(utf8_type, sstring("103")));
         mutation m3(s, key);
-        m3.set_static_cell(column, mmut3.serialize(*my_map_type));
+        m3.set_static_cell(column, std::move(mmut3));
         mt->apply(m3);
         auto mmut2o = make_collection_mutation({}, int32_type->decompose(102), make_collection_member(utf8_type, sstring("102 override")));
         mutation m2o(s, key);
-        m2o.set_static_cell(column, mmut2o.serialize(*my_map_type));
+        m2o.set_static_cell(column, std::move(mmut2o));
         mt->apply(m2o);
 
         auto p = get_partition(semaphore.make_permit(), *mt, key);
         lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
-        i->as_collection_mutation().with_deserialized(*my_map_type, [] (collection_mutation_view_description muts) {
-            BOOST_REQUIRE(muts.cells.size() == 3);
-        });
+        BOOST_REQUIRE(i->as_collection_mutation().size() == 3);
         // FIXME: more strict tests
     });
 }
@@ -283,28 +414,26 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         auto& column = *s->get_column_definition("s1");
         auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_atomic_cell());
         mutation m1(s, key);
-        m1.set_static_cell(column, mmut1.serialize(*my_set_type));
+        m1.set_static_cell(column, std::move(mmut1));
         mt->apply(m1);
         auto mmut2 = make_collection_mutation({}, int32_type->decompose(102), make_atomic_cell());
         mutation m2(s, key);
-        m2.set_static_cell(column, mmut2.serialize(*my_set_type));
+        m2.set_static_cell(column, std::move(mmut2));
         mt->apply(m2);
         auto mmut3 = make_collection_mutation({}, int32_type->decompose(103), make_atomic_cell());
         mutation m3(s, key);
-        m3.set_static_cell(column, mmut3.serialize(*my_set_type));
+        m3.set_static_cell(column, std::move(mmut3));
         mt->apply(m3);
         auto mmut2o = make_collection_mutation({}, int32_type->decompose(102), make_atomic_cell());
         mutation m2o(s, key);
-        m2o.set_static_cell(column, mmut2o.serialize(*my_set_type));
+        m2o.set_static_cell(column, std::move(mmut2o));
         mt->apply(m2o);
 
         auto p = get_partition(semaphore.make_permit(), *mt, key);
         lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
-        i->as_collection_mutation().with_deserialized(*my_set_type, [] (collection_mutation_view_description muts) {
-            BOOST_REQUIRE(muts.cells.size() == 3);
-        });
+        BOOST_REQUIRE(i->as_collection_mutation().size() == 3);
         // FIXME: more strict tests
     });
 }
@@ -325,28 +454,26 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
         auto mmut1 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 101));
         mutation m1(s, key);
-        m1.set_static_cell(column, mmut1.serialize(*my_list_type));
+        m1.set_static_cell(column, std::move(mmut1));
         mt->apply(m1);
         auto mmut2 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 102));
         mutation m2(s, key);
-        m2.set_static_cell(column, mmut2.serialize(*my_list_type));
+        m2.set_static_cell(column, std::move(mmut2));
         mt->apply(m2);
         auto mmut3 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 103));
         mutation m3(s, key);
-        m3.set_static_cell(column, mmut3.serialize(*my_list_type));
+        m3.set_static_cell(column, std::move(mmut3));
         mt->apply(m3);
         auto mmut2o = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 102));
         mutation m2o(s, key);
-        m2o.set_static_cell(column, mmut2o.serialize(*my_list_type));
+        m2o.set_static_cell(column, std::move(mmut2o));
         mt->apply(m2o);
 
         auto p = get_partition(semaphore.make_permit(), *mt, key);
         lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
-        i->as_collection_mutation().with_deserialized(*my_list_type, [] (collection_mutation_view_description muts) {
-            BOOST_REQUIRE(muts.cells.size() == 4);
-        });
+        BOOST_REQUIRE(i->as_collection_mutation().size() == 4);
         // FIXME: more strict tests
     });
 }
@@ -373,50 +500,44 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
     auto mut1 = make_collection_mutation({}, serialize_field_index(0), make_collection_member(int32_type, 0),
             serialize_field_index(2), make_collection_member(long_type, int64_t(2)));
     mutation m1(s, key);
-    m1.set_static_cell(column, mut1.serialize(*ut));
+    m1.set_static_cell(column, std::move(mut1));
     mt->apply(m1);
 
     // {d: "text"}
     auto mut2 = make_collection_mutation({}, serialize_field_index(3), make_collection_member(utf8_type, "text"));
     mutation m2(s, key);
-    m2.set_static_cell(column, mut2.serialize(*ut));
+    m2.set_static_cell(column, std::move(mut2));
     mt->apply(m2);
 
     // {c: 3}
     auto mut3 = make_collection_mutation({}, serialize_field_index(2), make_collection_member(long_type, int64_t(3)));
     mutation m3(s, key);
-    m3.set_static_cell(column, mut3.serialize(*ut));
+    m3.set_static_cell(column, std::move(mut3));
     mt->apply(m3);
 
     auto p = get_partition(semaphore.make_permit(), *mt, key);
     lazy_row& r = p.static_row();
     auto i = r.find_cell(column.id);
     BOOST_REQUIRE(i);
-    i->as_collection_mutation().with_deserialized(*ut, [&] (collection_mutation_view_description m) {
-        // one cell for each field that has been set. mut3 and mut1 should have been merged
-        BOOST_REQUIRE(m.cells.size() == 3);
-        BOOST_REQUIRE(std::all_of(m.cells.begin(), m.cells.end(), [] (const auto& c) { return c.second.is_live(); }));
+    auto cmv = i->as_collection_mutation();
+    // one cell for each field that has been set. mut3 and mut1 should have been merged
+    BOOST_REQUIRE(cmv.size() == 3);
+    BOOST_REQUIRE(std::all_of(cmv.begin(), cmv.end(), [] (const auto& c) { return c.second.is_live(); }));
 
-        auto cells_equal = [] (const auto& c1, const auto& c2) {
-            return c1.first == c2.first && c1.second.value().linearize() == c2.second.value().linearize();
-        };
+    auto cells_equal = [] (const auto& c1, const auto& c2) {
+        return c1.first == c2.first && c1.second.value().linearize() == c2.second.value().linearize();
+    };
 
-        auto cell_a = std::make_pair(serialize_field_index(0), make_collection_member(int32_type, 0));
-        BOOST_REQUIRE(cells_equal(m.cells[0], std::pair<bytes_view, atomic_cell_view>(cell_a.first, cell_a.second)));
+    auto cell_a = std::make_pair(serialize_field_index(0), make_collection_member(int32_type, 0));
+    auto cell_c = std::make_pair(serialize_field_index(2), make_collection_member(long_type, int64_t(3)));
+    auto cell_d = std::make_pair(serialize_field_index(3), make_collection_member(utf8_type, "text"));
 
-        auto cell_c = std::make_pair(serialize_field_index(2), make_collection_member(long_type, int64_t(3)));
-        BOOST_REQUIRE(cells_equal(m.cells[1], std::pair<bytes_view, atomic_cell_view>(cell_c.first, cell_c.second)));
-
-        auto cell_d = std::make_pair(serialize_field_index(3), make_collection_member(utf8_type, "text"));
-        BOOST_REQUIRE(cells_equal(m.cells[2], std::pair<bytes_view, atomic_cell_view>(cell_d.first, cell_d.second)));
-
-        auto mm = m.materialize(*ut);
-        BOOST_REQUIRE(mm.cells.size() == 3);
-
-        BOOST_REQUIRE(cells_equal(mm.cells[0], cell_a));
-        BOOST_REQUIRE(cells_equal(mm.cells[1], cell_c));
-        BOOST_REQUIRE(cells_equal(mm.cells[2], cell_d));
-    });
+    auto it = cmv.begin();
+    BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(cell_a.first, cell_a.second)));
+    ++it;
+    BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(cell_c.first, cell_c.second)));
+    ++it;
+    BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(cell_d.first, cell_d.second)));
 }
 
 // Verify that serializing and unserializing a large collection doesn't
@@ -440,13 +561,13 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
     const std::array sizes_kb{size_t(1), size_t(10), size_t(64)};
     auto mt = make_lw_shared<replica::memtable>(schema);
 
-    auto make_mutation_with_collection = [&schema, &semaphore, collection_type] (partition_key pk, collection_mutation_description cmd) {
+    auto make_mutation_with_collection = [&schema, &semaphore, collection_type] (partition_key pk, collection_mutation cmd) {
         const auto& cdef = schema->column_at(column_kind::regular_column, 0);
 
         mutation mut(schema, pk);
 
         row r;
-        r.apply(cdef, atomic_cell_or_collection(cmd.serialize(*collection_type)));
+        r.apply(cdef, atomic_cell_or_collection(std::move(cmd)));
         mut.apply(mutation_fragment(*schema, semaphore.make_permit(), clustering_row(clustering_key_prefix::make_empty(), {}, {}, std::move(r))));
 
         return mut;
@@ -463,16 +584,17 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         const api::timestamp_type ts1 = 1;
         const api::timestamp_type ts2 = 2;
 
-        collection_mutation_description cmd1;
-        collection_mutation_description cmd2;
+        collection_mutation_writer w1({});
+        collection_mutation_writer w2({});
 
         for (size_t j = 0; j < size_t(8 * 1024 * 1024) / blob_size; ++j) { // we want no more than 8MB total size
-            cmd1.cells.emplace_back(int32_type->decompose(int(j)), atomic_cell::make_live(*value_type, ts1, blob, atomic_cell::collection_member::yes));
-            cmd2.cells.emplace_back(int32_type->decompose(int(j)), atomic_cell::make_live(*value_type, ts2, blob, atomic_cell::collection_member::yes));
+            auto key_bytes = int32_type->decompose(int(j));
+            w1.push_back(bytes_view(key_bytes), atomic_cell::make_live(*value_type, ts1, blob, atomic_cell::collection_member::yes));
+            w2.push_back(bytes_view(key_bytes), atomic_cell::make_live(*value_type, ts2, blob, atomic_cell::collection_member::yes));
         }
 
-        mt->apply(make_mutation_with_collection(pk, std::move(cmd1)));
-        mt->apply(make_mutation_with_collection(pk, std::move(cmd2))); // this should trigger a merge of the two collections
+        mt->apply(make_mutation_with_collection(pk, std::move(w1).finish()));
+        mt->apply(make_mutation_with_collection(pk, std::move(w2).finish())); // this should trigger a merge of the two collections
 
         auto rd = mt->make_mutation_reader(schema, semaphore.make_permit());
         auto close_rd = deferred_close(rd);
@@ -500,17 +622,25 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_serialization_exception_safety) {
     const bytes blob(blob_size, 'a');
     const api::timestamp_type ts = 1;
 
-    collection_mutation_description cmd;
-
+    std::vector<bytes> keys;
+    keys.reserve(256);
     for (size_t i = 0; i != 256; ++i) {
-        cmd.cells.emplace_back(int32_type->decompose(int(i)), atomic_cell::make_live(*value_type, ts, blob, atomic_cell::collection_member::yes));
+        keys.push_back(int32_type->decompose(int(i)));
     }
 
+    const auto make_cmd = [&]() {
+        collection_mutation_writer w({});
+        for (const auto& k : keys) {
+            w.push_back(bytes_view(k), atomic_cell::make_live(*value_type, ts, blob, atomic_cell::collection_member::yes));
+        }
+        return std::move(w).finish();
+    };
+
     // We need an undisturbed run first to create all thread_local variables.
-    cmd.serialize(*collection_type);
+    make_cmd();
 
     memory::with_allocation_failures([&] {
-        cmd.serialize(*collection_type);
+        make_cmd();
     });
 }
 
@@ -1277,7 +1407,7 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         m1.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
             atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v2:value4")))));
         auto mset1 = make_collection_mutation({}, int32_type->decompose(1), make_atomic_cell(), int32_type->decompose(2), make_atomic_cell());
-        m1.set_clustered_cell(ckey2, *s->get_column_definition("v3"), mset1.serialize(*my_set_type));
+        m1.set_clustered_cell(ckey2, *s->get_column_definition("v3"), std::move(mset1));
 
         mutation m2(s, partition_key::from_single_value(*s, "key1"));
         m2.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
@@ -1290,7 +1420,7 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         m2.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
             atomic_cell::make_live(*bytes_type, 3, bytes_type->decompose(data_value(bytes("v2:value4a")))));
         auto mset2 = make_collection_mutation({}, int32_type->decompose(1), make_atomic_cell(), int32_type->decompose(3), make_atomic_cell());
-        m2.set_clustered_cell(ckey2, *s->get_column_definition("v3"), mset2.serialize(*my_set_type));
+        m2.set_clustered_cell(ckey2, *s->get_column_definition("v3"), std::move(mset2));
 
         mutation m3(s, partition_key::from_single_value(*s, "key1"));
         m3.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
@@ -1301,7 +1431,7 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         m3.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
             atomic_cell::make_live(*bytes_type, 3, bytes_type->decompose(data_value(bytes("v2:value4a")))));
         auto mset3 = make_collection_mutation({}, int32_type->decompose(1), make_atomic_cell());
-        m3.set_clustered_cell(ckey2, *s->get_column_definition("v3"), mset3.serialize(*my_set_type));
+        m3.set_clustered_cell(ckey2, *s->get_column_definition("v3"), std::move(mset3));
 
         mutation m12(s, partition_key::from_single_value(*s, "key1"));
         m12.apply(m1);
@@ -1314,10 +1444,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(m2_1.find_row(*s, ckey2));
         BOOST_REQUIRE(m2_1.find_row(*s, ckey2)->find_cell(2));
         auto cmv = m2_1.find_row(*s, ckey2)->find_cell(2)->as_collection_mutation();
-        cmv.with_deserialized(*my_set_type, [] (collection_mutation_view_description cm) {
-            BOOST_REQUIRE(cm.cells.size() == 1);
-            BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(3));
-        });
+        BOOST_REQUIRE(cmv.size() == 1);
+        BOOST_REQUIRE(cmv.begin()->first == managed_bytes_view(int32_type->decompose(3)));
 
         mutation m12_1(s, partition_key::from_single_value(*s, "key1"));
         m12_1.apply(m1);
@@ -1332,10 +1460,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(!m1_2.find_row(*s, ckey2)->find_cell(0));
         BOOST_REQUIRE(!m1_2.find_row(*s, ckey2)->find_cell(1));
         cmv = m1_2.find_row(*s, ckey2)->find_cell(2)->as_collection_mutation();
-        cmv.with_deserialized(*my_set_type, [] (collection_mutation_view_description cm) {
-            BOOST_REQUIRE(cm.cells.size() == 1);
-            BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(2));
-        });
+        BOOST_REQUIRE(cmv.size() == 1);
+        BOOST_REQUIRE(cmv.begin()->first == managed_bytes_view(int32_type->decompose(2)));
 
         mutation m12_2(s, partition_key::from_single_value(*s, "key1"));
         m12_2.apply(m2);
@@ -1988,16 +2114,17 @@ SEASTAR_TEST_CASE(test_collection_cell_diff) {
         auto k = dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key")));
         mutation m1(s, k);
         auto uuid = utils::UUID_gen::get_time_UUID_bytes();
-        collection_mutation_description mcol1;
-        mcol1.cells.emplace_back(
-                bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
-                atomic_cell::make_live(*bytes_type, api::timestamp_type(1), to_bytes("element")));
-        m1.set_clustered_cell(clustering_key::make_empty(), col, mcol1.serialize(*col.type));
+        auto mcol1_key = bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size());
+        auto mcol1_cell = atomic_cell::make_live(*bytes_type, api::timestamp_type(1), to_bytes("element"));
+        collection_mutation_writer mcol1_w({});
+        mcol1_w.push_back(bytes_view(mcol1_key), atomic_cell_view(mcol1_cell));
+        auto mcol1 = std::move(mcol1_w).finish();
+        m1.set_clustered_cell(clustering_key::make_empty(), col, std::move(mcol1));
 
         mutation m2(s, k);
-        collection_mutation_description mcol2;
-        mcol2.tomb = tombstone(api::timestamp_type(2), gc_clock::now());
-        m2.set_clustered_cell(clustering_key::make_empty(), col, mcol2.serialize(*col.type));
+        collection_mutation_writer mcol2_w(tombstone(api::timestamp_type(2), gc_clock::now()));
+        auto mcol2 = std::move(mcol2_w).finish();
+        m2.set_clustered_cell(clustering_key::make_empty(), col, std::move(mcol2));
 
         mutation m12 = m1;
         m12.apply(m2);
@@ -2621,7 +2748,7 @@ SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
         auto collection_type = map_type_impl::get_instance(int32_type, bytes_type, true);
 
         auto m = make_collection_mutation({ }, int32_type->decompose(0), make_collection_member(bytes_type, data_value(bytes(bv))));
-        auto cell = atomic_cell_or_collection(m.serialize(*collection_type));
+        auto cell = atomic_cell_or_collection(std::move(m));
 
         with_allocator(alloc, [&] {
             auto before = alloc.allocated_bytes();
@@ -2704,35 +2831,39 @@ SEASTAR_THREAD_TEST_CASE(test_collection_compaction) {
     // No collection tombstone, row tombstone covers all cells
     auto cmut = make_collection_mutation({}, key, make_collection_member(bytes_type, value));
     auto row_tomb = row_tombstone(tombstone { 1, gc_clock::time_point() });
-    auto res = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
-    BOOST_CHECK(!res.is_live());
-    BOOST_CHECK(!cmut.tomb);
-    BOOST_CHECK(cmut.cells.empty());
+    auto [out1, res1] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
+    BOOST_CHECK(!res1.is_live());
+    BOOST_CHECK(collection_mutation_view(out1).empty());
 
     // No collection tombstone, row tombstone doesn't cover anything
     cmut = make_collection_mutation({}, key, make_collection_member(bytes_type, value));
     row_tomb = row_tombstone(tombstone { -1, gc_clock::time_point() });
-    res = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
-    BOOST_CHECK(res.is_live());
-    BOOST_CHECK(!cmut.tomb);
-    BOOST_CHECK_EQUAL(cmut.cells.size(), 1);
+    auto [out2, res2] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
+    BOOST_CHECK(res2.is_live());
+    {
+        collection_mutation_view v = out2;
+        BOOST_CHECK(!v.tomb());
+        BOOST_CHECK_EQUAL(v.size(), 1);
+    }
 
     // Collection tombstone covers everything
     cmut = make_collection_mutation(tombstone { 2, gc_clock::time_point() }, key, make_collection_member(bytes_type, value));
     row_tomb = row_tombstone(tombstone { 1, gc_clock::time_point() });
-    res = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
-    BOOST_CHECK(!res.is_live());
-    BOOST_CHECK(cmut.tomb);
-    BOOST_CHECK_EQUAL(cmut.tomb.timestamp, 2);
-    BOOST_CHECK(cmut.cells.empty());
+    auto [out3, res3] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
+    BOOST_CHECK(!res3.is_live());
+    {
+        collection_mutation_view v = out3;
+        BOOST_CHECK(v.tomb());
+        BOOST_CHECK_EQUAL(v.tomb().timestamp, 2);
+        BOOST_CHECK_EQUAL(v.size(), 0);
+    }
 
     // Collection tombstone covered by row tombstone
     cmut = make_collection_mutation(tombstone { 2, gc_clock::time_point() }, key, make_collection_member(bytes_type, value));
     row_tomb = row_tombstone(tombstone { 3, gc_clock::time_point() });
-    res = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
-    BOOST_CHECK(!res.is_live());
-    BOOST_CHECK(!cmut.tomb);
-    BOOST_CHECK(cmut.cells.empty());
+    auto [out4, res4] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
+    BOOST_CHECK(!res4.is_live());
+    BOOST_CHECK(collection_mutation_view(out4).empty());
 }
 
 namespace {
@@ -2778,19 +2909,16 @@ private:
             }
             BOOST_REQUIRE_EQUAL(is_cell_purgeable(cell), OnlyPurged);
         } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
-            auto cell = cell_or_collection.as_collection_mutation();
-            cell.with_deserialized(*cdef.type, [&] (collection_mutation_view_description m_view) {
-                BOOST_REQUIRE(m_view.tomb.timestamp == api::missing_timestamp || m_view.tomb.timestamp > tomb.tomb().timestamp ||
-                        is_tombstone_purgeable(m_view.tomb) == OnlyPurged);
-                auto t = m_view.tomb;
-                t.apply(tomb.tomb());
-                for (const auto& [key, cell] : m_view.cells) {
-                    if constexpr (OnlyPurged) {
-                        BOOST_REQUIRE(!cell.is_covered_by(t, false));
-                    }
-                    BOOST_REQUIRE_EQUAL(is_cell_purgeable(cell), OnlyPurged);
+            auto m_view = cell_or_collection.as_collection_mutation();
+            auto t = m_view.tomb();
+            BOOST_REQUIRE(t.timestamp == api::missing_timestamp || t.timestamp > tomb.tomb().timestamp || is_tombstone_purgeable(t) == OnlyPurged);
+            t.apply(tomb.tomb());
+            for (const auto& [key, cell] : m_view) {
+                if constexpr (OnlyPurged) {
+                    BOOST_REQUIRE(!cell.is_covered_by(t, false));
                 }
-            });
+                BOOST_REQUIRE_EQUAL(is_cell_purgeable(cell), OnlyPurged);
+            }
         } else {
             throw std::runtime_error(fmt::format("Cannot check cell {} of unknown type {}", cdef.name_as_text(), cdef.type->name()));
         }
@@ -3840,16 +3968,6 @@ SEASTAR_TEST_CASE(test_tracing_format) {
     return make_ready_future();
  }
 
-void do_make_collection(collection_mutation_description& desc, std::pair<bytes, atomic_cell>&& cell) {
-    desc.cells.push_back(std::move(cell));
-};
-
-template <typename... Cell>
-void do_make_collection(collection_mutation_description& desc, std::pair<bytes, atomic_cell>&& cell, Cell&& ...cells) {
-    desc.cells.push_back(std::move(cell));
-    do_make_collection(desc, std::forward<Cell>(cells)...);
-};
-
 SEASTAR_TEST_CASE(test_compact_and_expire_cell_stats) {
     const auto collection_type = map_type_impl::get_instance(int32_type, int32_type, true);
 
@@ -3878,10 +3996,12 @@ SEASTAR_TEST_CASE(test_compact_and_expire_cell_stats) {
     };
 
     const auto make_collection = [&] (tombstone tomb, auto&&... cells) {
-        collection_mutation_description desc;
-        desc.tomb = tomb;
-        do_make_collection(desc, std::forward<decltype(cells)>(cells)...);
-        return desc.serialize(*collection_type);
+        collection_mutation_writer w(tomb);
+        auto push_cell = [&w](std::pair<bytes, atomic_cell>&& cell) {
+            w.push_back(bytes_view(cell.first), std::move(cell.second));
+        };
+        (..., push_cell(std::forward<decltype(cells)>(cells)));
+        return std::move(w).finish();
     };
 
     const auto check = [&] (row_content rc, row_tombstone rt, compact_and_expire_result expected_res, std::source_location sl = std::source_location::current()) {
@@ -3898,7 +4018,7 @@ SEASTAR_TEST_CASE(test_compact_and_expire_cell_stats) {
             }
             if (rc.collection_column) {
                 const auto cdef = *s.get_column_definition(column_names.at(col_kind)[1]);
-                r.apply(cdef, atomic_cell_or_collection(collection_mutation(*collection_type, *rc.collection_column)));
+                r.apply(cdef, atomic_cell_or_collection(collection_mutation(*rc.collection_column)));
             }
             auto res = r.compact_and_expire(s, col_kind, rt, now, always_gc, now);
             BOOST_REQUIRE_EQUAL(res, expected_res);

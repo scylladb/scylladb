@@ -1319,7 +1319,7 @@ struct process_row_visitor {
                 _is_column_delete = true;
             }
 
-            void dead_collection_cell(bytes_view key, const atomic_cell_view&) {
+            void dead_collection_cell(managed_bytes_view key, const atomic_cell_view&) {
                 _deleted_keys.push_back(key);
             }
 
@@ -1338,7 +1338,7 @@ struct process_row_visitor {
 
                     set_visitor(ttl_opt& ttl_column) : collection_visitor(ttl_column) {}
 
-                    void live_collection_cell(bytes_view key, const atomic_cell_view& cell) {
+                    void live_collection_cell(managed_bytes_view key, const atomic_cell_view& cell) {
                         this->_ttl_column = get_ttl(cell);
                         _added_keys.emplace_back(key);
                     }
@@ -1364,7 +1364,7 @@ struct process_row_visitor {
                     udt_visitor(ttl_opt& ttl_column, size_t num_keys)
                         : collection_visitor(ttl_column), _added_cells(num_keys) {}
 
-                    void live_collection_cell(bytes_view key, const atomic_cell_view& cell) {
+                    void live_collection_cell(managed_bytes_view key, const atomic_cell_view& cell) {
                         this->_ttl_column = get_ttl(cell);
                         _added_cells[deserialize_field_index(key)].emplace(cell.value());
                     }
@@ -1392,7 +1392,7 @@ struct process_row_visitor {
                     map_or_list_visitor(ttl_opt& ttl_column)
                         : collection_visitor(ttl_column) {}
 
-                    void live_collection_cell(bytes_view key, const atomic_cell_view& cell) {
+                    void live_collection_cell(managed_bytes_view key, const atomic_cell_view& cell) {
                         this->_ttl_column = get_ttl(cell);
                         _added_cells.emplace_back(key, cell.value());
                     }

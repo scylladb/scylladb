@@ -1658,15 +1658,13 @@ compact_and_expire_result row::compact_and_expire(
                 res.live_cells++;
             }
         } else {
-            c.as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
-                auto m = m_view.materialize(*def.type);
-                res += m.compact_and_expire(id, tomb, query_time, can_gc, gc_before, collector);
-                if (m.cells.empty() && m.tomb <= tomb.tomb()) {
-                    erase = true;
-                } else {
-                    c = m.serialize(*def.type);
-                }
-            });
+            auto compact_res = ::compact_and_expire(c.as_collection_mutation(), id, *def.type, tomb, query_time, can_gc, gc_before, collector);
+            res += compact_res.result;
+            if (collection_mutation_view(compact_res.collection).empty()) {
+                 erase = true;
+            } else {
+                c = std::move(compact_res.collection);
+            }
         }
         return erase;
     });
@@ -1782,7 +1780,7 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
         } else {
             auto diff = ::difference(*cdef.type,
                     c->cell.as_collection_mutation(), it->cell.as_collection_mutation());
-            if (!static_cast<collection_mutation_view>(diff).is_empty()) {
+            if (!static_cast<collection_mutation_view>(diff).empty()) {
                 r.append_cell(c.key(), std::move(diff));
             }
         }

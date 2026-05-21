@@ -28,8 +28,6 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
     if (type.is_multi_cell()) {
         // Non-frozen user defined type.
 
-        collection_mutation_description mut;
-
         // Setting a non-frozen (multi-cell) UDT means overwriting all cells.
         // We start by deleting all existing cells.
 
@@ -41,7 +39,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
         // insert into cf json '{"a": 1, "b":{"a":1}}' default unset;
         // currently this would set b.b to null. However, by specifying 'default unset',
         // perhaps the user intended to leave b.a unchanged.
-        mut.tomb = params.make_tombstone_just_before();
+        collection_mutation_writer mut(params.make_tombstone_just_before());
 
         if (!ut_value.is_null()) {
             const auto& elems = expr::get_user_type_elements(ut_value, type);
@@ -55,12 +53,12 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
                     continue;
                 }
 
-                mut.cells.emplace_back(serialize_field_index(i),
+                mut.push_back(managed_bytes_view(serialize_field_index(i)),
                         params.make_cell(*type.type(i), *elems[i], atomic_cell::collection_member::yes));
             }
         }
 
-        m.set_cell(row_key, column, mut.serialize(type));
+        m.set_cell(row_key, column, std::move(mut).finish());
     } else {
         if (!ut_value.is_null()) {
             m.set_cell(row_key, column, params.make_cell(type, ut_value.view()));
@@ -77,21 +75,21 @@ void user_types::setter_by_field::execute(mutation& m, const clustering_key_pref
 
     auto& type = static_cast<const user_type_impl&>(*column.type);
 
-    collection_mutation_description mut;
-    mut.cells.emplace_back(serialize_field_index(_field_idx), !value.is_null()
+    collection_mutation_writer mut(tombstone{});
+    mut.push_back(managed_bytes_view(serialize_field_index(_field_idx)), !value.is_null()
                 ? params.make_cell(*type.type(_field_idx), value.view(), atomic_cell::collection_member::yes)
                 : params.make_dead_cell());
 
-    m.set_cell(row_key, column, mut.serialize(type));
+    m.set_cell(row_key, column, std::move(mut).finish());
 }
 
 void user_types::deleter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     throwing_assert(column.type->is_user_type() && column.type->is_multi_cell());
 
-    collection_mutation_description mut;
-    mut.cells.emplace_back(serialize_field_index(_field_idx), params.make_dead_cell());
+    collection_mutation_writer mut(tombstone{});
+    mut.push_back(managed_bytes_view(serialize_field_index(_field_idx)), params.make_dead_cell());
 
-    m.set_cell(row_key, column, mut.serialize(*column.type));
+    m.set_cell(row_key, column, std::move(mut).finish());
 }
 
 }

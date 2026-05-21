@@ -1280,15 +1280,13 @@ regular_column_transformation::result extract_from_attrs_column_computation::com
         return regular_column_transformation::result();
     }
     collection_mutation_view cmv = attrs->as_collection_mutation();
-    return cmv.with_deserialized(*attrs_col->type, [this] (const collection_mutation_view_description& cmvd) {
-        for (auto&& [key, cell] : cmvd.cells) {
-            if (key == _attr_name) {
-                return regular_column_transformation::result(cell,
-                    std::bind(serialized_value_if_type, std::placeholders::_1, _desired_type));
-            }
+    for (auto&& [key, cell] : cmv) {
+        if (key == managed_bytes_view(_attr_name)) {
+            return regular_column_transformation::result(cell,
+                std::bind(serialized_value_if_type, std::placeholders::_1, _desired_type));
         }
-        return regular_column_transformation::result();
-    });
+    }
+    return regular_column_transformation::result();
 }
 
 // extract_from_attrs_column_computation needs the whole row to compute
@@ -2304,12 +2302,12 @@ public:
     void del(const bytes& name, api::timestamp_type ts) {
         add(name, atomic_cell::make_dead(ts, gc_clock::now()));
     }
-    collection_mutation_description to_mut() {
-        collection_mutation_description ret;
+    collection_mutation to_mut() {
+        collection_mutation_writer ret(tombstone{});
         for (auto&& e : collected) {
-            ret.cells.emplace_back(e.first, std::move(e.second));
+            ret.push_back(bytes_view(e.first), std::move(e.second));
         }
-        return ret;
+        return std::move(ret).finish();
     }
     bool empty() const {
         return collected.empty();
@@ -2657,7 +2655,7 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
     }
     auto attrs = attrs_column(*schema);
     if (!attrs_collector.empty()) {
-        auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
+        auto serialized_map = attrs_collector.to_mut();
         row.cells().apply(attrs, std::move(serialized_map));
     }
     // To allow creation of an item with no attributes, we need a row marker.
@@ -2680,7 +2678,7 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
     //    Scylla to handle collection replacements in CQL (see #6084, PR #6491,
     //    e.g. cql3::maps::setter::execute()) and we utilize it to avoid
     //    emitting the REMOVE event (resolving #6930).
-    row.cells().apply(attrs, collection_mutation_description{tombstone{ts - 1, gc_clock::now()}}.serialize(*attrs.type));
+    row.cells().apply(attrs, collection_mutation_writer(tombstone{ts - 1, gc_clock::now()}).finish());
     // Note that for old tables created with regular LSI and GSI key columns,
     // we must also delete the regular columns that are not part of the new
     // schema consisting of pk, ck, and :attrs.
@@ -4312,7 +4310,7 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
         apply_attribute_updates(previous_item, ts, row, modified_attrs, any_updates, any_deletes);
     }
     if (!modified_attrs.empty()) {
-        auto serialized_map = modified_attrs.to_mut().serialize(*attrs_type());
+        auto serialized_map = modified_attrs.to_mut();
         row.cells().apply(attrs_column(*_schema), std::move(serialized_map));
     }
     // To allow creation of an item with no attributes, we need a row marker.

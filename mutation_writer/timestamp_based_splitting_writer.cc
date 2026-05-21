@@ -199,20 +199,19 @@ std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_ba
         return _classifier(cell.as_atomic_cell(cdef).timestamp());
     }
     if (cdef.type->is_collection() || cdef.type->is_user_type()) {
-        return cell.as_collection_mutation().with_deserialized(*cdef.type, [this] (collection_mutation_view_description mv) {
-            std::optional<bucket_id> bucket;
-            if (mv.tomb) {
-                bucket = _classifier(mv.tomb.timestamp);
+        auto cmv = cell.as_collection_mutation();
+        std::optional<bucket_id> bucket;
+        if (auto tomb = cmv.tomb(); tomb) {
+            bucket = _classifier(tomb.timestamp);
+        }
+        for (auto&& c : cmv) {
+            const auto this_bucket = _classifier(c.second.timestamp());
+            if (bucket && *bucket != this_bucket) {
+                return std::optional<bucket_id>{};
             }
-            for (auto&& c : mv.cells) {
-                const auto this_bucket = _classifier(c.second.timestamp());
-                if (bucket && *bucket != this_bucket) {
-                    return std::optional<bucket_id>{};
-                }
-                bucket = this_bucket;
-            }
-            return bucket;
-        });
+            bucket = this_bucket;
+        }
+        return bucket;
     }
     throw std::runtime_error(fmt::format("Cannot classify timestamp of cell (column {} of unknown type {})", cdef.name_as_text(), cdef.type->name()));
 }
@@ -280,19 +279,29 @@ small_flat_map<timestamp_based_splitting_mutation_writer::bucket_id, atomic_cell
 timestamp_based_splitting_mutation_writer::split_collection(atomic_cell_or_collection&& collection, const column_definition& cdef) {
     small_flat_map<bucket_id, atomic_cell_or_collection, 4> pieces_by_bucket;
 
-    collection.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description original_mv) {
-        small_flat_map<bucket_id, collection_mutation_view_description, 4> mutations_by_bucket;
-        for (auto&& c : original_mv.cells) {
-            mutations_by_bucket[_classifier(c.second.timestamp())].cells.push_back(c);
-        }
-        if (original_mv.tomb) {
-            mutations_by_bucket[_classifier(original_mv.tomb.timestamp)].tomb = original_mv.tomb;
-        }
+    const auto cmv = collection.as_collection_mutation();
 
-        for (auto&& [bucket, bucket_mv] : mutations_by_bucket) {
-            pieces_by_bucket.emplace(bucket, bucket_mv.serialize(*cdef.type));
+    small_flat_map<bucket_id, collection_mutation_writer, 4> mutations_by_bucket;
+
+    if (cmv.tomb()) {
+        mutations_by_bucket.emplace(_classifier(cmv.tomb().timestamp), cmv.tomb());
+    }
+
+    auto get_bucket = [&] (int64_t bucket) {
+        if (auto it = mutations_by_bucket.find(bucket); it != mutations_by_bucket.end()) {
+            return &it->second;
         }
-    });
+        // The bucket writer which owns the collection tombstone is already created.
+        return &mutations_by_bucket.emplace(bucket, tombstone{}).first->second;
+    };
+
+    for (auto&& [key, value] : cmv) {
+        get_bucket(_classifier(value.timestamp()))->push_back(std::move(key), std::move(value));
+    }
+
+    for (auto&& [bucket, bucket_writer] : mutations_by_bucket) {
+        pieces_by_bucket.emplace(bucket, std::move(bucket_writer).finish());
+    }
 
     return pieces_by_bucket;
 }

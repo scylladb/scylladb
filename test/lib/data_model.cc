@@ -13,6 +13,7 @@
 
 #include "schema/schema_builder.hh"
 #include "types/concrete_types.hh"
+#include "mutation/collection_mutation.hh"
 
 namespace tests::data_model {
 
@@ -120,14 +121,13 @@ mutation mutation_description::build(schema_ptr s) const {
                     }
                 ));
 
-                collection_mutation_description mut;
-                mut.tomb = c.tomb;
+                collection_mutation_writer w(c.tomb);
                 for (auto& [ key, value ] : c.elements) {
                     if (!value.expiring) {
-                        mut.cells.emplace_back(key, atomic_cell::make_live(get_value_type(key), value.timestamp,
+                        w.push_back(bytes_view(key), atomic_cell::make_live(get_value_type(key), value.timestamp,
                                                                             value.value, atomic_cell::collection_member::yes));
                     } else {
-                        mut.cells.emplace_back(key, atomic_cell::make_live(get_value_type(key),
+                        w.push_back(bytes_view(key), atomic_cell::make_live(get_value_type(key),
                                                                            value.timestamp,
                                                                            value.value,
                                                                            value.expiring->expiry_point,
@@ -135,7 +135,7 @@ mutation mutation_description::build(schema_ptr s) const {
                                                                            atomic_cell::collection_member::yes));
                     }
                 }
-                m.set_static_cell(*cdef, mut.serialize(*cdef->type));
+                m.set_static_cell(*cdef, std::move(w).finish());
             }
         ), value_or_collection);
     }
@@ -170,14 +170,13 @@ mutation mutation_description::build(schema_ptr s) const {
                         }
                     ));
 
-                    collection_mutation_description mut;
-                    mut.tomb = c.tomb;
+                    collection_mutation_writer w(c.tomb);
                     for (auto& [ key, value ] : c.elements) {
                         if (!value.expiring) {
-                            mut.cells.emplace_back(key, atomic_cell::make_live(get_value_type(key), value.timestamp,
+                            w.push_back(bytes_view(key), atomic_cell::make_live(get_value_type(key), value.timestamp,
                                                                             value.value, atomic_cell::collection_member::yes));
                         } else {
-                            mut.cells.emplace_back(key, atomic_cell::make_live(get_value_type(key),
+                            w.push_back(bytes_view(key), atomic_cell::make_live(get_value_type(key),
                                                                                value.timestamp,
                                                                                value.value,
                                                                                value.expiring->expiry_point,
@@ -186,7 +185,7 @@ mutation mutation_description::build(schema_ptr s) const {
                         }
 
                     }
-                    m.set_clustered_cell(ck, *cdef, mut.serialize(*cdef->type));
+                    m.set_clustered_cell(ck, *cdef, std::move(w).finish());
                 }
             ), value_or_collection);
         }

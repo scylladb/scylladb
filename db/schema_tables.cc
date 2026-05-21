@@ -1120,14 +1120,14 @@ make_map_mutation(const Map& map,
     auto vtyp = column_type->get_values_type();
 
     if (column_type->is_multi_cell()) {
-        collection_mutation_description mut;
+        collection_mutation_writer mut(tombstone{});
 
         for (auto&& entry : map) {
             auto te = f(entry);
-            mut.cells.emplace_back(ktyp->decompose(data_value(te.first)), atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(data_value(te.second)), atomic_cell::collection_member::yes));
+            mut.push_back(managed_bytes_view(ktyp->decompose(data_value(te.first))), atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(data_value(te.second)), atomic_cell::collection_member::yes));
         }
 
-        return mut.serialize(*column_type);
+        return std::move(mut).finish();
     } else {
         map_type_impl::native_type tmp;
         tmp.reserve(map.size());
@@ -1377,20 +1377,17 @@ make_list_mutation(const std::vector<T, Args...>& values,
     auto vtyp = column_type->get_elements_type();
 
     if (column_type->is_multi_cell()) {
-        collection_mutation_description m;
-        m.cells.reserve(values.size());
-        m.tomb.timestamp = timestamp - 1;
-        m.tomb.deletion_time = gc_clock::now();
+        collection_mutation_writer m(tombstone{timestamp - 1, gc_clock::now()});
 
         for (auto&& value : values) {
             auto dv = f(value);
             auto uuid = utils::UUID_gen::get_time_UUID_bytes();
-            m.cells.emplace_back(
-                bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
+            m.push_back(
+                managed_bytes_view(bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size())),
                 atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(std::move(dv)), atomic_cell::collection_member::yes));
         }
 
-        return m.serialize(*column_type);
+        return std::move(m).finish();
     } else {
         list_type_impl::native_type tmp;
         tmp.reserve(values.size());

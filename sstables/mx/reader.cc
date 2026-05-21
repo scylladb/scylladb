@@ -74,7 +74,7 @@ public:
         atomic_cell_or_collection val;
     };
     std::vector<cell> _cells;
-    collection_mutation_description _cm;
+    std::optional<collection_mutation_writer> _cm;
 
     data_consumer::proceed consume_range_tombstone_start(clustering_key_prefix ck, bound_kind k, tombstone t) {
         sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_start(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
@@ -422,7 +422,7 @@ public:
                                                     ttl,
                                                     local_deletion_time,
                                                     atomic_cell::collection_member::yes);
-            _cm.cells.emplace_back(to_bytes(cell_path), std::move(ac));
+            _cm->push_back(cell_path, std::move(ac));
         } else {
             auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
                                  : make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time,
@@ -435,26 +435,24 @@ public:
     data_consumer::proceed consume_complex_column_start(const sstables::column_translation::column_info& column_info,
                                                  tombstone tomb) {
         sstlog.trace("mp_row_consumer_m {}: consume_complex_column_start({}, {})", fmt::ptr(this), column_info.id, tomb);
-        _cm.tomb = tomb;
-        _cm.cells.clear();
+        _cm.emplace(tomb);
         return data_consumer::proceed::yes;
     }
 
     data_consumer::proceed consume_complex_column_end(const sstables::column_translation::column_info& column_info) {
         const std::optional<column_id>& column_id = column_info.id;
         sstlog.trace("mp_row_consumer_m {}: consume_complex_column_end({})", fmt::ptr(this), column_id);
-        if (_cm.tomb) {
-            check_column_missing_in_current_schema(column_info, _cm.tomb.timestamp);
+        if (_cm->tombstone()) {
+            check_column_missing_in_current_schema(column_info, _cm->tombstone().timestamp);
         }
         if (column_id) {
             const column_definition& column_def = get_column_definition(column_id);
-            if (!_cm.cells.empty() || (_cm.tomb && _cm.tomb.timestamp > column_def.dropped_at())) {
+            if (!_cm->empty() || (_cm->tombstone() && _cm->tombstone().timestamp > column_def.dropped_at())) {
                 check_schema_mismatch(column_info, column_def);
-                _cells.push_back({column_def.id, _cm.serialize(*column_def.type)});
+                _cells.push_back({column_def.id, std::move(*_cm).finish()});
             }
         }
-        _cm.tomb = {};
-        _cm.cells.clear();
+        _cm.reset();
         return data_consumer::proceed::yes;
     }
 

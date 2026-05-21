@@ -140,8 +140,8 @@ bool atomic_cell_or_collection::equals(const abstract_type& type, const atomic_c
     }
 
     if (type.is_atomic()) {
-        auto a = atomic_cell_view::from_bytes(type, _data);
-        auto b = atomic_cell_view::from_bytes(type, other._data);
+        auto a = atomic_cell_view::from_bytes(_data);
+        auto b = atomic_cell_view::from_bytes(other._data);
         if (a.timestamp() != b.timestamp()) {
             return false;
         }

@@ -74,20 +74,18 @@ auto write_dead_cell(Writer&& writer, atomic_cell_view c)
 template<typename Writer>
 auto write_collection_cell(Writer&& collection_writer, collection_mutation_view cmv, const column_definition& def)
 {
-  return cmv.with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
-    auto cells_writer = std::move(collection_writer).write_tomb(m_view.tomb).start_elements();
-    for (auto&& c : m_view.cells) {
-        auto cell_writer = cells_writer.add().write_key(c.first);
-        if (!c.second.is_live()) {
-            write_dead_cell(std::move(cell_writer).start_value_dead_cell(), c.second).end_collection_element();
-        } else if (c.second.is_live_and_has_ttl()) {
-            write_expiring_cell(std::move(cell_writer).start_value_expiring_cell(), c.second).end_collection_element();
+  auto cells_writer = std::move(collection_writer).write_tomb(cmv.tomb()).start_elements();
+    for (auto&& [key, cell] : cmv) {
+        auto cell_writer = cells_writer.add().write_fragmented_key(fragment_range(key));
+        if (!cell.is_live()) {
+            write_dead_cell(std::move(cell_writer).start_value_dead_cell(), cell).end_collection_element();
+        } else if (cell.is_live_and_has_ttl()) {
+            write_expiring_cell(std::move(cell_writer).start_value_expiring_cell(), cell).end_collection_element();
         } else {
-            write_live_cell(std::move(cell_writer).start_value_live_cell(), c.second).end_collection_element();
+            write_live_cell(std::move(cell_writer).start_value_live_cell(), cell).end_collection_element();
         }
     }
     return std::move(cells_writer).end_elements().end_collection_cell();
-  });
 }
 
 template<typename Writer>

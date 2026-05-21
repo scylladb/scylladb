@@ -15,6 +15,7 @@
 #include "mutation/timestamp.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/fragment_range.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
 #include "schema.hh"
@@ -2299,29 +2300,26 @@ void collection_column_computation::operate_on_collection_entries(
 
     const column_definition* cdef = schema.get_column_definition(_collection_name);
 
-    decltype(collection_mutation_view_description::cells) update_cells, existing_cells;
+    using cells_type = utils::chunked_vector<std::pair<managed_bytes_view, atomic_cell_view>>;
+    cells_type update_cells, existing_cells;
 
     const auto* update_cell = update.cells().find_cell(cdef->id);
     tombstone update_tombstone = update.tomb().tomb();
     if (update_cell) {
         collection_mutation_view update_col_view = update_cell->as_collection_mutation();
-        update_col_view.with_deserialized(*(cdef->type), [&update_cells, &update_tombstone] (collection_mutation_view_description descr) {
-            update_tombstone.apply(descr.tomb);
-            update_cells = descr.cells;
-        });
+        update_tombstone.apply(update_col_view.tomb());
+        update_cells = cells_type(std::from_range_t{}, update_col_view);
     }
     if (existing) {
         const auto* existing_cell = existing->cells().find_cell(cdef->id);
         if (existing_cell) {
             collection_mutation_view existing_col_view = existing_cell->as_collection_mutation();
-            existing_col_view.with_deserialized(*(cdef->type), [&existing_cells] (collection_mutation_view_description descr) {
-                existing_cells = descr.cells;
-            });
+            existing_cells = cells_type(std::from_range_t{}, existing_col_view);
         }
     }
 
     auto compare = [](const collection_kv& p1, const collection_kv& p2) {
-        return p1.first <=> p2.first;
+        return compare_unsigned(p1.first, p2.first);
     };
 
     // Both collections are assumed to be sorted by the keys.
@@ -2367,17 +2365,17 @@ bytes collection_column_computation::compute_value(const schema&, const partitio
 
 std::vector<db::view::view_key_and_action> collection_column_computation::compute_values_with_action(const schema& schema, const partition_key& key,
         const db::view::clustering_or_static_row& update, const std::optional<db::view::clustering_or_static_row>& existing) const {
-    using collection_kv = std::pair<bytes_view, atomic_cell_view>;
+    using collection_kv = std::pair<managed_bytes_view, atomic_cell_view>;
     auto serialize_cell = [_kind = _kind](const collection_kv& kv) -> bytes {
         using kind = collection_column_computation::kind;
         auto& [key, value] = kv;
         switch (_kind) {
             case kind::keys:
-                return bytes(key);
+                return to_bytes(key);
             case kind::values:
                 return value.value().linearize();
             case kind::entries:
-                bytes_opt elements[] = {bytes(key), value.value().linearize()};
+                bytes_opt elements[] = {to_bytes(key), value.value().linearize()};
                 return tuple_type_impl::build_value(elements);
         }
         std::abort(); // compiler will error

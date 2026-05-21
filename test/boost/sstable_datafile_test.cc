@@ -135,22 +135,22 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         mutation m(s, key);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
-        collection_mutation_description set_mut;
-        set_mut.tomb = tomb;
-        set_mut.cells.emplace_back(to_bytes("1"), make_atomic_cell(bytes_type, {}));
-        set_mut.cells.emplace_back(to_bytes("2"), make_atomic_cell(bytes_type, {}));
-        set_mut.cells.emplace_back(to_bytes("3"), make_atomic_cell(bytes_type, {}));
+        collection_mutation_writer set_mut_writer(tomb);
+        set_mut_writer.push_back(bytes_view(to_bytes("1")), make_atomic_cell(bytes_type, {}));
+        set_mut_writer.push_back(bytes_view(to_bytes("2")), make_atomic_cell(bytes_type, {}));
+        set_mut_writer.push_back(bytes_view(to_bytes("3")), make_atomic_cell(bytes_type, {}));
+        auto set_mut = std::move(set_mut_writer).finish();
 
-        m.set_clustered_cell(c_key, set_col, set_mut.serialize(*set_col.type));
+        m.set_clustered_cell(c_key, set_col, set_mut);
 
-        m.set_static_cell(static_set_col, set_mut.serialize(*static_set_col.type));
+        m.set_static_cell(static_set_col, set_mut);
 
         auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
         mutation m2(s, key2);
-        collection_mutation_description set_mut_single;
-        set_mut_single.cells.emplace_back(to_bytes("4"), make_atomic_cell(bytes_type, {}));
+        collection_mutation_writer set_mut_single_writer({});
+        set_mut_single_writer.push_back(bytes_view(to_bytes("4")), make_atomic_cell(bytes_type, {}));
 
-        m2.set_clustered_cell(c_key, set_col, set_mut_single.serialize(*set_col.type));
+        m2.set_clustered_cell(c_key, set_col, std::move(set_mut_single_writer).finish());
 
         auto mt = make_memtable(s, {std::move(m), std::move(m2)}).get();
 
@@ -162,19 +162,18 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
             BOOST_REQUIRE(r->size() == 1);
             auto cell = r->find_cell(set_col.id);
             BOOST_REQUIRE(cell);
-            return cell->as_collection_mutation().with_deserialized(*set_col.type, [&] (collection_mutation_view_description m) {
-                return m.materialize(*set_col.type);
-            });
+            return cell->as_collection_mutation();
         };
 
         auto sstp = verify_mutation(env, env.make_sstable(s), mt, "key1", [&] (mutation_opt& mutation) {
-            auto verify_set = [&tomb] (const collection_mutation_description& m) {
-                BOOST_REQUIRE(bool(m.tomb) == true);
-                BOOST_REQUIRE(m.tomb == tomb);
-                BOOST_REQUIRE(m.cells.size() == 3);
-                BOOST_REQUIRE(m.cells[0].first == to_bytes("1"));
-                BOOST_REQUIRE(m.cells[1].first == to_bytes("2"));
-                BOOST_REQUIRE(m.cells[2].first == to_bytes("3"));
+            auto verify_set = [&tomb] (const collection_mutation_view m) {
+                BOOST_REQUIRE(bool(m.tomb()) == true);
+                BOOST_REQUIRE(m.tomb() == tomb);
+                BOOST_REQUIRE(m.size() == 3);
+                auto it = m.begin();
+                BOOST_REQUIRE(to_bytes(it->first) == to_bytes("1")); ++it;
+                BOOST_REQUIRE(to_bytes(it->first) == to_bytes("2")); ++it;
+                BOOST_REQUIRE(to_bytes(it->first) == to_bytes("3"));
             };
 
             auto& mp = mutation->partition();
@@ -183,9 +182,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
             BOOST_REQUIRE(scol);
 
             // The static set
-            scol->as_collection_mutation().with_deserialized(*static_set_col.type, [&] (collection_mutation_view_description mut) {
-                verify_set(mut.materialize(*static_set_col.type));
-            });
+            verify_set(scol->as_collection_mutation());
 
             // The clustered set
             auto m = verifier(mutation);
@@ -194,9 +191,9 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 
         verify_mutation(env, sstp, "key2", [&] (mutation_opt& mutation) {
             auto m = verifier(mutation);
-            BOOST_REQUIRE(!m.tomb);
-            BOOST_REQUIRE(m.cells.size() == 1);
-            BOOST_REQUIRE(m.cells[0].first == to_bytes("4"));
+            BOOST_REQUIRE(!m.tomb());
+            BOOST_REQUIRE(m.size() == 1);
+            BOOST_REQUIRE(to_bytes(m.begin()->first) == to_bytes("4"));
         }).get();
     });
 }

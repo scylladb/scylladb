@@ -193,7 +193,7 @@ private:
     data_type get_value_type(bytes_view);
     */
 
-    void cell(bytes_view key, const atomic_cell_view& c) {
+    void cell(managed_bytes_view key, const atomic_cell_view& c) {
         auto& entry = get_or_append_entry(c.timestamp(), get_ttl(c));
         entry.cells.emplace_back(to_bytes(key), atomic_cell(*static_cast<V&>(*this).get_value_type(key), c));
     }
@@ -207,11 +207,11 @@ public:
         entry.t = t;
     }
 
-    void live_collection_cell(bytes_view key, const atomic_cell_view& c) {
+    void live_collection_cell(managed_bytes_view key, const atomic_cell_view& c) {
         cell(key, c);
     }
 
-    void dead_collection_cell(bytes_view key, const atomic_cell_view& c) {
+    void dead_collection_cell(managed_bytes_view key, const atomic_cell_view& c) {
         cell(key, c);
     }
 
@@ -245,7 +245,7 @@ struct extract_row_visitor {
                 collection_visitor(column_id id, std::map<change_key_t, row_update>& updates, const collection_type_impl& ctype)
                     : extract_collection_visitor<collection_visitor>(id, updates), _value_type(ctype.value_comparator()) {}
 
-                data_type get_value_type(bytes_view) {
+                data_type get_value_type(managed_bytes_view) {
                     return _value_type;
                 }
             } v(cdef.id, _updates, ctype);
@@ -259,7 +259,7 @@ struct extract_row_visitor {
                 udt_visitor(column_id id, std::map<change_key_t, row_update>& updates, const user_type_impl& utype)
                     : extract_collection_visitor<udt_visitor>(id, updates), _utype(utype) {}
 
-                data_type get_value_type(bytes_view key) {
+                data_type get_value_type(managed_bytes_view key) {
                     return _utype.type(deserialize_field_index(key));
                 }
             } v(cdef.id, _updates, utype);
@@ -430,8 +430,8 @@ struct find_timestamp_visitor {
         // with cdc$time using timestamp T + 1 instead of T.
         visit(t.timestamp + 1);
     }
-    void live_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
-    void dead_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
+    void live_collection_cell(managed_bytes_view, const atomic_cell_view& cell) { visit(cell); }
+    void dead_collection_cell(managed_bytes_view, const atomic_cell_view& cell) { visit(cell); }
     void collection_column(const column_definition&, auto&& visit_collection) { visit_collection(*this); }
     void marker(const row_marker& rm) { visit(rm.timestamp()); }
     void static_row_cells(auto&& visit_row_cells) { visit_row_cells(*this); }
@@ -516,14 +516,14 @@ struct should_split_visitor {
 
     void collection_tombstone(const tombstone& t) { visit(t.timestamp + 1); }
 
-    virtual void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
+    virtual void live_collection_cell(managed_bytes_view, const atomic_cell_view& cell) {
         if (_had_row_marker) {
             // nonatomic updates cannot be expressed with an INSERT.
             return stop();
         }
         visit(cell);
     }
-    void dead_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
+    void dead_collection_cell(managed_bytes_view, const atomic_cell_view& cell) { visit(cell); }
     void collection_column(const column_definition&, auto&& visit_collection) { visit_collection(*this); }
 
     virtual void marker(const row_marker& rm) {
@@ -574,7 +574,7 @@ class alternator_should_split_visitor : public should_split_visitor {
 public:
     ~alternator_should_split_visitor() override = default;
 
-    void live_collection_cell(bytes_view, const atomic_cell_view& cell) override {
+    void live_collection_cell(managed_bytes_view, const atomic_cell_view& cell) override {
         visit(cell.timestamp());
     }
 
@@ -639,7 +639,13 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             for (auto& nonatomic_update : sr_update.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
-                m.set_static_cell(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
+                m.set_static_cell(cdef, [&]() {
+                    collection_mutation_writer w(nonatomic_update.t);
+                    for (auto& [k, v] : nonatomic_update.cells) {
+                        w.push_back(bytes_view(k), atomic_cell_view(v));
+                    }
+                    return std::move(w).finish();
+                }());
             }
             processor.process_change(m);
         }
@@ -654,7 +660,13 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             for (auto& nonatomic_update : cr_insert.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
-                row.cells().apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
+                row.cells().apply(cdef, [&]() {
+                    collection_mutation_writer w(nonatomic_update.t);
+                    for (auto& [k, v] : nonatomic_update.cells) {
+                        w.push_back(bytes_view(k), atomic_cell_view(v));
+                    }
+                    return std::move(w).finish();
+                }());
             }
             row.apply(cr_insert.marker);
 
@@ -671,7 +683,13 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             for (auto& nonatomic_update : cr_update.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
-                row.apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
+                row.apply(cdef, [&]() {
+                    collection_mutation_writer w(nonatomic_update.t);
+                    for (auto& [k, v] : nonatomic_update.cells) {
+                        w.push_back(bytes_view(k), atomic_cell_view(v));
+                    }
+                    return std::move(w).finish();
+                }());
             }
 
             processor.process_change(m);

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "bytes.hh"
+#include "utils/managed_bytes.hh"
 #include <memory>
 
 class schema;
@@ -116,7 +117,7 @@ class collection_column_computation final : public column_computation {
     const kind _kind;
     collection_column_computation(const bytes& collection_name, kind kind) : _collection_name(collection_name), _kind(kind) {}
 
-    using collection_kv = std::pair<bytes_view, atomic_cell_view>;
+    using collection_kv = std::pair<managed_bytes_view, atomic_cell_view>;
     void operate_on_collection_entries(
             std::invocable<collection_kv*, collection_kv*, tombstone> auto&& old_and_new_row_func, const schema& schema,
             const partition_key& key, const db::view::clustering_or_static_row& update, const std::optional<db::view::clustering_or_static_row>& existing) const;

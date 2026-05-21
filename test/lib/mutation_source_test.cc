@@ -2272,33 +2272,36 @@ public:
                     }
                     static thread_local std::uniform_int_distribution<int> element_dist{1, 13};
                     static thread_local std::uniform_int_distribution<int64_t> uuid_ts_dist{-12219292800000L, -12219292800000L + 1000};
-                    collection_mutation_description m;
+                    std::vector<std::pair<bytes, atomic_cell>> cells;
                     auto num_cells = element_dist(_gen);
-                    m.cells.reserve(num_cells);
+                    cells.reserve(num_cells);
                     std::unordered_set<bytes> unique_cells;
                     unique_cells.reserve(num_cells);
                     auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
                     for (auto i = 0; i < num_cells; ++i) {
                         auto uuid = utils::UUID_gen::min_time_UUID(std::chrono::milliseconds{uuid_ts_dist(_gen)}).serialize();
                         if (unique_cells.emplace(uuid).second) {
-                            m.cells.emplace_back(
+                            cells.emplace_back(
                                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
                                 atomic_cell::make_live(*ctype->value_comparator(), gen_timestamp(timestamp_level::data), _blobs[value_blob_index_dist(_gen)],
                                     atomic_cell::collection_member::yes));
                         }
                     }
-                    std::sort(m.cells.begin(), m.cells.end(), [] (auto&& c1, auto&& c2) {
+                    std::sort(cells.begin(), cells.end(), [] (auto&& c1, auto&& c2) {
                             return timeuuid_type->as_less_comparator()(c1.first, c2.first);
                     });
-                    return m.serialize(*ctype);
+                    collection_mutation_writer w({});
+                    for (auto& [k, v] : cells) {
+                        w.push_back(bytes_view(k), atomic_cell_view(v));
+                    }
+                    return std::move(w).finish();
                 };
                 auto get_dead_cell = [&] () -> atomic_cell_or_collection{
                     if (col.is_atomic() || col.is_counter()) {
                         return atomic_cell::make_dead(gen_timestamp(timestamp_level::cell_tombstone), new_expiry());
                     }
-                    collection_mutation_description m;
-                    m.tomb = tombstone(gen_timestamp(timestamp_level::collection_tombstone), new_expiry());
-                    return m.serialize(*col.type);
+                    collection_mutation_writer w(tombstone(gen_timestamp(timestamp_level::collection_tombstone), new_expiry()));
+                    return std::move(w).finish();
 
                 };
                 // FIXME: generate expiring cells
