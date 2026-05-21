@@ -74,6 +74,14 @@ index::supports_expression_v index::supports_expression(const column_definition&
     }
 }
 
+index::supports_expression_v index::supports_bm25_expression(const column_definition& cdef) const {
+    if (cdef.name_as_text() != _target_column) {
+        return supports_expression_v::from_bool(false);
+    }
+    auto custom_class = secondary_index_manager::get_custom_class(_im);
+    return supports_expression_v::from_bool(custom_class && dynamic_cast<fulltext_index*>(custom_class->get()) != nullptr);
+}
+
 index::supports_expression_v index::supports_subscript_expression(const column_definition& cdef, const cql3::expr::oper_t op) const {
     using target_type = cql3::statements::index_target::target_type;
     if (cdef.name_as_text() != _target_column) {
