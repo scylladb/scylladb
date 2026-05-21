@@ -5129,10 +5129,11 @@ class data_read_resolver : public abstract_read_resolver {
     bool _all_reached_end = true;
     query::short_read _is_short_read;
     std::vector<reply> _data_results;
+    size_t _block_for;
     mutations_per_partition_key_map _diffs;
 private:
     void on_timeout() override {
-        fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0));
+        fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _block_for, response_count() != 0));
     }
     void on_failure(exceptions::coordinator_exception_container&& ex) override {
         // we will not need them any more
@@ -5336,7 +5337,8 @@ private:
         return got_incomplete_information_across_partitions(s, cmd, last_row, rp, versions, is_reversed);
     }
 public:
-    data_read_resolver(schema_ptr schema, db::consistency_level cl, size_t targets_count, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, targets_count, timeout),
+    data_read_resolver(schema_ptr schema, db::consistency_level cl, size_t targets_count, size_t block_for, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, targets_count, timeout),
+    _block_for(block_for),
     _diffs(10, partition_key::hashing(*_schema), partition_key::equality(*_schema)) {
         _data_results.reserve(targets_count);
     }
@@ -5344,23 +5346,37 @@ public:
         if (!_request_failed) {
             _max_live_count = std::max(result->row_count(), _max_live_count);
             _data_results.emplace_back(std::move(from), std::move(result));
-            if (_data_results.size() == _targets_count) {
-                _timeout.cancel();
-                _done_promise.set_value(bo::success());
-            }
+            maybe_resolve();
         }
     }
     void on_error(locator::host_id ep, error_kind kind) override {
-        switch (kind) {
-        case error_kind::RATE_LIMIT:
-            fail_request(exceptions::rate_limit_exception(_schema->ks_name(), _schema->cf_name(), db::operation_type::read, false));
-            break;
-        case error_kind::DISCONNECT:
-        case error_kind::FAILURE:
-            fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0));
-            break;
+        ++_failed;
+        if (_failed > _targets_count - _block_for) {
+            switch (kind) {
+            case error_kind::RATE_LIMIT:
+                fail_request(exceptions::rate_limit_exception(_schema->ks_name(), _schema->cf_name(), db::operation_type::read, false));
+                break;
+            case error_kind::DISCONNECT:
+            case error_kind::FAILURE:
+                fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _failed, _block_for, response_count() != 0));
+                break;
+            }
+            return;
+        }
+
+        // We wait for every replica to either respond or fail. A tolerated
+        // failure may be the last outstanding target, completing the resolver.
+        maybe_resolve();
+    }
+private:
+    void maybe_resolve() {
+        // Resolve when every replica has either responded or failed.
+        if (!_request_failed && (_data_results.size() + _failed == _targets_count)) {
+            _timeout.cancel();
+            _done_promise.set_value(bo::success());
         }
     }
+public:
     uint32_t max_live_count() const {
         return _max_live_count;
     }
@@ -5765,15 +5781,19 @@ protected:
     virtual void adjust_targets_for_reconciliation() {}
     void reconcile(db::consistency_level cl, storage_proxy::clock_type::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
         adjust_targets_for_reconciliation();
-        data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
+        auto block_for = db::block_for(*_effective_replication_map_ptr, cl);
+        data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _all_replicas.size(), block_for, timeout);
         auto exec = shared_from_this();
 
         if (_proxy->features().empty_replica_mutation_pages) {
             cmd->slice.options.set<query::partition_slice::option::allow_mutation_read_page_without_live_row>();
         }
 
+        slogger.trace("read-repair reconcile: targets={} block_for={} for {}.{}",
+                _all_replicas.size(), block_for, _schema->ks_name(), _schema->cf_name());
+
         // Waited on indirectly.
-        make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
+        make_mutation_data_requests(cmd, data_resolver, _all_replicas.begin(), _all_replicas.end(), timeout);
 
         // Waited on indirectly.
         (void)data_resolver->done().then_wrapped([this, exec_ = std::move(exec), data_resolver_ = std::move(data_resolver), cmd_ = std::move(cmd), cl_ = cl, timeout_ = timeout] (future<result<>> f) mutable -> future<> {
