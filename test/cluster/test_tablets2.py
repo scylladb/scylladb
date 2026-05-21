@@ -2130,8 +2130,8 @@ async def test_split_and_incremental_repair_synchronization(manager: ManagerClie
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': {initial_tablets}}};")
 
-        # insert data
-        pks = range(256)
+        # insert data — use a small volume to keep split compactions fast in debug mode
+        pks = range(64)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in pks])
 
         # flush the table
@@ -2157,7 +2157,7 @@ async def test_split_and_incremental_repair_synchronization(manager: ManagerClie
             insert_stmt.consistency_level = ConsistencyLevel.ONE
 
             await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": "test", "what": "throw"})
-            pks = range(256, 512)
+            pks = range(64, 128)
             await asyncio.gather(*[cql.run_async(insert_stmt, (k, k)) for k in pks])
             await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
 
