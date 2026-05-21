@@ -1213,7 +1213,7 @@ private:
             throw std::runtime_error(msg);
         }
 
-        co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(60s));
+        co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(10min));
         rlogger.debug("Disabling compaction for range={} for incremental repair", _range);
         auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
         for (auto& lock_holder : reenablers_and_holders.lock_holders) {
