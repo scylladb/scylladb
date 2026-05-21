@@ -935,7 +935,7 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
     }
 }
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit) {
+    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, uint8_t flags, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit) {
     using auth_state = service::client_state::auth_state;
 
     auto cqlop = static_cast<cql_binary_opcode>(op);
@@ -961,7 +961,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
-    return futurize_invoke([this, cqlop, stream, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state] () mutable {
+    return futurize_invoke([this, cqlop, stream, flags, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
@@ -991,6 +991,16 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             });
         };
         auto in = request_reader(std::move(fbuf), *linearization_buffer_ptr);
+
+        // Skip over the custom payload so the opcode parser reads from the
+        // correct position in the frame body.
+        if ((flags & cql_frame_flags::custom_payload) && _version >= 4) {
+            auto payload = in.read_string_bytes_map();
+            if (!payload) [[unlikely]] {
+                return make_exception_future<process_fn_return_type>(std::move(payload).assume_error());
+            }
+        }
+
         switch (cqlop) {
         case cql_binary_opcode::STARTUP:       return wrap_in_foreign(process_startup(stream, std::move(in), client_state, trace_state));
         case cql_binary_opcode::AUTH_RESPONSE: return wrap_in_foreign(process_auth_response(stream, std::move(in), client_state, trace_state));
@@ -1238,7 +1248,7 @@ future<> cql_server::connection::process_request() {
               return make_ready_future<>();
           }
           semaphore_units<> mem_permit = mem_permit_fut.get();
-          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit))] (fragmented_temporary_buffer buf) mutable {
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, flags, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit))] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._stats.requests_served;
             ++_server._stats.requests_serving;
@@ -1264,8 +1274,8 @@ future<> cql_server::connection::process_request() {
                     op == uint8_t(cql_binary_opcode::BATCH));
 
             future<foreign_ptr<std::unique_ptr<cql_server::response>>> request_process_future = should_paralelize ?
-                    _process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit) :
-                    process_request_one(istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit);
+                    _process_request_stage(this, istream, op, stream, flags, seastar::ref(_client_state), tracing_requested, mem_permit) :
+                    process_request_one(istream, op, stream, flags, seastar::ref(_client_state), tracing_requested, mem_permit);
 
             future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave), stream] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
                 try {
