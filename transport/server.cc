@@ -999,6 +999,10 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
             client_state.set_login(std::move(*opt_user));
             co_await client_state.check_user_can_login();
             co_await client_state.maybe_update_per_service_level_params();
+            update_scheduling_group();
+            _authenticating = false;
+            _ready = true;
+            on_connection_ready();
             res = make_ready(stream, trace_state);
         } else {
             res = make_autheticate(stream, a.qualified_java_name(), trace_state);
