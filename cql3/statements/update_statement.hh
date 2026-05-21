@@ -70,6 +70,14 @@ public:
         return *_restrictions;
     }
 
+    size_t object_size() const override {
+        return sizeof(*this);
+    }
+    size_t external_memory_usage() const override {
+        return modification_statement::external_memory_usage() +
+               (_restrictions ? sizeof(restrictions::update_restrictions) + _restrictions->external_memory_usage() : 0);
+    }
+
     virtual utils::chunked_vector<mutation> apply_updates(
             const std::vector<dht::partition_range>& keys,
             const std::vector<query::clustering_range>& ranges,

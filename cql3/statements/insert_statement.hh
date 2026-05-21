@@ -48,6 +48,11 @@ public:
 
     virtual void validate_primary_key(const query_options& options) const override;
 
+    size_t object_size() const override {
+        return sizeof(*this);
+    }
+    size_t external_memory_usage() const override;
+
     virtual utils::chunked_vector<mutation> apply_updates(
             const std::vector<dht::partition_range>& keys,
             const std::vector<query::clustering_range>& ranges,
@@ -80,6 +85,14 @@ public:
         , _value(std::move(v))
         , _default_unset(default_unset) {
     }
+
+    size_t object_size() const override {
+        return sizeof(*this);
+    }
+    size_t external_memory_usage() const override {
+        return insert_statement::external_memory_usage() + _value.external_memory_usage();
+    }
+
 private:
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const override;
 

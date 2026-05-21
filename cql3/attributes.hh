@@ -72,6 +72,9 @@ public:
 
     void fill_prepare_context(prepare_context& ctx);
 
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    size_t external_memory_usage() const;
+
     class raw final {
     public:
         std::optional<cql3::expr::expression> timestamp;
