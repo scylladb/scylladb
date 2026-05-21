@@ -832,6 +832,9 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
             },
             [&] (const temporary& t) {
                 out = fmt::format_to(out, "@temporary{}", t.index);
+            },
+            [&] (const bm25_call& bm) {
+                out = fmt::format_to(out, "BM25({}, {})", to_printer(bm.column), to_printer(bm.query_term));
             }
         }, pr.expr_to_print);
     return out;
@@ -965,6 +968,9 @@ bool recurse_until(const expression& e, const noncopyable_function<bool (const e
                 }
                 return false;
             },
+            [&] (const bm25_call& bm) {
+                return recurse_until(bm.column, predicate_fun) || recurse_until(bm.query_term, predicate_fun);
+            },
             [](LeafExpression auto const&) {
                 return false;
             }
@@ -1039,6 +1045,9 @@ expression search_and_replace(const expression& e,
                         .sub = recurse(s.sub),
                         .type = s.type,
                     };
+                },
+                [&] (const bm25_call& bm) -> expression {
+                    return bm25_call{recurse(bm.column), recurse(bm.query_term)};
                 },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
@@ -1336,6 +1345,12 @@ static
 cql3::raw_value
 do_evaluate(const temporary& t, const evaluation_inputs& inputs) {
     return inputs.temporaries[t.index];
+}
+
+static
+cql3::raw_value
+do_evaluate(const bm25_call&, const evaluation_inputs&) {
+    on_internal_error(expr_logger, "BM25 expression cannot be evaluated directly - it is handled by the fulltext index");
 }
 
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
@@ -1915,6 +1930,10 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
         [](untyped_constant&) {},
         [](constant&) {},
         [](temporary&) {},
+        [&](bm25_call& bm) {
+            fill_prepare_context(bm.column, ctx);
+            fill_prepare_context(bm.query_term, ctx);
+        },
     }, e);
 }
 
@@ -1989,6 +2008,9 @@ type_of(const expression& e) {
                     return t;
                 },
             }, e.type);
+        },
+        [] (const bm25_call&) -> data_type {
+            return float_type;
         },
         [] (const ExpressionElement auto& e) -> data_type {
             return e.type;
@@ -2190,6 +2212,10 @@ bool is_token_function(const expression& e) {
     return is_token_function(*fun_call);
 }
 
+bool has_bm25_function(const expression& e) {
+    return find_binop(e, [](const binary_operator& o) { return is<bm25_call>(o.lhs); });
+}
+
 bool is_partition_token_for_schema(const function_call& fun_call, const schema& table_schema) {
     if (!is_token_function(fun_call)) {
         return false;
@@ -2276,6 +2302,9 @@ aggregation_depth(const cql3::expr::expression& e) {
         [] (const field_selection& fs) {
             return aggregation_depth(fs.structure);
         },
+        [] (const bm25_call&) {
+            return 0u;
+        },
         [] (const LeafExpression auto&) {
             return 0u;
         },
@@ -2361,6 +2390,9 @@ levellize_aggregation_depth(const cql3::expr::expression& e, unsigned desired_de
         [&] (field_selection fs) -> expression {
             recurse(fs.structure);
             return fs;
+        },
+        [&] (bm25_call bm) -> expression {
+            return bm;
         },
         [&] (LeafExpression auto leaf) -> expression {
             return leaf;

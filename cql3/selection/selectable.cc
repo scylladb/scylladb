@@ -76,6 +76,9 @@ selectable_processes_selection(const expr::expression& selectable) {
         [&] (const expr::usertype_constructor&) -> bool {
             on_internal_error(slogger, "collection_constructor found its way to selector context");
         },
+        [&] (const expr::bm25_call&) -> bool {
+            on_internal_error(slogger, "bm25_call found its way to selector context");
+        },
         [&] (const expr::temporary& t) -> bool {
             // Well it doesn't process the selection, but it's not bypasses the selection completely
             // so we can't use the fast path. In any case it won't be seen.

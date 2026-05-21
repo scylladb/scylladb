@@ -72,6 +72,7 @@ struct tuple_constructor;
 struct collection_constructor;
 struct usertype_constructor;
 struct temporary;
+struct bm25_call;
 
 template <typename T>
 concept ExpressionElement
@@ -91,6 +92,7 @@ concept ExpressionElement
         || std::same_as<T, collection_constructor>
         || std::same_as<T, usertype_constructor>
         || std::same_as<T, temporary>
+        || std::same_as<T, bm25_call>
         ;
 
 template <typename Func>
@@ -111,6 +113,7 @@ concept invocable_on_expression
         && std::invocable<Func, collection_constructor>
         && std::invocable<Func, usertype_constructor>
         && std::invocable<Func, temporary>
+        && std::invocable<Func, bm25_call>
         ;
 
 template <typename Func>
@@ -131,6 +134,7 @@ concept invocable_on_expression_ref
         && std::invocable<Func, collection_constructor&>
         && std::invocable<Func, usertype_constructor&>
         && std::invocable<Func, temporary&>
+        && std::invocable<Func, bm25_call&>
         ;
 
 /// A CQL expression -- union of all possible expression types.
@@ -463,13 +467,29 @@ struct temporary {
     data_type type;
 };
 
+// BM25 fulltext scoring call.
+// Represents BM25(column, query_term) in WHERE and ORDER BY clauses.
+// This is a planner directive — it's never evaluated at runtime.
+// The fulltext index performs the actual BM25 scoring.
+// Before preparation, `column` is an unresolved_identifier.
+// After preparation, `column` is a column_value.
+struct bm25_call {
+    expression column;
+    expression query_term;
+
+    friend bool operator==(const bm25_call& a, const bm25_call& b) {
+        return a.column == b.column && a.query_term == b.query_term;
+    }
+};
+
 // now that all expression types are fully defined, we can define expression::impl
 struct expression::impl final {
     using variant_type = std::variant<
             conjunction, binary_operator, column_value, unresolved_identifier,
             column_mutation_attribute, function_call, cast, field_selection,
             bind_variable, untyped_constant, constant, tuple_constructor,
-            collection_constructor, usertype_constructor, subscript, temporary>;
+            collection_constructor, usertype_constructor, subscript, temporary,
+            bm25_call>;
     variant_type v;
     impl(variant_type v) : v(std::move(v)) {}
 };

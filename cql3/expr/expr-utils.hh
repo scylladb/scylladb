@@ -123,6 +123,8 @@ inline bool is_compare(oper_t op) {
 bool is_token_function(const function_call&);
 bool is_token_function(const expression&);
 
+bool has_bm25_function(const expression&);
+
 bool is_partition_token_for_schema(const function_call&, const schema&);
 bool is_partition_token_for_schema(const expression&, const schema&);
 
