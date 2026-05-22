@@ -77,8 +77,9 @@ Auditing Alternator Requests
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 When auditing is enabled, Alternator (DynamoDB-compatible API) requests are audited using the same
-backends and the same filtering configuration (``audit_categories``, ``audit_keyspaces``,
-``audit_tables``) as CQL operations. No additional configuration is needed.
+backends and filtering configuration as CQL operations. There are no separate Alternator audit settings.
+The filtering configuration includes ``audit_categories``, ``audit_keyspaces``, ``audit_tables``,
+and, for operations with table context, ``audit_rules``.
 
 Both successful and failed Alternator requests are audited.
 
@@ -142,11 +143,25 @@ For example, to audit an Alternator table called ``my_table_name`` use either of
 **Global and batch operations**: Some Alternator operations are not scoped to a single table:
 
 * ``ListTables`` and ``DescribeEndpoints`` have no associated keyspace or table.
-* ``BatchWriteItem`` and ``BatchGetItem`` may span multiple tables.
+  These operations are logged whenever their category matches ``audit_categories``, regardless of
+  ``audit_keyspaces`` or ``audit_tables`` filters. Their ``keyspace_name`` field is empty.
+* ``BatchWriteItem`` and ``BatchGetItem`` may span multiple tables. Therefore, the audit log
+  entries for these operations have the ``keyspace_name`` field empty. These operations still
+  match each table in the batch against ``audit_keyspaces``, ``audit_tables``, and table-qualified
+  ``audit_rules`` filters. The ``table_name`` field in the audit entry contains only the audited
+  tables, listed in pipe-separated (``|``) format. The JSON request in the audit entry's
+  ``operation`` field is also stripped of entries belonging to non-audited tables, so that data
+  from these tables is not leaked into audit records. If none of the tables in a batch match the
+  audit filter, no audit entry is produced for that batch operation. When different tables in a
+  batch match different audit sinks, each sink receives at most one audit entry with the tables
+  matching that sink.
 
-These operations are logged whenever their category matches ``audit_categories``, regardless of
-``audit_keyspaces`` or ``audit_tables`` filters. Their ``keyspace_name`` field is empty, and for
-batch operations the ``table_name`` field contains a pipe-separated (``|``) list of all involved table names.
+For example, given ``audit_tables: "alternator.my_table"`` or an ``audit_rules`` entry whose
+``qualified_table_names`` match only ``alternator_my_table.*``, and a single ``BatchWriteItem`` that
+targets both ``my_table`` and ``other_table``, the resulting audit entry will list only
+``my_table`` in its ``table_name`` field -- ``other_table`` is filtered out. Also, the contents of
+the JSON request body for ``other_table`` will not be present in the audit entry. If the same
+``BatchWriteItem`` targeted only ``other_table``, no audit entry would be produced at all.
 
 **DynamoDB Streams operations**: For streams-related operations (``DescribeStream``, ``GetShardIterator``,
 ``GetRecords``), the ``table_name`` field contains the base table name and the CDC log table name
@@ -388,9 +403,6 @@ Additional Resources
 * :doc:`Authorization</operating-scylla/security/authorization>` 
 
 * :doc:`Authentication</operating-scylla/security/authentication>` 
-
-
-
 
 
 
