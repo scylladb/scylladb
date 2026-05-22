@@ -959,7 +959,10 @@ statement_restrictions::statement_restrictions(private_tag,
                         "Restriction '{:user}' is not supported in materialized view creation. Only IS NOT NULL is allowed.",
                         pred.filter));
             }
-            _not_null_columns.insert(require_on_single_column(pred));
+            if (!_not_null_columns) {
+                _not_null_columns = std::make_unique<std::unordered_set<const column_definition*>>();
+            }
+            _not_null_columns->insert(require_on_single_column(pred));
         } else if (pred.is_not_null_single_column && require_on_single_column(pred)->is_partition_key()) {
             // A partition key column is never null, so IS NOT NULL on one matches
             // every row. The restriction carries no information, so drop it - in
@@ -1492,7 +1495,7 @@ statement_restrictions::ck_restrictions_need_filtering() const {
 
 bool
 statement_restrictions::is_restricted(const column_definition* cdef) const {
-    if (_not_null_columns.contains(cdef)) {
+    if (_not_null_columns && _not_null_columns->contains(cdef)) {
         return true;
     }
 
@@ -2911,7 +2914,10 @@ void statement_restrictions::validate_primary_key(const query_options& options) 
 
 
 const std::unordered_set<const column_definition*> statement_restrictions::get_not_null_columns() const {
-    return _not_null_columns;
+    if (_not_null_columns) {
+        return *_not_null_columns;
+    }
+    return {};
 }
 
 shared_ptr<const statement_restrictions>
