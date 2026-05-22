@@ -107,6 +107,7 @@ public:
     gms::inet_address broadcast_address = gms::inet_address("localhost");
     bool ms_listen = false;
     bool clean_data_dir_before_test = true;
+    bool strongly_consistent_tables = false;
 
     std::optional<db_clock::duration> batchlog_replay_timeout;
     std::chrono::milliseconds batchlog_delay = std::chrono::milliseconds(0);

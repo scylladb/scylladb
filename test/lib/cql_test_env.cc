@@ -449,14 +449,17 @@ public:
     }
 
     future<> create_keyspace(const cql_test_config& cfg, std::string_view name) {
-        sstring tablets = "";
+        sstring options = "";
         if (cfg.initial_tablets) {
-            tablets = format(" and tablets = {{'initial' : {}}}", *cfg.initial_tablets);
+            options = format(" and tablets = {{'initial' : {}}}", *cfg.initial_tablets);
         } else if (cfg.db_config->enable_tablets()) {
-            tablets = " and tablets = {'enabled' : true}";
+            options = " and tablets = {'enabled' : true}";
+        }
+        if (cfg.strongly_consistent_tables) {
+            options += " and consistency = 'global'";
         }
         auto query = seastar::format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.NetworkTopologyStrategy', 'replication_factor' : 1}}{};", name,
-                            tablets);
+                            options);
         return execute_cql(query).discard_result();
     }
 
