@@ -114,7 +114,6 @@ schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary:
     , _features(features)
     , _extensions(cfg.extensions())
     , _murmur3_partitioner_ignore_msb_bits(cfg.murmur3_partitioner_ignore_msb_bits())
-    , _schema_registry_grace_period(cfg.schema_registry_grace_period())
     , _user_types(std::move(uts))
 {}
 

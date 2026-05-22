@@ -81,10 +81,6 @@ public:
         return _murmur3_partitioner_ignore_msb_bits;
     }
 
-    uint32_t schema_registry_grace_period() const {
-        return _schema_registry_grace_period;
-    }
-
     const data_dictionary::user_types_storage& user_types() const noexcept {
         return *_user_types;
     }
@@ -101,7 +97,6 @@ private:
     const gms::feature_service& _features;
     const db::extensions& _extensions;
     const unsigned _murmur3_partitioner_ignore_msb_bits;
-    const uint32_t _schema_registry_grace_period;
     const std::shared_ptr<data_dictionary::user_types_storage> _user_types;
 };
 

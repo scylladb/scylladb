@@ -483,7 +483,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 {
     SCYLLA_ASSERT(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 
-    local_schema_registry().init(*this); // TODO: we're never unbound.
+    local_schema_registry().init(*this, std::chrono::seconds(get_config().schema_registry_grace_period())); // TODO: we're never unbound.
     setup_metrics();
 
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);

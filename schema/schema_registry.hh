@@ -112,18 +112,17 @@ public:
 class schema_registry {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
     std::unique_ptr<db::schema_ctxt> _ctxt;
+    schema_registry_entry::erase_clock::duration _grace_period{std::chrono::seconds(1)};
 
     friend class schema_registry_entry;
     schema_registry_entry& get_entry(table_schema_version) const;
-    // Duration for which unused entries are kept alive to avoid
-    // too frequent re-requests and syncs. Default is 1 second.
-    schema_registry_entry::erase_clock::duration grace_period() const;
+    schema_registry_entry::erase_clock::duration grace_period() const { return _grace_period; }
 private:
     void attach_table(schema_registry_entry&) noexcept;
 public:
     ~schema_registry();
     // workaround to this object being magically appearing from nowhere.
-    void init(const db::schema_ctxt&);
+    void init(const db::schema_ctxt&, schema_registry_entry::erase_clock::duration grace_period);
 
     // Looks up schema by version or loads it using supplied loader.
     // If the schema refers to a view, the loader must return both view and base schemas.

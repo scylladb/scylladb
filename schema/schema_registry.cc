@@ -54,8 +54,9 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
 
 schema_registry::~schema_registry() = default;
 
-void schema_registry::init(const db::schema_ctxt& ctxt) {
+void schema_registry::init(const db::schema_ctxt& ctxt, schema_registry_entry::erase_clock::duration grace_period) {
     _ctxt = std::make_unique<db::schema_ctxt>(ctxt);
+    _grace_period = grace_period;
 }
 
 void schema_registry::attach_table(schema_registry_entry& e) noexcept {
@@ -119,10 +120,6 @@ schema_registry_entry& schema_registry::get_entry(table_schema_version v) const 
         throw schema_version_not_found(v);
     }
     return e;
-}
-
-schema_registry_entry::erase_clock::duration schema_registry::grace_period() const {
-    return std::chrono::seconds(_ctxt->schema_registry_grace_period());
 }
 
 schema_ptr schema_registry::get(table_schema_version v) const {
