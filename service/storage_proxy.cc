@@ -1753,7 +1753,7 @@ public:
             register_cancellable();
         }
 
-        attach_to(*_proxy->_write_handlers_gate);
+        attach_to(_proxy->_write_handlers_gate);
     }
     void attach_to(gate& g) {
         _holders.push_back(g.hold());
@@ -7474,7 +7474,7 @@ void storage_proxy::on_down(const gms::inet_address& endpoint, locator::host_id 
 };
 
 future<> storage_proxy::drain_on_shutdown() {
-    co_await cancel_all_write_response_handlers(false);
+    co_await cancel_all_write_response_handlers();
     co_await _hints_resource_manager.stop();
 }
 
@@ -7498,23 +7498,42 @@ future<utils::chunked_vector<dht::token_range_endpoints>> storage_proxy::describ
     return locator::describe_ring(_db.local(), _remote->gossiper(), keyspace, include_only_local_dc);
 }
 
-future<> storage_proxy::cancel_all_write_response_handlers(bool allow_new) {
-    // Cancel all existing handlers. They are attached to the current gate.
+future<> storage_proxy::cancel_all_write_response_handlers() {
+    auto f = _write_handlers_gate.close();
     while (!_response_handlers.empty()) {
         _response_handlers.begin()->second->timeout_cb();
         co_await coroutine::maybe_yield();
     }
-    // Close the gate and wait for destruction of handlers still alive via
-    // external shared_ptr refs (e.g. background futures in send_to_live_endpoints).
-    auto f = _write_handlers_gate->close();
-    std::unique_ptr<gate> old_gate;
-    if (allow_new) {
-        // Swap in a fresh open gate so new handlers can be created.
-        // Keep the old gate alive (via old_gate) until the close future resolves.
-        old_gate = std::exchange(_write_handlers_gate, std::make_unique<gate>());
-    }
-    // If !allow_new, the closed gate stays in _write_handlers_gate — any
-    // subsequent handler creation will get gate_closed_exception.
     co_await std::move(f);
+}
+
+future<> storage_proxy::cancel_nonlocal_write_response_handlers() {
+    // Cancel handlers that have pending remote targets. After
+    // stop_transport(), MUTATION_DONE responses from remote nodes can
+    // no longer arrive, so these handlers are stuck. Handlers whose
+    // only pending targets are local can still complete via
+    // apply_locally and are left alone.
+    gate g;
+    // Collect IDs first to avoid iterator invalidation during cancellation.
+    // No yield here — the loop body is trivial (integer comparison + push_back).
+    std::vector<response_id_type> to_cancel;
+    to_cancel.reserve(_response_handlers.size());
+    for (auto& [id, handler] : _response_handlers) {
+        auto dominated_by_local = std::ranges::all_of(handler->get_targets(), [&] (locator::host_id target) {
+            return is_me(*handler->_effective_replication_map_ptr, target);
+        });
+        if (!dominated_by_local) {
+            to_cancel.push_back(id);
+        }
+    }
+    for (auto id : to_cancel) {
+        auto it = _response_handlers.find(id);
+        if (it != _response_handlers.end()) {
+            it->second->attach_to(g);
+            it->second->timeout_cb();
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_await g.close();
 }
 }

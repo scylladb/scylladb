@@ -2971,14 +2971,17 @@ future<> storage_service::do_drain() {
     // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
     co_await stop_transport();
 
-    // Cancel write handlers on all shards so they release their ERMs
-    // (and the associated token_metadata versions). Without this,
+    // Cancel write handlers that have pending remote targets so they release
+    // their ERMs (and the associated token_metadata versions). Without this,
     // wait_for_group0_stop below may deadlock: the topology coordinator
     // fiber calls barrier_and_drain which blocks in stale_versions_in_use()
     // waiting for stale token_metadata versions held by write handlers
     // whose MUTATION_DONE responses can no longer arrive (transport is stopped).
+    // Handlers with only local pending targets are left alone — they can
+    // still complete via apply_locally, and group0 needs them for raft commits
+    // until wait_for_group0_stop below.
     co_await _qp.proxy().container().invoke_on_all([] (storage_proxy& sp) {
-        return sp.cancel_all_write_response_handlers(true);
+        return sp.cancel_nonlocal_write_response_handlers();
     });
 
     // Drain view builder before group0, because the view builder uses group0 to coordinate view building.
