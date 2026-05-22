@@ -1408,71 +1408,6 @@ public:
     virtual void reply(locator::host_id ep) {};
 };
 
-// different mutation for each destination (for read repairs)
-class per_destination_mutation : public mutation_holder {
-    std::unordered_map<locator::host_id, lw_shared_ptr<const frozen_mutation>> _mutations;
-    dht::token _token;
-public:
-    per_destination_mutation(const std::unordered_map<locator::host_id, std::optional<mutation>>& mutations) {
-        for (auto&& m : mutations) {
-            lw_shared_ptr<const frozen_mutation> fm;
-            if (m.second) {
-                _schema = m.second.value().schema();
-                _token = m.second.value().token();
-                fm = make_lw_shared<const frozen_mutation>(freeze(m.second.value()));
-                _size += fm->representation().size();
-            }
-            _mutations.emplace(m.first, std::move(fm));
-        }
-    }
-    virtual bool store_hint(db::hints::manager& hm, locator::host_id hid, locator::effective_replication_map_ptr ermptr,
-            tracing::trace_state_ptr tr_state) override {
-        auto m = _mutations[hid];
-        if (m) {
-            return hm.store_hint(hid, _schema, std::move(m), tr_state);
-        } else {
-            return false;
-        }
-    }
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm) override {
-        const auto my_id = sp.my_host_id(erm);
-        auto m = _mutations[my_id];
-        if (m) {
-            tracing::trace(tr_state, "Executing a mutation locally");
-            return sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info);
-        }
-        return make_ready_future<>();
-    }
-    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
-            storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) override {
-        auto m = _mutations[ep];
-        if (m) {
-            tracing::trace(tr_state, "Sending a mutation to /{}", ep);
-            return sp.remote().send_mutation(ep, timeout, tracing::make_trace_info(tr_state),
-                    *m, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(),
-                    response_id, rate_limit_info, fence);
-        }
-        sp.got_response(response_id, ep, std::nullopt);
-        return make_ready_future<>();
-    }
-    virtual bool is_shared() override {
-        return false;
-    }
-    virtual void release_mutation() override {
-        for (auto&& m : _mutations) {
-            if (m.second) {
-                m.second.release();
-            }
-        }
-    }
-    dht::token& token() {
-        return _token;
-    }
-};
-
 class single_mutation_holder : public mutation_holder {
 protected:
     lw_shared_ptr<const frozen_mutation> _mutation;
@@ -3311,11 +3246,6 @@ struct batchlog_replay_mutation {
     mutation mut;
 };
 
-struct read_repair_mutation {
-    std::unordered_map<locator::host_id, std::optional<mutation>> value;
-    locator::effective_replication_map_ptr ermp;
-};
-
 struct read_repair_reconciled_write {
     mutation mut;
     locator::effective_replication_map_ptr ermp;
@@ -3339,13 +3269,6 @@ template <> struct fmt::formatter<service::hint_wrapper> : fmt::formatter<string
 template <> struct fmt::formatter<service::batchlog_replay_mutation> : fmt::formatter<string_view> {
     auto format(const service::batchlog_replay_mutation& h, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "batchlog_replay_mutation{{{}}}", h.mut);
-    }
-};
-
-template <>
-struct fmt::formatter<service::read_repair_mutation> : fmt::formatter<string_view> {
-    auto format(const service::read_repair_mutation& m, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", m.value);
     }
 };
 
@@ -3870,21 +3793,6 @@ result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler(const batchlog_replay_mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options) {
     return create_write_response_handler_helper(m.mut.schema(), m.mut.token(), std::make_unique<shared_mutation>(m.mut), cl, type, tr_state,
             std::move(permit), allow_limit, is_cancellable::yes, std::move(options));
-}
-
-result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options) {
-    host_id_vector_replica_set endpoints;
-    const auto& m = mut.value;
-    endpoints.reserve(m.size());
-    std::ranges::copy(m | std::views::keys, std::inserter(endpoints, endpoints.begin()));
-    auto mh = std::make_unique<per_destination_mutation>(m);
-
-    slogger.trace("creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
-    tracing::trace(tr_state, "Creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
-
-    // No rate limiting for read repair
-    return make_write_response_handler(std::move(mut.ermp), cl, type, std::move(mh), std::move(endpoints), host_id_vector_topology_change(), host_id_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate(), is_cancellable::no);
 }
 
 result<storage_proxy::response_id_type>
@@ -4848,20 +4756,6 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
     } else {
         return 0;
     }
-}
-
-future<result<>> storage_proxy::schedule_repair(locator::effective_replication_map_ptr ermp, mutations_per_partition_key_map diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state,
-                                        service_permit permit) {
-    if (diffs.empty()) {
-        return make_ready_future<result<>>(bo::success());
-    }
-    return mutate_internal(
-            diffs |
-                    std::views::values |
-                    std::views::transform([ermp] (auto& v) { return read_repair_mutation{std::move(v), ermp}; }) |
-                    // The transform above is destructive, materialize into a vector to make the range re-iterable.
-                    std::ranges::to<std::vector<read_repair_mutation>>()
-            , cl, std::move(trace_state), std::move(permit));
 }
 
 class abstract_read_resolver {
