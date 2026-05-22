@@ -1178,9 +1178,16 @@ future<> compaction_manager::really_do_stop() noexcept {
     cmlog.info("Stopped");
 }
 
-// Should return immediately when _state == state::none.
 void compaction_manager::do_stop() noexcept {
-    if (_state == state::none || _stop_future) {
+    if (_stop_future) {
+        return;
+    }
+
+    if (_state == state::none) {
+        // Possible when the node shuts down before enable() is called,
+        // e.g. due to an early startup failure. The task manager module
+        // was registered in the constructor and must be unregistered.
+        _stop_future = _task_manager_module->stop();
         return;
     }
 
