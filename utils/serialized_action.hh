@@ -64,7 +64,7 @@ public:
         }
 
         // run in background, synchronize using `ret`
-        (void)_sem.wait().then([this, later] () mutable {
+        (void)with_semaphore(_sem, 1, [this, later] () mutable {
             if (later) {
                 return seastar::yield().then([this] () mutable {
                     return do_trigger();
@@ -77,10 +77,6 @@ public:
             } else {
                 pr.set_value();
             }
-        });
-
-        ret = ret.finally([this] {
-            _sem.signal();
         });
 
         if (abortable) {
