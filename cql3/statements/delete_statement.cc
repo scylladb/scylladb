@@ -76,9 +76,9 @@ delete_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
             throw exceptions::invalid_request_exception(format("Invalid identifier {} for deletion (should not be a PRIMARY KEY part)", def->name_as_text()));
         }
 
-        auto&& op = deletion->prepare(db, schema->ks_name(), *def);
+        auto op = deletion->prepare(db, schema->ks_name(), *def);
         op->fill_prepare_context(ctx);
-        stmt->add_operation(op);
+        stmt->add_operation(std::move(op));
     }
     prepare_conditions(db, *schema, ctx, *stmt);
     stmt->process_where_clause(db, _where_clause, ctx);
