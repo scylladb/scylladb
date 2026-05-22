@@ -304,6 +304,28 @@ public:
         return string_map;
     }
 
+    utils::result_with_exception_ptr<std::unordered_map<sstring, bytes>> read_string_bytes_map() {
+        std::unordered_map<sstring, bytes> map;
+        utils::result_with_exception_ptr<uint16_t> n = read_short();
+        if (!n) [[unlikely]] {
+            return bo::failure(std::move(n).assume_error());
+        }
+        for (auto i = 0; i < n.assume_value(); i++) {
+            utils::result_with_exception_ptr<sstring> key = read_string();
+            if (!key) [[unlikely]] {
+                return bo::failure(std::move(key).assume_error());
+            }
+            utils::result_with_exception_ptr<bytes> val = read_bytes();
+            if (!val) [[unlikely]] {
+                return bo::failure(std::move(val).assume_error());
+            }
+            map.emplace(std::piecewise_construct,
+                std::forward_as_tuple(std::move(key).assume_value()),
+                std::forward_as_tuple(std::move(val).assume_value()));
+        }
+        return map;
+    }
+
 private:
     enum class options_flag {
         VALUES,
