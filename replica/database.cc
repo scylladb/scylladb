@@ -2622,7 +2622,7 @@ auto fmt::formatter<db::operation_type>::format(db::operation_type op_type, fmt:
 }
 
 
-std::string_view fmt::formatter<db::consistency_level>::to_string(db::consistency_level cl) {
+static std::string_view consistency_level_to_string(db::consistency_level cl) {
     switch (cl) {
     using enum db::consistency_level;
     case ANY:
@@ -2650,6 +2650,27 @@ std::string_view fmt::formatter<db::consistency_level>::to_string(db::consistenc
     default:
         abort();
     }
+}
+
+std::string_view fmt::formatter<db::consistency_level>::to_string(db::consistency_level cl) {
+    return consistency_level_to_string(cl);
+}
+
+db::consistency_level db::consistency_level_from_string(std::string_view sv) {
+    static const auto string_to_cl = [] {
+        std::unordered_map<std::string_view, db::consistency_level> ret;
+        for (int i = static_cast<int>(db::consistency_level::MIN_VALUE);
+                i <= static_cast<int>(db::consistency_level::MAX_VALUE);
+                i++) {
+            auto cl = static_cast<db::consistency_level>(i);
+            ret.emplace(consistency_level_to_string(cl), cl);
+        }
+        return ret;
+    } ();
+    if (auto it = string_to_cl.find(sv); it != string_to_cl.end()) {
+        return it->second;
+    }
+    throw std::out_of_range(std::format("Expected a valid consistency level spelled in ALL CAPS, got \"{}\"", sv));
 }
 
 namespace replica {

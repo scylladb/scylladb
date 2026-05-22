@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include "db/consistency_level_type.hh"
 #include "utils/assert.hh"
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -102,6 +103,7 @@ struct test_config {
     bool bypass_cache;
     std::optional<unsigned> initial_tablets;
     unsigned collection = 0;
+    db::consistency_level consistency_level;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
@@ -168,7 +170,7 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg) {
     auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}, cfg.consistency_level).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
@@ -191,7 +193,7 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg) 
     auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}, cfg.consistency_level).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
@@ -209,7 +211,7 @@ static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg)
     auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}, cfg.consistency_level).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
@@ -228,7 +230,7 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
     auto id = env.prepare(query).get();
     return time_parallel([&env, &cfg, id] {
             bytes key = make_random_key(cfg);
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}, cfg.consistency_level).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
 }
 
@@ -336,6 +338,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("counters", "test counters")
         ("collection", bpo::value<unsigned>()->default_value(0), "add map<text,text> collection column with N cells per row (excludes --counters)")
         ("tablets", "use tablets")
+        ("consistency-level", bpo::value<std::string>()->default_value("QUORUM"), "consistency level used for read and write operations")
         ("initial-tablets", bpo::value<unsigned>()->default_value(128), "initial number of tablets")
         ("sstable-summary-ratio", bpo::value<double>(), "Generate summary entry, so that summary file size / data file size ~= this ratio")
         ("sstable-format", bpo::value<std::string>(), "SSTable format name to use")
@@ -426,6 +429,7 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.stop_on_error = app.configuration()["stop-on-error"].as<bool>();
             cfg.timeout = app.configuration()["timeout"].as<std::string>();
             cfg.bypass_cache = app.configuration().contains("bypass-cache");
+            cfg.consistency_level = db::consistency_level_from_string(app.configuration()["consistency-level"].as<std::string>());
             audit::audit::start_audit(env.local_db().get_config(), env.get_shared_token_metadata(), env.qp(), env.migration_manager()).handle_exception([&] (auto&& e) {
                 fmt::print("audit start failed: {}", e);
             }).get();

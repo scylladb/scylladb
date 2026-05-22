@@ -31,6 +31,8 @@ enum class consistency_level {
     LOCAL_ONE, MAX_VALUE = LOCAL_ONE
 };
 
+db::consistency_level consistency_level_from_string(std::string_view sv);
+
 }
 
 template <> struct fmt::formatter<db::consistency_level> {
