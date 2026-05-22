@@ -47,8 +47,8 @@ batch_statement::batch_statement(int bound_terms, type type_,
     : cql_statement_opt_metadata(timeout_for_type(type_))
     , _bound_terms(bound_terms), _type(type_), _statements(std::move(statements))
     , _attrs(std::move(attrs))
-    , _has_conditions(std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->has_conditions(); }))
     , _stats(stats)
+    , _has_conditions(std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->has_conditions(); }))
 {
     validate();
     if (has_conditions()) {
@@ -404,7 +404,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     return qp.proxy().cas(schema, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([this, request = std::move(request)] (bool is_applied) {
-        return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
+        return request->build_cas_result_set(_metadata, *_columns_of_cas_result_set, is_applied);
     });
 }
 
@@ -414,7 +414,7 @@ void batch_statement::build_cas_result_set_metadata() {
     }
     const auto& schema = *_statements.front().statement->s;
 
-    _columns_of_cas_result_set.resize(schema.all_columns_count());
+    _columns_of_cas_result_set = std::make_unique<column_set>(schema.all_columns_count());
 
     // Add the mandatory [applied] column to result set metadata
     std::vector<lw_shared_ptr<column_specification>> columns;
@@ -424,14 +424,14 @@ void batch_statement::build_cas_result_set_metadata() {
     columns.push_back(applied);
 
     for (const auto& def : schema.primary_key_columns()) {
-        _columns_of_cas_result_set.set(def.ordinal_id);
+        _columns_of_cas_result_set->set(def.ordinal_id);
     }
     for (const auto& s : _statements) {
-        _columns_of_cas_result_set.union_with(s.statement->columns_of_cas_result_set());
+        _columns_of_cas_result_set->union_with(s.statement->columns_of_cas_result_set());
     }
-    columns.reserve(_columns_of_cas_result_set.count());
+    columns.reserve(_columns_of_cas_result_set->count());
     for (const auto& def : schema.all_columns()) {
-        if (_columns_of_cas_result_set.test(def.ordinal_id)) {
+        if (_columns_of_cas_result_set->test(def.ordinal_id)) {
             columns.emplace_back(def.column_specification);
         }
     }
