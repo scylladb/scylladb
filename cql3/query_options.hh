@@ -32,16 +32,23 @@ class column_specification;
 using computed_function_values = std::unordered_map<uint8_t, bytes_opt>;
 
 using unset_bind_variable_vector = utils::small_vector<bool, 16>;
+using raw_value_vector = utils::small_vector<cql3::raw_value, 16>;
+
+using raw_value_view_vector = utils::small_vector<cql3::raw_value_view, 16>;
 
 // Matches a raw_value_view with an unset vector to support CQL binary protocol
 // "unset" values.
 struct raw_value_view_vector_with_unset {
-    std::vector<raw_value_view> values;
+    raw_value_view_vector values;
     unset_bind_variable_vector unset;
 
-    raw_value_view_vector_with_unset(std::vector<raw_value_view> values_, unset_bind_variable_vector unset_) : values(std::move(values_)), unset(std::move(unset_)) {}
+    raw_value_view_vector_with_unset(raw_value_view_vector values_, unset_bind_variable_vector unset_) : values(std::move(values_)), unset(std::move(unset_)) {}
+    raw_value_view_vector_with_unset(std::vector<raw_value_view> values_, unset_bind_variable_vector unset_) : values(std::from_range, std::move(values_)), unset(std::move(unset_)) {}
     // Constructor with no unset support, for tests and internal queries
-    raw_value_view_vector_with_unset(std::vector<raw_value_view> values_) : values(std::move(values_)) {
+    raw_value_view_vector_with_unset(raw_value_view_vector values_) : values(std::move(values_)) {
+        unset.resize(values.size());
+    }
+    raw_value_view_vector_with_unset(std::vector<raw_value_view> values_) : values(std::from_range, std::move(values_)) {
         unset.resize(values.size());
     }
     raw_value_view_vector_with_unset() = default;
@@ -50,16 +57,22 @@ struct raw_value_view_vector_with_unset {
 // Matches a raw_value with an unset vector to support CQL binary protocol
 // "unset" values.
 struct raw_value_vector_with_unset {
-    std::vector<raw_value> values;
+    raw_value_vector values;
     unset_bind_variable_vector unset;
 
-    raw_value_vector_with_unset(std::vector<raw_value> values_, unset_bind_variable_vector unset_) : values(std::move(values_)), unset(std::move(unset_)) {}
+    raw_value_vector_with_unset(raw_value_vector values_, unset_bind_variable_vector unset_) : values(std::move(values_)), unset(std::move(unset_)) {}
+    // Constructor from std::vector (protocol/tracing paths)
+    raw_value_vector_with_unset(std::vector<raw_value> values_, unset_bind_variable_vector unset_) : values(std::from_range, std::move(values_)), unset(std::move(unset_)) {}
     // Constructor with no unset support, for tests and internal queries
-    raw_value_vector_with_unset(std::vector<raw_value> values_) : values(std::move(values_)) {
+    raw_value_vector_with_unset(raw_value_vector values_) : values(std::move(values_)) {
+        unset.resize(values.size());
+    }
+    raw_value_vector_with_unset(std::vector<raw_value> values_) : values(std::from_range, std::move(values_)) {
         unset.resize(values.size());
     }
     // Mostly for testing.
-    raw_value_vector_with_unset(std::initializer_list<raw_value> values_) : raw_value_vector_with_unset(std::vector(values_)) {}
+    raw_value_vector_with_unset(std::initializer_list<raw_value> values_, unset_bind_variable_vector unset_) : values(values_.begin(), values_.end()), unset(std::move(unset_)) {}
+    raw_value_vector_with_unset(std::initializer_list<raw_value> values_) : raw_value_vector_with_unset(raw_value_vector(values_.begin(), values_.end())) {}
     raw_value_vector_with_unset() = default;
 };
 
@@ -82,8 +95,8 @@ private:
     const cql_config& _cql_config;
     const db::consistency_level _consistency;
     const std::optional<std::vector<std::string_view>> _names;
-    std::vector<cql3::raw_value> _values;
-    std::vector<cql3::raw_value_view> _value_views;
+    raw_value_vector _values;
+    raw_value_view_vector _value_views;
     unset_bind_variable_vector _unset;
     const bool _skip_metadata;
     const specific_options _options;
@@ -125,7 +138,7 @@ private:
     explicit query_options(query_options&& o, std::vector<Values> values_ranges);
 
 public:
-    query_options(query_options&&) = default;
+    query_options(query_options&& o) noexcept;
     explicit query_options(const query_options&) = default;
 
     explicit query_options(const cql_config& cfg,
@@ -138,8 +151,8 @@ public:
     explicit query_options(const cql_config& cfg,
                            db::consistency_level consistency,
                            std::optional<std::vector<std::string_view>> names,
-                           std::vector<cql3::raw_value> values,
-                           std::vector<cql3::raw_value_view> value_views,
+                           raw_value_vector values,
+                           raw_value_view_vector value_views,
                            unset_bind_variable_vector unset,
                            bool skip_metadata,
                            specific_options options
@@ -230,7 +243,7 @@ public:
         return _names;
     }
 
-    const std::vector<cql3::raw_value_view>& get_values() const noexcept {
+    const raw_value_view_vector& get_values() const noexcept {
         return _value_views;
     }
 
