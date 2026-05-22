@@ -7,11 +7,13 @@
 """Minio server for testing.
    Provides helpers to setup and manage minio server for testing.
 """
+import atexit
 import os
 import argparse
 import asyncio
 from asyncio.subprocess import Process
 from typing import Generator, Optional
+import glob as globmod
 import json
 import logging
 import pathlib
@@ -33,7 +35,40 @@ class MinioServer:
     ENV_SECRET_KEY = 'AWS_SECRET_ACCESS_KEY'
     DEFAULT_REGION = 'local'
 
+    # Minio unconditionally uses O_DSYNC and fdatasync() on xl.meta writes
+    # (hardcoded in xl-storage_noatime_supported.go).  There is no env var to
+    # disable this -- MINIO_FS_OSYNC only controls a global sync(2) after
+    # renames, not per-file durability.  Since minio is a statically-linked Go
+    # binary (raw syscalls), LD_PRELOAD cannot intercept them either.
+    #
+    # To avoid the I/O penalty in tests we place the data root on tmpfs where
+    # the kernel returns instantly from fdatasync/O_DSYNC without hitting disk.
+    TMPFS_DIR = '/dev/shm'
+    TMPFS_PREFIX = 'scylla-minio-'
+
     log_file: BufferedWriter
+
+    @classmethod
+    def _cleanup_stale_tmpfs_dirs(cls, logger):
+        """Remove leftover tmpfs dirs from prior crashes (dead PIDs)."""
+        for d in globmod.glob(os.path.join(cls.TMPFS_DIR, cls.TMPFS_PREFIX + '*')):
+            # Directory names are: scylla-minio-<pid>-<random>
+            try:
+                pid = int(pathlib.Path(d).name.split('-')[2])
+            except (IndexError, ValueError):
+                continue
+            try:
+                os.kill(pid, 0)     # probe whether PID is alive
+            except ProcessLookupError:
+                # PID is dead -- safe to clean up
+                try:
+                    shutil.rmtree(d)
+                    if logger:
+                        logger.info('cleaned up stale minio tmpfs dir: %s', d)
+                except OSError:
+                    pass
+            except PermissionError:
+                pass    # PID is alive but owned by another user -- leave it
 
     def __init__(self, tempdir_base, address, logger):
         self.srv_exe = shutil.which('minio')
@@ -42,7 +77,6 @@ class MinioServer:
         self.tempdir_base = pathlib.Path(tempdir_base)
         tempdir = tempfile.mkdtemp(dir=tempdir_base, prefix="minio-")
         self.tempdir = pathlib.Path(tempdir)
-        self.rootdir = self.tempdir / 'minio_root'
         self.mcdir = self.tempdir / 'mc'
         self.logger = logger
         self.cmd: Optional[Process] = None
@@ -54,6 +88,31 @@ class MinioServer:
         self.log_filename = (self.tempdir_base / 'minio').with_suffix(".log")
         self.old_env = dict()
         self.default_config = None
+
+        # Place the minio data root on tmpfs so O_DSYNC/fdatasync are no-ops.
+        # Encode our PID into the name so stale dirs from crashed processes can
+        # be identified and cleaned up.
+        #
+        # Require at least 256 MB free on tmpfs -- the test data can reach
+        # ~50 MB and multiple minio instances may run in parallel.
+        min_tmpfs_bytes = 256 * 1024 * 1024
+        tmpfs_usable = False
+        if os.path.isdir(self.TMPFS_DIR):
+            try:
+                st = os.statvfs(self.TMPFS_DIR)
+                tmpfs_usable = st.f_bavail * st.f_frsize >= min_tmpfs_bytes
+            except OSError:
+                pass
+        if tmpfs_usable:
+            self._cleanup_stale_tmpfs_dirs(logger)
+            self.rootdir = pathlib.Path(
+                tempfile.mkdtemp(dir=self.TMPFS_DIR,
+                                 prefix=f'{self.TMPFS_PREFIX}{os.getpid()}-'))
+            self._atexit_cleanup = lambda: shutil.rmtree(self.rootdir, ignore_errors=True)
+            atexit.register(self._atexit_cleanup)
+        else:
+            self.rootdir = self.tempdir / 'minio_root'
+            self._atexit_cleanup = None
 
     def __repr__(self):
         return f"[minio] {self.address}:{self.port}/{self.bucket_name}"
@@ -187,7 +246,11 @@ class MinioServer:
             env={
                 **os.environ,
                 'MINIO_BROWSER': 'off',
-                'MINIO_FS_OSYNC': 'off',
+                # MINIO_FS_OSYNC is intentionally not set here.  Despite its
+                # name it only controls a global sync(2) after renames (off by
+                # default) -- it has no effect on the per-file O_DSYNC and
+                # fdatasync() calls that dominate I/O.  Those are eliminated by
+                # placing rootdir on tmpfs instead (see __init__).
             },
         )
         timeout = time.time() + 30
@@ -243,7 +306,7 @@ class MinioServer:
             return
 
         self.log_file = self.log_filename.open("wb")
-        os.mkdir(self.rootdir)
+        os.makedirs(self.rootdir, exist_ok=True)
 
         retries = 42  # just retry a fixed number of times
         for port in self._get_local_ports(retries):
@@ -297,6 +360,12 @@ class MinioServer:
         finally:
             self.logger.info('Killed minio server')
             self.cmd = None
+            # Clean up the tmpfs rootdir first (it may be separate from tempdir)
+            if self.rootdir != self.tempdir / 'minio_root':
+                shutil.rmtree(self.rootdir, ignore_errors=True)
+                if self._atexit_cleanup:
+                    atexit.unregister(self._atexit_cleanup)
+                    self._atexit_cleanup = None
             shutil.rmtree(self.tempdir)
 
 
