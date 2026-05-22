@@ -65,7 +65,7 @@ public:
     const std::unique_ptr<attributes> attrs;
 
 protected:
-    std::vector<::shared_ptr<operation>> _column_operations;
+    std::vector<std::unique_ptr<operation>> _column_operations;
     cql_stats& _stats;
 
     expr::expression _condition = expr::conjunction{{}}; // TRUE
@@ -139,7 +139,7 @@ public:
 
     bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
-    void add_operation(::shared_ptr<operation> op);
+    void add_operation(std::unique_ptr<operation> op);
 
     void inc_cql_stats(bool is_internal) const;
 

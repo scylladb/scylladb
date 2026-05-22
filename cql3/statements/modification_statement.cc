@@ -743,7 +743,7 @@ bool modification_statement::depends_on(std::string_view ks_name, std::optional<
     return keyspace() == ks_name && (!cf_name || column_family() == *cf_name);
 }
 
-void modification_statement::add_operation(::shared_ptr<operation> op) {
+void modification_statement::add_operation(std::unique_ptr<operation> op) {
     if (op->column.is_static()) {
         _sets_static_columns = true;
     } else {
