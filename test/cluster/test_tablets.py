@@ -811,10 +811,14 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
     await cql.run_async("create materialized view ks1.tv as select * from ks1.t where pk is not null and v is not null primary key (v, pk)")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
 
-    coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
-    log = await manager.server_open_log(coord_serv.server_id)
-    mark = await log.mark()
+    # Open logs on all servers and record marks. The topology coordinator may
+    # change mid-operation (e.g. due to a leadership transfer), so we watch all
+    # server logs and succeed as soon as any one of them shows the injection message.
+    logs_and_marks = []
+    for s in servers:
+        log = await manager.server_open_log(s.server_id)
+        mark = await log.mark()
+        logs_and_marks.append((log, mark))
 
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
@@ -825,7 +829,9 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
     alter_task = asyncio.create_task(alter_keyspace())
 
-    await log.wait_for(f'{injection}: entered', from_mark=mark)
+    # Wait for the injection to fire on any server (the coordinator may change).
+    await wait_for_first_completed([log.wait_for(f'{injection}: entered', from_mark=mark)
+                                    for log, mark in logs_and_marks])
     await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c']}, {'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']})
 
     task_manager_client = TaskManagerClient(manager.api)
