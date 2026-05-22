@@ -3714,6 +3714,18 @@ void tablet_storage_group_manager::update_effective_replication_map(
             utils::get_local_injector().disable("tablet_force_tablet_count_decrease");
         }
         handle_tablet_merge_completion(old_erm, *old_tablet_map, *new_tablet_map);
+    } else if (new_tablet_map->needs_split() && !old_tablet_map->needs_split()) {
+        // A resize decision was added without changing the tablet count (the "split initiated"
+        // entry).  Storage groups already allocated at this point were created before
+        // needs_split() became true, so allocate_storage_group() never called set_split_mode()
+        // on them.  Call it now so that subsequent writes land in split-ready compaction groups
+        // and handle_tablet_split_completion() finds an empty _main_cg when the new tablet count
+        // eventually arrives.
+        tlogger.info0("Detected new split decision for table {}.{} at tablet count {}, setting split mode on existing storage groups",
+                      schema()->ks_name(), schema()->cf_name(), new_tablet_count);
+        for (const storage_group_ptr& sg : _storage_groups | std::views::values) {
+            sg->set_split_mode();
+        }
     }
 
     // Allocate storage group if tablet is migrating in, or deallocate if it's migrating out.
