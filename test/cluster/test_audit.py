@@ -51,8 +51,6 @@ logger = logging.getLogger(__name__)
 # Stable socket path for syslog backends, shared across tests to enable server reuse.
 syslog_socket_path = tempfile.mktemp(prefix="/tmp/scylla-audit-", suffix=".socket")
 
-# Keys that require server restart (not live-updatable).
-NON_LIVE_AUDIT_KEYS = {"audit", "audit_unix_socket_path"}
 # Keys that can be updated via SIGHUP (live-updatable).
 LIVE_AUDIT_KEYS = {"audit_categories", "audit_keyspaces", "audit_tables", "audit_rules"}
 # Auth config applied when user/password are requested.
@@ -71,30 +69,39 @@ class AuditTester:
 
     def __init__(self, manager: ManagerClient):
         self.manager = manager
+        self._prev_config_keys: set[str] = set()
 
-    def _build_server_config(self, needed: dict[str, str],
+    def _build_server_config(self, target_config: dict[str, str],
                              enable_compact_storage: bool,
                              user: str | None) -> dict[str, Any]:
         """Build the full server config dict from audit settings, auth, and flags."""
-        cfg: dict[str, Any] = dict(needed)
+        cfg: dict[str, Any] = dict(target_config)
         cfg["enable_create_table_with_compact_storage"] = enable_compact_storage
         if user:
             cfg.update(AUTH_CONFIG)
         return cfg
 
     async def _check_restart_needed(self, current: dict[str, str],
-                                    needed: dict[str, str],
+                                    target_config: dict[str, str],
                                     absent_keys: set[str],
                                     user: str | None) -> bool:
         """Decide whether a running server must be restarted.
 
-        A restart is needed when non-live audit keys or auth config changed.
+        A restart is needed when any config key outside live-updatable
+        audit config changed, or when auth config changed.
         """
-        # Non-live audit keys changed or need to be removed.
-        restart = any(
-            str(current.get(k, "")) != str(needed.get(k, ""))
-            for k in NON_LIVE_AUDIT_KEYS if k in needed
-        ) or any(k in current for k in NON_LIVE_AUDIT_KEYS & absent_keys)
+        # Any config key that isn't live-updatable audit config must match; otherwise restart.
+        restart = False
+        for k, v in target_config.items():
+            if k in LIVE_AUDIT_KEYS:
+                continue
+            if str(current.get(k, "")) != str(v):
+                restart = True
+                break
+
+        # A previously set key outside live-updatable audit config must be removed when absent.
+        if not restart:
+            restart = any(k in current for k in absent_keys - LIVE_AUDIT_KEYS)
 
         # Auth config changes also require a restart.
         has_auth = any(k in current for k in AUTH_CONFIG)
@@ -108,7 +115,7 @@ class AuditTester:
 
         return restart
 
-    async def _apply_config_to_running_servers(self, servers, needed: dict[str, str],
+    async def _apply_config_to_running_servers(self, servers, target_config: dict[str, str],
                                                absent_keys: set[str],
                                                enable_compact_storage: bool,
                                                user: str | None,
@@ -117,7 +124,7 @@ class AuditTester:
         for srv in servers:
             current = await self.manager.server_get_config(srv.server_id)
 
-            needs_restart = await self._check_restart_needed(current, needed, absent_keys, user)
+            needs_restart = await self._check_restart_needed(current, target_config, absent_keys, user)
 
             # Transitioning from auth to no-auth: remove auth keys before restart.
             has_auth = any(k in current for k in AUTH_CONFIG)
@@ -130,13 +137,13 @@ class AuditTester:
                 for k in absent_keys:
                     await self.manager.server_remove_config_option(srv.server_id, k)
                 await self.manager.server_stop_gracefully(srv.server_id)
-                full_cfg = self._build_server_config(needed, enable_compact_storage, user)
+                full_cfg = self._build_server_config(target_config, enable_compact_storage, user)
                 await self.manager.server_update_config(srv.server_id, config_options=full_cfg)
                 await self.manager.server_start(srv.server_id)
                 await self.manager.driver_connect(auth_provider=auth_provider)
             else:
                 # Server stays up — only push live-updatable keys.
-                live_cfg = {k: v for k, v in needed.items() if k in LIVE_AUDIT_KEYS}
+                live_cfg = {k: v for k, v in target_config.items() if k in LIVE_AUDIT_KEYS}
                 live_cfg["enable_create_table_with_compact_storage"] = enable_compact_storage
                 log_file = await self.manager.server_open_log(srv.server_id)
                 # Each remove/update sends a SIGHUP.  Wait for each one's
@@ -150,7 +157,7 @@ class AuditTester:
                 await self.manager.server_update_config(srv.server_id, config_options=live_cfg)
                 await log_file.wait_for(r"completed re-reading configuration file", from_mark=from_mark, timeout=60)
 
-    async def _start_fresh_servers(self, needed: dict[str, str],
+    async def _start_fresh_servers(self, target_config: dict[str, str],
                                    enable_compact_storage: bool,
                                    rf: int,
                                    user: str | None,
@@ -168,7 +175,7 @@ class AuditTester:
             audit_cmdline.extend(cmdline)
         cmdline = audit_cmdline
 
-        cfg = self._build_server_config(needed, enable_compact_storage, user)
+        cfg = self._build_server_config(target_config, enable_compact_storage, user)
         connect_opts: dict[str, Any] = {}
         if auth_provider:
             connect_opts["auth_provider"] = auth_provider
@@ -216,8 +223,8 @@ class AuditTester:
         Returns:
             List of server IP addresses.
         """
-        needed = helper.update_audit_settings(audit_settings)
-        absent_keys = (NON_LIVE_AUDIT_KEYS | LIVE_AUDIT_KEYS) - needed.keys()
+        target_config = helper.update_audit_settings(audit_settings)
+        absent_keys = self._prev_config_keys - target_config.keys()
         auth_provider = PlainTextAuthProvider(username=user, password=password or "") if user else None
         expected_servers = len(property_file) if property_file else rf
 
@@ -231,15 +238,17 @@ class AuditTester:
         if servers:
             server_ips = [srv.ip_addr for srv in servers]
             await self._apply_config_to_running_servers(
-                servers, needed, absent_keys, enable_compact_storage, user, auth_provider)
+                servers, target_config, absent_keys, enable_compact_storage, user, auth_provider)
         else:
             server_ips = await self._start_fresh_servers(
-                needed, enable_compact_storage, rf, user, auth_provider,
+                target_config, enable_compact_storage, rf, user, auth_provider,
                 property_file=property_file, cmdline=cmdline)
+
+        self._prev_config_keys = set(target_config.keys())
 
         cql = self.manager.get_cql()
         cql.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
-        audit_mode = needed.get("audit") or ""
+        audit_mode = target_config.get("audit") or ""
         if "table" not in audit_mode:
             cql.execute("DROP KEYSPACE IF EXISTS audit")
 
@@ -1725,6 +1734,59 @@ class CQLAuditTester(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
+    async def _test_empty_keyspace_ddl(self, helper_class):
+        """Verify CREATE/DROP FUNCTION and CREATE/DROP AGGREGATE are audited
+        with ks="" regardless of whether the target keyspace exists.
+
+        Both existing-keyspace and nonexistent-keyspace variants are tested.
+        DROP ... IF EXISTS succeeds even for non-existent keyspaces.
+        """
+        with helper_class() as helper:
+            audit_settings = helper.update_audit_settings({
+                **self.audit_default_settings,
+                "audit_categories": "DDL",
+                "audit_keyspaces": "ks",
+                "enable_user_defined_functions": True,
+            })
+            session = await self.prepare(helper=helper, audit_settings=audit_settings)
+
+            # Existing keyspace — all statements succeed, run in the order shown.
+            self.execute_and_validate_new_audit_entry(
+                session,
+                "CREATE OR REPLACE FUNCTION ks.audit_probe(s int, v int) "
+                "CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return s + v'",
+                category="DDL", ks="")
+            self.execute_and_validate_new_audit_entry(
+                session,
+                "CREATE OR REPLACE AGGREGATE ks.audit_agg(int) "
+                "SFUNC audit_probe STYPE int",
+                category="DDL", ks="")
+            self.execute_and_validate_new_audit_entry(
+                session, "DROP AGGREGATE IF EXISTS ks.audit_agg",
+                category="DDL", ks="")
+            self.execute_and_validate_new_audit_entry(
+                session, "DROP FUNCTION IF EXISTS ks.audit_probe",
+                category="DDL", ks="")
+
+            # Non-existent keyspace — CREATE fails, DROP IF EXISTS succeeds.
+            error_cases = [
+                ("CREATE OR REPLACE FUNCTION non_existing_keyspace.audit_probe(s int, v int) "
+                 "CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return s + v'", True),
+                ("DROP FUNCTION IF EXISTS non_existing_keyspace.audit_probe", False),
+                ("CREATE OR REPLACE AGGREGATE non_existing_keyspace.audit_agg(int) "
+                 "SFUNC audit_probe STYPE int", True),
+                ("DROP AGGREGATE IF EXISTS non_existing_keyspace.audit_agg", False),
+            ]
+            for stmt, error in error_cases:
+                expected = [AuditEntry(category="DDL", cl="ONE", error=error,
+                                       ks="", statement=stmt, table="",
+                                       user="anonymous")]
+                with self.assert_entries_were_added(session, expected):
+                    try:
+                        session.execute(stmt)
+                    except Exception:
+                        assert error, f"Expected statement to fail: {stmt!r}"
+
     class AuditConfigChanger:
         class ExpectedResult(enum.Enum):
             SUCCESS = 1
@@ -2407,6 +2469,7 @@ async def test_audit_table_noauth(manager: ManagerClient):
     await t._test_prepare(AuditBackendTable)
     await t._test_batch(AuditBackendTable)
     await t._test_batch_native_protocol(AuditBackendTable)
+    await t._test_empty_keyspace_ddl(AuditBackendTable)
 
 
 # AuditBackendTable, auth (cassandra), rf=1
@@ -2499,6 +2562,7 @@ async def test_audit_syslog_noauth(manager: ManagerClient):
     await t._test_prepare(Syslog)
     await t._test_batch(Syslog)
     await t._test_batch_native_protocol(Syslog)
+    await t._test_empty_keyspace_ddl(Syslog)
 
 
 # AuditBackendSyslog, auth, rf=1
@@ -2528,6 +2592,7 @@ async def test_audit_composite_noauth(manager: ManagerClient):
     await t._test_prepare(Composite)
     await t._test_batch(Composite)
     await t._test_batch_native_protocol(Composite)
+    await t._test_empty_keyspace_ddl(Composite)
 
 
 # AuditBackendComposite, auth, rf=1
