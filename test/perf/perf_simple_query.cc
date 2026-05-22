@@ -338,6 +338,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("counters", "test counters")
         ("collection", bpo::value<unsigned>()->default_value(0), "add map<text,text> collection column with N cells per row (excludes --counters)")
         ("tablets", "use tablets")
+        ("strongly-consistent-tables", "use strongly consistent tables")
         ("consistency-level", bpo::value<std::string>()->default_value("QUORUM"), "consistency level used for read and write operations")
         ("initial-tablets", bpo::value<unsigned>()->default_value(128), "initial number of tablets")
         ("sstable-summary-ratio", bpo::value<double>(), "Generate summary entry, so that summary file size / data file size ~= this ratio")
@@ -389,6 +390,11 @@ int scylla_simple_query_main(int argc, char** argv) {
             if (app.configuration().contains("tablets")) {
                 cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
+            }
+            if (app.configuration().contains("strongly-consistent-tables")) {
+                cfg.db_config->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+                                                     db::config::config_source::CommandLine);
+                cfg.strongly_consistent_tables = true;
             }
             set_from_cli("audit", app, cfg.db_config->audit);
             set_from_cli("audit-keyspaces", app, cfg.db_config->audit_keyspaces);
