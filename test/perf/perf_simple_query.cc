@@ -64,13 +64,16 @@ static void execute_update_for_key(cql_test_env& env, const bytes& key, unsigned
     if (collection > 0) {
         col_suffix = fmt::format(", \"CC\" = {}", make_collection_literal(collection));
     }
+    // Strongly consistent writes need QUORUM/LOCAL_QUORUM.
+    // For eventual consistency it does not matter because there is only one node involved.
+    auto qo = std::make_unique<cql3::query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>{}, cql3::query_options::specific_options::DEFAULT);
     env.execute_cql(fmt::format("UPDATE cf SET "
         "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
         "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
         "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
         "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
         "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27{} "
-        "WHERE \"KEY\"= 0x{};", col_suffix, to_hex(key))).get();
+        "WHERE \"KEY\"= 0x{};", col_suffix, to_hex(key)), std::move(qo)).get();
 };
 
 static void execute_counter_update_for_key(cql_test_env& env, const bytes& key) {
