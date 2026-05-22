@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <memory>
+#include <unordered_set>
 #include <vector>
 #include "bounds_slice.hh"
 #include "cql3/expr/expression.hh"
@@ -168,7 +170,7 @@ private:
     std::vector<expr::binary_operator> _scoring_function_restrictions;
 
 
-    std::unordered_set<const column_definition*> _not_null_columns;
+    std::unique_ptr<std::unordered_set<const column_definition*>> _not_null_columns;
 
     /**
      * The restrictions used to build the index expressions
