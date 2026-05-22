@@ -1081,9 +1081,9 @@ statement_restrictions::statement_restrictions(private_tag,
         // only recognized column_value and tuple_constructor in the LHS.
         if (pred.equality && !pred.is_subscript) {
             if (auto* sc = std::get_if<on_column>(&pred.on)) {
-                _columns_with_eq.insert(sc->column);
+                _columns_with_eq.push_back(sc->column);
             } else if (auto* mc = std::get_if<on_clustering_key_prefix>(&pred.on)) {
-                _columns_with_eq.insert(mc->columns.begin(), mc->columns.end());
+                _columns_with_eq.insert(_columns_with_eq.end(), mc->columns.begin(), mc->columns.end());
             }
         }
     }
@@ -1433,7 +1433,7 @@ statement_restrictions::find_idx(const secondary_index::secondary_index_manager&
 }
 
 bool statement_restrictions::has_eq_restriction_on_column(const column_definition& column) const {
-    return _columns_with_eq.contains(&column);
+    return std::find(_columns_with_eq.begin(), _columns_with_eq.end(), &column) != _columns_with_eq.end();
 }
 
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
