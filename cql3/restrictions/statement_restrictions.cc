@@ -1290,10 +1290,19 @@ statement_restrictions::statement_restrictions(private_tag,
     _get_partition_key_ranges_fn = build_partition_key_ranges_fn();
 
     _get_clustering_bounds_fn = build_get_clustering_bounds_fn();
-    _get_global_index_clustering_ranges_fn = build_get_global_index_clustering_ranges_fn();
-    _get_global_index_token_clustering_ranges_fn = build_get_global_index_token_clustering_ranges_fn();
-    _get_local_index_clustering_ranges_fn = build_get_local_index_clustering_ranges_fn();
-    _value_for_index_partition_key_fn = build_value_for_index_partition_key_fn();
+
+    auto global_idx_ck = build_get_global_index_clustering_ranges_fn();
+    auto global_idx_token_ck = build_get_global_index_token_clustering_ranges_fn();
+    auto local_idx_ck = build_get_local_index_clustering_ranges_fn();
+    auto idx_pk_val = build_value_for_index_partition_key_fn();
+    if (global_idx_ck || global_idx_token_ck || local_idx_ck || idx_pk_val) {
+        _index_fns = std::make_unique<index_query_fns>(index_query_fns{
+            std::move(global_idx_ck),
+            std::move(global_idx_token_ck),
+            std::move(local_idx_ck),
+            std::move(idx_pk_val),
+        });
+    }
 }
 
 bool
@@ -2635,7 +2644,10 @@ statement_restrictions::build_get_global_index_clustering_ranges_fn() const {
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
         const query_options& options) const {
-    return _get_global_index_clustering_ranges_fn(options);
+    if (!_index_fns || !_index_fns->get_global_index_clustering_ranges_fn) {
+        on_internal_error(rlogger, "get_global_index_clustering_ranges called without index functions");
+    }
+    return _index_fns->get_global_index_clustering_ranges_fn(options);
 }
 
 get_clustering_bounds_fn_t
@@ -2661,7 +2673,10 @@ statement_restrictions::build_get_global_index_token_clustering_ranges_fn() cons
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_token_clustering_ranges(
     const query_options& options) const {
-    return _get_global_index_token_clustering_ranges_fn(options);
+    if (!_index_fns || !_index_fns->get_global_index_token_clustering_ranges_fn) {
+        on_internal_error(rlogger, "get_global_index_token_clustering_ranges called without index functions");
+    }
+    return _index_fns->get_global_index_token_clustering_ranges_fn(options);
 }
 
 get_clustering_bounds_fn_t
@@ -2678,7 +2693,10 @@ statement_restrictions::build_get_local_index_clustering_ranges_fn() const {
 
 std::vector<query::clustering_range> statement_restrictions::get_local_index_clustering_ranges(
         const query_options& options) const {
-    return _get_local_index_clustering_ranges_fn(options);
+    if (!_index_fns || !_index_fns->get_local_index_clustering_ranges_fn) {
+        on_internal_error(rlogger, "get_local_index_clustering_ranges called without index functions");
+    }
+    return _index_fns->get_local_index_clustering_ranges_fn(options);
 }
 
 get_singleton_value_fn_t
@@ -2713,7 +2731,10 @@ statement_restrictions::build_value_for_index_partition_key_fn() const {
 
 bytes_opt
 statement_restrictions::value_for_index_partition_key(const query_options& options) const {
-    return _value_for_index_partition_key_fn(options);
+    if (!_index_fns || !_index_fns->value_for_index_partition_key_fn) {
+        on_internal_error(rlogger, "value_for_index_partition_key called without index functions");
+    }
+    return _index_fns->value_for_index_partition_key_fn(options);
 }
 
 sstring statement_restrictions::to_string() const {
