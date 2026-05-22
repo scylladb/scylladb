@@ -42,12 +42,12 @@ boto3.dynamodb.types.DYNAMODB_CONTEXT = decimal.Context(prec=100)
 # but the more "official" way would be to modify botocore's JSON configuration
 # file, botocore/data/dynamodb/2012-08-10/service-2.json.
 
-# add_vs_to_client() is a context manager that modifies the given boto3
-# client to accept the new vector-search parameters in requests and responses,
-# and also monkey-patches the TypeSerializer/TypeDeserializer so that the
-# Vector type is serialized as FLOAT32VECTOR. The patches are restored on exit.
-@contextmanager
-def add_vs_to_client(client):
+# add_vs_to_resource() modifies the given boto3 resource (and the low-level
+# boto3 client held by it) to accept the new vector-search parameters in
+# requests and responses. It also modifies the resource to serialize and
+# deserialize Vector() values to the optimized FLOAT32VECTOR format.
+def add_vs_to_resource(resource):
+    client = resource.meta.client
     # All the new parameter "shapes" that we will use below for the
     # new parameters of the different operations:
     new_shapes = {
@@ -185,26 +185,19 @@ def add_vs_to_client(client):
     attribute_value_shape._cache.pop('members', None)
     shape_resolver._shape_cache.pop('AttributeValue', None)
 
-    # Monkey-patch boto3 resource's TypeSerializer so that values of type
-    # "Vector" (a class defined below) are serialized into the JSON request as
-    # {"FLOAT32VECTOR": [1.0, ...]} (JSON numbers) instead of the standard
-    # list encoding {"L": [{"N": "1.0"}, ...]}. This allows the high-level
-    # resource interface (table.put_item etc.) to send Vector attributes
-    # without needing client_no_transform.
-    _orig_serialize = boto3.dynamodb.types.TypeSerializer.serialize
-    def _serialize_with_vector(self, value):
-        if isinstance(value, Vector):
-            return {'FLOAT32VECTOR': list(value)}
-        return _orig_serialize(self, value)
-    boto3.dynamodb.types.TypeSerializer.serialize = _serialize_with_vector
-    _had_deserialize = hasattr(boto3.dynamodb.types.TypeDeserializer, '_deserialize_float32vector')
-    boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector = lambda self, value: Vector(value)
-    try:
-        yield
-    finally:
-        boto3.dynamodb.types.TypeSerializer.serialize = _orig_serialize
-        if not _had_deserialize:
-            del boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector
+    # Patch the resource's _injector serializer/deserializer so that Vector
+    # values are sent as FLOAT32VECTOR instead of the standard DynamoDB list
+    # encoding, and FLOAT32VECTOR responses are deserialized back to Vector.
+    class _VectorTypeSerializer(boto3.dynamodb.types.TypeSerializer):
+        def serialize(self, value):
+            if isinstance(value, Vector):
+                return {'FLOAT32VECTOR': list(value)}
+            return super().serialize(value)
+    class _VectorTypeDeserializer(boto3.dynamodb.types.TypeDeserializer):
+        def _deserialize_float32vector(self, value):
+            return Vector(value)
+    resource._injector._serializer = _VectorTypeSerializer()
+    resource._injector._deserializer = _VectorTypeDeserializer()
 
 
 @pytest.fixture(scope="module")
@@ -212,15 +205,14 @@ def vs(new_dynamodb_session, dynamodb):
     if is_aws(dynamodb):
         skip_env('Scylla-only: vector search extensions not available on DynamoDB')
     resource = new_dynamodb_session()
-    with add_vs_to_client(resource.meta.client):
-        yield resource
+    add_vs_to_resource(resource)
+    yield resource
 
 # Use the Vector(list) type for test values that are meant to be stored as
 # optimized vectors (array of floats instead of JSON list of numbers).
-# The serialization monkey-patching in the vs fixture will cause this list
-# to be serialized and sent to Alternator as
-# {'FLOAT32VECTOR': [1.0, 2.0, ...]}} instead of the standard list-of-numbers
-# {'L': [{'N': '1.0'}, ...]}.
+# The _injector patching in the vs fixture will cause this list to be
+# serialized and sent to Alternator as {'FLOAT32VECTOR': [1.0, 2.0, ...]}
+# instead of the standard list-of-numbers {'L': [{'N': '1.0'}, ...]}.
 class Vector(list):
     pass
 
