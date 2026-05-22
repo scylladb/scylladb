@@ -269,7 +269,7 @@ map_prepare_expression(const collection_constructor& c, data_dictionary::databas
         return constant::make_null(receiver->type);
     }
 
-    std::vector<expression> values;
+    expression_list values;
     values.reserve(c.elements.size());
     bool all_terminal = true;
     for (auto&& entry : c.elements) {
@@ -385,7 +385,7 @@ set_prepare_expression(const collection_constructor& c, data_dictionary::databas
     }
 
     auto value_spec = set_value_spec_of(*receiver);
-    std::vector<expression> values;
+    expression_list values;
     values.reserve(c.elements.size());
     bool all_terminal = true;
     for (auto& e : c.elements)
@@ -463,7 +463,7 @@ list_prepare_expression(const collection_constructor& c, data_dictionary::databa
     }
 
     auto&& value_spec = list_value_spec_of(*receiver);
-    std::vector<expression> values;
+    expression_list values;
     values.reserve(c.elements.size());
     bool all_terminal = true;
     for (auto& e : c.elements) {
@@ -540,7 +540,7 @@ vector_prepare_expression(const collection_constructor& c, data_dictionary::data
     vector_validate_assignable_to(c, db, keyspace, schema_opt, *receiver);
 
     auto&& value_spec = vector_value_spec_of(*receiver);
-    std::vector<expression> values;
+    expression_list values;
     values.reserve(c.elements.size());
     bool all_terminal = true;
     for (auto& e : c.elements) {
@@ -641,7 +641,7 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary:
     if (receiver) {
         tuple_constructor_validate_assignable_to(tc, db, keyspace, schema_opt, *receiver);
     }
-    std::vector<expression> values;
+    expression_list values;
     bool all_terminal = true;
     for (size_t i = 0; i < tc.elements.size(); ++i) {
         lw_shared_ptr<column_specification> component_receiver;
@@ -955,7 +955,7 @@ sql_cast_prepare_expression(const cast& c, data_dictionary::database db, const s
     // We implement the cast to a function_call.
     return function_call{
         .func = std::move(fun),
-        .args = std::vector({*prepared_arg}),
+        .args = [&] { expression_list a; a.push_back(std::move(*prepared_arg)); return a; }(),
     };
 }
 
@@ -1131,7 +1131,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
                                                     fun->name(), fun->arg_types().size(), fc.args.size()));
     }
 
-    std::vector<expr::expression> parameters;
+    expr::expression_list parameters;
     parameters.reserve(partially_prepared_args.size());
     bool all_terminal = true;
     for (size_t i = 0; i < partially_prepared_args.size(); ++i) {
@@ -1221,7 +1221,7 @@ std::optional<expression> prepare_conjunction(const conjunction& conj,
                                                               std::move(child_receiver_name), boolean_type);
     }
 
-    std::vector<expression> prepared_children;
+    expression_list prepared_children;
 
     bool all_terminal = true;
     for (const expression& child : conj.children) {
@@ -1624,7 +1624,7 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
 }
 
 assignment_testable::test_result
-test_assignment_all(const std::vector<expression>& to_test, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
+test_assignment_all(const expression_list& to_test, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
     test_result res = test_result::EXACT_MATCH;
     for (auto&& e : to_test) {
@@ -1857,7 +1857,7 @@ optimize_like(const expression& e) {
                     if ((type_of(*rhs) == utf8_type || type_of(*rhs) == ascii_type) && !rhs->is_null()) {
                         auto pattern = to_bytes(rhs->value.view());
                         auto func = ::make_shared<like_constant_function>(type_of(binop->lhs), pattern);
-                        auto args = std::vector<expression>();
+                        auto args = expression_list();
                         args.push_back(binop->lhs);
                         return function_call{std::move(func), std::move(args)};
                     }

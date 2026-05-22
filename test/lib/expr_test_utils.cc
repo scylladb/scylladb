@@ -356,19 +356,19 @@ constant make_int_vector_const(const std::vector<int32_t>& values) {
     return constant(make_int_vector_raw(values), vector_type_impl::get_instance(int32_type, values.size()));
 }
 
-collection_constructor make_list_constructor(std::vector<expression> elements, data_type elements_type) {
+collection_constructor make_list_constructor(expression_list elements, data_type elements_type) {
     return collection_constructor{.style = collection_constructor::style_type::list_or_vector,
                                   .elements = std::move(elements),
                                   .type = list_type_impl::get_instance(elements_type, true)};
 }
 
-collection_constructor make_set_constructor(std::vector<expression> elements, data_type elements_type) {
+collection_constructor make_set_constructor(expression_list elements, data_type elements_type) {
     return collection_constructor{.style = collection_constructor::style_type::set,
                                   .elements = std::move(elements),
                                   .type = set_type_impl::get_instance(elements_type, true)};
 }
 
-collection_constructor make_map_constructor(const std::vector<expression> elements,
+collection_constructor make_map_constructor(const expression_list elements,
                                             data_type key_type,
                                             data_type element_type) {
     return collection_constructor{.style = collection_constructor::style_type::map,
@@ -379,7 +379,7 @@ collection_constructor make_map_constructor(const std::vector<expression> elemen
 collection_constructor make_map_constructor(const std::vector<std::pair<expression, expression>>& elements,
                                             data_type key_type,
                                             data_type element_type) {
-    std::vector<expression> map_element_pairs;
+    expression_list map_element_pairs;
     for (const std::pair<expression, expression>& element : elements) {
         map_element_pairs.push_back(tuple_constructor{.elements = {element.first, element.second},
                                                       .type = tuple_type_impl::get_instance({key_type, element_type})});
@@ -387,12 +387,12 @@ collection_constructor make_map_constructor(const std::vector<std::pair<expressi
     return make_map_constructor(map_element_pairs, key_type, element_type);
 }
 
-tuple_constructor make_tuple_constructor(std::vector<expression> elements, std::vector<data_type> element_types) {
+tuple_constructor make_tuple_constructor(expression_list elements, std::vector<data_type> element_types) {
     return tuple_constructor{.elements = std::move(elements),
                              .type = tuple_type_impl::get_instance(std::move(element_types))};
 }
 
-collection_constructor make_vector_constructor(std::vector<expression> elements, data_type elements_type, vector_dimension_t dimension) {
+collection_constructor make_vector_constructor(expression_list elements, data_type elements_type, vector_dimension_t dimension) {
     return collection_constructor{.style = collection_constructor::style_type::vector,
                                   .elements = std::move(elements),
                                   .type = vector_type_impl::get_instance(elements_type, dimension)};

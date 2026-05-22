@@ -164,7 +164,7 @@ private:
     /**
      * The restrictions used to build the index expressions
      */
-    std::vector<expr::expression> _index_restrictions;
+    expr::expression_list _index_restrictions;
 
     /**
      * <code>true</code> if the secondary index need to be queried, <code>false</code> otherwise
@@ -179,7 +179,7 @@ private:
     bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
     bool _has_multi_column; ///< True iff _clustering_columns_restrictions has a multi-column restriction.
 
-    std::vector<expr::expression> _where; ///< The entire WHERE clause (factorized).
+    expr::expression_list _where; ///< The entire WHERE clause (factorized).
 
     /// Parts of _where defining the clustering slice.
     ///
@@ -269,7 +269,7 @@ public:
         check_indexes do_check_indexes);
 public:
 
-    const std::vector<expr::expression>& index_restrictions() const;
+    const expr::expression_list& index_restrictions() const;
 
     /**
      * Checks if the restrictions on the partition key is an IN restriction.

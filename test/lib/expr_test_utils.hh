@@ -107,16 +107,16 @@ constant make_int_int_map_const(const std::vector<std::pair<int32_t, int32_t>>& 
 
 constant make_int_vector_const(const std::vector<int32_t>& values);
 
-collection_constructor make_list_constructor(std::vector<expression> elements, data_type elements_type);
-collection_constructor make_set_constructor(std::vector<expression> elements, data_type elements_type);
-collection_constructor make_map_constructor(const std::vector<expression> elements,
+collection_constructor make_list_constructor(expression_list elements, data_type elements_type);
+collection_constructor make_set_constructor(expression_list elements, data_type elements_type);
+collection_constructor make_map_constructor(const expression_list elements,
                                             data_type key_type,
                                             data_type element_type);
 collection_constructor make_map_constructor(const std::vector<std::pair<expression, expression>>& elements,
                                             data_type key_type,
                                             data_type element_type);
-tuple_constructor make_tuple_constructor(std::vector<expression> elements, std::vector<data_type> element_types);
-collection_constructor make_vector_constructor(std::vector<expression> elements, data_type elements_type, vector_dimension_t dimension);
+tuple_constructor make_tuple_constructor(expression_list elements, std::vector<data_type> element_types);
+collection_constructor make_vector_constructor(expression_list elements, data_type elements_type, vector_dimension_t dimension);
 usertype_constructor make_usertype_constructor(std::vector<std::pair<std::string_view, constant>> field_values);
 
 ::lw_shared_ptr<column_specification> make_receiver(data_type receiver_type, sstring name = "receiver_name");

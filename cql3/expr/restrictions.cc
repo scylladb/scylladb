@@ -62,7 +62,7 @@ void validate_single_column_relation(const column_value& lhs, oper_t oper, const
     }
 }
 
-std::vector<const column_definition*> to_column_definitions(const std::vector<expression>& cols) {
+std::vector<const column_definition*> to_column_definitions(const expression_list& cols) {
     std::vector<const column_definition*> result;
     result.reserve(cols.size());
 
@@ -263,7 +263,7 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     // Convert single element IN relation to an EQ relation
     if (prepared_binop.op == oper_t::IN) {
         if (is<collection_constructor>(prepared_binop.rhs)) {
-            const std::vector<expression>& elements = as<collection_constructor>(prepared_binop.rhs).elements;
+            const expression_list& elements = as<collection_constructor>(prepared_binop.rhs).elements;
             if (elements.size() == 1) {
                 prepared_binop.op = oper_t::EQ;
                 prepared_binop.rhs = elements[0];

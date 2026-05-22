@@ -1214,7 +1214,7 @@ statement_restrictions::statement_restrictions(private_tag,
         auto partition_key_filter = expr::conjunction{
             .children = _single_column_partition_key_restrictions
                     | std::ranges::views::values
-                    | std::ranges::to<std::vector>(),
+                    | std::ranges::to<expr::expression_list>(),
         };
         _partition_level_filter = expr::make_conjunction(std::move(_partition_level_filter), std::move(partition_key_filter));
     }
@@ -1223,7 +1223,7 @@ statement_restrictions::statement_restrictions(private_tag,
         auto clustering_key_filter = expr::conjunction{
             .children = _single_column_clustering_key_restrictions
                     | std::ranges::views::values
-                    | std::ranges::to<std::vector>(),
+                    | std::ranges::to<expr::expression_list>(),
         };
         _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(clustering_key_filter));
     }
@@ -1240,7 +1240,7 @@ statement_restrictions::statement_restrictions(private_tag,
         .children = _single_column_nonprimary_key_restrictions
                 | std::ranges::views::filter(make_column_kind_checker(column_kind::static_column))
                 | std::ranges::views::values
-                | std::ranges::to<std::vector>(),
+                | std::ranges::to<expr::expression_list>(),
     };
 
     _partition_level_filter = expr::make_conjunction(std::move(_partition_level_filter), std::move(static_columns_filter));
@@ -1249,7 +1249,7 @@ statement_restrictions::statement_restrictions(private_tag,
         .children = _single_column_nonprimary_key_restrictions
                 | std::ranges::views::filter(make_column_kind_checker(column_kind::regular_column))
                 | std::ranges::views::values
-                | std::ranges::to<std::vector>(),
+                | std::ranges::to<expr::expression_list>(),
     };
 
     _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(regular_columns_filter));
@@ -1257,7 +1257,7 @@ statement_restrictions::statement_restrictions(private_tag,
     auto multi_column_restrictions = expr::conjunction{
         .children = expr::boolean_factors(_clustering_columns_restrictions)
                 | std::ranges::views::filter(contains_multi_column_restriction)
-                | std::ranges::to<std::vector>()
+                | std::ranges::to<expr::expression_list>()
     };
 
     _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(multi_column_restrictions));
@@ -1355,7 +1355,7 @@ statement_restrictions::is_restricted(const column_definition* cdef) const {
 }
 
 
-const std::vector<expr::expression>& statement_restrictions::index_restrictions() const {
+const expr::expression_list& statement_restrictions::index_restrictions() const {
     return _index_restrictions;
 }
 
@@ -2496,7 +2496,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
             | std::views::take(_schema->partition_key_size()) // take only the partition key restrictions
             | std::views::transform(expr::as<expr::binary_operator>) // we know it's an EQ
             | std::views::transform(std::mem_fn(&expr::binary_operator::rhs)) // "solve" for the column value
-            | std::ranges::to<std::vector>();
+            | std::ranges::to<expr::expression_list>();
 
     auto pk_solvers = (*_idx_tbl_ck_prefix)
             | std::views::drop(1) // skip the token restriction

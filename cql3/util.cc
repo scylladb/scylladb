@@ -147,8 +147,8 @@ expr::expression where_clause_to_relations(const std::string_view& where_clause,
 }
 
 sstring rename_columns_in_where_clause(const std::string_view& where_clause, std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> renames, dialect d) {
-    std::vector<expr::expression> relations = boolean_factors(where_clause_to_relations(where_clause, d));
-    std::vector<expr::expression> new_relations;
+    expr::expression_list relations = boolean_factors(where_clause_to_relations(where_clause, d));
+    expr::expression_list new_relations;
     new_relations.reserve(relations.size());
 
     for (const expr::expression& old_relation : relations) {

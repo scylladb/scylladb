@@ -146,7 +146,7 @@ inline auto find_clustering_order(const expression& e) {
 /// Given a Boolean expression, compute its factors such as e=f1 AND f2 AND f3 ...
 /// If the expression is TRUE, may return no factors (happens today for an
 /// empty conjunction).
-std::vector<expression> boolean_factors(expression e);
+expression_list boolean_factors(expression e);
 
 /// Run the given function for each element in the top level conjunction.
 void for_each_boolean_factor(const expression& e, const noncopyable_function<void (const expression&)>& for_each_func);
@@ -203,7 +203,7 @@ extern assignment_testable::test_result test_assignment(const expression& expr, 
 
 // Test all elements of exprs for assignment. If all are exact match, return exact match. If any is not assignable,
 // return not assignable. Otherwise, return weakly assignable.
-extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver);
+extern assignment_testable::test_result test_assignment_all(const expression_list& exprs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver);
 
 extern shared_ptr<assignment_testable> as_assignment_testable(expression e, std::optional<data_type> type_opt);
 
@@ -271,8 +271,8 @@ cql3::expr::expression levellize_aggregation_depth(const cql3::expr::expression&
 
 
 struct aggregation_split_result {
-    std::vector<expression> inner_loop;
-    std::vector<expression> outer_loop;
+    expression_list inner_loop;
+    expression_list outer_loop;
     std::vector<cql3::raw_value> initial_values_for_temporaries; // same size as inner_loop
 };
 

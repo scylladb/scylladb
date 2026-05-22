@@ -19,6 +19,7 @@
 #include "cql3/functions/function_name.hh"
 #include "seastarx.hh"
 #include "cql3/values.hh"
+#include "utils/small_vector.hh"
 
 class row;
 
@@ -248,10 +249,15 @@ struct binary_operator {
     friend bool operator==(const binary_operator&, const binary_operator&) = default;
 };
 
+// A list of expressions with small buffer optimization.
+// Most CQL constructs (conjunctions, function args, tuples, collections)
+// have a small number of elements, so avoid heap allocation for the common case.
+using expression_list = utils::small_vector<expression, 4>;
+
 // A conjunction of expressions separated by the AND keyword.
 // For example: "a < 3 AND col1 = ? AND pk IN (1, 2)"
 struct conjunction {
-    std::vector<expression> children;
+    expression_list children;
 
     friend bool operator==(const conjunction&, const conjunction&) = default;
 };
@@ -287,7 +293,7 @@ struct function_call {
     // Before preparation "func" is a function_name.
     // During preparation it's converted into db::functions::function
     std::variant<functions::function_name, shared_ptr<db::functions::function>> func;
-    std::vector<expression> args;
+    expression_list args;
 
     // 0-based index of the function call within a CQL statement.
     // Used to populate the cache of execution results while passing to
@@ -404,7 +410,7 @@ struct constant {
 // For example: "('a', ?, some_column)"
 // During preparation tuple constructors with constant values are converted to expr::constant.
 struct tuple_constructor {
-    std::vector<expression> elements;
+    expression_list elements;
 
     // Might be nullptr before prepare.
     // After prepare always holds a valid type, although it might be reversed_type(tuple_type).
@@ -421,7 +427,7 @@ struct collection_constructor {
     style_type style;
 
     // For map constructors, elements is a list of key-pair tuples.
-    std::vector<expression> elements;
+    expression_list elements;
 
     // Might be nullptr before prepare.
     // After prepare always holds a valid type, although it might be reversed_type(collection_type).

@@ -371,7 +371,7 @@ namespace raw {
 insert_statement::insert_statement(cf_name name,
                                    std::unique_ptr<attributes::raw> attrs,
                                    std::vector<::shared_ptr<column_identifier::raw>> column_names,
-                                   std::vector<expr::expression> column_values,
+                                   expr::expression_list column_values,
                                    bool if_not_exists)
     : raw::modification_statement{std::move(name), std::move(attrs), std::nullopt /* condition */, if_not_exists, false}
     , _column_names{std::move(column_names)}
@@ -397,7 +397,7 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
         throw exceptions::invalid_request_exception("No columns provided to INSERT");
     }
 
-    std::vector<expr::expression> relations;
+    expr::expression_list relations;
     std::unordered_set<bytes> column_ids;
     for (size_t i = 0; i < _column_names.size(); i++) {
         auto&& col = _column_names[i];

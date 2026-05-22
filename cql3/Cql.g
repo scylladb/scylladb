@@ -441,7 +441,7 @@ unaliasedSelector returns [uexpression tmp]
        )*
     ;
 
-selectionFunctionArgs returns [std::vector<expression> a]
+selectionFunctionArgs returns [expression_list a]
     : '(' ')'
     | '(' s1=unaliasedSelector { a.push_back(std::move(s1)); }
           ( ',' sn=unaliasedSelector { a.push_back(std::move(sn)); } )*
@@ -454,7 +454,7 @@ countArgument
     ;
 
 whereClause returns [uexpression clause]
-    @init { std::vector<expression> terms; }
+    @init { expression_list terms; }
     : e1=relation { terms.push_back(std::move(e1)); } (K_AND en=relation { terms.push_back(std::move(en)); })*
         { clause = conjunction{std::move(terms)}; }
     ;
@@ -507,7 +507,7 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
     @init {
         auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<::shared_ptr<cql3::column_identifier::raw>> column_names;
-        std::vector<expression> values;
+        expression_list values;
         bool if_not_exists = false;
         bool default_unset = false;
         std::optional<expression> json_value;
@@ -615,7 +615,7 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
 
 updateConditions returns [uexpression cond]
     @init {
-        std::vector<expression> conditions;
+        expression_list conditions;
     }
     : c1=columnCondition { conditions.emplace_back(std::move(c1)); }
          ( K_AND cn=columnCondition { conditions.emplace_back(std::move(cn)); } )*
@@ -1633,7 +1633,7 @@ constant returns [untyped_constant constant]
     ;
 
 mapLiteral returns [collection_constructor map]
-    @init{std::vector<expression> m;}
+    @init{expression_list m;}
     : '{' { }
           ( k1=term ':' v1=term { m.push_back(tuple_constructor{{std::move(k1), std::move(v1)}}); }
             ( ',' kn=term ':' vn=term { m.push_back(tuple_constructor{{std::move(kn), std::move(vn)}}); } )*  )?
@@ -1641,7 +1641,7 @@ mapLiteral returns [collection_constructor map]
     ;
 
 setOrMapLiteral[uexpression t] returns [collection_constructor value]
-	@init{ std::vector<expression> e; }
+	@init{ expression_list e; }
     : ':' v=term { e.push_back(tuple_constructor{{std::move(t), std::move(v)}}); }
           ( ',' kn=term ':' vn=term { e.push_back(tuple_constructor{{std::move(kn), std::move(vn)}}); } )*
       { $value = collection_constructor{collection_constructor::style_type::map, std::move(e)}; }
@@ -1651,7 +1651,7 @@ setOrMapLiteral[uexpression t] returns [collection_constructor value]
     ;
 
 collectionLiteral returns [uexpression value]
-	@init{ std::vector<expression> l; }
+	@init{ expression_list l; }
     : '['
           ( t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* )?
       ']' { $value = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(l)}; }
@@ -1669,7 +1669,7 @@ usertypeLiteral returns [uexpression ut]
     ;
 
 tupleLiteral returns [uexpression tt]
-    @init{ std::vector<expression> l; }
+    @init{ expression_list l; }
     @after{ $tt = tuple_constructor{std::move(l)}; }
     : '(' t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* ')'
     ;
@@ -1705,7 +1705,7 @@ allowedFunctionName returns [sstring s]
     | K_COUNT                       { $s = "count"; }
     ;
 
-functionArgs returns [std::vector<expression> a]
+functionArgs returns [expression_list a]
     : '(' ')'
     | '(' t1=term { a.push_back(std::move(t1)); }
           ( ',' tn=term { a.push_back(std::move(tn)); } )*
@@ -1901,7 +1901,7 @@ relation returns [uexpression e]
                     oper_t::IN,
                     collection_constructor {
                       .style = collection_constructor::style_type::list_or_vector,
-                      .elements = std::vector<expression>()
+                      .elements = expression_list()
                     }
                   );
               }
@@ -1960,15 +1960,15 @@ listOfIdentifiers returns [std::vector<::shared_ptr<cql3::column_identifier::raw
     : n1=cident { $ids.push_back(n1); } (',' ni=cident { $ids.push_back(ni); })*
     ;
 
-singleColumnInValues returns [std::vector<expression> list]
+singleColumnInValues returns [expression_list list]
     : '(' ( t1 = term { $list.push_back(std::move(t1)); } (',' ti=term { $list.push_back(std::move(ti)); })* )? ')'
     ;
 
-tupleOfTupleLiterals returns [std::vector<expression> literals]
+tupleOfTupleLiterals returns [expression_list literals]
     : '(' t1=tupleLiteral { $literals.emplace_back(std::move(t1)); } (',' ti=tupleLiteral { $literals.emplace_back(std::move(ti)); })* ')'
     ;
 
-tupleOfMarkersForTuples returns [std::vector<expression> markers]
+tupleOfMarkersForTuples returns [expression_list markers]
     : '(' m1=marker { $markers.emplace_back(std::move(m1)); } (',' mi=marker { $markers.emplace_back(std::move(mi)); })* ')'
     ;
 

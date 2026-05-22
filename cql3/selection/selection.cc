@@ -202,14 +202,14 @@ contains_ttl(const expr::expression& e) {
 
 class selection_with_processing : public selection {
 private:
-    std::vector<expr::expression> _selectors;
-    std::vector<expr::expression> _inner_loop;
-    std::vector<expr::expression> _outer_loop;
+    expr::expression_list _selectors;
+    expr::expression_list _inner_loop;
+    expr::expression_list _outer_loop;
     std::vector<raw_value> _initial_values_for_temporaries;
 public:
     selection_with_processing(schema_ptr schema, std::vector<const column_definition*> columns,
             std::vector<lw_shared_ptr<column_specification>> metadata,
-            std::vector<expr::expression> selectors)
+            expr::expression_list selectors)
         : selection(schema, std::move(columns), std::move(metadata),
             contains_writetime(expr::tuple_constructor{selectors}),
             contains_ttl(expr::tuple_constructor{selectors}),
@@ -526,7 +526,7 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     auto metadata = collect_metadata(*schema, prepared_selectors);
     if (processes_selection(prepared_selectors) || prepared_selectors.size() != defs.size()) {
         return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata),
-                prepared_selectors | std::views::transform(std::mem_fn(&prepared_selector::expr)) | std::ranges::to<std::vector>());
+                prepared_selectors | std::views::transform(std::mem_fn(&prepared_selector::expr)) | std::ranges::to<expr::expression_list>());
     } else {
         return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false);
     }

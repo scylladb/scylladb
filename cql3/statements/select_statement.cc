@@ -2027,7 +2027,7 @@ static uint32_t add_similarity_function_to_selectors(
     auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
 
     // Create the function arguments
-    std::vector<expr::expression> args;
+    expr::expression_list args;
     args.push_back(expr::column_value(ann_ordering_info._prepared_ann_ordering.first));
     args.push_back(ann_ordering_info._prepared_ann_ordering.second);
 
@@ -2296,7 +2296,7 @@ select_statement::maybe_jsonize_select_clause(std::vector<selection::prepared_se
         }
 
         // Prepare args for as_json_function
-        std::vector<expr::expression> args;
+        expr::expression_list args;
         args.reserve(prepared_selectors.size());
         for (const auto& prepared_selector : prepared_selectors) {
             args.push_back(std::move(prepared_selector.expr));

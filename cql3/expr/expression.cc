@@ -75,7 +75,7 @@ static cql3::raw_value do_evaluate(const function_call&, const evaluation_inputs
 
 namespace {
 
-using children_t = std::vector<expression>; // conjunction's children.
+using children_t = expression_list; // conjunction's children.
 
 children_t explode_conjunction(expression e) {
     return expr::visit(overloaded_functor{
@@ -587,7 +587,7 @@ const column_value& get_subscripted_column(const expression& e) {
 
 expression make_conjunction(expression a, expression b) {
     auto children = explode_conjunction(std::move(a));
-    std::ranges::copy(explode_conjunction(std::move(b)), back_inserter(children));
+    std::ranges::copy(explode_conjunction(std::move(b)), std::back_inserter(children));
     return conjunction{std::move(children)};
 }
 
@@ -599,9 +599,9 @@ make_untyped_null() {
     };
 }
 
-std::vector<expression>
+expression_list
 boolean_factors(expression e) {
-    std::vector<expression> ret;
+    expression_list ret;
     for_each_boolean_factor(e, [&](const expression& boolean_factor) {
         ret.push_back(boolean_factor);
     });
@@ -986,7 +986,7 @@ expression search_and_replace(const expression& e,
                     return conjunction{
                             conj.children
                             | std::views::transform(recurse)
-                            | std::ranges::to<std::vector>()
+                            | std::ranges::to<expression_list>()
                     };
                 },
                 [&] (const binary_operator& oper) -> expression {
@@ -999,7 +999,7 @@ expression search_and_replace(const expression& e,
                     return tuple_constructor{
                         tc.elements
                             | std::views::transform(recurse)
-                            | std::ranges::to<std::vector>(),
+                            | std::ranges::to<expression_list>(),
                         tc.type
                     };
                 },
@@ -1008,7 +1008,7 @@ expression search_and_replace(const expression& e,
                         c.style,
                         c.elements
                             | std::views::transform(recurse)
-                            | std::ranges::to<std::vector>(),
+                            | std::ranges::to<expression_list>(),
                         c.type
                     };
                 },
@@ -1024,7 +1024,7 @@ expression search_and_replace(const expression& e,
                         fc.func,
                         fc.args
                             | std::views::transform(recurse)
-                            | std::ranges::to<std::vector>()
+                            | std::ranges::to<expression_list>()
                     };
                 },
                 [&] (const cast& c) -> expression {
@@ -2147,7 +2147,7 @@ convert_map_back_to_listlike(expression e) {
 
     auto type = dynamic_pointer_cast<const listlike_collection_type_impl>(type_of(e));
     auto map_type = map_type_impl::get_instance(type->name_comparator(), type->value_comparator(), true);
-    auto args = std::vector<expression>();
+    auto args = expression_list();
     args.push_back(std::move(e));
 
     return function_call{
@@ -2386,8 +2386,8 @@ split_aggregation(std::span<const expression> aggregation) {
     auto allocate_temporary = [&] () -> size_t {
         return nr_temporaries++;
     };
-    std::vector<expression> inner_vec;
-    std::vector<expression> outer_vec;
+    expression_list inner_vec;
+    expression_list outer_vec;
     std::vector<raw_value> initial_values_vec;
     for (auto& e : aggregation) {
         auto outer = search_and_replace(e, [&] (const expression& e) -> std::optional<expression> {
@@ -2410,7 +2410,7 @@ split_aggregation(std::span<const expression> aggregation) {
                     auto& agg = agg_fn->get_aggregate();
                     auto inner_fn = agg.aggregation_function;
                     auto outer_fn = agg.state_to_result_function;
-                    auto inner_args = std::vector<expression>();
+                    auto inner_args = expression_list();
                     inner_args.push_back(temporary{.index = temp, .type = agg.state_type});
                     inner_args.insert(inner_args.end(), fc->args.begin(), fc->args.end());
                     auto inner = function_call{
@@ -2418,7 +2418,7 @@ split_aggregation(std::span<const expression> aggregation) {
                         .args = std::move(inner_args),
                     };
                     // The result of evaluating inner should be stored in the same temporary.
-                    auto outer_args = std::vector<expression>();
+                    auto outer_args = expression_list();
                     outer_args.push_back(temporary{.index = temp, .type = agg.state_type});
                     auto outer = std::invoke([&] () -> expression {
                         if (outer_fn) {

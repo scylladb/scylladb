@@ -24,7 +24,7 @@ expr::expression
 make_count_rows_function_expression() {
     return expr::function_call{
             cql3::functions::function_name::native_function(cql3::functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME),
-                    std::vector<cql3::expr::expression>()};
+                    cql3::expr::expression_list()};
 }
 
 

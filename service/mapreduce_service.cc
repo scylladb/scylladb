@@ -365,7 +365,7 @@ static shared_ptr<cql3::selection::selection> mock_selection(
         }
 
         auto reducible_aggr = aggr_function->reducible_aggregate_function();
-        auto arg_exprs = info->column_names | std::views::transform(name_as_expression) | std::ranges::to<std::vector<cql3::expr::expression>>();
+        auto arg_exprs = info->column_names | std::views::transform(name_as_expression) | std::ranges::to<cql3::expr::expression_list>();
         auto fc_expr = cql3::expr::function_call{reducible_aggr, arg_exprs};
         auto column_identifier = make_shared<cql3::column_identifier>(info->name.name, false);
         auto prepared_expr = cql3::expr::prepare_expression(fc_expr, db.as_data_dictionary(), "", schema.get(), nullptr);

@@ -119,7 +119,7 @@ static unresolved_identifier make_column(const char* col_name) {
     return unresolved_identifier{::make_shared<column_identifier_raw>(col_name, true)};
 }
 
-static function_call make_token(std::vector<expression> args) {
+static function_call make_token(expression_list args) {
     return function_call {
         .func = functions::function_name::native_function("token"),
         .args = args
@@ -366,9 +366,9 @@ BOOST_AUTO_TEST_CASE(expr_printer_parse_and_print_test) {
 }
 
 BOOST_AUTO_TEST_CASE(boolean_factors_test) {
-    BOOST_REQUIRE_EQUAL(boolean_factors(make_bool_const(true)), std::vector<expression>({make_bool_const(true)}));
+    BOOST_REQUIRE_EQUAL(boolean_factors(make_bool_const(true)), expression_list({make_bool_const(true)}));
 
-    BOOST_REQUIRE_EQUAL(boolean_factors(constant::make_null(boolean_type)), std::vector<expression>({constant::make_null(boolean_type)}));
+    BOOST_REQUIRE_EQUAL(boolean_factors(constant::make_null(boolean_type)), expression_list({constant::make_null(boolean_type)}));
 
     bind_variable bv1{0};
     bind_variable bv2{1};
@@ -377,9 +377,9 @@ BOOST_AUTO_TEST_CASE(boolean_factors_test) {
 
     BOOST_REQUIRE_EQUAL(
         boolean_factors(
-            conjunction{std::vector<expression>({bv1, bv2, bv3, bv4})}
+            conjunction{expression_list({bv1, bv2, bv3, bv4})}
         ),
-        std::vector<expression>(
+        expression_list(
             {bv1, bv2, bv3, bv4}
         )
     );
@@ -387,13 +387,13 @@ BOOST_AUTO_TEST_CASE(boolean_factors_test) {
     BOOST_REQUIRE_EQUAL(
         boolean_factors(
             conjunction{
-                std::vector<expression>({
+                expression_list({
                     make_conjunction(bv1, bv2),
                     make_conjunction(bv3, bv4)
                 })
             }
         ),
-        std::vector<expression>(
+        expression_list(
             {bv1, bv2, bv3, bv4}
         )
     );
@@ -640,7 +640,7 @@ BOOST_AUTO_TEST_CASE(evaluate_set_collection_constructor_with_empty) {
 BOOST_AUTO_TEST_CASE(evaluate_map_collection_constructor_with_empty) {
     // TODO: Empty multi-cell collections are trated as NULL in the database,
     // should the conversion happen in evaluate?
-    expression empty_map = make_map_constructor(std::vector<expression>(), int32_type, int32_type);
+    expression empty_map = make_map_constructor(expression_list(), int32_type, int32_type);
     BOOST_REQUIRE_EQUAL(evaluate(empty_map, evaluation_inputs{}), make_int_int_map_raw({}));
 }
 
@@ -1383,7 +1383,7 @@ BOOST_AUTO_TEST_CASE(prepare_token) {
 
     expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
 
-    std::vector<expression> expected_args = {column_value(table_schema->get_column_definition("p1")),
+    expression_list expected_args = {column_value(table_schema->get_column_definition("p1")),
                                  column_value(table_schema->get_column_definition("p2")),
                                  column_value(table_schema->get_column_definition("p3"))};
 
@@ -1402,7 +1402,7 @@ BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
                                   .build();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression tok = make_token(std::vector<expression>());
+    expression tok = make_token(expression_list());
 
     BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
@@ -3171,7 +3171,7 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_one_true) {
 
 // Helper function that evaluates a conjunction with given elements
 raw_value eval_conj(std::vector<raw_value> elements) {
-    std::vector<expression> conj_children;
+    expression_list conj_children;
     for (const raw_value& element : elements) {
         conj_children.push_back(constant(element, boolean_type));
     }
@@ -3888,9 +3888,9 @@ enum struct expected_rhs_type {
 
 // Generates invalid RHS values for use in prepare_binary_operator tests.
 // The argument specifies what type of RHS values are right, so we can avoid them when generating the wrong ones.
-std::vector<expression> get_invalid_rhs_values(expected_rhs_type expected_rhs) {
+expression_list get_invalid_rhs_values(expected_rhs_type expected_rhs) {
     // Start by adding values that are wrong in all prepare_binary_operator tests
-    std::vector<expression> invalid_rhs_vals = {
+    expression_list invalid_rhs_vals = {
         make_bool_untyped("true"), make_duration_untyped("365d"), make_hex_untyped("0xdeadbeef"),
         // A tuple where the third element has a type that doesn't match the one expected by multi_column_tuple
         tuple_constructor{.elements =
@@ -3992,7 +3992,7 @@ void test_prepare_binary_operator_invalid_rhs_values(const expression& good_bino
                                                      expected_rhs_type expected_rhs,
                                                      data_dictionary::database db,
                                                      const schema_ptr& table_schema) {
-    std::vector<expression> invalid_rhs_vals = get_invalid_rhs_values(expected_rhs);
+    expression_list invalid_rhs_vals = get_invalid_rhs_values(expected_rhs);
 
     for (const expression& invalid_rhs : invalid_rhs_vals) {
         binary_operator invalid_binop = as<binary_operator>(good_binop);
@@ -4685,7 +4685,7 @@ BOOST_AUTO_TEST_CASE(prepare_token_func_without_receiver) {
         BOOST_REQUIRE(token_fun != nullptr);
         BOOST_REQUIRE((*token_fun)->name() == functions::function_name::native_function("token"));
 
-        std::vector<expression> expected_args = {column_value(table_schema->get_column_definition("pk1")),
+        expression_list expected_args = {column_value(table_schema->get_column_definition("pk1")),
                                                  column_value(table_schema->get_column_definition("pk2")),
                                                  make_int_const(1234)};
         BOOST_REQUIRE_EQUAL(prepared_token->args, expected_args);

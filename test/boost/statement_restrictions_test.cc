@@ -32,7 +32,7 @@ namespace {
 /// Returns statement_restrictions::get_clustering_bounds() of where_clause, with reasonable defaults in
 /// boilerplate.
 query::clustering_row_ranges slice(
-        const std::vector<expr::expression>& where_clause, cql_test_env& env,
+        const expr::expression_list& where_clause, cql_test_env& env,
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
     return restrictions::analyze_statement_restrictions(
@@ -402,7 +402,7 @@ SEASTAR_TEST_CASE(index_selection) {
         auto check = [&](std::string_view where_clause) -> expected {
             prepare_context ctx;
             auto factors = where_clause.empty()
-                ? std::vector<expr::expression>{}
+                ? expr::expression_list{}
                 : boolean_factors(cql3::util::where_clause_to_relations(where_clause, cql3::dialect{}));
             auto sr = restrictions::analyze_statement_restrictions(
                     e.data_dictionary(),
@@ -1156,7 +1156,7 @@ static shared_ptr<const restrictions::statement_restrictions> make_restrictions(
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
     auto factors = where_clause.empty()
-            ? std::vector<expr::expression>{}
+            ? expr::expression_list{}
             : boolean_factors(cql3::util::where_clause_to_relations(where_clause, cql3::dialect{}));
     return restrictions::analyze_statement_restrictions(
             env.data_dictionary(),

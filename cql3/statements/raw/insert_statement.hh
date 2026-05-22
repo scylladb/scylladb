@@ -28,7 +28,7 @@ namespace raw {
 class insert_statement : public raw::modification_statement {
 private:
     const std::vector<::shared_ptr<column_identifier::raw>> _column_names;
-    const std::vector<expr::expression> _column_values;
+    const expr::expression_list _column_values;
 public:
     /**
      * A parsed <code>INSERT</code> statement.
@@ -41,7 +41,7 @@ public:
     insert_statement(cf_name name,
                   std::unique_ptr<attributes::raw> attrs,
                   std::vector<::shared_ptr<column_identifier::raw>> column_names,
-                  std::vector<expr::expression> column_values,
+                  expr::expression_list column_values,
                   bool if_not_exists);
 
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
