@@ -710,6 +710,9 @@ protected:
 future<> compaction_manager::run_custom_job(compaction_group_view& t, compaction_type type, const char* desc, noncopyable_function<future<>(compaction_data&, compaction_progress_monitor&)> job, tasks::task_info info, throw_if_stopping do_throw_if_stopping) {
     auto gh = start_compaction(t);
     if (!gh) {
+        if (is_disabled()) {
+            co_return co_await coroutine::return_exception_ptr(make_disabled_exception(t));
+        }
         co_return;
     }
 
