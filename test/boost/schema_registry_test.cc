@@ -45,12 +45,11 @@ static schema_ptr random_schema() {
 struct dummy_init {
     std::unique_ptr<db::config> config;
     gms::feature_service fs;
-    seastar::lowres_clock::duration grace_period;
     dummy_init()
             : config(std::make_unique<db::config>())
-            , fs({get_disabled_features_from_db_config(*config)})
-            , grace_period(std::chrono::seconds(config->schema_registry_grace_period())) {
-        local_schema_registry().init(db::schema_ctxt(*config, std::make_shared<data_dictionary::dummy_user_types_storage>(), fs));
+            , fs({get_disabled_features_from_db_config(*config)}) {
+        local_schema_registry().init(db::schema_ctxt(*config, std::make_shared<data_dictionary::dummy_user_types_storage>(), fs),
+                                     std::chrono::seconds(config->schema_registry_grace_period()));
     }
 };
 
