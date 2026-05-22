@@ -1379,6 +1379,16 @@ static inline db::per_partition_rate_limit::info adjust_rate_limit_for_local_ope
     return info;
 }
 
+template <typename T, size_t N>
+std::optional<T> pop_back_if_available(utils::small_vector<T, N>& v) {
+    std::optional<T> res;
+    if (!v.empty()) {
+        res.emplace(std::move(v.back()));
+        v.pop_back();
+    }
+    return res;
+}
+
 class mutation_holder {
 protected:
     size_t _size = 0;
@@ -1406,6 +1416,11 @@ public:
     // called when reply is received
     // allows mutation holder to have its own accounting
     virtual void reply(locator::host_id ep) {};
+    // Reassign the mutation intended for `from` to `to`.
+    // Only meaningful for per_destination_mutation (read-repair diffs).
+    virtual void reassign(locator::host_id from, locator::host_id to) {
+        on_internal_error(slogger, "reassign called on mutation_holder that does not support it");
+    }
 };
 
 // different mutation for each destination (for read repairs)
@@ -1470,6 +1485,45 @@ public:
     }
     dht::token& token() {
         return _token;
+    }
+    // Reassign the frozen mutation intended for `from` to `to`.
+    // Used during read-repair write-phase spare retry: when the original
+    // target fails, we redirect its diff to a spare replica.
+    //
+    // Sending the diff computed for one replica to a different one is safe.
+    //
+    // Background: merge(X, Y) for two replica states takes, for each cell,
+    // the version with the higher timestamp.  It is monotonic: if X ⊇ S
+    // (X contains every cell of S at equal-or-higher timestamps), then
+    // merge(X, Y) ⊇ S as well.
+    //
+    // During reconciliation of replicas {B, C}, the coordinator computes the
+    // reconciled result R = merge(B_old, C_old) and per-replica diffs:
+    //
+    //   diff(C) = R - C_old   (cells in R that C is missing)
+    //   diff(B) = R - B_old   (empty if B already had everything)
+    //
+    // If the write to C fails and we send diff(C) to spare A instead, any
+    // subsequent quorum read must still recover R.  The only quorum that
+    // excludes B (the fully-repaired replica) is {A, C}, and:
+    //
+    //   R  =  (R - C_old) ∪ C_old          …by construction of the diff
+    //      ⊆  (R - C_old) ∪ C_new          …C_new ⊇ C_old because
+    //                                         mutations only add cells
+    //      ⊆  A_new ∪ C_new                …A_new ⊇ (R - C_old) because
+    //                                         we applied diff(C) to A,
+    //                                         and mutations only add
+    //      =  merge(A_new, C_new)
+    //
+    // So merge(A, C) ⊇ R for any later read.  This generalises to any RF:
+    // substituting one read participant with a non-participant preserves
+    // the quorum intersection property, because any quorum that misses all
+    // fully-repaired replicas must include both the spare (carrying R - C)
+    // and the unrepaired original (carrying C).
+    void reassign(locator::host_id from, locator::host_id to) override {
+        auto node = _mutations.extract(from);
+        node.key() = to;
+        _mutations.insert(std::move(node));
     }
 };
 
@@ -1721,6 +1775,7 @@ protected:
     db::per_partition_rate_limit::info _rate_limit_info;
     db::view::update_backlog _view_backlog; // max view update backlog of all participating targets
     utils::small_vector<gate::holder, 2> _holders;
+    host_id_vector_replica_set _spare_targets;
 
 protected:
     virtual bool waited_for(locator::host_id from) = 0;
@@ -1830,6 +1885,11 @@ public:
         if (waited_for(from)) {
             _failed += count;
             if (_total_block_for + _failed > _total_endpoints) {
+                // Redirect to a spare replica before giving up
+                if (auto spare = pop_back_if_available(_spare_targets)) {
+                    redirect_write_to_spare(from, *spare);
+                    return false;
+                }
                 _error = err;
                 _message = std::move(msg);
                 delay(get_trace_state(), [] (abstract_write_response_handler*) { });
@@ -1991,6 +2051,39 @@ public:
     const schema_ptr& get_schema() const {
         return _mutation_holder->schema();
     }
+    void report_write_failure(locator::host_id ep, storage_proxy::response_id_type response_id,
+                              size_t failure_count, std::exception_ptr eptr) {
+        auto schema = get_schema();
+        ++stats().writes_errors.get_ep_stat(_effective_replication_map_ptr->get_topology(), ep);
+        error err = error::FAILURE;
+        std::optional<sstring> msg;
+
+        if (try_catch<replica::rate_limit_exception>(eptr)) {
+            // There might be a lot of those, so ignore
+            err = error::RATE_LIMIT;
+        } else if (const auto* stale = try_catch<replica::stale_topology_exception>(eptr)) {
+            msg = stale->what();
+        } else if (try_catch_nested<rpc::closed_error>(eptr)) {
+            // ignore, disconnect will be logged by gossiper
+        } else if (const auto* e = try_catch_nested<seastar::gate_closed_exception>(eptr)) {
+            // may happen during shutdown, log and ignore it
+            slogger.warn("gate_closed_exception during mutation write to {}.{} on {}: {}",
+                schema->ks_name(), schema->cf_name(), ep, e->what());
+        } else if (try_catch<timed_out_error>(eptr)) {
+            // from local mutations. Ignore so that logs are not flooded.
+            // database total_writes_timedout counter was incremented.
+            // It needs to be recorded that the timeout occurred locally though.
+            err = error::TIMEOUT;
+        } else if (auto* e = try_catch<db::virtual_table_update_exception>(eptr)) {
+            msg = e->grab_cause();
+        } else if (auto* e = try_catch<replica::critical_disk_utilization_exception>(eptr)) {
+            msg = e->what();
+        } else {
+            slogger.error("exception during mutation write to {}.{} on {}: {}",
+                schema->ks_name(), schema->cf_name(), ep, eptr);
+        }
+        _proxy->got_failure_response(response_id, ep, failure_count, std::nullopt, err, std::move(msg));
+    }
     size_t get_mutation_size() const {
         return _mutation_holder->size();
     }
@@ -1999,6 +2092,38 @@ public:
     }
     bool read_repair_write() {
         return !_mutation_holder->is_shared();
+    }
+    void set_repair_spares(host_id_vector_replica_set&& spares) {
+        _spare_targets = std::move(spares);
+    }
+    // Redirect a read-repair write from a failed replica to a spare.
+    // See per_destination_mutation::reassign() for why this is safe.
+    void redirect_write_to_spare(locator::host_id from, locator::host_id to) {
+        slogger.trace("read-repair write: replica {} failed, redirecting to spare {}", from, to);
+        tracing::trace(_trace_state, "Read-repair write: replica {} failed, redirecting to spare {}", from, to);
+        _proxy->get_stats().read_repair_spare_write_redirects++;
+        _mutation_holder->reassign(from, to);
+        _targets.push_back(to);
+        // The spare is a new write target not in the original set.
+        // _total_endpoints must be incremented because the write-phase CL check
+        // (_total_block_for + _failed > _total_endpoints) tests total capacity.
+        // Without the increment, the check would remain triggered after the
+        // redirect (since _failed already accounts for the original failure),
+        // causing us to prematurely conclude CL is unachievable — either
+        // wasting another spare or failing the write — when the spare we
+        // just sent to might still succeed.
+        _total_endpoints++;
+        auto response_id = _id;
+        auto timeout = _expire_timer.get_timeout();
+        // Fire-and-forget: the response handler stays alive in the response_id
+        // registry until all targets respond or time out. The spare's response
+        // (or failure) flows back through got_response / got_failure_response,
+        // same as any other target in send_to_live_endpoints.
+        ++stats().read_repair_write_attempts.get_ep_stat(_effective_replication_map_ptr->get_topology(), to);
+        (void)apply_remotely(to, host_id_vector_replica_set{}, response_id, timeout, _trace_state)
+            .handle_exception([response_id, to, self = shared_from_this()] (std::exception_ptr eptr) {
+                self->report_write_failure(to, response_id, 1, std::move(eptr));
+            });
     }
     const tracing::trace_state_ptr& get_trace_state() const {
         return _trace_state;
@@ -3055,6 +3180,14 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("number of background read repairs"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
+        sm::make_total_operations("read_repair_spare_read_redirects", read_repair_spare_read_redirects,
+                       sm::description("number of read-repair data requests redirected to a spare replica"),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
+        sm::make_total_operations("read_repair_spare_write_redirects", read_repair_spare_write_redirects,
+                       sm::description("number of read-repair write requests redirected to a spare replica"),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
         sm::make_total_operations("read_timeouts", [this]{return read_timeouts.count(); },
                        sm::description("number of read request failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
@@ -3289,6 +3422,7 @@ struct batchlog_replay_mutation {
 struct read_repair_mutation {
     std::unordered_map<locator::host_id, std::optional<mutation>> value;
     locator::effective_replication_map_ptr ermp;
+    host_id_vector_replica_set spare_targets;
 };
 
 }
@@ -3847,7 +3981,12 @@ storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db
     tracing::trace(tr_state, "Creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
 
     // No rate limiting for read repair
-    return make_write_response_handler(std::move(mut.ermp), cl, type, std::move(mh), std::move(endpoints), host_id_vector_topology_change(), host_id_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate(), is_cancellable::no);
+    auto result = make_write_response_handler(std::move(mut.ermp), cl, type, std::move(mh), std::move(endpoints), host_id_vector_topology_change(), host_id_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate(), is_cancellable::no);
+    if (result) {
+        auto& handler = *get_write_response_handler(result.value());
+        handler.set_repair_spares(host_id_vector_replica_set(mut.spare_targets));
+    }
+    return result;
 }
 
 result<storage_proxy::response_id_type>
@@ -4656,7 +4795,6 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
     auto& global_stats = handler._proxy->_global_stats;
-    auto schema = handler_ptr->get_schema();
 
     if (handler.get_targets().size() == 0) {
         // Usually we remove the response handler when receiving responses from all targets.
@@ -4752,36 +4890,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         }
 
         // Waited on indirectly.
-        (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats, schema] (std::exception_ptr eptr) {
-            ++stats.writes_errors.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
-            error err = error::FAILURE;
-            std::optional<sstring> msg;
-
-            if (try_catch<replica::rate_limit_exception>(eptr)) {
-                // There might be a lot of those, so ignore
-                err = error::RATE_LIMIT;
-            } else if (const auto* stale = try_catch<replica::stale_topology_exception>(eptr)) {
-                msg = stale->what();
-            } else if (try_catch_nested<rpc::closed_error>(eptr)) {
-                // ignore, disconnect will be logged by gossiper
-            } else if (const auto* e = try_catch_nested<seastar::gate_closed_exception>(eptr)) {
-                // may happen during shutdown, log and ignore it
-                slogger.warn("gate_closed_exception during mutation write to {}.{} on {}: {}",
-                    schema->ks_name(), schema->cf_name(), coordinator, e->what());
-            } else if (try_catch<timed_out_error>(eptr)) {
-                // from lmutate(). Ignore so that logs are not flooded
-                // database total_writes_timedout counter was incremented.
-                // It needs to be recorded that the timeout occurred locally though.
-                err = error::TIMEOUT;
-            } else if (auto* e = try_catch<db::virtual_table_update_exception>(eptr)) {
-                msg = e->grab_cause();
-            } else if (auto* e = try_catch<replica::critical_disk_utilization_exception>(eptr)) {
-                msg = e->what();
-            } else {
-                slogger.error("exception during mutation write to {}.{} on {}: {}",
-                    schema->ks_name(), schema->cf_name(), coordinator, eptr);
-            }
-            p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err, std::move(msg));
+        (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr] (std::exception_ptr eptr) {
+            handler_ptr->report_write_failure(coordinator, response_id, forward_size + 1, std::move(eptr));
         });
     }
 }
@@ -4802,14 +4912,14 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
 }
 
 future<result<>> storage_proxy::schedule_repair(locator::effective_replication_map_ptr ermp, mutations_per_partition_key_map diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state,
-                                        service_permit permit) {
+                                        service_permit permit, host_id_vector_replica_set spare_targets) {
     if (diffs.empty()) {
         return make_ready_future<result<>>(bo::success());
     }
     return mutate_internal(
             diffs |
                     std::views::values |
-                    std::views::transform([ermp] (auto& v) { return read_repair_mutation{std::move(v), ermp}; }) |
+                    std::views::transform([ermp, &spare_targets] (auto& v) { return read_repair_mutation{std::move(v), ermp, spare_targets}; }) |
                     // The transform above is destructive, materialize into a vector to make the range re-iterable.
                     std::ranges::to<std::vector<read_repair_mutation>>()
             , cl, std::move(trace_state), std::move(permit));
@@ -5130,6 +5240,9 @@ class data_read_resolver : public abstract_read_resolver {
     query::short_read _is_short_read;
     std::vector<reply> _data_results;
     mutations_per_partition_key_map _diffs;
+    // Callback to send speculative data mutation request to a spare replica on failure.
+    // Returns true if a speculative request was sent, false if no spare replicas available.
+    noncopyable_function<bool(locator::host_id failed_ep)> _speculate_read_on_failure = [] (locator::host_id) { return false; };
 private:
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0));
@@ -5351,6 +5464,14 @@ public:
         }
     }
     void on_error(locator::host_id ep, error_kind kind) override {
+        // During the read-repair data-fetch phase, a replica may fail to
+        // respond (network issue, overload, shutdown, etc.).  Try redirecting
+        // the request to a spare replica so that reconciliation can still
+        // collect enough responses to proceed.
+        if (_speculate_read_on_failure(ep)) {
+            return;
+        }
+        // No spare replicas available, fail the request.
         switch (kind) {
         case error_kind::RATE_LIMIT:
             fail_request(exceptions::rate_limit_exception(_schema->ks_name(), _schema->cf_name(), db::operation_type::read, false));
@@ -5360,6 +5481,9 @@ public:
             fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0));
             break;
         }
+    }
+    void set_speculate_read_on_failure(noncopyable_function<bool(locator::host_id failed_ep)>&& cb) {
+        _speculate_read_on_failure = std::move(cb);
     }
     uint32_t max_live_count() const {
         return _max_live_count;
@@ -5561,6 +5685,8 @@ protected:
     db::consistency_level _cl;
     size_t _block_for;
     host_id_vector_replica_set _targets;
+    // Spare target replicas that can potentially be contacted for this read (as part of read-repair)
+    host_id_vector_replica_set _spare_targets;
     // Targets that were successfully used for a data or digest request
     host_id_vector_replica_set _used_targets;
     promise<result<foreign_ptr<lw_shared_ptr<query::result>>>> _result_promise;
@@ -5587,10 +5713,11 @@ public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
             locator::effective_replication_map_ptr ermp,
             lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
-            host_id_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
+            host_id_vector_replica_set targets, host_id_vector_replica_set spare_targets, tracing::trace_state_ptr trace_state,
+            service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
                            _schema(std::move(s)), _proxy(std::move(proxy))
                          , _effective_replication_map_ptr(std::move(ermp))
-                         , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
+                         , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _spare_targets(std::move(spare_targets)), _trace_state(std::move(trace_state)),
                            _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info),
                            _native_reversed_queries_enabled(_proxy->features().native_reverse_queries) {
         _proxy->get_stats().reads++;
@@ -5757,7 +5884,25 @@ protected:
     uint32_t original_partition_limit() const {
         return _cmd->partition_limit;
     }
+    // Adjust _targets and _spare_targets before reconciliation.
+    // Overridden by abstract_speculating_read_executor to trim _targets
+    // to _block_for, moving excess used targets to _spare_targets.
+    // never_speculating_read_executor uses the default (no-op) because
+    // _block_for == _targets.size() — no trimming is needed.
     virtual void adjust_targets_for_reconciliation() {}
+    // Redirect a failed read-repair data request to a spare replica.
+    // Returns true if a spare was available and the request was sent, false otherwise.
+    bool redirect_read_to_spare(locator::host_id failed_ep, lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, clock_type::time_point timeout) {
+        auto spare_ep = pop_back_if_available(_spare_targets);
+        if (!spare_ep) {
+            return false;
+        }
+        slogger.trace("read-repair read: replica {} failed, redirecting to spare {}", failed_ep, *spare_ep);
+        tracing::trace(_trace_state, "Read-repair read: replica {} failed, redirecting to spare {}", failed_ep, *spare_ep);
+        _proxy->get_stats().read_repair_spare_read_redirects++;
+        make_mutation_data_requests(cmd, resolver, &*spare_ep, &*spare_ep + 1, timeout);
+        return true;
+    }
     void reconcile(db::consistency_level cl, storage_proxy::clock_type::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
         adjust_targets_for_reconciliation();
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
@@ -5767,15 +5912,26 @@ protected:
             cmd->slice.options.set<query::partition_slice::option::allow_mutation_read_page_without_live_row>();
         }
 
+        // Set up callback to redirect failed read-repair data requests to spare replicas.
+        // Delegates to redirect_read_to_spare().
+        // Consumed spares are removed from _spare_targets, but a copy is kept to
+        // compute write-phase spares after the read phase completes.
+        auto all_replicas = _targets;
+        all_replicas.insert(all_replicas.end(), _spare_targets.begin(), _spare_targets.end());
+        data_resolver->set_speculate_read_on_failure([this, cmd, data_resolver, timeout] (locator::host_id failed_ep) {
+            return redirect_read_to_spare(failed_ep, cmd, data_resolver, timeout);
+        });
+
         // Waited on indirectly.
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout);
 
         // Waited on indirectly.
-        (void)data_resolver->done().then_wrapped([this, exec_ = std::move(exec), data_resolver_ = std::move(data_resolver), cmd_ = std::move(cmd), cl_ = cl, timeout_ = timeout] (future<result<>> f) mutable -> future<> {
+        (void)data_resolver->done().then_wrapped([this, exec_ = std::move(exec), data_resolver_ = std::move(data_resolver), cmd_ = std::move(cmd), cl_ = cl, timeout_ = timeout, all_replicas_ = std::move(all_replicas)] (future<result<>> f) mutable -> future<> {
             // move captures to coroutine stack frame
             // to prevent use after free
             auto exec = std::move(exec_);
             auto data_resolver = std::move(data_resolver_);
+            auto all_replicas = std::move(all_replicas_);
             auto cmd = std::move(cmd_);
             auto cl = cl_;
             auto timeout = timeout_;
@@ -5820,11 +5976,26 @@ protected:
                         }
                     }
 
+                    // Compute write-phase spare targets: all replicas that are NOT
+                    // write targets (i.e., not in the diff map). This includes both
+                    // unconsumed read-phase spares and original targets that failed
+                    // during the read phase (they may have recovered by write time).
+                    auto write_spare_targets = all_replicas;
+                    if (!diffs.empty()) {
+                        // All partitions have the same set of replica keys; use the first.
+                        const auto& first_diff = diffs.begin()->second;
+                        auto [rm, end] = std::ranges::remove_if(write_spare_targets,
+                            [&first_diff] (const locator::host_id& ep) {
+                                return first_diff.contains(ep);
+                            });
+                        write_spare_targets.erase(rm, end);
+                    }
+
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
                     // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
                     // Waited on indirectly.
-                    (void)_proxy->schedule_repair(_effective_replication_map_ptr, std::move(diffs), _cl, _trace_state, _permit).then(utils::result_wrap([this, result = std::move(result)] () mutable {
+                    (void)_proxy->schedule_repair(_effective_replication_map_ptr, std::move(diffs), _cl, _trace_state, _permit, std::move(write_spare_targets)).then(utils::result_wrap([this, result = std::move(result)] () mutable {
                         _result_promise.set_value(std::move(result));
                         return make_ready_future<::result<>>(bo::success());
                     })).then_wrapped([this, exec] (future<::result<>>&& f) {
@@ -6009,19 +6180,41 @@ private:
 class never_speculating_read_executor : public abstract_read_executor {
 public:
     never_speculating_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
-            locator::effective_replication_map_ptr ermp,
-            lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, host_id_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit,
-            db::per_partition_rate_limit::info rate_limit_info) :
-                                        abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(ermp), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state), std::move(permit), rate_limit_info) {
+            locator::effective_replication_map_ptr ermp, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl,
+            host_id_vector_replica_set targets, host_id_vector_replica_set spare_targets, tracing::trace_state_ptr trace_state,
+            service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
+                                        abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(ermp), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(spare_targets), std::move(trace_state), std::move(permit), rate_limit_info) {
         _block_for = _targets.size();
     }
 };
 
-// this executor always asks for one additional data reply
-class always_speculating_read_executor : public abstract_read_executor {
+// Base class for speculating executors. Provides adjust_targets_for_reconciliation()
+// which trims _targets to _block_for replicas for the read-repair data phase,
+// moving excess targets and unused digest-phase targets into _spare_targets.
+class abstract_speculating_read_executor : public abstract_read_executor {
 public:
     using abstract_read_executor::abstract_read_executor;
-    virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) {
+    virtual void adjust_targets_for_reconciliation() override {
+        auto used = used_targets();
+        // Targets that didn't respond during the digest phase become spares.
+        std::ranges::copy_if(_targets, std::back_inserter(_spare_targets), [&used] (const auto& t) {
+            return !std::ranges::contains(used, t);
+        });
+        // Keep only _block_for used targets; excess become preferred spares
+        // (they responded during digest, so they are likely still healthy).
+        while (used.size() > _block_for) {
+            _spare_targets.push_back(used.back());
+            used.pop_back();
+        }
+        _targets = std::move(used);
+    }
+};
+
+// this executor always asks for one additional data reply
+class always_speculating_read_executor : public abstract_speculating_read_executor {
+public:
+    using abstract_speculating_read_executor::abstract_speculating_read_executor;
+    virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) override {
         if (_targets.size() < 2) {
             on_internal_error(slogger,
                               seastar::format("always_speculating_read_executor: received {} replica(s)"
@@ -6037,10 +6230,10 @@ public:
 };
 
 // this executor sends request to an additional replica after some time below timeout
-class speculating_read_executor : public abstract_read_executor {
+class speculating_read_executor : public abstract_speculating_read_executor {
     timer<storage_proxy::clock_type> _speculate_timer;
 public:
-    using abstract_read_executor::abstract_read_executor;
+    using abstract_speculating_read_executor::abstract_speculating_read_executor;
     virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) override {
         if (_targets.size() < 2) {
             on_internal_error(slogger,
@@ -6098,9 +6291,6 @@ public:
     virtual void got_cl() override {
         _speculate_timer.cancel();
     }
-    virtual void adjust_targets_for_reconciliation() override {
-        _targets = used_targets();
-    }
 };
 
 result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd,
@@ -6130,8 +6320,16 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
             _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
 
-    slogger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
-    tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} repair decision: {}", token, all_replicas, target_replicas, repair_decision);
+    host_id_vector_replica_set spare_replicas;
+    // For datacenter-local consistency levels (e.g. LOCAL_QUORUM), spare replicas
+    // must be in the local DC — cross-DC spares would violate the locality constraint.
+    auto local_dc_filter = erm->get_topology().get_local_dc_filter();
+    std::ranges::copy_if(all_replicas, std::back_inserter(spare_replicas), [&] (const auto& r) {
+        return !std::ranges::contains(target_replicas, r) && (!db::is_datacenter_local(cl) || local_dc_filter(r));
+    });
+
+    slogger.trace("creating read executor for token {} with all: {} targets: {} spare: {} rp decision: {}", token, all_replicas, target_replicas, spare_replicas, repair_decision);
+    tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} spare: {} repair decision: {}", token, all_replicas, target_replicas, spare_replicas, repair_decision);
 
     // Throw UAE early if we don't have enough replicas.
     try {
@@ -6165,7 +6363,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
             || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
         tracing::trace(trace_state, "Creating never_speculating_read_executor - speculative retry is disabled or there are no extra replicas to speculate with");
-        return ::make_shared<never_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<never_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, std::move(target_replicas), std::move(spare_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
     if (target_replicas.size() == all_replicas.size()) {
@@ -6173,7 +6371,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
         // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
         tracing::trace(trace_state, "always_speculating_read_executor (all targets)");
-        return ::make_shared<always_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<always_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(spare_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
@@ -6182,9 +6380,13 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         if (!extra_replica || (is_datacenter_local(cl) && !local_dc_filter(*extra_replica))) {
             slogger.trace("read executor no extra target to speculate");
             tracing::trace(trace_state, "Creating never_speculating_read_executor - there are no extra replicas to speculate with");
-            return ::make_shared<never_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+            return ::make_shared<never_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, std::move(target_replicas), std::move(spare_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
         } else {
             target_replicas.push_back(*extra_replica);
+            // The extra replica was already in spare_replicas (computed before it was
+            // added to targets). Remove it to keep the two sets disjoint.
+            auto [rm, end] = std::ranges::remove(spare_replicas, *extra_replica);
+            spare_replicas.erase(rm, end);
             slogger.trace("creating read executor with extra target {}", *extra_replica);
             tracing::trace(trace_state, "Added extra target {} for speculative read", *extra_replica);
         }
@@ -6192,10 +6394,10 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
 
     if (retry_type == speculative_retry::type::ALWAYS) {
         tracing::trace(trace_state, "Creating always_speculating_read_executor");
-        return ::make_shared<always_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<always_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(spare_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     } else {// PERCENTILE or CUSTOM.
         tracing::trace(trace_state, "Creating speculating_read_executor");
-        return ::make_shared<speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        return ::make_shared<speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(spare_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 }
 
@@ -6558,7 +6760,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 throw;
             }
 
-            exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
+            // Range queries retry at a higher level (per sub-range), spare replicas are not used.
+            exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), host_id_vector_replica_set{}, trace_state, permit, std::monostate()));
             ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
         }
 

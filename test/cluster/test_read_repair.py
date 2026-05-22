@@ -3,12 +3,13 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-
+import asyncio
 import json
 import logging
 import pytest
 import random
 import time
+from enum import Enum
 from typing import TypeAlias, Any
 
 from cassandra.cluster import ConsistencyLevel, Session  # type: ignore
@@ -18,7 +19,7 @@ from cassandra.pool import Host  # type: ignore
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -341,3 +342,98 @@ async def test_read_repair_with_trace_logging(request, manager):
             found_read_repair |= "digest mismatch, starting read repair" == event.description
 
         assert found_read_repair
+
+
+class ReadRepairPhase(Enum):
+    READ = 1
+    WRITE = 2
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize(
+    "failed_phase",
+    [
+        pytest.param(ReadRepairPhase.READ),
+        pytest.param(ReadRepairPhase.WRITE),
+    ]
+)
+@pytest.mark.parametrize(
+    "speculative_retry",
+    [
+        pytest.param("'NONE'", id="never_speculating"),
+        pytest.param("'ALWAYS'", id="always_speculating"),
+    ]
+)
+async def test_read_repair_failure(manager: ManagerClient, failed_phase: ReadRepairPhase, speculative_retry: str):
+    cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "storage_proxy=trace"]
+    servers = await manager.servers_add(5, cmdline=cmdline, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 5};"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        table_opts = f" WITH speculative_retry = {speculative_retry}"
+        async with new_test_table(manager, ks, "pk bigint, ck bigint, c int, PRIMARY KEY (pk, ck)", table_opts) as cf:
+
+            insert_stmt = cql.prepare(f"INSERT INTO {cf} (pk, ck, c) VALUES (?, ?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ONE
+
+            # Block writes on servers[0] so it is stale for every row. This is necessary for
+            # the WRITE phase variant: if servers[0] already had the correct data for a row,
+            # its read-repair diff would be nullopt and apply_remotely() would auto-ack without
+            # sending a mutation -- the database_apply injection would never fire, and no spare
+            # redirect would be triggered for that row.
+            await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": cf.split(".")[1], "what": "throw"})
+            await asyncio.gather(*[cql.run_async(insert_stmt, (0, ck, ck)) for ck in range(0, 100)])
+            await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
+
+            # Read data with CL=QUORUM shall eventually select server[0] as one of the target replicas,
+            # and trigger read-repair. Trigger failure either during the read or the write phase of read-repair.
+            match failed_phase:
+                case ReadRepairPhase.READ:
+                    # Enable error injection to simulate a failure during the read phase of read-repair
+                    await manager.api.enable_injection(servers[0].ip_addr, "fail_mutation_query", one_shot=False, parameters={"ks_name": ks, "cf_name": cf.split(".")[1]})
+                case ReadRepairPhase.WRITE:
+                    # Enable error injection to simulate a failure during the write phase of read-repair
+                    await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": cf.split(".")[1], "what": "throw"})
+
+            # Open log files on all servers and set marks before triggering read-repair.
+            # The coordinator can be any server, so we need to check all logs.
+            logs_and_marks = []
+            for srv in servers:
+                log = await manager.server_open_log(srv.server_id)
+                mark = await log.mark()
+                logs_and_marks.append((log, mark))
+
+            # Check that read-repair still succeeds.
+            for ck in range(0, 100):
+                resp = await cql.run_async(SimpleStatement(f"SELECT * FROM {cf} WHERE pk = 0 AND ck = {ck}", consistency_level = ConsistencyLevel.QUORUM))
+                assert resp
+                assert resp[0] == (0, ck, ck)
+
+            # Verify read-repair was triggered and the spare replica mechanism was used.
+            # Since servers[0] has stale data and its error injection causes failures,
+            # the spare must be used for read-repair to succeed.
+            #
+            # With never_speculating (block_for == targets after trimming), any
+            # failure requires a spare redirect.  With always_speculating, the
+            # executor trims 4 used targets down to block_for=3, moving one to
+            # spares. If servers[0] happens to be the trimmed-away target, its
+            # error injection never fires and read-repair succeeds without spare
+            # usage -- both outcomes are valid.
+            all_matches = []
+            for log, mark in logs_and_marks:
+                all_matches += await log.grep("read-repair write: replica .* failed, redirecting to spare", from_mark=mark)
+                all_matches += await log.grep("read-repair read: replica .* failed, redirecting to spare", from_mark=mark)
+
+            # With never_speculating, block_for == targets so any failure forces a
+            # spare redirect.  With always_speculating, the failing server may have
+            # been trimmed from targets to spares, so spare usage is not guaranteed.
+            may_skip_spare = speculative_retry != "'NONE'"
+
+            match failed_phase:
+                case ReadRepairPhase.READ:
+                    read_spare_matches = [m for m in all_matches if "read-repair read:" in m[0]]
+                    assert read_spare_matches or may_skip_spare, "Expected read-repair read-phase spare usage log, but none found"
+                case ReadRepairPhase.WRITE:
+                    write_spare_matches = [m for m in all_matches if "read-repair write:" in m[0]]
+                    assert write_spare_matches or may_skip_spare, "Expected read-repair write-phase spare usage log, but none found"
