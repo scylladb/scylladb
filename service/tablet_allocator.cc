@@ -1392,6 +1392,26 @@ public:
         co_return ret;
     }
 
+    uint64_t get_tablet_group_size(const tablet_map& tmap, table_id table, tablet_id tid, host_id host) const {
+        if (_force_capacity_based_balancing) {
+            return _target_tablet_size;
+        }
+
+        uint64_t tablet_group_size = 0;
+        auto token_range = tmap.get_token_range(tid);
+        auto it = _tm->tablets().all_table_groups().find(table);
+        const auto& colocated_tables = it != _tm->tablets().all_table_groups().end() ? it->second : table_group_set{};
+        for (auto group_member : colocated_tables) {
+            const range_based_tablet_id rb_tid {group_member, token_range};
+            auto& member_tmap = _tm->tablets().get_tablet_map(group_member);
+            auto& ti = member_tmap.get_tablet_info(tid);
+            auto trinfo = member_tmap.get_tablet_transition_info(tid);
+            auto tablet_size_opt = get_tablet_size(host, rb_tid, ti, trinfo);
+            tablet_group_size += std::max(tablet_size_opt.value_or(_target_tablet_size), _minimal_tablet_size);
+        }
+        return tablet_group_size;
+    }
+
     future<migration_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
         lblogger.debug("In make_rack_list_colocation_plan");
 
@@ -1468,8 +1488,11 @@ public:
                             target_info.shard_load(dst.shard, _target_tablet_size));
 
                 tablet_transition_kind kind = tablet_transition_kind::migration;
+                auto& src_tmap = tmeta.get_tablet_map(source.gid.table);
+                auto src_tablet_size = get_tablet_group_size(src_tmap, source.gid.table, source.gid.tablet, source.replica.host);
                 migration_tablet_set source_tablets {
                     .tablet_s = source.gid,     // Ignore the merge co-location.
+                    .tablet_set_disk_size = src_tablet_size,
                 };
                 auto src = source.replica;
                 auto mig = get_migration_info(source_tablets, kind, src, dst);
@@ -1805,8 +1828,11 @@ public:
                         return make_ready_future<>();
                     }
 
+                    auto host = replica ? replica->host : ti.replicas.front().host;
+                    auto rf_tablet_size = get_tablet_group_size(tmap, table_or_mv->id(), tid, host);
                     migration_tablet_set source_tablets {
                         .tablet_s = gid,     // Ignore the merge co-location.
+                        .tablet_set_disk_size = rf_tablet_size,
                     };
                     if (rf_change_state == rf_change_state::needs_extending) {
                         // Pick the least loaded node as target.
@@ -4360,24 +4386,9 @@ public:
                     utils::small_vector<uint64_t, 2> tablet_sizes;
                     uint64_t tablet_sizes_sum = 0;
                     for (auto tid : tids) {
-                        if (_force_capacity_based_balancing) {
-                            tablet_sizes_sum += _target_tablet_size;
-                            tablet_sizes.push_back(_target_tablet_size);
-                        } else {
-                            uint64_t tablet_group_size = 0;
-                            auto token_range = tmap.get_token_range(tid);
-                            for (auto group_member : tables) {
-                                const range_based_tablet_id rb_tid {group_member, token_range};
-                                auto& member_tmap = _tm->tablets().get_tablet_map(group_member);
-                                auto& ti = member_tmap.get_tablet_info(tid);
-                                auto trinfo = member_tmap.get_tablet_transition_info(tid);
-                                auto tablet_size_opt = get_tablet_size(replica.host, rb_tid, ti, trinfo);
-                                const uint64_t tablet_size = std::max(tablet_size_opt.value_or(_target_tablet_size), _minimal_tablet_size);
-                                tablet_group_size += tablet_size;
-                                tablet_sizes_sum += tablet_size;
-                            }
-                            tablet_sizes.push_back(tablet_group_size);
-                        }
+                        auto tablet_group_size = get_tablet_group_size(tmap, table, tid, replica.host);
+                        tablet_sizes_sum += tablet_group_size;
+                        tablet_sizes.push_back(tablet_group_size);
                     }
                     auto& node_load_info = nodes[replica.host];
                     shard_load& shard_load_info = node_load_info.shards[replica.shard];
