@@ -84,7 +84,7 @@ protected:
     /**
      * The comparator used to orders results when multiple keys are selected (using IN).
      */
-    ordering_comparator_type _ordering_comparator;
+    std::unique_ptr<ordering_comparator_type> _ordering_comparator;
 
     query::partition_slice::option_set _opts;
     cql_stats& _stats;

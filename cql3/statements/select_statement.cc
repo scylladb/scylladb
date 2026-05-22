@@ -219,7 +219,7 @@ select_statement::select_statement(schema_ptr schema,
     , _limit(std::move(limit))
     , _per_partition_limit_unset_guard(per_partition_limit)
     , _per_partition_limit(std::move(per_partition_limit))
-    , _ordering_comparator(std::move(ordering_comparator))
+    , _ordering_comparator(ordering_comparator ? std::make_unique<ordering_comparator_type>(std::move(ordering_comparator)) : nullptr)
     , _stats(stats)
     , _ks_sel(::is_internal_keyspace(schema->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
     , _attrs(std::move(attrs))
@@ -982,7 +982,7 @@ select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::resul
         auto rs = builder.build();
 
         if (needs_post_query_ordering()) {
-            rs->sort(_ordering_comparator);
+            rs->sort(*_ordering_comparator);
             if (_is_reversed) {
                 rs->reverse();
             }
