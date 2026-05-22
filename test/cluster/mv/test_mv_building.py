@@ -196,6 +196,86 @@ async def test_empty_build_step_after_reshard(manager: ManagerClient):
     mv2_rows = await cql.run_async(f"SELECT * FROM ks.mv2")
     assert len(base_rows) == len(mv_rows) == len(mv2_rows) == 129
 
+# Tests that an interrupted MV build resumes correctly after resharding.
+# Complements test_empty_build_step_after_reshard which tests a specific bug (#26523) where
+# an empty build step after reshard doesn't crash. This test verifies that a build paused
+# mid-progress (with saved progress token) resumes correctly on a differently-sharded node.
+# Migrated from dtest materialized_views_test.py::TestInterruptBuildProcess::test_interrupt_build_process_with_resharding_*_test
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("smp_before,smp_after", [
+    (1, 2),   # increase shards
+    (2, 1),   # decrease shards
+])
+@pytest.mark.parametrize("interrupt_resharding", [False, True])
+async def test_interrupt_build_with_resharding(manager: ManagerClient, smp_before: int, smp_after: int, interrupt_resharding: bool):
+    """Test that an interrupted MV build process resumes correctly after resharding.
+
+    Scenarios:
+    - interrupt_resharding=False: interrupt build, restart with different shard count, verify build resumes
+    - interrupt_resharding=True: interrupt build, start resharding, interrupt resharding too, restart, verify
+    """
+    cmdline_before = ['--smp', str(smp_before), '--logger-log-level', 'view=debug']
+    cmdline_after = ['--smp', str(smp_after), '--logger-log-level', 'view=debug']
+
+    server = await manager.server_add(cmdline=cmdline_before)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+
+        n_partitions = 10
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, '{i}')") for i in range(n_partitions)])
+
+        # Pause the view builder using injection to control build progress
+        await manager.api.enable_injection(server.ip_addr, "delay_finishing_build_step", one_shot=False)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab "
+                        "WHERE key IS NOT NULL AND c IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v)")
+
+        # Wait for build to start and save progress
+        async def progress_saved():
+            rows = await cql.run_async(
+                f"SELECT * FROM system.scylla_views_builds_in_progress WHERE keyspace_name = '{ks}' AND view_name = 'mv' ALLOW FILTERING")
+            return len(rows) > 0 or None
+        await wait_for(progress_saved, time.time() + 60)
+
+        # Block further build steps and release the current one
+        await manager.api.enable_injection(server.ip_addr, "dont_start_build_step", one_shot=False)
+        await manager.api.message_injection(server.ip_addr, "delay_finishing_build_step")
+
+        # Stop the node
+        logger.info(f"Stopping node. Resharding {smp_before} -> {smp_after}, interrupt_resharding={interrupt_resharding}")
+        await manager.server_stop_gracefully(server.server_id)
+
+        # Restart with new shard count
+        if interrupt_resharding:
+            # Start, wait for resharding to begin, then kill and restart.
+            # Prevent view building worker from resuming work on view building.
+            await manager.server_update_config(server.server_id, "error_injections_at_startup", ["dont_start_build_step"])
+            log = await manager.server_open_log(server.server_id)
+            mark = await log.mark()
+            await manager.server_start(server.server_id, cmdline_options_override=cmdline_after)
+            try:
+                await log.wait_for("Reshard", from_mark=mark, timeout=30)
+            except:
+                pass  # resharding might not always appear in logs for small data
+            await manager.server_stop(server.server_id, convict=False)
+            await manager.server_remove_config_option(server.server_id, "error_injections_at_startup")
+            await manager.server_start(server.server_id, cmdline_options_override=cmdline_after)
+        else:
+            await manager.server_start(server.server_id, cmdline_options_override=cmdline_after)
+
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+
+        # Wait for view building to complete
+        await wait_for_view(cql, 'mv', 1)
+
+        # Verify all data is correct
+        base_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.tab"))
+        view_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.mv"))
+        assert view_rows == base_rows, f"View has {len(view_rows)} rows, base has {len(base_rows)} rows"
+
 # It may happen that a node fails to process an RPC request from the coordinator.
 # In that case, we would like to prevent sending more requests to it because
 # they're most likely going to fail as well. Verify that that's the case.
