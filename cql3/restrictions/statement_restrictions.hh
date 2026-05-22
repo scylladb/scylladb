@@ -234,7 +234,7 @@ private:
     check_indexes _check_indexes = check_indexes::yes;
     /// Columns that appear on the LHS of an EQ restriction (not IN).
     /// For multi-column EQ like (ck1, ck2) = (1, 2), all columns in the tuple are included.
-    std::unordered_set<const column_definition*> _columns_with_eq;
+    std::vector<const column_definition*> _columns_with_eq;
     std::vector<const column_definition*> _column_defs_for_filtering;
     schema_ptr _view_schema;
     std::unique_ptr<secondary_index::index> _idx_opt;
