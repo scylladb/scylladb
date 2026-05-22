@@ -975,7 +975,7 @@ available:
                                                     Higher levels provide better compression ratios at the cost of speed.
                                                     Allowed values are integers between 1 and 22.
  ``crc_check_chance``      1.0                      Not implemented (option value is ignored).
-========================= ========================= =============================================================================
+========================= ======================== =============================================================================
 
 .. crc_check_chance was promoted to a top-level table option since Cassandra 3.0, but we didn't do this.
 
