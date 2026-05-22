@@ -346,6 +346,8 @@ bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_h
                 on_internal_error(expr_logger, "NOT IN operator on limits(), despite being rejected via !is_slice()");
             case oper_t::ADD:
                 on_internal_error(expr_logger, "ADD operator on limits()");
+            case oper_t::SUB:
+                on_internal_error(expr_logger, "SUB operator on limits()");
             }
         }
     }
@@ -1152,6 +1154,56 @@ static raw_value arithmetic_add(const expression& lhs_expr, const expression& rh
     return raw_value::make_value(managed_bytes(result));
 }
 
+static raw_value arithmetic_sub(const expression& lhs_expr, const expression& rhs_expr, const evaluation_inputs& inputs) {
+    raw_value lhs_val = evaluate(lhs_expr, inputs);
+    raw_value rhs_val = evaluate(rhs_expr, inputs);
+    if (lhs_val.is_null() || rhs_val.is_null()) {
+        // null minus anything is null:
+        return raw_value::make_null();
+    }
+    const abstract_type& t = type_of(lhs_expr)->without_reversed();
+    if (const abstract_type& rhs_t = type_of(rhs_expr)->without_reversed(); rhs_t != t) {
+        throw exceptions::invalid_request_exception(
+            format("Arithmetic SUB on different types ({} and {}) is not yet supported",
+                t.cql3_type_name(), rhs_t.cql3_type_name()));
+    }
+    bytes result = lhs_val.view().with_linearized([&](bytes_view lhs_bv) -> bytes {
+        return rhs_val.view().with_linearized([&](bytes_view rhs_bv) -> bytes {
+            return visit(t, make_visitor(
+                [&] <typename T> (const integer_type_impl<T>& itype) -> bytes {
+                    T l = value_cast<T>(itype.deserialize(lhs_bv));
+                    T r = value_cast<T>(itype.deserialize(rhs_bv));
+                    T res;
+                    if (__builtin_sub_overflow(l, r, &res)) {
+                        throw exceptions::invalid_request_exception("Arithmetic SUB overflow");
+                    }
+                    return serialized(res);
+                },
+                [&] <typename T> (const floating_type_impl<T>& ftype) -> bytes {
+                    T l = value_cast<T>(ftype.deserialize(lhs_bv));
+                    T r = value_cast<T>(ftype.deserialize(rhs_bv));
+                    return serialized(l - r);
+                },
+                [&] (const varint_type_impl& vtype) -> bytes {
+                    utils::multiprecision_int l = value_cast<utils::multiprecision_int>(vtype.deserialize(lhs_bv));
+                    utils::multiprecision_int r = value_cast<utils::multiprecision_int>(vtype.deserialize(rhs_bv));
+                    return serialized(l + (-r));
+                },
+                [&] (const decimal_type_impl& dtype) -> bytes {
+                    big_decimal l = value_cast<big_decimal>(dtype.deserialize(lhs_bv));
+                    big_decimal r = value_cast<big_decimal>(dtype.deserialize(rhs_bv));
+                    return serialized(l - r);
+                },
+                [&] (const abstract_type& atype) -> bytes {
+                    throw exceptions::invalid_request_exception(
+                        format("Arithmetic SUB is not supported for type {}", atype.cql3_type_name()));
+                }
+            ));
+        });
+    });
+    return raw_value::make_value(managed_bytes(result));
+}
+
 static
 cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_inputs& inputs) {
     if (binop.order == comparison_order::clustering) {
@@ -1163,6 +1215,8 @@ cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_input
     switch (binop.op) {
         case oper_t::ADD:
             return arithmetic_add(binop.lhs, binop.rhs, inputs);
+        case oper_t::SUB:
+            return arithmetic_sub(binop.lhs, binop.rhs, inputs);
         case oper_t::EQ:
             binop_result = equal(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
@@ -2016,7 +2070,7 @@ type_of(const expression& e) {
         [] (const binary_operator& e) {
             // Arithmetic operators return the type of their operands;
             // all other (comparison) operators return boolean.
-            if (e.op == oper_t::ADD) {
+            if (e.op == oper_t::ADD || e.op == oper_t::SUB) {
                 return type_of(e.lhs);
             }
             return boolean_type;
@@ -2650,6 +2704,8 @@ std::string_view fmt::formatter<cql3::expr::oper_t>::to_string(const cql3::expr:
         return "LIKE";
     case oper_t::ADD:
         return "+";
+    case oper_t::SUB:
+        return "-";
     }
     on_internal_error(cql3::expr::expr_logger, fmt::format("unexpected oper_t value {}", static_cast<int>(op)));
 }
