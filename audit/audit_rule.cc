@@ -203,7 +203,7 @@ bool matches_rule(const audit_rule& rule, statement_category category,
                   std::string_view keyspace, std::string_view table,
                   std::string_view role) {
     return matches_category(rule, category)
-        && (is_table_scoped_category(category) ? (keyspace.empty() || matches_table(rule, keyspace, table)) : true)
+        && (!is_table_scoped_category(category) || keyspace.empty() || matches_table(rule, keyspace, table))
         && matches_role(rule, role);
 }
 

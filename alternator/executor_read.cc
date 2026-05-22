@@ -1959,7 +1959,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // from one of the operations will be returned.
     bool some_succeeded = false;
     std::exception_ptr eptr;
-    std::set<sstring> audited_table_names;
+    audit::audit_table_set audited_table_names;
     bool only_audited_tables = true;
     bool should_audit = _audit.local_is_initialized() && _audit.local().will_log(audit::statement_category::QUERY);
     rjson::value response = rjson::empty_object();
@@ -1972,7 +1972,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         std::string table = rs.schema->cf_name();
         if (should_audit) {
             if (_audit.local().will_log(audit::statement_category::QUERY, rs.schema->ks_name(), table)) {
-                audited_table_names.insert(table);
+                audited_table_names.emplace(rs.schema->ks_name(), table);
             } else {
                 only_audited_tables = false;
             }
@@ -2038,8 +2038,9 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             // Filter out non-audited tables from the request body for privacy
             filter_batch_request_items_by_tbl_name(request, audited_table_names);
         }
+        auto audit_table_names = print_names_for_audit(audited_table_names);
         maybe_audit(audit_info, audit::statement_category::QUERY, "",
-                    print_names_for_audit(audited_table_names), "BatchGetItem", request, db::consistency_level::ANY);
+                    audit_table_names, "BatchGetItem", request, db::consistency_level::ANY, std::move(audited_table_names));
     }
     if (!some_succeeded && eptr) {
         co_await coroutine::return_exception_ptr(std::move(eptr));

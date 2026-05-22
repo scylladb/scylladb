@@ -159,8 +159,7 @@ audit_sink_set preprocessed_audit_rules::matching_sinks(statement_category categ
 
     if (!table_scoped || keyspace.empty()) {
         // Table-independent categories (AUTH, ADMIN, DCL) or operations with
-        // empty keyspace (e.g., batch operations spanning multiple tables):
-        // only role matching matters.
+        // empty keyspace: only role matching matters.
         return collect_sinks(role_it->second, category);
     }
 

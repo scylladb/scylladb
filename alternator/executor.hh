@@ -183,7 +183,8 @@ private:
                      std::string_view table_name,
                      std::string_view operation_name,
                      const rjson::value& request,
-                     std::optional<db::consistency_level> cl = std::nullopt);
+                     std::optional<db::consistency_level> cl = std::nullopt,
+                     std::optional<audit::audit_table_set> alternator_batch_tables = std::nullopt);
 
     future<rjson::value> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
     future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization,
@@ -228,6 +229,6 @@ struct arn_parts {
 //    if not empty - postfix value must start with expected_postfix, but might be longer
 arn_parts parse_arn(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix);
 
-// The format is ks1|ks2|ks3... and table1|table2|table3...
-sstring print_names_for_audit(const std::set<sstring>& names);
+// The format is table1|table2|table3...
+sstring print_names_for_audit(const audit::audit_table_set& names);
 }
