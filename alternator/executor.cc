@@ -3458,9 +3458,8 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // For each table, we need its stats and schema.
     std::vector<std::pair<lw_shared_ptr<stats>, schema_ptr>> per_table_wcu;
 
-    std::set<sstring> table_names; // for auditing
-    // FIXME: will_log() here doesn't pass keyspace/table, so keyspace-level audit
-    // filtering is bypassed — a batch spanning multiple tables is audited as a whole.
+    std::set<sstring> audited_table_names;
+    bool only_audited_tables = true;
     bool should_audit = _audit.local_is_initialized() && _audit.local().will_log(audit::statement_category::DML);
     mutation_builders.reserve(request_items.MemberCount());
     per_table_wcu.reserve(request_items.MemberCount());
@@ -3472,7 +3471,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         per_table_stats->api_operations.batch_write_item_histogram.add(it->value.Size());
         tracing::add_alternator_table_name(trace_state, schema->cf_name());
         if (should_audit) {
-            table_names.insert(schema->cf_name());
+            if (_audit.local().will_log(audit::statement_category::DML, schema->ks_name(), schema->cf_name())) {
+                audited_table_names.insert(schema->cf_name());
+            } else {
+                only_audited_tables = false;
+            }
         }
 
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
@@ -3591,8 +3594,14 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     for (const auto& w : per_table_wcu) {
         w.first->api_operations.batch_write_item_latency.mark(duration);
     }
-    maybe_audit(audit_info, audit::statement_category::DML, "",
-                print_names_for_audit(table_names), "BatchWriteItem", request, db::consistency_level::LOCAL_QUORUM);
+    if (!audited_table_names.empty()) {
+        if (!only_audited_tables) {
+            // Filter out non-audited tables from the request body for privacy
+            filter_batch_request_items_by_tbl_name(request, audited_table_names);
+        }
+        maybe_audit(audit_info, audit::statement_category::DML, "",
+                    print_names_for_audit(audited_table_names), "BatchWriteItem", request, db::consistency_level::LOCAL_QUORUM);
+    }
     co_return rjson::print(std::move(ret));
 }
 

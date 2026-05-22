@@ -17,6 +17,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -217,6 +218,10 @@ schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, con
 /// Returns (or lazily creates) the per-table stats object for the given schema.
 /// If the table has been deleted, returns a temporary stats object.
 lw_shared_ptr<stats> get_stats_from_schema(service::storage_proxy& sp, const schema& schema);
+
+/// Filter tables from a batch request's "RequestItems" JSON
+/// object. Removes members whose key is not in `tbl_name_filter`.
+void filter_batch_request_items_by_tbl_name(rjson::value& request, const std::set<sstring>& tbl_name_filter);
 
 /// Writes one item's attributes into `item` from the given selection result
 /// row. If include_all_embedded_attributes is true, all attributes from the
