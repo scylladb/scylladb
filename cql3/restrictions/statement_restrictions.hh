@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <memory>
 #include <vector>
 #include "bounds_slice.hh"
 #include "cql3/expr/expression.hh"
@@ -226,10 +227,16 @@ private:
     expr::expression _idx_restrictions = expr::conjunction({});
     get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
     get_clustering_bounds_fn_t _get_clustering_bounds_fn;
-    get_clustering_bounds_fn_t _get_global_index_clustering_ranges_fn;
-    get_clustering_bounds_fn_t _get_global_index_token_clustering_ranges_fn;
-    get_clustering_bounds_fn_t _get_local_index_clustering_ranges_fn;
-    get_singleton_value_fn_t _value_for_index_partition_key_fn;
+
+    // Index-related query functions, only allocated for index-backed queries.
+    // For non-index queries (the common case), this is nullptr, saving ~120 bytes.
+    struct index_query_fns {
+        get_clustering_bounds_fn_t get_global_index_clustering_ranges_fn;
+        get_clustering_bounds_fn_t get_global_index_token_clustering_ranges_fn;
+        get_clustering_bounds_fn_t get_local_index_clustering_ranges_fn;
+        get_singleton_value_fn_t value_for_index_partition_key_fn;
+    };
+    std::unique_ptr<index_query_fns> _index_fns;
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
