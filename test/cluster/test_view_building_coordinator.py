@@ -1018,3 +1018,51 @@ async def test_all_good_on_node_restart(manager: ManagerClient):
     log = await manager.server_open_log(servers[0].server_id)
     warnings = await log.grep(expr="view_building_state_observer failed with")
     assert len(warnings) == 0, f"Found view building state observer warnings: {warnings}"
+
+# Test that in presence of view update hints, view building will not be marked as finished
+# Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_do_not_finish_view_building_with_hints(manager: ManagerClient):
+    node_count = 3
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, config={
+        "hinted_handoff_enabled": False,
+        "shadow_round_ms": 1000,
+    }, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+        await populate_base_table(cql, ks, "tab")
+
+        marks = await mark_all_servers(manager)
+        await pause_view_building_tasks(manager)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
+
+        # Stop two nodes while view building is paused
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await manager.server_stop_gracefully(servers[2].server_id)
+
+        # Unpause view building on the remaining node - it should not finish
+        # because it cannot replicate view updates to the down nodes.
+        await manager.api.message_injection(servers[0].ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK)
+        await manager.api.disable_injection(servers[0].ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK)
+
+        # Verifying view building does not finish while nodes are down
+        result = await cql.run_async(SimpleStatement(f"SELECT * FROM system_distributed.view_build_status WHERE keyspace_name = '{ks}' AND view_name = 'mv_cf_view'",
+            consistency_level=ConsistencyLevel.ONE))
+        for row in result:
+            assert row.status != 'SUCCESS', "View building should not finish while nodes are down"
+
+        # Restart the stopped nodes
+        await manager.server_start(servers[1].server_id)
+        await manager.server_start(servers[2].server_id)
+
+        # Wait for the view to be built and verify its content
+        await wait_for_view(cql, 'mv_cf_view', node_count)
+        await check_view_contents(cql, ks, "tab", "mv_cf_view")
