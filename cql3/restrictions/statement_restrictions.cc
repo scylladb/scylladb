@@ -876,7 +876,10 @@ statement_restrictions::statement_restrictions(private_tag,
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
-            _not_null_columns.insert(col);
+            if (!_not_null_columns) {
+                _not_null_columns = std::make_unique<std::unordered_set<const column_definition*>>();
+            }
+            _not_null_columns->insert(col);
 
             if (!for_view) {
                 throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", pred.filter));
@@ -1348,7 +1351,7 @@ statement_restrictions::ck_restrictions_need_filtering() const {
 
 bool
 statement_restrictions::is_restricted(const column_definition* cdef) const {
-    if (_not_null_columns.contains(cdef)) {
+    if (_not_null_columns && _not_null_columns->contains(cdef)) {
         return true;
     }
 
@@ -2751,7 +2754,10 @@ void statement_restrictions::validate_primary_key(const query_options& options) 
 
 
 const std::unordered_set<const column_definition*> statement_restrictions::get_not_null_columns() const {
-    return _not_null_columns;
+    if (_not_null_columns) {
+        return *_not_null_columns;
+    }
+    return {};
 }
 
 shared_ptr<const statement_restrictions>
