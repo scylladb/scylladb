@@ -27,6 +27,8 @@
 #include "replica/database_fwd.hh"
 #include "tasks/task_handler.hh"
 #include "service/storage_proxy.hh"
+#include "replica/schema_describe_helper.hh"
+#include "utils/UUID_gen.hh"
 
 #include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
@@ -90,10 +92,10 @@ SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works, *boost::unit_test::pr
 
 using namespace sstables;
 
-future<> backup(cql_test_env& env, sstring endpoint, sstring bucket) {
+future<sstring> backup(cql_test_env& env, sstring endpoint, sstring bucket) {
     sharded<db::snapshot_ctl> ctl;
     co_await ctl.start(std::ref(env.db()), std::ref(env.get_storage_proxy()), std::ref(env.get_task_manager()), std::ref(env.get_sstorage_manager()), db::snapshot_ctl::config{});
-    auto prefix = "/backup";
+    auto prefix = fmt::format("/backup-{}", utils::UUID_gen::get_time_UUID());
 
     auto task_id = co_await ctl.local().start_backup(endpoint, bucket, prefix, "ks", "cf", "snapshot", false);
     auto task = tasks::task_handler{env.get_task_manager().local(), task_id};
@@ -101,6 +103,7 @@ future<> backup(cql_test_env& env, sstring endpoint, sstring bucket) {
     BOOST_REQUIRE(status.state == tasks::task_manager::task_state::done);
 
     co_await ctl.stop();
+    co_return prefix;
 }
 
 future<> check_snapshot_sstables(cql_test_env& env) {
@@ -143,12 +146,13 @@ SEASTAR_TEST_CASE(test_populate_snapshot_sstables_from_manifests, *boost::unit_t
 
             auto ep = storage_options.to_map()["endpoint"];
             auto bucket = storage_options.to_map()["bucket"];
-            backup(env, ep, bucket).get();
+            auto prefix = backup(env, ep, bucket).get();
+            auto manifest_path = prefix + "/manifest.json";
 
-            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "unexpected_snapshot", {"/backup/manifest.json"}, db::consistency_level::ONE).get(), std::runtime_error);;
+            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "unexpected_snapshot", {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);;
 
             // populate system_distributed.snapshot_sstables with the content of the snapshot manifest
-            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "snapshot", {"/backup/manifest.json"}, db::consistency_level::ONE).get();
+            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "snapshot", {manifest_path}, db::consistency_level::ONE).get();
 
             check_snapshot_sstables(env).get();
     }, false, db_cfg_ptr, 10);
