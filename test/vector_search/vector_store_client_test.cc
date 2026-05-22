@@ -512,6 +512,63 @@ SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_cql) {
             });
 }
 
+SEASTAR_TEST_CASE(vector_store_client_test_ann_with_restricted_key_column_not_selected) {
+    auto server = co_await make_vs_mock_server();
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    co_await do_with_cql_env(
+            [&server](cql_test_env& env) -> future<> {
+                co_await env.execute_cql(R"(
+                    CREATE TABLE ks.idx (
+                        pk1 tinyint, pk2 tinyint,
+                        ck1 tinyint, ck2 tinyint,
+                        category int,
+                        embedding vector<float, 3>,
+                        PRIMARY KEY ((pk1, pk2), ck1, ck2))
+                )");
+                co_await env.execute_cql("CREATE CUSTOM INDEX embedding_idx ON ks.idx (embedding) USING 'vector_index'");
+                co_await env.execute_cql("INSERT INTO ks.idx (pk1, pk2, ck1, ck2, category, embedding) VALUES (5, 7, 9, 1, 7, [0.1, 0.2, 0.3])");
+                co_await env.execute_cql("INSERT INTO ks.idx (pk1, pk2, ck1, ck2, category, embedding) VALUES (5, 7, 9, 2, 8, [0.1, 0.2, 0.3])");
+
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+
+                server->next_ann_response({http::reply::status_type::ok,
+                        R"({"primary_keys":{"pk1":[5,5],"pk2":[7,7],"ck1":[9,9],"ck2":[2,1]},"distances":[0.2,0.1]})"});
+
+                const std::vector<sstring> restriction_tokens{
+                        "pk1 = 5",
+                        "pk2 = 7",
+                        "ck1 = 9",
+                        "ck2 IN (1, 2)",
+                };
+                for (unsigned mask = 1; mask < (1U << restriction_tokens.size()); ++mask) {
+                    sstring where_clause;
+                    for (unsigned i = 0; i < restriction_tokens.size(); ++i) {
+                        if ((mask & (1U << i)) == 0) {
+                            continue;
+                        }
+                        if (!where_clause.empty()) {
+                            where_clause += " AND ";
+                        }
+                        where_clause += restriction_tokens[i];
+                    }
+
+                    auto msg = co_await env.execute_cql(format(
+                            "SELECT category FROM ks.idx WHERE {} ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2", where_clause));
+                    assert_that(msg).is_rows().with_rows({
+                            {{int32_type->decompose(8)}},
+                            {{int32_type->decompose(7)}},
+                    });
+                }
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
+}
+
 SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
     auto cfg = config();
     auto count = 0;
