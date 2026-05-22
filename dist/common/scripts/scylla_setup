@@ -106,7 +106,8 @@ def interactive_choose_swap_size():
 
 pkg_files = {
         f'{PRODUCT}-tools': scylladir_p() / 'share/cassandra/bin/cqlsh',
-        f'{PRODUCT}-node-exporter': scylladir_p() / 'node_exporter/node_exporter'
+        f'{PRODUCT}-node-exporter': scylladir_p() / 'node_exporter/node_exporter',
+        f'{PRODUCT}-process-exporter': scylladir_p() / 'dependencies/process-exporter'
         }
 def do_verify_package(pkg):
     if is_offline():
@@ -178,6 +179,7 @@ if __name__ == '__main__':
 
     default_no_ntp_setup = False
     default_no_node_exporter = False
+    default_no_process_exporter = False
     default_no_kernel_check = False
     default_no_raid_setup = False
     default_no_coredump_setup = False
@@ -261,6 +263,9 @@ if __name__ == '__main__':
     parser.add_argument('--no-node-exporter', action='store_true',
                         default=default_no_node_exporter,
                         help='do not enable the node exporter')
+    parser.add_argument('--no-process-exporter', action='store_true',
+                        default=default_no_process_exporter,
+                        help='do not enable the process exporter')
     parser.add_argument('--no-cpuscaling-setup', action='store_true',
                         default=default_no_cpuscaling_setup,
                         help='skip cpu scaling setup')
@@ -313,6 +318,7 @@ if __name__ == '__main__':
     io_setup = args.io_setup
     version_check = not args.no_version_check
     node_exporter = not args.no_node_exporter
+    process_exporter = not args.no_process_exporter
     cpuscaling_setup = not args.no_cpuscaling_setup
     fstrim_setup = not args.no_fstrim_setup
     memory_setup = not args.no_memory_setup
@@ -500,6 +506,14 @@ if __name__ == '__main__':
         node_exporter_unit = systemd_unit('scylla-node-exporter')
         node_exporter_unit.enable()
         node_exporter_unit.start()
+
+    if do_verify_package(f'{PRODUCT}-process-exporter'):
+        process_exporter = interactive_ask_service('Do you want to enable process exporter to export Prometheus data about running processes?', 'Yes - enable process exporter. No - skip this step.', process_exporter)
+    args.no_process_exporter = not process_exporter
+    if process_exporter:
+        process_exporter_unit = systemd_unit('scylla-process-exporter')
+        process_exporter_unit.enable()
+        process_exporter_unit.start()
 
     if args.developer_mode:
         run_setup_script('developer mode', 'scylla_dev_mode_setup --developer-mode 1')

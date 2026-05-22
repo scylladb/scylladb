@@ -331,6 +331,29 @@ node_exporter_url() {
     echo "https://github.com/prometheus/node_exporter/releases/download/v$NODE_EXPORTER_VERSION/$(node_exporter_filename)"
 }
 
+PROCESS_EXPORTER_VERSION=0.8.7
+declare -A PROCESS_EXPORTER_CHECKSUM=(
+    ["x86_64"]=6d274cca5e94c6a25e55ec05762a472561859ce0a05b984aaedb67dd857ceee2
+    ["aarch64"]=4a2502f290323e57eeeb070fc10e64047ad0cd838ae5a1b347868f75667b5ab0
+)
+PROCESS_EXPORTER_DIR=/opt/scylladb/dependencies
+
+process_exporter_filename() {
+    echo "process-exporter-$PROCESS_EXPORTER_VERSION.linux-$(go_arch).tar.gz"
+}
+
+process_exporter_fullpath() {
+    echo "$PROCESS_EXPORTER_DIR/$(process_exporter_filename)"
+}
+
+process_exporter_checksum() {
+    sha256sum "$(process_exporter_fullpath)" | while read -r sum _; do [[ "$sum" == "${PROCESS_EXPORTER_CHECKSUM["$(arch)"]}" ]]; done
+}
+
+process_exporter_url() {
+    echo "https://github.com/ncabatoff/process-exporter/releases/download/v$PROCESS_EXPORTER_VERSION/$(process_exporter_filename)"
+}
+
 MINIO_BINARIES_DIR=/usr/local/bin
 
 minio_server_url() {
@@ -359,6 +382,7 @@ print_usage() {
     echo "  --print-pip-runtime-packages Print required pip packages for Scylla"
     echo "  --print-pip-symlinks Print list of pip provided commands which need to install to /usr/bin"
     echo "  --print-node-exporter-filename Print node_exporter filename"
+    echo "  --print-process-exporter-filename Print process_exporter filename"
     echo "  --future Install dependencies for future toolchain (Fedora rawhide based)"
     exit 1
 }
@@ -367,6 +391,7 @@ PRINT_PYTHON3=false
 PRINT_PIP=false
 PRINT_PIP_SYMLINK=false
 PRINT_NODE_EXPORTER=false
+PRINT_PROCESS_EXPORTER=false
 FUTURE=false
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -384,6 +409,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--print-node-exporter-filename")
             PRINT_NODE_EXPORTER=true
+            shift 1
+            ;;
+        "--print-process-exporter-filename")
+            PRINT_PROCESS_EXPORTER=true
             shift 1
             ;;
         "--future")
@@ -417,6 +446,11 @@ fi
 
 if $PRINT_NODE_EXPORTER; then
     node_exporter_fullpath
+    exit 0
+fi
+
+if $PRINT_PROCESS_EXPORTER; then
+    process_exporter_fullpath
     exit 0
 fi
 
@@ -472,6 +506,17 @@ elif [ "$ID" = "fedora" ]; then
         curl -fSL -o "$(node_exporter_fullpath)" "$(node_exporter_url)"
         if ! node_exporter_checksum; then
             echo "$(node_exporter_filename) download failed"
+            exit 1
+        fi
+    fi
+
+    if [ -f "$(process_exporter_fullpath)" ] && process_exporter_checksum; then
+        echo "$(process_exporter_filename) already exists, skipping download"
+    else
+        mkdir -p "$PROCESS_EXPORTER_DIR"
+        curl -fSL -o "$(process_exporter_fullpath)" "$(process_exporter_url)"
+        if ! process_exporter_checksum; then
+            echo "$(process_exporter_filename) download failed"
             exit 1
         fi
     fi

@@ -78,6 +78,7 @@ packages=(
     "build/dist/$config/redhat/RPMS/$arch/$product-conf-$version-$release.$arch.rpm"
     "build/dist/$config/redhat/RPMS/$arch/$product-kernel-conf-$version-$release.$arch.rpm"
     "build/dist/$config/redhat/RPMS/$arch/$product-node-exporter-$version-$release.$arch.rpm"
+    "build/dist/$config/redhat/RPMS/$arch/$product-process-exporter-$version-$release.$arch.rpm"
     "tools/cqlsh/build/redhat/RPMS/$arch/$product-cqlsh-$version-$release.$arch.rpm"
     "tools/python3/build/redhat/RPMS/$arch/$product-python3-$version-$release.$arch.rpm"
 )
@@ -115,6 +116,7 @@ run mkdir -p /opt/scylladb/supervisor
 run touch /opt/scylladb/SCYLLA-CONTAINER-FILE
 bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-server.sh
 bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
+bcp dist/common/supervisor/scylla-process-exporter.sh /opt/scylladb/supervisor/scylla-process-exporter.sh
 bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
 
 # XXX: This is required to run setup scripts in root-mode with non-root user

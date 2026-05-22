@@ -54,12 +54,18 @@ Breaks: scylla-enterprise-node-exporter (<< 2025.1.0~)
 Description: Prometheus exporter for machine metrics
  Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
 
+Package: %{product}-process-exporter
+Architecture: any
+Description: Prometheus exporter for process metrics
+ Prometheus exporter exposing process and thread metrics for processes matching a given name and/or regex.
+
 Package: %{product}
 Section: metapackages
 Architecture: any
 Depends: %{product}-server (= ${binary:Version})
  , %{product}-kernel-conf (= ${binary:Version})
  , %{product}-node-exporter (= ${binary:Version})
+ , %{product}-process-exporter (= ${binary:Version})
  , %{product}-cqlsh (= ${binary:Version})
 Replaces: scylla-enterprise (<< 2025.1.0~)
 Breaks: scylla-enterprise (<< 2025.1.0~)

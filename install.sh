@@ -418,6 +418,25 @@ EOS
     chmod 644 "$rsystemd"/scylla-node-exporter.service.d/nonroot.conf
 fi
 
+# scylla-process-exporter
+install -d -m755 "$rprefix"/dependencies
+install -m755 dependencies/process-exporter "$rprefix"/dependencies
+install -m644 dependencies/process-exporter.yml "$rprefix"/dependencies
+if ! $without_systemd; then
+    install -m644 dist/common/systemd/scylla-process-exporter.service -Dt "$rsystemd"
+fi
+if ! $nonroot && ! $without_systemd; then
+    : # no override needed; ExecStart path in the service file is absolute
+elif ! $without_systemd; then
+    install -d -m755 "$rsystemd"/scylla-process-exporter.service.d
+    cat << EOS > "$rsystemd"/scylla-process-exporter.service.d/nonroot.conf
+[Service]
+ExecStart=
+ExecStart=$rprefix/dependencies/process-exporter -config.path $rprefix/dependencies/process-exporter.yml
+EOS
+    chmod 644 "$rsystemd"/scylla-process-exporter.service.d/nonroot.conf
+fi
+
 # scylla-server
 install -m755 -d "$rprefix"
 install -m755 -d "$retc/scylla.d"
@@ -632,7 +651,7 @@ relocate_python3 "$rprefix"/scripts fix_system_distributed_tables.py
 
 if $supervisor; then
     install -d -m755 `supervisor_dir $retc`
-    for service in scylla-server scylla-jmx scylla-node-exporter; do
+    for service in scylla-server scylla-jmx scylla-node-exporter scylla-process-exporter; do
         if [ "$service" = "scylla-server" ]; then
             program="scylla"
         else
