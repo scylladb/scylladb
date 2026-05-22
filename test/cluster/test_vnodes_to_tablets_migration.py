@@ -879,3 +879,115 @@ async def test_migration_multiple_keyspaces(manager: ManagerClient):
             for row in rows:
                 assert row.intended_storage_mode is None, \
                     f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
+
+
+@pytest.mark.asyncio
+async def test_tablet_status_in_migration_api(manager: ManagerClient):
+    """"Verify the ?include=tablet_status query parameter in the migration API.
+
+    When set, the migration API response is extended with a 'tablets' field that
+    contains per-table pow2 convergence status. Intended for use after migration
+    finalization to track convergence progress via the same API.
+
+    Steps:
+    1. Before migration: no-op; no 'tablets' field in response.
+    2. During migration: no-op; no 'tablets' field in response.
+    3. After finalization: 'tablets' field is present and its fields have correct values.
+    4. Without query param: no 'tablets' field in response.
+    5. After pow2 convergence: convergence is reported as completed for all tables.
+    """
+    num_shards = 3
+    tokens_per_node = 16
+
+    logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
+    cfg = {'num_tokens': tokens_per_node}
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    logger.info("Creating keyspace with two empty vnode-based tables")
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, c int)")
+
+        logger.info("Before migration - verify no tablet status in response")
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
+        assert status['status'] == 'vnodes'
+        assert 'tablets' not in status, "tablets field should not be present before migration"
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Marking node for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        logger.info("Restarting node to trigger resharding")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("During migration - verify no tablet status in response")
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
+        assert status['status'] == 'migrating_to_tablets'
+        assert 'tablets' not in status, "tablets field should not be present during migration"
+
+        # Disable tablet balancing to prevent pow2 convergence from running
+        # before we can check the post-finalization status.
+        await manager.api.disable_tablet_balancing(server.ip_addr)
+
+        logger.info("Finalizing migration")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("After finalization - verify tablet status is present with in_progress convergence")
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
+        assert status['status'] == 'tablets'
+        assert 'tablets' in status, "tablets field should be present after finalization"
+
+        pow2 = status['tablets']['pow2_convergence']
+        assert pow2['status'] == 'in_progress'
+        assert pow2['tables_total'] == 2
+        assert pow2['tables_converging'] == 2
+        assert len(pow2['tables']) == 2
+
+        table_names = {t['table'] for t in pow2['tables']}
+        assert table_names == {'t1', 't2'}, f"Expected tables t1 and t2, got {table_names}"
+
+        for t in pow2['tables']:
+            assert 'converging' in t
+            assert 'current_tablet_count' in t
+            assert 'target_pow2_tablet_count' in t
+            assert t['converging'] is True
+
+            # Verify current/target tablet counts match system.tablets
+            table_name = t['table']
+            expected_count = await get_tablet_count(manager, server, ks, table_name)
+            expected_target = await get_target_pow2_tablet_count(manager, server, ks, table_name)
+            assert t['current_tablet_count'] == expected_count, \
+                f"Table {table_name}: API reports {t['current_tablet_count']} tablets, system.tablets has {expected_count}"
+            assert t['target_pow2_tablet_count'] == expected_target, \
+                f"Table {table_name}: API reports target {t['target_pow2_tablet_count']}, system.tablets has {expected_target}"
+
+        logger.info("Without query param - verify no tablet status")
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=False)
+        assert 'tablets' not in status, "tablets field should not be present without query param"
+
+        # Re-enable tablet balancing to allow pow2 convergence to proceed.
+        await manager.api.enable_tablet_balancing(server.ip_addr)
+
+        logger.info("After pow2 convergence - verify all tables have converged")
+        await wait_for_pow2_convergence(manager, server, ks, 't1')
+        await wait_for_pow2_convergence(manager, server, ks, 't2')
+
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
+        pow2 = status['tablets']['pow2_convergence']
+        assert pow2['status'] == 'complete'
+        assert pow2['tables_converging'] == 0
+        assert pow2['tables_total'] == 2
+
+        for t in pow2['tables']:
+            assert t['converging'] is False
+            assert t['target_pow2_tablet_count'] == 0
+            tablet_count = t['current_tablet_count']
+            assert tablet_count > 0 and (tablet_count & (tablet_count - 1)) == 0, \
+                f"Tablet count {tablet_count} for table {t['table']} is not a power of two"
