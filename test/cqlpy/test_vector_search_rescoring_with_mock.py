@@ -404,23 +404,72 @@ def test_similarity_function_returns_correctly_rescored_results(cql, test_keyspa
     for func_name, data in TEST_DATA.items():
         with rescoring_test_table(cql, test_keyspace, data,
                 extra_options={"similarity_function": func_name}) as table:
-            # Tested with both argument orderings of the similarity function to cover both code paths.
-            for func_args in [f"embedding, {ANN_QUERY_VECTOR_LITERAL}",
-                              f"{ANN_QUERY_VECTOR_LITERAL}, embedding"]:
-                vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
-                order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
-                rows = list(cql.execute(
-                    f"SELECT id, similarity_{func_name}({func_args}) AS similarity FROM {table} "
-                    f"{order_by} LIMIT 2"))
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
+            rows = list(cql.execute(
+                f"SELECT id"
+                # Tested with both argument orderings of the similarity function to cover both code paths.
+                f", similarity_{func_name}(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity1"
+                f", similarity_{func_name}({ANN_QUERY_VECTOR_LITERAL}, embedding) AS similarity2"
+                f" FROM {table} {order_by} LIMIT 2"))
 
-                expected = data[:2]
-                assert [row.id for row in rows] == [d_row.id for d_row in expected]
-                for row, d_row in zip(rows, expected):
-                    assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
-                assert len(rows[0]) == 2
+            expected = data[:2]
+            assert [row.id for row in rows] == [d_row.id for d_row in expected]
+            for row, d_row in zip(rows, expected):
+                assert row.similarity1 == pytest.approx(d_row.expected_similarity, abs=0.01)
+                assert row.similarity2 == pytest.approx(d_row.expected_similarity, abs=0.01)
+            assert len(rows[0]) == 3
+
+# Verifies that ANN() in SELECT returns computed similarity scores when
+# rescoring is enabled. Tests all similarity functions with all rows.
+#
+# Reproduces SCYLLADB-2212.
+@pytest.mark.xfail(reason="ANN() function in SELECT not yet implemented (SCYLLADB-2212)")
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_with_rescoring_ann_function_returns_computed_scores(cql, test_keyspace, vector_store_mock, ann_syntax):
+    for func_name, data in TEST_DATA.items():
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"similarity_function": func_name}) as table:
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
+            rows = list(cql.execute(
+                f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity "
+                f"FROM {table} {order_by} LIMIT 4"))
+
+            # With rescoring, rows are reordered by actual computed similarity.
+            assert [row.id for row in rows] == [d_row.id for d_row in data]
+            for row, d_row in zip(rows, data):
+                assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
+            assert len(rows[0]) == 2
 
 
-# Verifies that per-request rescoring=true enables rescoring on an index with
+# Verifies that ANN() in SELECT returns vector store similarity scores when
+# rescoring is disabled.
+#
+# Reproduces SCYLLADB-2212.
+@pytest.mark.xfail(reason="ANN() function in SELECT not yet implemented (SCYLLADB-2212)")
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_without_rescoring_ann_function_returns_vs_scores(cql, test_keyspace, vector_store_mock, ann_syntax):
+    for func_name, data in TEST_DATA.items():
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"similarity_function": func_name, "rescoring": "false"}) as table:
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
+            rows = list(cql.execute(
+                f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity "
+                f"FROM {table} {order_by} LIMIT 2"))
+
+            # Without rescoring, order matches vector store (reversed) and
+            # similarity values come directly from the vector store mock.
+            expected = list(reversed(data))[:2]
+            assert [row.id for row in rows] == [d_row.id for d_row in expected]
+            # reversed_ann_response produces scores: 0.01*N, 0.01*(N-1), ...
+            # With 4 rows and LIMIT 2, the first two returned are scores 0.04, 0.03.
+            assert rows[0].similarity == pytest.approx(0.04, abs=0.001)
+            assert rows[1].similarity == pytest.approx(0.03, abs=0.001)
+            assert len(rows[0]) == 2
+
+
 # rescoring=false, and the similarity function values are correctly computed.
 #
 # Reproduces SCYLLADB-184.
@@ -429,19 +478,22 @@ def test_per_request_rescoring_with_similarity_functions(cql, test_keyspace, vec
     for func_name, data in TEST_DATA.items():
         with rescoring_test_table(cql, test_keyspace, data,
                 extra_options={"similarity_function": func_name, "rescoring": "false"}) as table:
-            for func_args in [f"embedding, {ANN_QUERY_VECTOR_LITERAL}",
-                              f"{ANN_QUERY_VECTOR_LITERAL}, embedding"]:
-                vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
-                rows = list(cql.execute(
-                    f"SELECT id, similarity_{func_name}({func_args}) AS similarity FROM {table} "
-                    f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, "
-                    f"{{'rescoring': 'true'}}) LIMIT 2"))
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            rows = list(cql.execute(
+                f"SELECT id"
+                f", similarity_{func_name}(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity1"
+                f", similarity_{func_name}({ANN_QUERY_VECTOR_LITERAL}, embedding) AS similarity2"
+                f", ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, {{'rescoring': 'true'}}) AS ann_similarity"
+                f" FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, "
+                f"{{'rescoring': 'true'}}) LIMIT 2"))
 
-                expected = data[:2]
-                assert [row.id for row in rows] == [d_row.id for d_row in expected]
-                for row, d_row in zip(rows, expected):
-                    assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
-                assert len(rows[0]) == 2
+            expected = data[:2]
+            assert [row.id for row in rows] == [d_row.id for d_row in expected]
+            for row, d_row in zip(rows, expected):
+                assert row.similarity1 == pytest.approx(d_row.expected_similarity, abs=0.01)
+                assert row.similarity2 == pytest.approx(d_row.expected_similarity, abs=0.01)
+                assert row.ann_similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
+            assert len(rows[0]) == 4
 
 
 # Verifies that SELECT * with rescoring returns rows in the correct similarity
@@ -615,3 +667,37 @@ def test_rescoring_with_zerovector_query(cql, test_keyspace, vector_store_mock, 
         # filtered out by rescoring, leaving an empty result set.
         # What is most important - no error is thrown and the query completes successfully
         assert rows == []
+
+
+# Verifies that ANN() in SELECT produces errors in invalid contexts:
+# - Without a matching ANN ORDER BY clause.
+# - When the ANN() expression differs from the one in ORDER BY (different
+#   vector, options, or column).
+#
+# Reproduces SCYLLADB-2212.
+@pytest.mark.xfail(reason="ANN() function in SELECT not yet implemented (SCYLLADB-2212)")
+def test_ann_function_errors(cql, test_keyspace):
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data) as table:
+        # ANN() in SELECT without ANN ORDER BY is an error.
+        with pytest.raises(InvalidRequest):
+            cql.execute(
+                f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) FROM {table} WHERE id = 1")
+
+        # ANN() in SELECT with a different vector than ORDER BY is an error.
+        with pytest.raises(InvalidRequest):
+            cql.execute(
+                f"SELECT id, ANN(embedding, [0.9, 0.9]) AS similarity "
+                f"FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2")
+
+        # ANN() in SELECT with different options than ORDER BY is an error.
+        with pytest.raises(InvalidRequest):
+            cql.execute(
+                f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}, {{'rescoring': 'true'}}) AS similarity "
+                f"FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2")
+
+        # ANN() in SELECT with a different column than ORDER BY is an error.
+        with pytest.raises(InvalidRequest):
+            cql.execute(
+                f"SELECT id, ANN(nonexistent, {ANN_QUERY_VECTOR_LITERAL}) AS similarity "
+                f"FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2")
