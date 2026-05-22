@@ -76,7 +76,7 @@ async def test_group0_recovers_after_partial_command_application(manager: Manage
 
         # The error injection enters an infinite loop, so kill the process.
         logger.info("Kill the first node")
-        await manager.server_stop(srv1.server_id)
+        await manager.server_stop(srv1.server_id, convict=False)
 
         # Before restarting, enable an error injection which causes the state
         # machine to load the group0 state before (re)applying any group0

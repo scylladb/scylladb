@@ -106,7 +106,7 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query_typ
         server_to_kill = done.pop().result()
 
     logger.info(f"Kill a node: {server_to_kill.ip_addr}")
-    await manager.server_stop(server_to_kill.server_id)
+    await manager.server_stop(server_to_kill.server_id, convict=True)
 
     logger.info("Unblock reads")
     for server in servers:

@@ -52,7 +52,7 @@ async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> N
 
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "storage_proxy_fail_remove_from_batchlog") for s in servers])
 
-        await manager.server_stop(servers[1].server_id)
+        await manager.server_stop(servers[1].server_id, convict=True)
 
         batchlog_row_count = (await cql.run_async("SELECT COUNT(*) FROM system.batchlog_v2", host=hosts[0]))[0].count
         assert batchlog_row_count > 0
@@ -113,7 +113,7 @@ async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> No
 
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "storage_proxy_fail_remove_from_batchlog") for s in servers])
 
-        await manager.server_stop(servers[1].server_id)
+        await manager.server_stop(servers[1].server_id, convict=True)
 
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "skip_batch_replay") for s in servers if s != servers[1]])
 

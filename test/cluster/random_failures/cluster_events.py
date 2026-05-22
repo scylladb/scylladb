@@ -475,7 +475,7 @@ async def remove_data_dir_of_dead_node(manager: ManagerClient,
     data_dir = os.path.join(await manager.server_get_workdir(running_servers[1].server_id), "data")
 
     LOGGER.info("Kill a node")
-    await manager.server_stop(server_id=running_servers[1].server_id)
+    await manager.server_stop(server_id=running_servers[1].server_id, convict=True)
     await manager.server_not_sees_other_server(
         server_ip=running_servers[0].ip_addr,
         other_ip=running_servers[1].ip_addr,
@@ -601,7 +601,7 @@ async def remove_node(manager: ManagerClient,
 
     LOGGER.info(f"Kill a node: target={target.server_id} (rack={target.rack})")
 
-    await manager.server_stop(server_id=target.server_id)
+    await manager.server_stop(server_id=target.server_id, convict=True)
     await manager.server_not_sees_other_server(
         server_ip=coordinator.ip_addr,
         other_ip=target.ip_addr,
@@ -672,7 +672,7 @@ async def kill_non_coordinator_node(manager: ManagerClient,
     yield
 
     LOGGER.info("Kill a non-coordinator node")
-    await manager.server_stop(server_id=(await get_non_coordinator_host(manager=manager)).server_id)
+    await manager.server_stop(server_id=(await get_non_coordinator_host(manager=manager)).server_id, convict=False)
 
     LOGGER.info("Sleep for 2 seconds")
     await asyncio.sleep(2)
@@ -686,7 +686,7 @@ async def kill_coordinator_node(manager: ManagerClient,
     yield
 
     LOGGER.info("Kill the coordinator node")
-    await manager.server_stop(server_id=(await get_coordinator_host(manager=manager)).server_id)
+    await manager.server_stop(server_id=(await get_coordinator_host(manager=manager)).server_id, convict=True)
     await wait_new_coordinator_elected(manager=manager, expected_num_of_elections=2, deadline=time.time() + 60)
 
     yield

@@ -16,7 +16,7 @@ async def test_start_after_sudden_stop(manager: ManagerClient, random_tables) ->
     """Tests a server can rejoin the cluster after being stopped suddenly"""
     servers = await manager.running_servers()
     table = await random_tables.add_table(ncolumns=5)
-    await manager.server_stop(servers[0].server_id)
+    await manager.server_stop(servers[0].server_id, convict=True)
     await table.add_column()
     await manager.server_start(servers[0].server_id)
     await random_tables.verify_schema()

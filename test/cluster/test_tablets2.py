@@ -540,7 +540,7 @@ async def test_tablet_cleanup(manager: ManagerClient):
         # Kill and restart first node.
         # Check that this doesn't resurrect cleaned data.
         logger.info("Brutally restart first node")
-        await manager.server_stop(servers[0].server_id)
+        await manager.server_stop(servers[0].server_id, convict=False)
         await manager.server_start(servers[0].server_id)
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
         await manager.servers_see_each_other(servers)
@@ -2180,7 +2180,7 @@ async def test_split_and_incremental_repair_synchronization(manager: ManagerClie
         # Give enough time for split to happen in debug mode
         await wait_for(finished_splitting, time.time() + 120)
 
-        await manager.server_stop(servers[0].server_id)
+        await manager.server_stop(servers[0].server_id, convict=False)
         await manager.server_start(servers[0].server_id)
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
         await manager.servers_see_each_other(servers)

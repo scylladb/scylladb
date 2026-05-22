@@ -498,7 +498,7 @@ async def test_node_lost_during_decommission_drain(manager: ManagerClient):
 
         await coord_log.wait_for('topology_coordinator_pause_before_processing_backlog: waiting', from_mark=mark)
 
-        await manager.server_stop(srv_to_remove.server_id)
+        await manager.server_stop(srv_to_remove.server_id, convict=True)
         await manager.server_not_sees_other_server(coord_serv.ip_addr, srv_to_remove.ip_addr)
         await manager.api.exclude_node(coord_serv.ip_addr, [await manager.get_host_id(srv_to_remove.server_id)])
 

@@ -64,7 +64,8 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
         server_to_down = await find_server_by_host_id(manager, servers, HostID(str(base_replicas[0][0])))
 
         logger.info('Downing a node to be replaced')
-        await manager.server_stop(server_to_replace.server_id)
+        # convict=False to avoid triggering SCYLLADB-1996
+        await manager.server_stop(server_to_replace.server_id, convict=False)
 
         logger.info('Blocking tablet rebuild')
         coord = await get_topology_coordinator(manager)
@@ -83,7 +84,8 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
         await coord_log.wait_for('tablet_transition_updates: waiting', from_mark=coord_mark)
 
         if server_to_down.server_id != server_to_replace.server_id:
-            await manager.server_stop(server_to_down.server_id)
+            # convict=False to avoid triggering SCYLLADB-1996
+            await manager.server_stop(server_to_down.server_id, convict=False)
 
         # The update is supposed to go to the second replica only, since the other one is downed.
         # If pairing would shift, the update to the view would be lost because the first replica

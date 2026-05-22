@@ -43,7 +43,7 @@ async def test_truncation_records_pruned_on_dirty_restart(manager: ManagerClient
     cql = manager.get_cql()
 
     async def restart():
-        await manager.server_stop(server.server_id)
+        await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
         manager.driver_close()
         await manager.driver_connect()

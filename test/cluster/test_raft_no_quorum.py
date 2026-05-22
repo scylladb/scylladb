@@ -247,7 +247,7 @@ async def test_can_restart(manager: ManagerClient, raft_op_timeout: int) -> None
     servers = await manager.servers_add(5)
 
     logger.info(f"Stopping {servers}")
-    await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in servers))
+    await asyncio.gather(*(manager.server_stop(srv.server_id, convict=False) for srv in servers))
 
     # This ensures the read barriers below fail quickly without group 0 quorum.
     await asyncio.gather(*(update_group0_raft_op_timeout(srv.server_id, manager, raft_op_timeout) for srv in servers))

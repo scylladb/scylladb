@@ -275,7 +275,7 @@ async def test_reboot(manager, key_provider):
     async def restart(manager: ManagerClient, servers: list[ServerInfo], table_names: list[str]):
         # pylint: disable=unused-argument
         for s in servers:
-            await manager.server_stop(s.server_id)
+            await manager.server_stop(s.server_id, convict=False)
             await manager.server_start(s.server_id)
 
     num_servers = 3
@@ -535,7 +535,7 @@ async def test_system_encryption_reboot(manager: ManagerClient, tmpdir):
     async def restart(manager: ManagerClient, servers: list[ServerInfo], table_names: list[str]):
         # pylint: disable=unused-argument
         for s in servers:
-            await manager.server_stop(s.server_id)
+            await manager.server_stop(s.server_id, convict=False)
             await manager.server_start(s.server_id)
 
     options = {"commitlog_sync": "batch",

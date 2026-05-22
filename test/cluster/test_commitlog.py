@@ -78,7 +78,7 @@ async def test_reboot(request, manager: ManagerClient):
     logger.info("Some new data is written into test table")
 
     table_content_before_crash = await load_table()
-    await manager.server_stop(server_info.server_id)
+    await manager.server_stop(server_info.server_id, convict=False)
     await manager.server_start(server_info.server_id)
     cql = await reconnect_driver(manager)
     await wait_for_cql_and_get_hosts(cql, [server_info], time.time() + 60)

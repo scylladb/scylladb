@@ -31,6 +31,6 @@ async def test_topology_schema_changes(manager, random_tables):
     await random_tables.verify_schema()
 
     # Test add column after hard stop of a server (1/3)
-    await manager.server_stop(servers[1].server_id)
+    await manager.server_stop(servers[1].server_id, convict=True)
     await table.add_column()
     await random_tables.verify_schema()

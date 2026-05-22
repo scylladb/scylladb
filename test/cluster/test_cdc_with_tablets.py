@@ -345,7 +345,7 @@ async def test_cdc_colocation(manager: ManagerClient):
         s1_host_id = await manager.get_host_id(servers[1].server_id)
 
         # Stop first node and test partitions available on second node
-        await manager.server_stop(servers[0].server_id)
+        await manager.server_stop(servers[0].server_id, convict=True)
 
         accessible_partitions = set([pk for pk, host_id in pk_to_host.items() if host_id == s1_host_id])
         inaccessible_partitions = set([pk for pk, host_id in pk_to_host.items() if host_id == s0_host_id])

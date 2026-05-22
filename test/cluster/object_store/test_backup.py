@@ -884,15 +884,15 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Ma
         await log.wait_for("pause_tablet_restore: waiting for message", from_mark=mark)
 
         if target == 'api':
-            await manager.server_stop(servers[1].server_id)
+            await manager.server_stop(servers[1].server_id, convict=True)
             with pytest.raises(aiohttp.client_exceptions.ClientConnectorError):
                 await manager.api.wait_task(servers[1].ip_addr, tid)
         else:
             if target == 'coordinator':
-                await manager.server_stop(servers[0].server_id)
+                await manager.server_stop(servers[0].server_id, convict=True)
                 await manager.api.message_injection(servers[2].ip_addr, "pause_tablet_restore")
             elif target == 'replica':
-                await manager.server_stop(servers[2].server_id)
+                await manager.server_stop(servers[2].server_id, convict=True)
 
             # Sometimes killing nodes manage to restore tablets before being killed
             # So the best thing to do is to make sure restore task finishes at all

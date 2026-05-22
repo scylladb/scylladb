@@ -37,7 +37,7 @@ async def test_broken_bootstrap(manager: ManagerClient):
         except Exception:
             pass
 
-        await gather_safely(*(manager.server_stop(srv.server_id) for srv in [server_a, server_b]))
+        await gather_safely(*(manager.server_stop(srv.server_id, convict=False) for srv in [server_a, server_b]))
 
         await manager.server_start(server_a.server_id)
         await manager.driver_connect()
@@ -95,7 +95,7 @@ async def test_full_shutdown_during_replace(manager: ManagerClient, reuse_ip: bo
             replacing_host_id = await manager.get_host_id(replacing_server.server_id)
 
             logger.info(f'Stopping {live_servers + [replacing_server]}')
-            await gather_safely(*(manager.server_stop(srv.server_id) for srv in live_servers + [replacing_server]))
+            await gather_safely(*(manager.server_stop(srv.server_id, convict=False) for srv in live_servers + [replacing_server]))
             replacing_task.cancel()
 
             for srv in live_servers:

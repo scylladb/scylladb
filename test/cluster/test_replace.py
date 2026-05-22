@@ -20,13 +20,13 @@ from test.pylib.random_tables import RandomTables, Column, TextType
 logger = logging.getLogger(__name__)
 
 
-async def test_replace_different_ip(manager: ManagerClient, failure_detector_timeout) -> None:
+async def test_replace_different_ip(manager: ManagerClient) -> None:
     """Replace an existing node with new node using a different IP address"""
-    servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout})
+    servers = await manager.servers_add(3)
     logger.info(f"cluster started, servers {servers}")
 
     logger.info(f"replacing server {servers[0]}")
-    await manager.server_stop(servers[0].server_id)
+    await manager.server_stop(servers[0].server_id, convict=True)
     replaced_server = servers[0]
     replace_cfg = ReplaceConfig(replaced_id = replaced_server.server_id, reuse_ip_addr = False, use_host_id = False)
     new_server = await manager.server_add(replace_cfg)
@@ -65,17 +65,17 @@ async def test_replace_different_ip(manager: ManagerClient, failure_detector_tim
         await wait_for(check_peers_and_gossiper, time.time() + 60)
         logger.info(f"server {s} system.peers and gossiper state is valid")
 
-async def test_replace_different_ip_using_host_id(manager: ManagerClient, failure_detector_timeout) -> None:
+async def test_replace_different_ip_using_host_id(manager: ManagerClient) -> None:
     """Replace an existing node with new node reusing the replaced node host id"""
-    servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout})
-    await manager.server_stop(servers[0].server_id)
+    servers = await manager.servers_add(3)
+    await manager.server_stop(servers[0].server_id, convict=True)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
     await manager.server_add(replace_cfg)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
-async def test_replace_reuse_ip(request, manager: ManagerClient, failure_detector_timeout) -> None:
+async def test_replace_reuse_ip(request, manager: ManagerClient) -> None:
     """Replace an existing node with new node using the same IP address"""
-    servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout}, auto_rack_dc="dc1")
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
     host2 = (await wait_for_cql_and_get_hosts(manager.get_cql(), [servers[2]], time.time() + 60))[0]
 
     logger.info(f"creating test table")
@@ -126,10 +126,10 @@ async def test_replace_reuse_ip(request, manager: ManagerClient, failure_detecto
     await manager.server_sees_other_server(servers[1].ip_addr, servers[0].ip_addr)
     await manager.server_sees_other_server(servers[2].ip_addr, servers[0].ip_addr)
 
-async def test_replace_reuse_ip_using_host_id(manager: ManagerClient, failure_detector_timeout) -> None:
+async def test_replace_reuse_ip_using_host_id(manager: ManagerClient) -> None:
     """Replace an existing node with new node using the same IP address and same host id"""
-    servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout})
-    await manager.server_stop(servers[0].server_id)
+    servers = await manager.servers_add(3)
+    await manager.server_stop(servers[0].server_id, convict=True)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = True)
     await manager.server_add(replace_cfg)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)

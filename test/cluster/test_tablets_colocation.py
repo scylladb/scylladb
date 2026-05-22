@@ -147,7 +147,7 @@ async def test_move_tablet(manager: ManagerClient, move_table: str):
 
         # Now the dst node should hold both tablets. Stop the other node and
         # verify we can read from both tables.
-        await manager.server_stop(servers[src_server].server_id)
+        await manager.server_stop(servers[src_server].server_id, convict=False)
 
         rows = await cql.run_async(f"SELECT * FROM {ks}.test")
         assert len(rows) == row_count
@@ -403,7 +403,7 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
         await manager.api.flush_keyspace(servers[1].ip_addr, ks)
 
         # Stop node 2 and write data while it is down
-        await manager.server_stop(servers[1].server_id)
+        await manager.server_stop(servers[1].server_id, convict=False)
 
         cql.execute(SimpleStatement(f"INSERT INTO {ks}.test(pk, c) VALUES(2, 20)", consistency_level=ConsistencyLevel.ONE))
         await manager.api.flush_keyspace(servers[0].ip_addr, ks)

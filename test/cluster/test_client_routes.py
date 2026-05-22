@@ -61,7 +61,7 @@ async def test_client_routes(request, manager: ManagerClient):
     running_servers = await manager.running_servers()
     server_to_stop = running_servers[0]
     running_server = running_servers[1]
-    await manager.server_stop(server_to_stop.server_id)
+    await manager.server_stop(server_to_stop.server_id, convict=True)
     await manager.remove_node(running_server.server_id, server_to_stop.server_id)
     await wait_for_expected_client_routes_size(cql, num_servers)
 
@@ -80,7 +80,7 @@ async def test_client_routes_node_restart(request, manager: ManagerClient):
     cql, hosts = await manager.get_ready_cql(servers)
     server_to_restart = servers[2]
 
-    await manager.server_stop(server_to_restart.server_id)
+    await manager.server_stop(server_to_restart.server_id, convict=False)
     await manager.api.client.post("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(1)])
     await wait_for_expected_client_routes_size(cql, 1)
 
@@ -147,7 +147,7 @@ async def test_client_routes_lost_quorum(request, manager: ManagerClient):
     await wait_for_expected_client_routes_size(cql, 1)
 
     for server in servers[1:]:
-        await manager.server_stop(server.server_id)
+        await manager.server_stop(server.server_id, convict=False)
 
     async def fail_req(f):
         with pytest.raises(HTTPError) as exc:
@@ -246,7 +246,7 @@ async def test_client_routes_snapshot_transfer(request, manager: ManagerClient, 
     error_to_inject = "block_group0_transfer_snapshot"
 
     await manager.server_update_config(server_to_restart.server_id, "error_injections_at_startup", [error_to_inject])
-    await manager.server_stop(server_to_restart.server_id)
+    await manager.server_stop(server_to_restart.server_id, convict=False)
 
     await manager.api.client.post("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(1)])
     await wait_for_expected_client_routes_size(cql, 1)

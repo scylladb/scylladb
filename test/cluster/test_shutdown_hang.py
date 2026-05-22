@@ -36,7 +36,7 @@ async def test_hints_manager_shutdown_hang(manager: ManagerClient) -> None:
         await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
         logger.info(f"Stop {s2}")
-        await manager.server_stop(s2.server_id)
+        await manager.server_stop(s2.server_id, convict=True)
 
         logger.info("Write data with small timeout")
         # We're using a small timeout for the insert so it's not unexpected that it would fail on slow

@@ -19,7 +19,7 @@ from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host, gather_safely
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer, ScyllaVersionDescription
 from test.pylib.driver_utils import safe_driver_shutdown
@@ -347,10 +347,34 @@ class ManagerClient:
            To be used when a current cluster wants to be reused."""
         await self.client.put_json("/cluster/mark-clean")
 
-    async def server_stop(self, server_id: ServerNum) -> None:
-        """Stop specified server"""
+    async def server_stop(self, server_id: ServerNum, convict: bool) -> None:
+        """Stop specified server.
+
+        convict: If True, immediately marks the node as DOWN on all live nodes,
+                 bypassing the natural failure detection delay (~20s).
+                 Set to True when the test waits for other nodes to notice the down node
+                 to speed up the test (e.g. before
+                 remove_node, replace, or waiting for failure detection).
+                 Set to False when conviction is pointless (single node, all stopped, immediate restart)
+                 or the test wants to exercise natural failure detection.
+        """
+        host_id = None
+        if convict:
+            try:
+                host_id = await self.get_host_id(server_id)
+            except Exception:
+                # Server may have never completed bootstrap, so host_id is unknown.
+                # Skip conviction in this case.
+                pass
         logger.debug("ManagerClient stopping %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/stop")
+        if host_id is not None:
+            try:
+                await self.convict_on_all(host_id)
+            except Exception:
+                # It's a best-effort attempt, ignore errors
+                # In some scenarios errors are expected, e.g. when server_stop() is called concurrently on many servers.
+                pass
 
     async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 180) -> None:
         """Stop specified server gracefully"""
@@ -379,6 +403,19 @@ class ManagerClient:
             raise Exception("No running servers")
         # Any server will do, it's a group0 operation
         await self.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    async def convict(self, convict_on: ServerInfo, host: HostID):
+        """Convicts a given host on a live server.
+        convict_on will mark "host" as DOWN and drop connections to it.
+        """
+        logger.debug(f"Convicting {host} on {convict_on.ip_addr}")
+        await self.api.convict(convict_on.ip_addr, host)
+
+    async def convict_on_all(self, host: HostID):
+        """Convicts a given host on all live servers.
+        Each live server will mark "host" as DOWN and drop connections to it.
+        """
+        await gather_safely(*(self.api.convict(server.ip_addr, host) for server in await self.running_servers()))
 
     async def server_start(self,
                            server_id: ServerNum,

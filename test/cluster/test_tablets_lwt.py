@@ -375,7 +375,7 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
 
         # Step3: Node n1 is lost permanently
         logger.info("Stop n1")
-        await manager.server_stop(servers[0].server_id)
+        await manager.server_stop(servers[0].server_id, convict=True)
         stopped_servers.add(servers[0])
         cql = await reconnect_driver(manager)
 

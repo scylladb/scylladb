@@ -59,20 +59,20 @@ async def make_servers(manager: ManagerClient, servers_num: int,
     return servers_ordered
 
 
-async def test_raft_replace_ignore_nodes(manager: ManagerClient, failure_detector_timeout) -> None:
+async def test_raft_replace_ignore_nodes(manager: ManagerClient) -> None:
     """Replace 3 dead nodes.
 
        This is a slow test with a 7 node cluster and 3 replace operations,
        we want to run it only in dev mode.
     """
     logger.info("Booting initial cluster")
-    servers = await make_servers(manager, 7, config={'failure_detector_timeout_in_ms': failure_detector_timeout})
+    servers = await make_servers(manager, 7)
 
     s1_id = await manager.get_host_id(servers[1].server_id)
     s2_id = await manager.get_host_id(servers[2].server_id)
     logger.info(f"Stopping servers {servers[:3]}")
-    await manager.server_stop(servers[0].server_id)
-    await manager.server_stop(servers[1].server_id)
+    await manager.server_stop(servers[0].server_id, convict=True)
+    await manager.server_stop(servers[1].server_id, convict=True)
     await manager.server_stop_gracefully(servers[2].server_id)
 
     ignore_dead: list[IPAddress | HostID] = [s1_id, servers[2].ip_addr]

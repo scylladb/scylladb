@@ -259,7 +259,7 @@ async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
     # will be retrying to send a request to it.
     ignore_gossiper_err = "view_building_coordinator_ignore_gossiper"
     await manager.api.enable_injection(s1.ip_addr, ignore_gossiper_err, one_shot=False)
-    await manager.server_stop(s2.server_id)
+    await manager.server_stop(s2.server_id, convict=False)
 
     start = time.time()
 
@@ -352,8 +352,8 @@ async def test_do_not_finish_view_builder_with_nodes_down(manager: ManagerClient
         # Stop two nodes. Use non-graceful stop to avoid waiting for the
         # view_builder_consume_end_of_partition_delay injection to time out.
         logger.info("Stopping nodes 2 and 3")
-        await manager.server_stop(servers[1].server_id)
-        await manager.server_stop(servers[2].server_id)
+        await manager.server_stop(servers[1].server_id, convict=True)
+        await manager.server_stop(servers[2].server_id, convict=True)
 
         # Unpause the view builder on the remaining node - it should not finish
         # because it cannot replicate view updates to the down nodes.

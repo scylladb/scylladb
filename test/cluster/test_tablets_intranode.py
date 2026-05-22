@@ -89,7 +89,7 @@ async def test_crash_during_intranode_migration(manager: ManagerClient):
 
         s0_logs = await manager.server_open_log(servers[0].server_id)
         await s0_logs.wait_for('crash-in-tablet-write-both-read-new hit')
-        await manager.server_stop(servers[0].server_id)
+        await manager.server_stop(servers[0].server_id, convict=False)
         await manager.server_start(servers[0].server_id)
         await wait_for_cql_and_get_hosts(manager.cql, servers, time.time() + 60)
 
