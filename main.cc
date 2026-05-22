@@ -1262,6 +1262,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_cm = defer_verbose_shutdown("compaction_manager", [&cm] {
                cm.stop().get();
             });
+<<<<<<< HEAD
+||||||| parent of 69a5888da7 (test: add test_stop_before_starting_compaction_manager)
+            cm.invoke_on_all(&compaction::compaction_manager::start, std::ref(*cfg), only_on_shard0(&*disk_space_monitor_shard0)).get();
+=======
+
+            utils::get_local_injector().inject("stop_before_starting_compaction_manager",
+                    [] { throw std::runtime_error("injected failure before starting compaction_manager"); });
+
+            cm.invoke_on_all(&compaction::compaction_manager::start, std::ref(*cfg), only_on_shard0(&*disk_space_monitor_shard0)).get();
+>>>>>>> 69a5888da7 (test: add test_stop_before_starting_compaction_manager)
 
             checkpoint(stop_signal, "starting storage manager");
             sstables::storage_manager::config stm_cfg;
