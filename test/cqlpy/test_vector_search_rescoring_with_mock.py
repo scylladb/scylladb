@@ -563,6 +563,51 @@ def test_select_similarity_function_other_than_ann_ordering(cql, test_keyspace, 
         assert len(rows[0]) == 2
 
 
+# Verifies that rescoring correctly filters out non-existing IDs returned by the
+# vector store and maintains correct ordering when combined with a WHERE clause.
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_rescoring_filters_and_orders_with_where_clause(cql, test_keyspace, vector_store_mock, ann_syntax):
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data) as table:
+        # Vector store returns non-existing IDs mixed with valid ones in wrong order.
+        vector_store_mock.set_next_ann_response(200, json.dumps({
+            "primary_keys": {"id": [-11, 3, -10, 2, 1]},
+            "similarity_scores": [0, 0, 0, 0, 0],
+        }))
+        order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
+        rows = list(cql.execute(
+            f"SELECT id FROM {table} WHERE id IN (1, 2, 3) {order_by} LIMIT 3"))
+
+        # Should return IDs 1, 2, 3 in correct similarity order (not VS order).
+        assert [row.id for row in rows] == [1, 2, 3]
+        assert len(rows[0]) == 1
+
+
+# Same as test_rescoring_filters_and_orders_with_where_clause but also verifies
+# ANN() in SELECT returns correct similarity values after filtering.
+#
+# Reproduces SCYLLADB-2212.
+@pytest.mark.xfail(reason="ANN() function in SELECT not yet implemented (SCYLLADB-2212)")
+@pytest.mark.parametrize("ann_syntax", ANN_SYNTAX)
+def test_rescoring_filters_and_orders_with_where_clause_ann_function(cql, test_keyspace, vector_store_mock, ann_syntax):
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data) as table:
+        vector_store_mock.set_next_ann_response(200, json.dumps({
+            "primary_keys": {"id": [-11, 3, -10, 2, 1]},
+            "similarity_scores": [0, 0, 0, 0, 0],
+        }))
+        order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
+        rows = list(cql.execute(
+            f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity "
+            f"FROM {table} WHERE id IN (1, 2, 3) {order_by} LIMIT 3"))
+
+        assert [row.id for row in rows] == [1, 2, 3]
+        expected = data[:3]
+        for row, d_row in zip(rows, expected):
+            assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
+        assert len(rows[0]) == 2
+
+
 # Verifies that rescoring filters out results with invalid similarity scores.
 # Inserts rows with a NULL embedding, a NaN component, an Infinity component,
 # and a zero vector, then checks that only rows with valid similarity scores
@@ -701,3 +746,43 @@ def test_ann_function_errors(cql, test_keyspace):
             cql.execute(
                 f"SELECT id, ANN(nonexistent, {ANN_QUERY_VECTOR_LITERAL}) AS similarity "
                 f"FROM {table} ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2")
+
+
+# Verifies that WHERE ANN(embedding, vector) > N filters rows by similarity
+# threshold. Without rescoring, the threshold is applied to vector store scores.
+# With rescoring, the threshold is applied to rescored (computed) similarity.
+#
+# Reproduces SCYLLADB-421.
+@pytest.mark.xfail(reason="WHERE ANN() distance filtering not yet implemented (SCYLLADB-421)")
+def test_ann_threshold_filter(cql, test_keyspace, vector_store_mock):
+    data = TEST_DATA["cosine"]
+
+    # Without rescoring: filter by vector store scores.
+    # reversed_ann_response produces scores: 0.04, 0.03, 0.02, 0.01 (4 rows).
+    # Threshold > 0.025 should keep only scores 0.04 and 0.03 (ids 4, 3 in VS order).
+    with rescoring_test_table(cql, test_keyspace, data,
+            extra_options={"rescoring": "false"}) as table:
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        rows = list(cql.execute(
+            f"SELECT id FROM {table} "
+            f"WHERE ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) > 0.025 "
+            f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 4"))
+
+        # Only rows with VS scores > 0.025 survive; order is VS order (reversed).
+        expected = list(reversed(data))[:2]
+        assert [row.id for row in rows] == [d_row.id for d_row in expected]
+        assert len(rows[0]) == 1
+
+    # With rescoring: filter by rescored similarity.
+    # Computed similarities: id1=1.0, id2=0.97, id3=0.81, id4=0.76.
+    # Threshold > 0.9 should keep only id=1 (1.0) and id=2 (0.97).
+    with rescoring_test_table(cql, test_keyspace, data) as table:
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        rows = list(cql.execute(
+            f"SELECT id FROM {table} "
+            f"WHERE ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) > 0.9 "
+            f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 4"))
+
+        # Only rows with rescored similarity > 0.9 survive, in rescored order.
+        assert [row.id for row in rows] == [1, 2]
+        assert len(rows[0]) == 1
