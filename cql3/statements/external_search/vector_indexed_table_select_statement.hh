@@ -85,6 +85,10 @@ private:
     future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> query_base_table(query_processor& qp, service::query_state& state,
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
             std::vector<dht::partition_range> partition_ranges) const;
+
+    bool needs_post_filtering() const override {
+        return false; // All filtering is done by the index query, so no post-filtering is allowed.
+    }
 };
 
 } // namespace cql3::statements

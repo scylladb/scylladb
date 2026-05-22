@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from itertools import combinations
 import json
 import threading
 
@@ -256,3 +257,46 @@ def test_vector_search_no_paging_warning_when_limit_less_than_page_size(cql, tes
             f"SELECT * FROM {table} ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5", fetch_size=100))
 
         assert not result.response_future.warnings
+
+# Vector Search allows filtering on partition and clustering key columns in any combination.
+# It also assumes responsibility for filtering, so post-filtering in the coordinator is not allowed:
+# only selected columns are retrieved from the base table, and remaining columns are unavailable for filtering.
+# 
+# This test verifies all the combinations of partition key and clustering key columns filtering.
+# It reproduces bugs from when post filtering was not disabled in general and the normal filtering logic was used.
+# In that case some combinations triggered post-filtering, which failed or crashed (on primary key columns)
+# due to missing columns in the SELECT result set.
+#
+# Reproduces SCYLLADB-2737 (all cases without pk1 or pk2)
+def test_vector_search_ann_with_restricted_key_column_not_selected(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+
+    schema = "pk1 tinyint, pk2 tinyint, ck1 tinyint, ck2 tinyint, category int, embedding vector<float, 3>, PRIMARY KEY ((pk1, pk2), ck1, ck2)"
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(
+            f"CREATE CUSTOM INDEX {index_name} ON {table}(embedding) USING 'vector_index'")
+        cql.execute(
+            f"INSERT INTO {table} (pk1, pk2, ck1, ck2, category, embedding) VALUES (5, 7, 9, 1, 7, [0.1, 0.2, 0.3])")
+        cql.execute(
+            f"INSERT INTO {table} (pk1, pk2, ck1, ck2, category, embedding) VALUES (5, 7, 9, 2, 8, [0.1, 0.2, 0.3])")
+        vector_store_mock.set_next_ann_response(200, json.dumps({
+            "primary_keys": {"pk1": [5, 5], "pk2": [7, 7], "ck1": [9, 9], "ck2": [2, 1]},
+            "similarity_scores": [0.2, 0.1],
+        }))
+
+        restriction_tokens = [
+            "pk1 = 5",
+            "pk2 = 7",
+            "ck1 = 9",
+            "ck2 IN (1, 2)",
+        ]
+
+        for size in range(1, len(restriction_tokens) + 1):
+            for subset in combinations(restriction_tokens, size):
+                where_clause = " AND ".join(subset)
+                print(f"Testing ANN query with restrictions: {where_clause}")
+                result = cql.execute(
+                    f"SELECT category FROM {table} WHERE {where_clause} ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2")
+
+                assert list(result) == [(8,), (7,)]
