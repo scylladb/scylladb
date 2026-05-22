@@ -165,6 +165,70 @@ SEASTAR_TEST_CASE(test_querying_with_consumer) {
     });
 }
 
+/*
+ * Regression test for PR #30011 (paszkow's review comment).
+ *
+ * With utils::small_vector, moving a query_options that holds bind values in
+ * inline SBO storage copies those values to a new address, invalidating any
+ * raw_value_view that was pointing into the old buffer.  The two paging-
+ * continuation constructors:
+ *
+ *   query_options(unique_ptr<query_options>, paging_state)
+ *   query_options(unique_ptr<query_options>, paging_state, page_size)
+ *
+ * were delegating to the 8-arg constructor, passing _values and _value_views
+ * independently.  _value_views came from the moved-from object's inline
+ * storage and became stale pointers.  This is the same class of bug that
+ * corrupted tablet metadata read on the second page in read_tablet_metadata()
+ * (page_size=1000, `WHERE table_id = ?`).
+ *
+ * The fix routes through raw_value_vector_with_unset, which calls
+ * fill_value_views() after _values settles at its new address.
+ *
+ * Test: force multiple pages of query_internal() with a bind variable,
+ * verify every row on every page has the correct value.
+ */
+SEASTAR_TEST_CASE(test_paged_internal_query_with_bind_variable) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // Table with a clustering column so one partition can span many rows.
+        e.execute_cql("CREATE TABLE ks.paged_bind (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+
+        // Insert 25 rows under pk=0 (we'll page with page_size=10 -> 3 pages).
+        const int row_count = 25;
+        int expected_sum = 0;
+        for (int i = 0; i < row_count; ++i) {
+            expected_sum += i;
+            e.local_qp().execute_internal(
+                "INSERT INTO ks.paged_bind (pk, ck, v) VALUES (?, ?, ?)",
+                {0, i, i},
+                cql3::query_processor::cache_internal::yes).get();
+        }
+        // Insert a decoy row in a different partition to confirm the WHERE
+        // clause is actually honoured across pages.
+        e.local_qp().execute_internal(
+            "INSERT INTO ks.paged_bind (pk, ck, v) VALUES (?, ?, ?)",
+            {1, 0, 999},
+            cql3::query_processor::cache_internal::yes).get();
+
+        int rows_seen = 0;
+        int sum_seen = 0;
+        // page_size=10 forces 3 paging rounds; the bind value is the bug trigger.
+        e.local_qp().query_internal(
+            "SELECT * FROM ks.paged_bind WHERE pk = ?",
+            db::consistency_level::ONE,
+            {data_value(0)},
+            10,
+            [&rows_seen, &sum_seen](const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+                ++rows_seen;
+                sum_seen += row.get_as<int>("v");
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            }).get();
+
+        BOOST_CHECK_EQUAL(rows_seen, row_count);
+        BOOST_CHECK_EQUAL(sum_seen, expected_sum);
+    });
+}
+
 namespace {
 
 using clevel = db::consistency_level;
