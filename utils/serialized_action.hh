@@ -9,6 +9,7 @@
 #pragma once
 
 #include <functional>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_future.hh>
@@ -25,6 +26,7 @@ private:
     std::function<future<>()> _func;
     seastar::shared_future<> _pending;
     seastar::semaphore _sem;
+    bool _join_called = false;
 private:
     future<> do_trigger() {
         _pending = {};
@@ -46,6 +48,9 @@ public:
     // When action is not currently running, it is started immediately if !later or
     // at some point in time soon after current fiber defers when later is true.
     future<> trigger(bool later = false, seastar::abort_source* as = nullptr) {
+        if (_join_called) {
+            return seastar::make_exception_future<>(seastar::broken_semaphore());
+        }
         if (_pending.valid()) {
             return as ? _pending.get_future(*as) : _pending.get_future();
         }
@@ -98,9 +103,12 @@ public:
         return trigger(true);
     }
 
-    // Waits for all invocations initiated in the past.
+    // Waits for all invocations initiated in the past, including
+    // those pending in the queue at the time of the call.
     future<> join() {
-        return get_units(_sem, 1).discard_result();
+        _join_called = true;
+        auto units = co_await get_units(_sem, 1);
+        _sem.broken();
     }
 
     // The adaptor is to be used as an argument to utils::observable.observe()
@@ -117,7 +125,11 @@ public:
 
     public:
         template <typename... Args>
-        void operator()(Args&&...) { (void)_action.trigger(); };
+        void operator()(Args&&...) {
+            (void)_action.trigger().handle_exception_type([] (const seastar::broken_semaphore&) {
+                // Avoid an ignored exceptional future warning for notifications after join() starts.
+            });
+        };
     };
 
     observing_adaptor make_observer() noexcept {
