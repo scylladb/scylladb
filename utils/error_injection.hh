@@ -150,13 +150,8 @@ class error_injection {
     struct injection_shared_data {
         size_t received_message_count{0};
         size_t shared_read_message_count{0};
-<<<<<<< HEAD
-||||||| parent of 984a47fd71 (error_injection: release waiters when injection is disabled)
-        size_t waiter_count{0};
-=======
         size_t waiter_count{0};
         bool disabled{false};
->>>>>>> 984a47fd71 (error_injection: release waiters when injection is disabled)
         condition_variable received_message_cv;
         error_injection_parameters parameters;
         sstring injection_name;

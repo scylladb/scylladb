@@ -302,14 +302,7 @@ private:
     class cancellable_write_handlers_list;
     std::unique_ptr<cancellable_write_handlers_list> _cancellable_write_handlers_list;
 
-<<<<<<< HEAD
-||||||| parent of dc40fc94fd (storage_service: cancel write handlers during drain to prevent shutdown deadlock)
     gate _write_handlers_gate;
-
-=======
-    std::unique_ptr<gate> _write_handlers_gate = std::make_unique<gate>();
-
->>>>>>> dc40fc94fd (storage_service: cancel write handlers during drain to prevent shutdown deadlock)
     /* This is a pointer to the shard-local part of the sharded cdc_service:
      * storage_proxy needs access to cdc_service to augment mutations.
      *
@@ -531,7 +524,8 @@ public:
     bool is_me(gms::inet_address addr) const noexcept;
     bool is_me(const locator::effective_replication_map& erm, locator::host_id id) const noexcept;
 
-    future<> cancel_all_write_response_handlers(bool allow_new);
+    future<> cancel_all_write_response_handlers();
+    future<> cancel_nonlocal_write_response_handlers();
 
 private:
     bool only_me(const locator::effective_replication_map& erm, const host_id_vector_replica_set& replicas) const noexcept;
