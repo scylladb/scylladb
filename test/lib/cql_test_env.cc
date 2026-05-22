@@ -1060,10 +1060,6 @@ private:
                 return raft_gr.start();
             }).get();
 
-            auto shutdown_db = defer_verbose_shutdown("database tables", [this] {
-                _db.invoke_on_all(&replica::database::shutdown).get();
-            });
-
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
 
             _paxos_store.start(std::ref(_sys_ks), std::ref(_feature_service), std::ref(_db), std::ref(_mm)).get();
@@ -1078,6 +1074,10 @@ private:
                 if (need) {
                     _proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
                 }
+            });
+
+            auto drain_db = defer_verbose_shutdown("database drain", [this] {
+                _db.invoke_on_all(&replica::database::drain).get();
             });
 
             _sl_controller.invoke_on_all([this, &group0_client] (qos::service_level_controller& service) {
