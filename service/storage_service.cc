@@ -5715,7 +5715,12 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     }
 
     // Refresh is triggered after table creation, need to make sure we see the new tablets.
-    co_await _group0->group0_server().read_barrier(&_group0_as);
+    // Hold the group0 gate to prevent abort_and_drain() from destroying the
+    // raft server while read_barrier() is in flight (SCYLLADB-2071).
+    {
+        auto group0_holder = _group0->hold_group0_gate();
+        co_await _group0->group0_server().read_barrier(&_group0_as);
+    }
 
     using table_ids_t = std::unordered_set<table_id>;
     const auto table_ids = co_await std::invoke([this] () -> future<table_ids_t> {
