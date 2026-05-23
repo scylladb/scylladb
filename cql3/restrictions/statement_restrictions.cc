@@ -1210,8 +1210,12 @@ statement_restrictions::statement_restrictions(private_tag,
         const expr::allow_local_index allow_local_for_idx(
                 !has_partition_key_unrestricted_components()
                 && partition_key_restrictions_is_all_eq());
-        std::tie(_idx_opt, _idx_restrictions) = do_find_idx(
+        auto [idx_found, idx_restrictions] = do_find_idx(
                 _uses_secondary_indexing, sim, search_groups, allow_local_for_idx);
+        if (idx_found) {
+            _idx_opt = std::make_unique<secondary_index::index>(std::move(*idx_found));
+        }
+        _idx_restrictions = std::move(idx_restrictions);
     }
 
     calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db, sc_pk_pred_vectors, sc_ck_pred_vectors, sc_nonpk_pred_vectors);
@@ -1429,7 +1433,7 @@ static std::pair<std::optional<secondary_index::index>, expr::expression> do_fin
 
 std::pair<std::optional<secondary_index::index>, expr::expression>
 statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
-    return {_idx_opt, _idx_restrictions};
+    return {_idx_opt ? std::optional<secondary_index::index>(*_idx_opt) : std::nullopt, _idx_restrictions};
 }
 
 bool statement_restrictions::has_eq_restriction_on_column(const column_definition& column) const {
@@ -1448,8 +1452,8 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         std::optional<secondary_index::index> opt_idx;
-        if (_check_indexes) {
-            opt_idx = _idx_opt;
+        if (_check_indexes && _idx_opt) {
+            opt_idx = *_idx_opt;
         }
         auto column_uses_indexing = [&opt_idx] (const single_column_predicate_vectors& pred_vectors,
                                                 const column_definition* cdef) {

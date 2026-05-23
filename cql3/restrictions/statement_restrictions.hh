@@ -222,7 +222,7 @@ private:
     std::unordered_set<const column_definition*> _columns_with_eq;
     std::vector<const column_definition*> _column_defs_for_filtering;
     schema_ptr _view_schema;
-    std::optional<secondary_index::index> _idx_opt;
+    std::unique_ptr<secondary_index::index> _idx_opt;
     expr::expression _idx_restrictions = expr::conjunction({});
     get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
     get_clustering_bounds_fn_t _get_clustering_bounds_fn;
