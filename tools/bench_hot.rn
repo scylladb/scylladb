@@ -1,0 +1,30 @@
+const ROW_COUNT = latte::param!("row_count", 60000);
+
+// Zipfian exponent: higher = more skewed. 0.8 gives ~80/20 distribution
+// where ~20% of keys receive ~80% of accesses.
+const ZIPF_EXPONENT = latte::param!("zipf_exponent", 0.8);
+
+pub async fn schema(ctx) {
+    ctx.execute("CREATE TABLE IF NOT EXISTS bench_hot.data (pk bigint PRIMARY KEY, payload blob)").await?;
+}
+pub async fn erase(ctx) {
+    ctx.execute("TRUNCATE TABLE bench_hot.data").await?;
+}
+pub async fn prepare(ctx) {
+    ctx.load_cycle_count = ROW_COUNT;
+    ctx.prepare("insert", "INSERT INTO bench_hot.data (pk, payload) VALUES (?, ?)").await?;
+    ctx.prepare("read", "SELECT * FROM bench_hot.data WHERE pk = ?").await?;
+}
+pub async fn load(ctx, i) {
+    let payload = latte::blob(i, 1024);
+    ctx.execute_prepared("insert", [i, payload]).await?;
+}
+pub async fn run(ctx, i) {
+    // Zipfian via inverse-CDF power law:
+    // Map hash to uniform (0,1], then pk = floor(N * u^(1/(1-s)))
+    // where s = ZIPF_EXPONENT. This concentrates accesses on low-numbered keys.
+    let h = latte::hash(i);
+    let uniform = ((h % 1000000) + 1) as f64 / 1000001.0;
+    let pk = (ROW_COUNT as f64 * uniform.powf(1.0 / (1.0 - ZIPF_EXPONENT))) as i64 % ROW_COUNT;
+    ctx.execute_prepared("read", [pk]).await?;
+}

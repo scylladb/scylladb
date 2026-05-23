@@ -1,0 +1,875 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "Cache Metrics",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "collapsed": false,
+      "id": 1
+    },
+    {
+      "title": "Cache Hit Rate",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_row_hits[30s]) / (rate(scylla_cache_row_hits[30s]) + rate(scylla_cache_row_misses[30s]))",
+          "legendFormat": "row hit rate"
+        },
+        {
+          "expr": "rate(scylla_cache_partition_hits[30s]) / (rate(scylla_cache_partition_hits[30s]) + rate(scylla_cache_partition_misses[30s]))",
+          "legendFormat": "partition hit rate"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "id": 2
+    },
+    {
+      "title": "Cache Hits & Misses (rate/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_row_hits[30s])",
+          "legendFormat": "row hits/s"
+        },
+        {
+          "expr": "rate(scylla_cache_row_misses[30s])",
+          "legendFormat": "row misses/s"
+        }
+      ],
+      "id": 3
+    },
+    {
+      "title": "Cache Occupancy (rows)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "scylla_cache_row_count",
+          "legendFormat": "cached_rows"
+        }
+      ],
+      "id": 4
+    },
+    {
+      "title": "Cache Memory Usage",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "scylla_cache_bytes_used",
+          "legendFormat": "bytes_used"
+        },
+        {
+          "expr": "scylla_cache_bytes_total",
+          "legendFormat": "bytes_total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      },
+      "id": 5
+    },
+    {
+      "title": "ScyllaDB Read Latency (coordinator)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, rate(scylla_storage_proxy_coordinator_read_latency_bucket[30s]))",
+          "legendFormat": "p99"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(scylla_storage_proxy_coordinator_read_latency_bucket[30s]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.50, rate(scylla_storage_proxy_coordinator_read_latency_bucket[30s]))",
+          "legendFormat": "p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "\u00b5s"
+        }
+      },
+      "id": 6
+    },
+    {
+      "title": "CQL Requests / Second",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "rate(scylla_transport_requests_served[30s])",
+          "legendFormat": "cql_requests/s"
+        },
+        {
+          "expr": "rate(scylla_storage_proxy_coordinator_reads_local_node[30s])",
+          "legendFormat": "local_reads/s"
+        }
+      ],
+      "id": 7
+    },
+    {
+      "title": "Per-Workload Metrics (from Latte)",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "collapsed": false,
+      "id": 8
+    },
+    {
+      "title": "Throughput by Workload (ops/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "latte_throughput_ops{workload=\"hot_zipfian\"}",
+          "legendFormat": "hot (zipfian)"
+        },
+        {
+          "expr": "latte_throughput_ops{workload=\"scan\"}",
+          "legendFormat": "scan"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        }
+      },
+      "id": 9
+    },
+    {
+      "title": "Latency p99 by Workload (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "latte_latency_ms{workload=\"hot_zipfian\", quantile=\"99\"}",
+          "legendFormat": "hot (zipfian) p99"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"scan\", quantile=\"99\"}",
+          "legendFormat": "scan p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        }
+      },
+      "id": 10
+    },
+    {
+      "title": "Latency p50 by Workload (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "latte_latency_ms{workload=\"hot_zipfian\", quantile=\"50\"}",
+          "legendFormat": "hot (zipfian) p50"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"scan\", quantile=\"50\"}",
+          "legendFormat": "scan p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        }
+      },
+      "id": 11
+    },
+    {
+      "title": "Latency p95 by Workload (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "latte_latency_ms{workload=\"hot_zipfian\", quantile=\"95\"}",
+          "legendFormat": "hot (zipfian) p95"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"scan\", quantile=\"95\"}",
+          "legendFormat": "scan p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        }
+      },
+      "id": 12
+    },
+    {
+      "title": "Latency All Percentiles - Hot Zipfian (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "latte_latency_ms{workload=\"hot_zipfian\", quantile=\"50\"}",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"hot_zipfian\", quantile=\"75\"}",
+          "legendFormat": "p75"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"hot_zipfian\", quantile=\"90\"}",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"hot_zipfian\", quantile=\"95\"}",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"hot_zipfian\", quantile=\"99\"}",
+          "legendFormat": "p99"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"hot_zipfian\", quantile=\"99.9\"}",
+          "legendFormat": "p99.9"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        }
+      },
+      "id": 13
+    },
+    {
+      "title": "Latency All Percentiles - Scan (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 42
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "latte_latency_ms{workload=\"scan\", quantile=\"50\"}",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"scan\", quantile=\"75\"}",
+          "legendFormat": "p75"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"scan\", quantile=\"90\"}",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"scan\", quantile=\"95\"}",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"scan\", quantile=\"99\"}",
+          "legendFormat": "p99"
+        },
+        {
+          "expr": "latte_latency_ms{workload=\"scan\", quantile=\"99.9\"}",
+          "legendFormat": "p99.9"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        }
+      },
+      "id": 14
+    },
+    {
+      "title": "Per-Keyspace Cache Metrics",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "collapsed": false,
+      "id": 15
+    },
+    {
+      "title": "Cache Hit Rate by Keyspace",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "rate(scylla_column_family_cache_row_hits{ks=\"bench_hot\"}[30s]) / (rate(scylla_column_family_cache_row_hits{ks=\"bench_hot\"}[30s]) + rate(scylla_column_family_cache_row_misses{ks=\"bench_hot\"}[30s]))",
+          "legendFormat": "hot (bench_hot)"
+        },
+        {
+          "expr": "rate(scylla_column_family_cache_row_hits{ks=\"bench_scan\"}[30s]) / (rate(scylla_column_family_cache_row_hits{ks=\"bench_scan\"}[30s]) + rate(scylla_column_family_cache_row_misses{ks=\"bench_scan\"}[30s]))",
+          "legendFormat": "scan (bench_scan)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "id": 16
+    },
+    {
+      "title": "Cache Hits & Misses by Keyspace (rate/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "rate(scylla_column_family_cache_row_hits{ks=\"bench_hot\"}[30s])",
+          "legendFormat": "hot hits/s"
+        },
+        {
+          "expr": "rate(scylla_column_family_cache_row_misses{ks=\"bench_hot\"}[30s])",
+          "legendFormat": "hot misses/s"
+        },
+        {
+          "expr": "rate(scylla_column_family_cache_row_hits{ks=\"bench_scan\"}[30s])",
+          "legendFormat": "scan hits/s"
+        },
+        {
+          "expr": "rate(scylla_column_family_cache_row_misses{ks=\"bench_scan\"}[30s])",
+          "legendFormat": "scan misses/s"
+        }
+      ],
+      "id": 17
+    },
+    {
+      "title": "W-TinyLFU Internals",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 59
+      },
+      "collapsed": true,
+      "id": 18,
+      "panels": []
+    },
+    {
+      "title": "Segment Sizes",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 60
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "P1809F7CD0C75ACF3"
+      },
+      "targets": [
+        {
+          "expr": "scylla_cache_tinylfu_window_size{instance=\"scylla-bench\"}",
+          "legendFormat": "Window",
+          "refId": "A"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_probation_size{instance=\"scylla-bench\"}",
+          "legendFormat": "Probation",
+          "refId": "B"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_protected_size{instance=\"scylla-bench\"}",
+          "legendFormat": "Protected",
+          "refId": "C"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_max_window_size{instance=\"scylla-bench\"}",
+          "legendFormat": "Max Window",
+          "refId": "D"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_max_protected_size{instance=\"scylla-bench\"}",
+          "legendFormat": "Max Protected",
+          "refId": "E"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 20
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Max Window"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [10, 10]
+                }
+              },
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Max Protected"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [10, 10]
+                }
+              },
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "id": 19
+    },
+    {
+      "title": "Admission Gate (rate/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 68
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "P1809F7CD0C75ACF3"
+      },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_tinylfu_admissions{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Admissions",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_rejections{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Rejections",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_direct_evictions{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Direct Evictions (no gate)",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_jitter_admissions{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Jitter Admissions (hash-DoS)",
+          "refId": "D"
+        }
+      ],
+      "id": 20
+    },
+    {
+      "title": "Admission Rate %",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 68
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "P1809F7CD0C75ACF3"
+      },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_tinylfu_admissions{instance=\"scylla-bench\"}[30s]) / (rate(scylla_cache_tinylfu_admissions{instance=\"scylla-bench\"}[30s]) + rate(scylla_cache_tinylfu_rejections{instance=\"scylla-bench\"}[30s]))",
+          "legendFormat": "Admission Rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "id": 21
+    },
+    {
+      "title": "Avg Sketch Frequency by Segment",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 76
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "P1809F7CD0C75ACF3"
+      },
+      "targets": [
+        {
+          "expr": "scylla_cache_tinylfu_avg_freq_window{instance=\"scylla-bench\"}",
+          "legendFormat": "Window",
+          "refId": "A"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_avg_freq_probation{instance=\"scylla-bench\"}",
+          "legendFormat": "Probation",
+          "refId": "B"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_avg_freq_protected{instance=\"scylla-bench\"}",
+          "legendFormat": "Protected",
+          "refId": "C"
+        }
+      ],
+      "id": 22
+    },
+    {
+      "title": "Admission Frequency Distribution (rate/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 76
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "P1809F7CD0C75ACF3"
+      },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_tinylfu_admission_freq_0_1{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "freq 0-1",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_admission_freq_2_3{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "freq 2-3",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_admission_freq_4_7{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "freq 4-7",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_admission_freq_8_15{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "freq 8-15",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 20
+          }
+        }
+      },
+      "id": 23
+    },
+    {
+      "title": "Segment Flow (rate/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 84
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "P1809F7CD0C75ACF3"
+      },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_tinylfu_protected_promotions{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Promotions (prob\u2192prot)",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_protected_demotions{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Demotions (prot\u2192prob)",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_window_to_probation{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Window\u2192Probation",
+          "refId": "C"
+        }
+      ],
+      "id": 24
+    },
+    {
+      "title": "Sketch Aging",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 84
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "P1809F7CD0C75ACF3"
+      },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_tinylfu_sketch_resets{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Resets/s",
+          "refId": "A"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_sample_count{instance=\"scylla-bench\"} / scylla_cache_tinylfu_sample_threshold{instance=\"scylla-bench\"}",
+          "legendFormat": "Reset Progress",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Reset Progress"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "id": 25
+    },
+    {
+      "title": "LSA Eviction Pressure",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "P1809F7CD0C75ACF3"
+      },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_tinylfu_eviction_calls{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Eviction Calls/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(scylla_lsa_memory_evicted{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Bytes Evicted/s",
+          "refId": "B"
+        },
+        {
+          "expr": "scylla_lsa_occupancy{instance=\"scylla-bench\"}",
+          "legendFormat": "LSA Occupancy",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_eviction_calls_empty{instance=\"scylla-bench\"}[30s])",
+          "legendFormat": "Empty Eviction Calls/s",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Bytes Evicted/s"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          }
+        ]
+      },
+      "id": 26
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "scylladb",
+    "benchmark",
+    "wtinylfu"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "ScyllaDB W-TinyLFU Benchmark",
+  "uid": "scylla-bench-wtinylfu",
+  "version": 2
+}

@@ -1,0 +1,230 @@
+# W-TinyLFU Cache Benchmark Configuration
+# =========================================
+# Used by tools/run_bench.sh and tools/gen_bench_report.py
+# Latte workload scripts: tools/bench_hot.rn, tools/bench_scan.rn
+#
+# To run:  bash tools/run_bench.sh
+# Report:  python3 tools/gen_bench_report.py
+
+# --- ScyllaDB instance ---
+scylla:
+  binary: ./build/release/scylla       # path to scylla binary (run via dbuild)
+  memory: 256M                          # total memory per instance
+  smp: 1                                # number of shards
+  api_port: 10000                       # REST API port
+  cql_port: 9042                        # CQL native transport port
+  prometheus_port: 9180                  # Prometheus metrics port
+  developer_mode: true
+  extra_args: --overprovisioned --default-log-level warn
+
+# --- Data / schema ---
+# Each workload uses its own keyspace for per-table cache metric isolation.
+replication:
+  class: SimpleStrategy
+  replication_factor: 1
+
+# --- Workloads ---
+workloads:
+  hot:
+    description: >
+      Hot-set reads with Zipfian distribution. Keys are chosen via
+      inverse-CDF power law (exponent 0.8), concentrating ~80% of
+      accesses on ~20% of keys. Each row carries a 1 KB blob payload.
+    script: tools/bench_hot.rn
+    keyspace: bench_hot
+    table: bench_hot.data
+    row_count: 60000                    # number of distinct keys
+    payload_bytes: 1024                 # blob size per row
+    access_pattern: zipfian             # power-law skew (exponent 0.8)
+
+  scan:
+    description: >
+      Sequential-scan reads. Keys are chosen with i % row_count,
+      cycling through all keys in order. Simulates a full-table scan
+      or analytics workload that touches every row once per pass.
+    script: tools/bench_scan.rn
+    keyspace: bench_scan
+    table: bench_scan.data
+    row_count: 300000                   # 5x the hot set
+    payload_bytes: 1024
+    access_pattern: sequential          # i % row_count (round-robin)
+
+# --- Benchmark phases ---
+phases:
+  warmup:
+    description: Hot-only reads to populate cache before the attack.
+    workload: hot
+    duration: 60s
+    rate: 15000                          # requests/s
+
+  attack:
+    description: >
+      Hot + scan running in parallel. The scan stream creates eviction
+      pressure; a good cache policy protects the hot set.
+    workloads: [hot, scan]              # run concurrently
+    duration: 240s
+    hot_rate: 10000                      # hot requests/s
+    scan_rate: 20000                     # scan requests/s (2x hot for eviction pressure)
+
+# --- W-TinyLFU configurations to compare ---
+# Each config restarts ScyllaDB with a clean data directory.
+configs:
+  - label: w1
+    window_fraction: 0.01               # 1% window, 99% SLRU (frequency-dominant)
+
+  - label: w99
+    window_fraction: 0.99               # 99% window ≈ pure LRU
+
+# --- Metrics collected ---
+# Gathered from Prometheus (http://localhost:9180/metrics) between phases.
+#
+# Global cache metrics (aggregated across all tables):
+metrics:
+  - scylla_cache_row_hits               # cumulative cache hits
+  - scylla_cache_row_misses             # cumulative cache misses
+  - scylla_cache_bytes_used             # current cache memory usage
+  - scylla_cache_bytes_total            # cache memory capacity
+  - scylla_cache_partitions             # cached partition count
+  - scylla_cache_tinylfu_admissions
+  - scylla_cache_tinylfu_rejections
+  - scylla_cache_tinylfu_direct_evictions
+  - scylla_cache_tinylfu_window_size
+  - scylla_cache_tinylfu_probation_size
+  - scylla_cache_tinylfu_protected_size
+
+# Per-table cache metrics (added in a separate commit for easy removal).
+# These use {ks="bench_hot"} / {ks="bench_scan"} labels to isolate
+# per-workload hit rates:
+per_table_metrics:
+  - scylla_column_family_cache_row_hits
+  - scylla_column_family_cache_row_misses
+  - scylla_column_family_cache_partition_hits
+  - scylla_column_family_cache_partition_misses
+
+# Latency percentiles are extracted from latte's output (cycle latency).
+latency_percentiles: [p50, p90, p99, p99.9, max]
+
+# --- Monitoring stack ---
+# Started automatically by run_bench.sh before the first test.
+# docker-compose file: .bench/monitoring/docker-compose.yml
+monitoring:
+  docker_compose: .bench/monitoring/docker-compose.yml
+  grafana:
+    url: http://localhost:3000
+    user: admin
+    password: admin
+    # Renderer is grafana-image-renderer sidecar on port 8081
+    renderer_url: http://localhost:8081/render
+    # Dashboard to capture snapshots from (uid from grafana-dashboard.json)
+    dashboard_uid: scylla-bench-wtinylfu
+    dashboard_title: ScyllaDB W-TinyLFU Benchmark
+  prometheus:
+    url: http://localhost:9090
+
+# --- Grafana snapshots ---
+# After each phase, the benchmark captures PNG snapshots of selected
+# Grafana panels. The snapshots cover the time window of that phase
+# and are embedded in the final HTML report.
+#
+# Each entry maps a logical name → Grafana panel ID (from grafana-dashboard.json).
+# The panel IDs are stable across runs because the dashboard JSON is provisioned.
+snapshots:
+  settle_seconds: 15                    # wait for Prometheus to scrape + Grafana to render
+  width: 1000                           # image width in pixels
+  height: 500                           # image height in pixels
+  panels:
+    - name: cache_hit_rate
+      panel_id: 2                       # "Cache Hit Rate" panel
+      title: Cache Hit Rate
+
+    - name: cache_hits_misses
+      panel_id: 3                       # "Cache Hits & Misses (rate/s)"
+      title: Cache Hits & Misses (rate/s)
+
+    - name: cache_occupancy
+      panel_id: 4                       # "Cache Occupancy (rows)"
+      title: Cache Occupancy
+
+    - name: cache_memory
+      panel_id: 5                       # "Cache Memory Usage"
+      title: Cache Memory Usage
+
+    - name: read_latency
+      panel_id: 6                       # "ScyllaDB Read Latency (coordinator)"
+      title: Read Latency (p50 / p95 / p99)
+
+    - name: cql_throughput
+      panel_id: 7                       # "CQL Requests / Second"
+      title: CQL Throughput
+
+    - name: cache_hit_rate_per_ks
+      panel_id: 16                      # "Cache Hit Rate by Keyspace"
+      title: Cache Hit Rate by Keyspace (hot vs scan)
+
+    - name: cache_hits_misses_per_ks
+      panel_id: 17                      # "Cache Hits & Misses by Keyspace (rate/s)"
+      title: Cache Hits & Misses by Keyspace
+
+    - name: tinylfu_segment_sizes
+      panel_id: 19
+      title: W-TinyLFU Segment Sizes
+
+    - name: tinylfu_admission_gate
+      panel_id: 20
+      title: Admission Gate (rate/s)
+
+    - name: tinylfu_admission_rate
+      panel_id: 21
+      title: Admission Rate %
+
+    - name: tinylfu_avg_frequency
+      panel_id: 22
+      title: Avg Sketch Frequency by Segment
+
+    - name: tinylfu_freq_distribution
+      panel_id: 23
+      title: Admission Frequency Distribution
+
+    - name: tinylfu_segment_flow
+      panel_id: 24
+      title: Segment Flow (rate/s)
+
+    - name: tinylfu_sketch_aging
+      panel_id: 25
+      title: Sketch Aging
+
+    - name: tinylfu_lsa_eviction
+      panel_id: 26
+      title: LSA Eviction Pressure
+
+# --- Output ---
+results_dir: .bench/results             # per-config subdirs: w1/, w50/, w99/
+report: docs/dev/wtinylfu_real_benchmark_results.html
+
+# Snapshot files are saved as:
+#   <results_dir>/<label>/snapshots/<panel_name>_<phase>.png
+# For example:
+#   .bench/results/w1/snapshots/cache_hit_rate_warmup.png
+#   .bench/results/w1/snapshots/read_latency_attack.png
+
+# --- Notes for future runs ---
+# 1. With 512M memory the row cache is ~300 MB (~170k partition slots).
+#    The hot set (80k rows) fits comfortably; the scan set (500k) does not.
+#    Eviction pressure comes from the scan stream during the attack phase.
+#
+# 2. The hot workload uses uniform-random access (hash). A Zipfian
+#    distribution would amplify the difference between window sizes
+#    because frequently-accessed keys benefit more from frequency gating.
+#    To test Zipfian, change bench_hot.rn's run() to use a Zipfian
+#    generator once latte supports it, or pre-generate a weighted key list.
+#
+# 3. Hill climbing is disabled to isolate the effect of initial window size.
+#    attack duration (300s+) so the climber has time to converge.
+#
+# 4. The benchmark restarts ScyllaDB between configs to get a cold cache.
+#    An alternative is runtime adjustment via the REST API:
+#      POST /cache_service/tinylfu_initial_window_percent?value=50
+#    but this doesn't reset cached entries, so results carry over.
+#
+# 5. For more memory pressure, reduce scylla.memory to 256M or increase
+#    hot.row_count so the hot set exceeds cache capacity.

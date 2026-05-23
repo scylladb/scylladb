@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'scylladb'
+    static_configs:
+      - targets: ['127.0.0.1:9180']
+        labels:
+          instance: 'scylla-bench'
+          cluster: 'benchmark'
+
+  - job_name: 'latte'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['localhost:9091']

@@ -1,0 +1,38 @@
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: scylla-bench-prometheus
+    network_mode: host
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    # Prometheus on port 9090 (default)
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.listen-address=:9090'
+
+  renderer:
+    image: grafana/grafana-image-renderer:latest
+    container_name: scylla-bench-renderer
+    network_mode: host
+    environment:
+      - HTTP_PORT=8081
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: scylla-bench-grafana
+    network_mode: host
+    depends_on:
+      - renderer
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SERVER_HTTP_PORT=3000
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_RENDERING_SERVER_URL=http://localhost:8081/render
+      - GF_RENDERING_CALLBACK_URL=http://localhost:3000/
+      - GF_LOG_FILTERS=rendering:debug
+    volumes:
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./grafana-dashboard-provider.yml:/etc/grafana/provisioning/dashboards/provider.yml:ro
+      - ./grafana-dashboard.json:/var/lib/grafana/dashboards/benchmark/scylla-bench.json:ro
+      - ./dashboards:/var/lib/grafana/dashboards/scylladb:ro

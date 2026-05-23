@@ -1,0 +1,21 @@
+const ROW_COUNT = latte::param!("row_count", 300000);
+
+pub async fn schema(ctx) {
+    ctx.execute("CREATE TABLE IF NOT EXISTS bench_scan.data (pk bigint PRIMARY KEY, payload blob)").await?;
+}
+pub async fn erase(ctx) {
+    ctx.execute("TRUNCATE TABLE bench_scan.data").await?;
+}
+pub async fn prepare(ctx) {
+    ctx.load_cycle_count = ROW_COUNT;
+    ctx.prepare("insert", "INSERT INTO bench_scan.data (pk, payload) VALUES (?, ?)").await?;
+    ctx.prepare("read", "SELECT * FROM bench_scan.data WHERE pk = ?").await?;
+}
+pub async fn load(ctx, i) {
+    let payload = latte::blob(i, 1024);
+    ctx.execute_prepared("insert", [i, payload]).await?;
+}
+pub async fn run(ctx, i) {
+    let pk = i % ROW_COUNT;
+    ctx.execute_prepared("read", [pk]).await?;
+}
