@@ -63,6 +63,37 @@ update_parameters::prefetch_data::prefetch_data(schema_ptr schema)
     , schema(schema)
 { }
 
+cql3::raw_value
+update_parameters::evaluate_on_prefetched_row(
+        const expr::expression& e, const partition_key& pkey, const clustering_key& ckey) const {
+    if (_prefetched.selection == nullptr) {
+        // No prefetched data available. Normally we won't get here, the
+        // caller should have called evaluate() in this case, not this function
+        return expr::evaluate(e, expr::evaluation_inputs{.options = &_options});
+    }
+    auto pkey_bytes = pkey.explode();
+    auto ckey_bytes = ckey.explode();
+    auto row = _prefetched.find_row(pkey, ckey);
+    if (row == nullptr) {
+        // Row is absent: treat all column references as null (SQL null-
+        // propagation semantics).
+        std::vector<managed_bytes_opt> empty_cells(_prefetched.selection->get_column_count(), std::nullopt);
+        return expr::evaluate(e, expr::evaluation_inputs{
+            .partition_key = pkey_bytes,
+            .clustering_key = ckey_bytes,
+            .static_and_regular_columns = empty_cells,
+            .selection = _prefetched.selection.get(),
+            .options = &_options,
+        });
+    }
+    return expr::evaluate(e, expr::evaluation_inputs{
+        .partition_key = pkey_bytes,
+        .clustering_key = ckey_bytes,
+        .static_and_regular_columns = row->cells,
+        .selection = _prefetched.selection.get(),
+        .options = &_options,
+    });
+}
 
 const update_parameters::prefetch_data::row*
 update_parameters::prefetch_data::find_row(const partition_key& pkey, const clustering_key& ckey) const {

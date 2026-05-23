@@ -168,6 +168,12 @@ public:
     std::optional<std::vector<std::pair<data_value, data_value>>>
     get_prefetched_list(const partition_key& pkey, const clustering_key& ckey, const column_definition& column) const;
 
+    // Evaluates expr against the prefetched row identified by (pkey, ckey).
+    // For efficiency, call this only when the expression references regular or
+    // static columns; for expressions that don't, call evaluate() directly.
+    cql3::raw_value evaluate_on_prefetched_row(
+        const expr::expression& expr, const partition_key& pkey, const clustering_key& ckey) const;
+
     static prefetch_data build_prefetch_data(schema_ptr schema, const query::result& query_result,
             const query::partition_slice& slice);
 };
