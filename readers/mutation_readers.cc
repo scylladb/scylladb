@@ -1424,13 +1424,13 @@ private:
     // Compacted stream
     bool _has_compacted_partition_start = false;
 
-private:
     void maybe_push_partition_start() {
         if (_has_compacted_partition_start) {
             push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(_last_uncompacted_partition_start)));
             _has_compacted_partition_start = false;
         }
     }
+public: // Needed for CompactedFragmentsConsumer concept
     void consume_new_partition(const dht::decorated_key& dk) {
         _has_compacted_partition_start = true;
         // We need to reset the partition's tombstone here. If the tombstone is
@@ -1464,6 +1464,7 @@ private:
     }
     void consume_end_of_stream() {
     }
+private:
     streamed_mutation::forwarding _fwd;
 
 public:
