@@ -64,9 +64,16 @@ future<service::group0_guard> view_building_coordinator::start_operation() {
 
 future<> view_building_coordinator::await_event() {
     _as.check();
+    // This injection is enabled by `view_building_coordinator_wait_before_await_event_after_starting_tasks` injection in `view_building_coordinator::work_on_view_building()`
+    co_await utils::get_local_injector().inject("view_building_coordinator_wait_before_await_event", utils::wait_for_message(5min));
     vbc_logger.debug("waiting for view building state machine event");
-    co_await _vb_sm.event.when();
+    if (!_remote_work_finished) {
+        // We missed a broadcast. If we waited on the condition variable,
+        // we'd get stuck for an indefinite amount of time. Prevent that.
+        co_await _vb_sm.event.when();
+    }
     vbc_logger.debug("event received");
+
 }
 
 future<> view_building_coordinator::commit_mutations(service::group0_guard guard, utils::chunked_vector<mutation> mutations, std::string_view description) {
@@ -114,6 +121,7 @@ future<> view_building_coordinator::run() {
         }
 
         bool sleep = false;
+        _remote_work_finished = false;
         try {
             auto guard_opt = co_await update_state(co_await start_operation());
             if (!guard_opt) {
@@ -394,6 +402,11 @@ future<> view_building_coordinator::work_on_view_building(service::group0_guard 
             vbc_logger.debug("Nothing to do for replica {}", replica);
         }
     }
+
+    if (utils::get_local_injector().enter("view_building_coordinator_wait_before_await_event_after_starting_tasks")) {
+        // `view_building_coordinator_wait_before_await_event` injection waits for a message before processing `view_building_coordinator::await_event()`
+        utils::get_local_injector().enable("view_building_coordinator_wait_before_await_event");
+    }
 }
 
 std::set<locator::tablet_replica> view_building_coordinator::get_replicas_with_tasks() {
@@ -497,6 +510,8 @@ future<std::optional<std::vector<utils::UUID>>> view_building_coordinator::work_
 
     if (rpc_failed) {
         co_await seastar::sleep(backoff_duration);
+        // Set `_remote_work_finished` to true in case the coordinator isn't waiting on the CV yet.
+        _remote_work_finished = true;
         _vb_sm.event.broadcast();
         co_return std::nullopt;
     }
@@ -507,6 +522,8 @@ future<std::optional<std::vector<utils::UUID>>> view_building_coordinator::work_
     auto lock = co_await get_shared_lock(_mutex);
     _finished_tasks.at(replica).insert_range(remote_results);
 
+    // Set `_remote_work_finished` to true in case the coordinator isn't waiting on the CV yet.
+    _remote_work_finished = true;
     _vb_sm.event.broadcast();
     co_return remote_results;
 }

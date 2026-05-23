@@ -1018,3 +1018,46 @@ async def test_all_good_on_node_restart(manager: ManagerClient):
     log = await manager.server_open_log(servers[0].server_id)
     warnings = await log.grep(expr="view_building_state_observer failed with")
     assert len(warnings) == 0, f"Found view building state observer warnings: {warnings}"
+
+# The test verifies that the coordinator doesn't get stuck when waiting
+# for an event even if view building tasks finish almost immediately.
+# To achieve this, the test needs to make sure that:
+# - the view building task is started and sent to the worker
+# - the task is finished - this triggers the broadcast on the CV
+# - the task cleaning fiber removes the finished task - this indirectly triggers broadcast on the CV by commiting to group0
+# before unpausing the coordinator (`view_building_coordinator_wait_before_await_event`)
+# Reproduces scylladb/scylladb#27298
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_coordinator_misses_cv_broadcast(manager: ManagerClient):
+    node_count = 1
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+
+        log = await manager.server_open_log(servers[0].server_id)
+        mark = await log.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event_after_starting_tasks", one_shot=True)
+        # At this point, the coordinator is waiting on the CV. 
+        # It will be awaken by creating the MV and it will start the work. 
+        # When the coordinator will schedule the first task, `view_building_coordinator_wait_before_await_event_after_starting_tasks` error injection
+        # will enable another `view_building_coordinator_wait_before_await_event` error injection, which will block the coordinator before awaiting the CV.
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        # Make sure that the coordinator is waiting on the error injection
+        await log.wait_for("view_building_coordinator_wait_before_await_event: waiting for message", from_mark=mark, timeout=60)
+
+        # Make sure that the `finished_task_gc_fiber()` removed the finished task. Without this commited mutation
+        # will wake up the coordinator.
+        # The log message differs depending on whether there are other alive tasks or not - although there is only one task,
+        # the regex matches both cases for safety.
+        await log.wait_for("[Rr]emoving.*finished task", from_mark=mark, timeout=60)
+
+        # Unpause the coordinator. This won't trigger a CV broadcast, reproducing the issue.
+        await manager.api.disable_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event_after_starting_tasks")
+        await manager.api.message_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event")
+        await manager.api.disable_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event")
+
+        await wait_for_view(cql, 'mv_cf_view', node_count)
