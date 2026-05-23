@@ -14,7 +14,7 @@ class mutation_fragment_v1_stream final {
     range_tombstone_assembler _rt_assembler;
     std::optional<clustering_row> _row;
 
-    friend class mutation_fragment_v2; // so it sees our consumer methods
+public:     // consume() methods need to be visible to concepts like MutationFragmentConsumerV2
     mutation_fragment_opt consume(static_row mf) {
         return wrap(std::move(mf));
     }
@@ -41,7 +41,7 @@ class mutation_fragment_v1_stream final {
         _rt_assembler.on_end_of_stream();
         return wrap(std::move(mf));
     }
-
+private:
     future<mutation_fragment_opt> read_from_underlying() {
         auto mfp = co_await _reader();
         if (!mfp) [[unlikely]] {
