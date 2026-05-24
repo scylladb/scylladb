@@ -5058,25 +5058,18 @@ BOOST_AUTO_TEST_CASE(evaluate_add_arbitrary_precision_no_overflow) {
         big_decimal(large_plus_one.c_str()));
 }
 
-// The decimal type offers unlimited precision, but adding two numbers with
-// wildly different magnitudes - like 1 and 1e100000000 can require allocating
-// a huge number of digits, takes a huge amount of time and potentially
-// run out of memory. The expected behavior is to refuse this operation.
-// Reproduces SCYLLADB-1576.
+// Adding two decimals with wildly different magnitudes (e.g. 1e100000000 + 1)
+// used to require allocating ~100 million digits and could OOM (SCYLLADB-1576).
+// The fix silently rounds the result to at most MAX_PRECISION (10000) significant
+// digits, so the operation now succeeds and returns 1e100000000 unchanged
+// (the 1 is too small to affect any of the 10000 significant digits).
 BOOST_AUTO_TEST_CASE(evaluate_add_large_magnitude) {
-    // SCYLLADB-1576: currently OOMs or churns CPU for a long time instead of
-    // throwing. Remove the next line when fixed.
-    return;
-
-    // 1e10000000 is stored compactly as (unscaled=1, scale=-100000000), but
-    // adding 1 to it forces alignment of decimal points, allocating 100 million
-    // digits and running out of memory.
     auto make_decimal = [](const char* s) -> constant {
         return constant(raw_value::make_value(managed_bytes(decimal_type->decompose(big_decimal(s)))), decimal_type);
     };
-    BOOST_REQUIRE_THROW(
-        eval_add(make_decimal("1e100000000"), make_decimal("1")),
-        exceptions::invalid_request_exception);
+    big_decimal result = raw_to<big_decimal>(
+        eval_add(make_decimal("1e100000000"), make_decimal("1")), decimal_type);
+    BOOST_REQUIRE_EQUAL(result.to_string(), big_decimal("1e100000000").to_string());
 }
 
 // Adding two different numeric types is currently not supported and should

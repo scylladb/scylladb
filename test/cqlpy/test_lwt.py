@@ -9,6 +9,9 @@
 #############################################################################
 
 import re
+import sys
+from decimal import Decimal
+
 import pytest
 from cassandra.protocol import InvalidRequest, SyntaxException
 
@@ -444,18 +447,70 @@ def test_lwt_counter_syntax_float_on_integer(cql, table1, scylla_only):
     with pytest.raises(TypeError):
         cql.execute(dec_stmt, [3.5, p, 1])
 
-# Test that trying to add "decimal" values with wildly different scales is
-# rejected with an error, not allowed to proceed with ridiculous amount of
-# CPU and memory usage. Reproduces SCYLLADB-1576.
-# This test needs to be skipped while SCYLLADB-1576 is not fixed, otherwise
-# it will cause the test suite to hang or crash.
-@pytest.mark.skip_bug(reason="SCYLLADB-1576: hangs or OOMs instead of rejecting")
+# Test that trying to add "decimal" values with wildly different scales
+# is silently truncated to limited precision. Following Cassandra's lead in
+# CASSANDRA-15232 we limit add's precision to 10,000 digits. If we didn't
+# limit the result's precision, adding 1 to 1e100000000 would cause the server
+# to try to allocate memory for 100 million digits.
+# Reproduces SCYLLADB-1576.
 def test_lwt_counter_syntax_decimal_magnitude_difference(cql, test_keyspace, scylla_only):
-    # 1e100000000 is stored compactly as (unscaled=1, scale=-100000000), but
-    # adding 1 to it forces alignment of decimal points, potentially allocating
-    # 100 million digits and running out of memory.
+    MAX_PRECISION = 10000
     with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, d decimal') as table:
         p = unique_key_int()
         cql.execute(f"INSERT INTO {table} (p, d) VALUES ({p}, 1e100000000)")
-        with pytest.raises(InvalidRequest):
+        cql.execute(f"UPDATE {table} SET d = d + 1 WHERE p = {p} IF EXISTS")
+        result = cql.execute(f"SELECT d FROM {table} WHERE p = {p}").one().d
+        # The 1 is insignificant compared to 1e100000000 at 10,000-digit precision.
+        assert result == Decimal('1E+100000000')
+
+# Let's expand on test_lwt_counter_syntax_decimal_magnitude_difference testing
+# more accurately how "SET r = r + 1" behaves with large decimal values.
+# We test that adding 1 to a decimal with fewer than MAX_PRECISION digits gives
+# an accurate result, and that adding 1 to a decimal with exactly MAX_PRECISION
+# digits silently loses the added 1 (truncated to MAX_PRECISION digits).
+# This is the LWT equivalent of test_decimal_add_precision in
+# test_type_decimal.py.
+# Reproduces SCYLLADB-1576.
+def test_lwt_counter_syntax_decimal_add_precision(cql, test_keyspace, scylla_only):
+    MAX_PRECISION = 10000
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, d decimal') as table:
+        old_limit = sys.get_int_max_str_digits()
+        sys.set_int_max_str_digits(MAX_PRECISION * 2)
+        try:
+            # 1e9999 + 1 produces the correct 10,000-digit result.
+            # 10,000 digits is exactly MAX_PRECISION, so no truncation happens.
+            p = unique_key_int()
+            cql.execute(f"INSERT INTO {table} (p, d) VALUES ({p}, 1e{MAX_PRECISION-1})")
             cql.execute(f"UPDATE {table} SET d = d + 1 WHERE p = {p} IF EXISTS")
+            result = cql.execute(f"SELECT d FROM {table} WHERE p = {p}").one().d
+            assert result == Decimal('1' + '0' * (MAX_PRECISION - 2) + '1')
+            # 1e10000 + 1 would have 10,001 digits of precision, but Scylla
+            # limits the precision to just 10,000 digits so the last digit will
+            # be zeroed out, and the result of the addition will be just 1e10000.
+            # Note that this truncation of the result is silent, it is not an error.
+            p = unique_key_int()
+            cql.execute(f"INSERT INTO {table} (p, d) VALUES ({p}, 1e{MAX_PRECISION})")
+            cql.execute(f"UPDATE {table} SET d = d + 1 WHERE p = {p} IF EXISTS")
+            result = cql.execute(f"SELECT d FROM {table} WHERE p = {p}").one().d
+            assert result == Decimal('1e' + str(MAX_PRECISION))
+            # Check that the "truncation" of extra digits is actually HALF_UP
+            # rounding: 1e10000 + 5 has 10001 digits (10000...005), the 10001st
+            # digit is 5, so HALF_UP rounds the 10000th digit (0) up to 1:
+            # result is 10000...010 (= 10^10000 + 10), not 10000...000 (= 10^10000).
+            # Note: HALF_EVEN would give 10^10000 here (0 is even), so this
+            # assertion specifically verifies Java's HALF_UP rounding mode.
+            p = unique_key_int()
+            cql.execute(f"INSERT INTO {table} (p, d) VALUES ({p}, 1e{MAX_PRECISION})")
+            cql.execute(f"UPDATE {table} SET d = d + 5 WHERE p = {p} IF EXISTS")
+            result = cql.execute(f"SELECT d FROM {table} WHERE p = {p}").one().d
+            assert result == Decimal('1' + '0' * (MAX_PRECISION - 2) + '10')
+            # For negative numbers, HALF_UP rounds away from zero (towards -inf),
+            # so -1e10000 - 5 = -(10^10000 + 5) rounds to -(10^10000 + 10),
+            # not -(10^10000).
+            p = unique_key_int()
+            cql.execute(f"INSERT INTO {table} (p, d) VALUES ({p}, -1e{MAX_PRECISION})")
+            cql.execute(f"UPDATE {table} SET d = d - 5 WHERE p = {p} IF EXISTS")
+            result = cql.execute(f"SELECT d FROM {table} WHERE p = {p}").one().d
+            assert result == Decimal('-1' + '0' * (MAX_PRECISION - 2) + '10')
+        finally:
+            sys.set_int_max_str_digits(old_limit)

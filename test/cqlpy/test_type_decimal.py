@@ -87,7 +87,7 @@ def test_decimal_clustering_key_inline_high_precision(cql, table1):
 #     [note: Integer.MIN_VALUE=-2147483648, Integer.MAX_VALUE=2147483647]
 # This test passes on Cassandra 3 but fails on Cassandra 4 and 5 due to
 # CASSANDRA-20723 which limits the exponent to 309.
-def test_decimal_clustering_key_inline_overflow_exponent(cql, table1):
+def test_decimal_clustering_key_inline_overflow_exponent(cql, table1, cassandra_bug):
     p = unique_key_int()
     # The following numbers all have an exponent that is itself (without
     # any fractional part) already above the scale limit.
@@ -302,18 +302,26 @@ def test_decimal_si_and_mv_representation(cql, test_keyspace):
 # Adding two decimals with very different scales in operator+= rescales
 # both operands to the larger scale via pow(10, scale_diff). CQL's
 # decimal type allows arbitrary scales (int32 range), so a table with
-# values like 1e1000000000 and 1 forces pow(10, 1000000000) when
-# computing SUM() or AVG(), allocating a number with ~1 billion digits.
+# values like 1e500000000 and 1 forces pow(10, 500000000) when
+# computing SUM() or AVG(), allocating a number with ~500 million digits.
 # This is the same class of DoS as issue #8002 (to_string OOM)
 # but in arithmetic.
-# This test is skipped because it would hang or crash the tests.
+# Cassandra has the same bug - whereas its arithmetic operations limit
+# the precision of the result to 10,000 digits (see tests below), for
+# aggregation sum() that we test here, it does not (CASSANDRA-21401).
+# We use the number 500 million and not higher because in Cassandra's
+# implementation, BitInteger (used to store the mantissa) has a hard
+# limit of around 537 million decimal digits (537M = 2^31/4 - where
+# 4=bitlength(10) was used by the Java code - incorrectly - instead of
+# log2(10) - to limit the number of binary digits to 2^31). So using 500
+# million digits can allow us to run this test on Cassandra - while still
+# timing out or OOMing if this bug exists.
 # Reproduces SCYLLADB-1576
-@pytest.mark.skip_bug(reason="SCYLLADB-1576")
-def test_decimal_sum_extreme_scale_oom(cql, test_keyspace):
+def test_decimal_sum_extreme_scale_oom(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace,
             "p int, c decimal, PRIMARY KEY (p)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c) VALUES (?, ?)")
-        cql.execute(stmt, [1, Decimal('1e1000000000')])
+        cql.execute(stmt, [1, Decimal('1e500000000')])
         cql.execute(stmt, [2, Decimal('1')])
         result = list(cql.execute(f"SELECT sum(c) FROM {table}"))
         assert len(result) == 1

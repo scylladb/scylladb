@@ -9,6 +9,7 @@
 #include "utils/assert.hh"
 #include "big_decimal.hh"
 #include <cassert>
+#include <numbers>
 #include "marshal_exception.hh"
 #include <seastar/core/format.hh>
 
@@ -301,32 +302,127 @@ std::strong_ordering big_decimal::tri_cmp_positive_nonzero_different_scale(const
     return int64_t(-diff_scale) <=> 0;
 }
 
+// Maximum number of significant decimal digits for addition/subtraction,
+// matching Cassandra's DecimalType.MAX_PRECISION (CASSANDRA-15232). Such
+// a limitation is necessary to avoid unlimited allocation when adding numbers
+// with wildly different scales - see SCYLLADB-1576.
+// Results exceeding this are silently rounded using HALF_UP (round half away
+// from zero), preventing unbounded memory growth.
+static constexpr int BIG_DECIMAL_MAX_PRECISION = 10000;
+
+// Round 'unscaled' to at most BIG_DECIMAL_MAX_PRECISION significant digits
+// using HALF_UP rounding (round half away from zero, matching Java's
+// RoundingMode.HALF_UP). Adjusts 'scale' to compensate for dropped digits.
+static void round_to_max_precision(boost::multiprecision::cpp_int& unscaled, int32_t& scale) {
+    if (unscaled == 0) {
+        return;
+    }
+    boost::multiprecision::cpp_int abs_u = boost::multiprecision::abs(unscaled);
+    // Fast path: use msb() as an upper bound on digit count.
+    // A number with msb position k has at most floor((k+1)*log10(2))+1 decimal digits.
+    // We need floor((k+1)*log10(2))+1 <= BIG_DECIMAL_MAX_PRECISION,
+    // i.e. k <= floor(BIG_DECIMAL_MAX_PRECISION * log2(10)) - 1.
+    // This avoids the expensive abs_u.str() call in the common case.
+    static constexpr double log2_10 = std::numbers::ln10 / std::numbers::ln2;
+    static constexpr unsigned int fast_exit_msb =
+        static_cast<unsigned int>(BIG_DECIMAL_MAX_PRECISION * log2_10) - 1;
+    if (boost::multiprecision::msb(abs_u) <= fast_exit_msb) [[likely]] {
+        return;
+    }
+    int num_digits = static_cast<int>(abs_u.str().size());
+    if (num_digits <= BIG_DECIMAL_MAX_PRECISION) {
+        return;
+    }
+    int excess = num_digits - BIG_DECIMAL_MAX_PRECISION;
+    boost::multiprecision::cpp_int divisor = boost::multiprecision::pow(boost::multiprecision::cpp_int(10), excess);
+    boost::multiprecision::cpp_int quotient = abs_u / divisor;
+    boost::multiprecision::cpp_int remainder = abs_u % divisor;
+    // HALF_UP: round away from zero when remainder * 2 >= divisor.
+    // This applies to both positive and negative numbers (away from zero).
+    if (remainder * 2 >= divisor) {
+        quotient += 1;
+        // A carry may have produced one extra digit (e.g., 999…9 + 1 = 10^MAX_PRECISION).
+        // Use the already-computed msb threshold to detect and correct this without
+        // a costly .str() call: any number with <= MAX_PRECISION decimal digits has
+        // msb <= fast_exit_msb, so msb > fast_exit_msb means one digit too many.
+        if (boost::multiprecision::msb(quotient) > fast_exit_msb) {
+            quotient /= 10;  // exact: carry result is always 10^MAX_PRECISION
+            ++excess;
+        }
+    }
+    unscaled = (unscaled < 0) ? -quotient : quotient;
+    // Dropping 'excess' low-order digits: the scale (number of fractional digits)
+    // decreases by 'excess', preserving the approximate value.
+    scale -= excess;
+}
+
 big_decimal& big_decimal::operator+=(const big_decimal& other)
 {
     if (_scale == other._scale) {
         _unscaled_value += other._unscaled_value;
-    } else {
-        boost::multiprecision::cpp_int rescale(10);
-        auto max_scale = std::max(_scale, other._scale);
-        boost::multiprecision::cpp_int u = _unscaled_value * boost::multiprecision::pow(rescale,  max_scale - _scale);
-        boost::multiprecision::cpp_int v = other._unscaled_value * boost::multiprecision::pow(rescale, max_scale - other._scale);
-        _unscaled_value = u + v;
-        _scale = max_scale;
+        round_to_max_precision(_unscaled_value, _scale);
+        return *this;
     }
+    boost::multiprecision::cpp_int rescale(10);
+    auto max_scale = std::max(_scale, other._scale);
+    // Shifts needed to align each operand to max_scale; one is always 0.
+    int64_t shift_this = (int64_t)max_scale - _scale;
+    int64_t shift_other = (int64_t)max_scale - other._scale;
+    // Assume (invariant maintained by round_to_max_precision) that both inputs
+    // have fewer than P = BIG_DECIMAL_MAX_PRECISION significant digits, so each
+    // unscaled value < 10^P.  When shift_this > 2*P, the aligned dominant
+    // operand u = _unscaled_value * 10^shift_this >= 10^(2P+1), while the
+    // dominated operand v = other._unscaled_value < 10^P, giving v/u < 10^(-P-1).
+    // In other words, 'other' is smaller than 1 unit in the (P+1)-th significant
+    // digit of '*this' and cannot affect the top P digits of the rounded result.
+    // Dropping it avoids allocating huge intermediate values (DoS/OOM protection,
+    // fixes SCYLLADB-1576).
+    constexpr int64_t max_safe_shift = 2LL * BIG_DECIMAL_MAX_PRECISION;
+    if (shift_this > max_safe_shift) {
+        // *this dominates; other is insignificant.
+        return *this;
+    }
+    if (shift_other > max_safe_shift) {
+        // other dominates; *this is insignificant.
+        _unscaled_value = other._unscaled_value;
+        _scale = other._scale;
+        return *this;
+    }
+    boost::multiprecision::cpp_int u = _unscaled_value * boost::multiprecision::pow(rescale, (uint32_t)shift_this);
+    boost::multiprecision::cpp_int v = other._unscaled_value * boost::multiprecision::pow(rescale, (uint32_t)shift_other);
+    _unscaled_value = u + v;
+    _scale = max_scale;
+    round_to_max_precision(_unscaled_value, _scale);
     return *this;
 }
 
 big_decimal& big_decimal::operator-=(const big_decimal& other) {
     if (_scale == other._scale) {
         _unscaled_value -= other._unscaled_value;
-    } else {
-        boost::multiprecision::cpp_int rescale(10);
-        auto max_scale = std::max(_scale, other._scale);
-        boost::multiprecision::cpp_int u = _unscaled_value * boost::multiprecision::pow(rescale,  max_scale - _scale);
-        boost::multiprecision::cpp_int v = other._unscaled_value * boost::multiprecision::pow(rescale, max_scale - other._scale);
-        _unscaled_value = u - v;
-        _scale = max_scale;
+        round_to_max_precision(_unscaled_value, _scale);
+        return *this;
     }
+    boost::multiprecision::cpp_int rescale(10);
+    auto max_scale = std::max(_scale, other._scale);
+    int64_t shift_this = (int64_t)max_scale - _scale;
+    int64_t shift_other = (int64_t)max_scale - other._scale;
+    // See operator+= for the derivation of max_safe_shift.
+    constexpr int64_t max_safe_shift = 2LL * BIG_DECIMAL_MAX_PRECISION;
+    if (shift_this > max_safe_shift) {
+        // *this dominates; other is insignificant.
+        return *this;
+    }
+    if (shift_other > max_safe_shift) {
+        // other dominates; result ≈ -other.
+        _unscaled_value = -other._unscaled_value;
+        _scale = other._scale;
+        return *this;
+    }
+    boost::multiprecision::cpp_int u = _unscaled_value * boost::multiprecision::pow(rescale, (uint32_t)shift_this);
+    boost::multiprecision::cpp_int v = other._unscaled_value * boost::multiprecision::pow(rescale, (uint32_t)shift_other);
+    _unscaled_value = u - v;
+    _scale = max_scale;
+    round_to_max_precision(_unscaled_value, _scale);
     return *this;
 }
 
