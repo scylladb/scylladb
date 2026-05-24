@@ -30,7 +30,7 @@ from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
-from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id
+from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, scale_timeout_by_mode
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from functools import partial
 import aiohttp
@@ -83,7 +83,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
     # reason, so we increase the timeouts according to each mode's needs. The client
     # should avoid timing out its requests before the server times out - for this reason
     # we increase the CQL driver's client-side timeout in conftest.py.
-    request_timeout_in_ms = 90000 if mode in {'debug', 'sanitize'} else 30000
+    request_timeout_in_ms = scale_timeout_by_mode(mode, 30000)
 
     return {
         'cluster_name': cluster_name,
