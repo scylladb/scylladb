@@ -93,7 +93,7 @@ public:
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
-    virtual future<> wipe(const sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept override;
+    virtual future<> wipe(sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
@@ -508,7 +508,7 @@ static inline fs::path parent_path(const sstring& fname) {
     return fs::canonical(fs::path(fname)).parent_path();
 }
 
-future<> filesystem_storage::wipe(const sstable& sst, const atomic_delete_context* ctx) noexcept {
+future<> filesystem_storage::wipe(sstable& sst, const atomic_delete_context* ctx) noexcept {
     auto sync = ctx ? sync_dir::no : sync_dir::yes;
     // We must be able to generate toc_filename()
     // in order to delete the sstable.
@@ -666,16 +666,14 @@ public:
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
-    future<> wipe(const sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept override;
+    future<> wipe(sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept override;
     future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     future<data_source> make_source(sstable& sst, component_type type, file, uint64_t offset, uint64_t len, file_input_stream_options) const override;
 
     future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
-    future<> destroy(const sstable& sst) override {
-        return make_ready_future<>();
-    }
+    future<> destroy(const sstable& sst) override;
     future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
     future<> atomic_delete_complete(atomic_delete_context ctx) const override;
     future<> remove_by_registry_entry(entry_descriptor desc) override;
@@ -856,23 +854,60 @@ future<> object_storage_base::change_state(const sstable& sst, sstable_state sta
     co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.manager().get_local_host_id(), sst.generation(), state);
 }
 
-future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_context* ctx) noexcept {
+future<> object_storage_base::wipe(sstable& sst, const atomic_delete_context* ctx) noexcept {
+    // Mark the sstable for deletion so that destroy() — called when the
+    // last shared_sstable reference is dropped — will delete the cloud
+    // objects.
+    sst.mark_for_deletion();
+    // Transition the registry entry to "removing" state to signal intent to
+    // delete.  The entry must survive the crash window so that
+    // garbage_collect() on restart can retry the S3 object deletion.
+    //
+    // Durability argument: if a crash loses the unfsynced commitlog, BOTH
+    // the status update and the S3 objects survive — the state is consistent
+    // and the sstable is loadable on restart.  If the update is committed,
+    // the entry is in "removing" and destroy() will clean up the S3 objects
+    // and delete the registry entry.  Either way, the registry is never left
+    // pointing at deleted objects, and orphaned S3 objects are always covered
+    // by a "removing" registry entry that garbage_collect() can act on.
+    //
     // FIXME: unlike filesystem_storage::wipe, this implementation does not
-    // catch exceptions from delete_object / sstables_registry calls and may
-    // return an exceptional future, breaking the contract documented on
-    // storage::wipe.
-    auto& sstables_registry = sst.manager().sstables_registry();
-    auto node_owner = sst.manager().get_local_host_id();
-
+    // catch exceptions from sstables_registry calls and may return an
+    // exceptional future, breaking the contract documented on storage::wipe.
     if (!ctx) {
-        co_await sstables_registry.update_entry_status(owner(), node_owner, sst.generation(), status_removing);
+        co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.manager().get_local_host_id(), sst.generation(), status_removing);
     }
+}
 
+future<> object_storage_base::destroy(const sstable& sst) {
+    // Only delete cloud objects if the SSTable was explicitly marked
+    // for deletion (by compaction or unlink).  Two cases are skipped:
+    //  - Normal shutdown: the last shared_sstable ref is dropped but
+    //    the SSTable is NOT marked for deletion — it must survive on
+    //    S3 so the node can reload it on restart.
+    //  - SSTables never sealed: not marked for deletion, also skipped.
+    if (!sst.marked_for_deletion()) {
+        co_return;
+    }
+    // Delete the S3 objects. Errors are logged but not propagated because
+    // destroy() is called fire-and-forget from the shared_ptr deleter.
+    // Any objects that could not be deleted here will be retried on the
+    // next startup via garbage_collect() which handles "removing" entries.
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
-        co_await delete_object(make_object_name(sst, type));
+        try {
+            co_await delete_object(make_object_name(sst, type));
+        } catch (...) {
+            sstlog.warn("Failed to delete {} object for {}: {}", _type, sst.toc_filename(), std::current_exception());
+        }
     });
-
-    co_await sstables_registry.delete_entry(owner(), node_owner, sst.generation());
+    // Remove the registry entry only after S3 objects are cleaned up.
+    // If this fails, the "removing" entry survives and garbage_collect()
+    // will delete the (already gone) objects tolerantly and retry deletion.
+    try {
+        co_await sst.manager().sstables_registry().delete_entry(owner(), sst.manager().get_local_host_id(), sst.generation());
+    } catch (...) {
+        sstlog.warn("Failed to delete registry entry for {}: {}", sst.toc_filename(), std::current_exception());
+    }
 }
 
 future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {

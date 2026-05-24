@@ -7461,16 +7461,57 @@ void failure_when_adding_new_sstable_fn(test_env& env) {
     auto on_add = [] (sstables::shared_sstable) { throw std::runtime_error("fail to seal"); return make_ready_future<>(); };
     BOOST_REQUIRE_THROW(table->add_new_sstable_and_update_cache(sst, on_add).get(), std::runtime_error);
 
-    // Verify new sstable was unlinked on failure.
-    BOOST_REQUIRE(!sst->get_storage().exists(*sst, sstables::component_type::Data).get());
+    if (env.get_storage_options().is_local_type()) {
+        // Verify new sstable was unlinked on failure.
+        BOOST_REQUIRE(!sst->get_storage().exists(*sst, sstables::component_type::Data).get());
+    } else {
+        // wipe() transitions the registry entry to "removing"; verify it is
+        // present with that status (not "sealed").  The entry will be cleaned
+        // by garbage_collect() on next startup.
+        sstring sst_status;
+        env.manager()
+            .sstables_registry()
+            .sstables_registry_list(table.schema()->id(), env.manager().get_local_host_id(),
+                                    [&sst_status, sst_desc = sst->get_descriptor(component_type::Data)](sstring status, sstable_state, entry_descriptor desc) {
+                                        if (desc.generation == sst_desc.generation) {
+                                            sst_status = std::move(status);
+                                        }
+                                        return make_ready_future();
+                                    })
+            .get();
+        BOOST_REQUIRE_EQUAL(sst_status, "removing");
+    }
 
     auto sst2 = make_sstable_containing(env.make_sstable(s), {mut1}).get();
     auto sst3 = make_sstable_containing(env.make_sstable(s), {mut1}).get();
     BOOST_REQUIRE_THROW(table->add_new_sstables_and_update_cache({sst2, sst3}, on_add).get(), std::runtime_error);
 
-    // Verify both sstables are unlinked on failure.
-    BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::Data).get());
-    BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::Data).get());
+    if (env.get_storage_options().is_local_type()) {
+        // Verify both sstables are unlinked on failure.
+        BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::Data).get());
+        BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::Data).get());
+    } else {
+        // wipe() transitions registry entries to "removing"; verify both are
+        // present with that status (not "sealed").
+        sstring sst2_status, sst3_status;
+        env.manager()
+            .sstables_registry()
+            .sstables_registry_list(table.schema()->id(), env.manager().get_local_host_id(),
+                                    [&sst2_status, &sst3_status,
+                                     sst2_desc = sst2->get_descriptor(component_type::Data),
+                                     sst3_desc = sst3->get_descriptor(component_type::Data)](sstring status, sstable_state, entry_descriptor desc) {
+                                        if (desc.generation == sst2_desc.generation) {
+                                            sst2_status = status;
+                                        }
+                                        if (desc.generation == sst3_desc.generation) {
+                                            sst3_status = status;
+                                        }
+                                        return make_ready_future();
+                                    })
+            .get();
+        BOOST_REQUIRE_EQUAL(sst2_status, "removing");
+        BOOST_REQUIRE_EQUAL(sst3_status, "removing");
+    }
 }
 
 SEASTAR_TEST_CASE(failure_when_adding_new_sstable_test) {
