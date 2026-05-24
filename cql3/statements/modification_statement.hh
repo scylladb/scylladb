@@ -41,8 +41,24 @@ class modification_statement : public cql_statement_opt_metadata {
 public:
     const statement_type type;
     bool _may_use_token_aware_routing;
-private:
+public:
+    const schema_ptr s;
+    const std::unique_ptr<attributes> attrs;
+
+protected:
+    // Hot fields: accessed on every query execution.
+    shared_ptr<const restrictions::statement_restrictions> _restrictions;
+    std::vector<::shared_ptr<operation>> _column_operations;
+    cql_stats& _stats;
     const uint32_t _bound_terms;
+    // True if any of update operations requires a prefetch.
+    // Pre-computed during statement prepare.
+    bool _requires_read = false;
+
+private:
+    const ks_selector _ks_sel;
+
+    // Cold fields: only for CAS/conditional statements.
     // If we have operation on list entries, such as adding or
     // removing an entry, the modification statement must prefetch
     // the old values of the list to create an idempotent mutation.
@@ -60,26 +76,15 @@ private:
     // contain LIST columns prefetched to apply updates, unless
     // these columns are also used in conditions.
     column_set _columns_of_cas_result_set;
-public:
-    const schema_ptr s;
-    const std::unique_ptr<attributes> attrs;
 
 protected:
-    std::vector<::shared_ptr<operation>> _column_operations;
-    cql_stats& _stats;
-
     expr::expression _condition = expr::conjunction{{}}; // TRUE
 private:
-    const ks_selector _ks_sel;
-
     // True if this statement has _if_exists or _if_not_exists or other
     // conditions that apply to static/regular columns, respectively.
     // Pre-computed during statement prepare.
     bool _has_static_column_conditions = false;
     bool _has_regular_column_conditions = false;
-    // True if any of update operations requires a prefetch.
-    // Pre-computed during statement prepare.
-    bool _requires_read = false;
     bool _if_not_exists = false;
     bool _if_exists = false;
 
@@ -92,9 +97,6 @@ private:
     bool _selects_a_collection = false;
 
     std::optional<bool> _is_raw_counter_shard_write;
-
-protected:
-    shared_ptr<const restrictions::statement_restrictions> _restrictions;
 public:
     typedef std::optional<std::unordered_map<sstring, bytes_opt>> json_cache_opt;
 

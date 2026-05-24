@@ -65,18 +65,27 @@ public:
     using parameters = raw::select_statement::parameters;
     using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
     using prepared_ann_ordering_type = raw::select_statement::prepared_ann_ordering_type;
-    bool _may_use_token_aware_routing;
 protected:
     static thread_local const lw_shared_ptr<const parameters> _default_parameters;
+
+    // Hot fields: accessed on every query execution.
+    // Grouped to fit in 1-2 cache lines after the base class (40 bytes).
     schema_ptr _schema;
-    schema_ptr _query_schema;
-    uint32_t _bound_terms;
-    lw_shared_ptr<const parameters> _parameters;
-    ::shared_ptr<selection::selection> _selection;
     const ::shared_ptr<const restrictions::statement_restrictions> _restrictions;
+    ::shared_ptr<selection::selection> _selection;
+    lw_shared_ptr<const parameters> _parameters;
+    cql_stats& _stats;
+    query::partition_slice::option_set _opts;
+    uint32_t _bound_terms;
     const bool _restrictions_need_filtering;
-    ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
     bool _is_reversed;
+    bool _range_scan = false;
+    bool _range_scan_no_bypass_cache = false;
+
+    // Cold fields: rarely accessed or only during specific operations.
+    const ks_selector _ks_sel;
+    schema_ptr _query_schema;
+    ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
     expr::unset_bind_variable_guard _limit_unset_guard;
     std::optional<expr::expression> _limit;
     expr::unset_bind_variable_guard _per_partition_limit_unset_guard;
@@ -92,12 +101,9 @@ protected:
      */
     ordering_comparator_type _ordering_comparator;
 
-    query::partition_slice::option_set _opts;
-    cql_stats& _stats;
-    const ks_selector _ks_sel;
-    bool _range_scan = false;
-    bool _range_scan_no_bypass_cache = false;
     std::unique_ptr<cql3::attributes> _attrs;
+public:
+    bool _may_use_token_aware_routing;
 private:
     future<shared_ptr<cql_transport::messages::result_message>> process_results_complex(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
