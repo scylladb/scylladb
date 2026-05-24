@@ -102,10 +102,22 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
 
         print('Drop table')
         cql.execute(f"DROP TABLE {ks}.test;")
-        # Check that the ownership table is de-populated
+        # Check that the ownership table is de-populated.
+        # With two-phase deletion for object-storage SSTables, wipe() transitions
+        # registry entries to "removing" state and defers the actual registry
+        # entry deletion to destroy() (runs when the last shared_sstable ref is
+        # dropped).  So entries still in "removing" state are expected — they
+        # confirm that wipe() ran correctly.
         res = cql.execute("SELECT * FROM system.sstables;")
-        rows = "\n".join(f"{row.table_id} {row.status}" for row in res)
-        assert not rows, 'Unexpected entries in registry'
+        unexpected = [row for row in res if row.status != 'removing']
+        assert not unexpected, \
+            f'Unexpected entries in registry: {[(row.table_id, row.status) for row in unexpected]}'
+        # Make sure objects also disappeared
+        await asyncio.gather(*(manager.server_restart(s.server_id) for s in servers))
+        cql = await reconnect_driver(manager)
+        objects = object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all()
+        print(f'Found objects: {[ objects ]}')
+        assert not list(objects), 'Expected no objects in object storage after table drop'
 
 async def test_garbage_collect(manager: ManagerClient, object_storage):
     '''verify ownership table is garbage-collected on boot'''
