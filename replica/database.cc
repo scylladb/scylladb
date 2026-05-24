@@ -3020,6 +3020,7 @@ struct database::table_truncate_state {
     db::replay_position low_mark;
     db_clock::time_point truncated_at;
     std::vector<compaction::compaction_reenabler> cres;
+    std::vector<replica::logstor::compaction_reenabler> logstor_cres;
     bool did_flush;
 };
 
@@ -3067,6 +3068,13 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
                     st->cres.emplace_back(co_await cm.stop_and_disable_compaction("truncate", ts));
                 });
             });
+
+            if (cf.uses_logstor()) {
+                auto& logstor_cm = cf.get_logstor_compaction_manager();
+                co_await cf.parallel_foreach_logstor_compaction_group([&logstor_cm, &st] (replica::compaction_group& cg) -> future<> {
+                    st->logstor_cres.emplace_back(co_await logstor_cm.disable_compaction(cg));
+                });
+            }
 
             co_return make_foreign(std::move(st));
         });

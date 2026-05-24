@@ -1617,6 +1617,7 @@ future<> compaction_manager_impl::compact_segments(compaction_group& cg, std::ve
 
     // wait for read operations that use the old locations
     co_await index.await_pending_reads();
+    co_await utils::get_local_injector().inject("logstor_compaction_wait_before_remove_segments", utils::wait_for_message(std::chrono::seconds{60}));
 
     // Free the compacted segments
     auto& ss = cg.logstor_segments();

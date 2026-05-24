@@ -5545,6 +5545,13 @@ future<> table::parallel_foreach_compaction_group_view(std::function<future<>(co
     });
 }
 
+future<> table::parallel_foreach_logstor_compaction_group(std::function<future<>(compaction_group&)> action) {
+    if (!uses_logstor()) {
+        co_return;
+    }
+    co_await parallel_foreach_compaction_group(std::move(action));
+}
+
 compaction::compaction_group_view& table::compaction_group_view_for_sstable(const sstables::shared_sstable& sst) const {
     auto& cg = compaction_group_for_sstable(sst);
     return cg.view_for_sstable(sst);
