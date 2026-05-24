@@ -452,6 +452,44 @@ async def test_drop_table(manager: ManagerClient):
             assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2 after all operations, but got {len(rows[0].v)}"
 
 @pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_table_during_logstor_compaction(manager: ManagerClient):
+    cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'debug_error_injection=debug', '--smp=1']
+    cfg = {'experimental_features': ['logstor']}
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+    inj = 'logstor_compaction_wait_before_remove_segments'
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        value_size = 30 * 1024
+        base_value = 'a' * value_size
+        overwritten_value = 'b' * value_size
+
+        for i in range(20):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{base_value}')")
+
+        for _ in range(4):
+            for i in range(10):
+                await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{overwritten_value}')")
+
+        await manager.api.logstor_flush(server.ip_addr)
+
+        server_log = await manager.server_open_log(server.server_id)
+        await manager.api.enable_injection(server.ip_addr, inj, one_shot=True)
+        log_mark = await server_log.mark()
+
+        await manager.api.logstor_compaction(server.ip_addr)
+        await server_log.wait_for(f'{inj}: waiting for message', from_mark=log_mark, timeout=60)
+
+        drop_task = cql.run_async(f"DROP TABLE {ks}.test")
+        await server_log.wait_for(f"Dropping {ks}.test", from_mark=log_mark, timeout=60)
+
+        await manager.api.message_injection(server.ip_addr, inj)
+        await drop_task
+
+@pytest.mark.asyncio
 async def test_trigger_separator_flush(manager: ManagerClient):
     """
     Write to 2 tablets, one slower than the other.
