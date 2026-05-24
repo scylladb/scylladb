@@ -759,6 +759,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::NODE_OPS_CMD:
     case messaging_verb::HINT_MUTATION:
     case messaging_verb::TABLET_STREAM_FILES:
+    case messaging_verb::CLONE_SSTABLE:
     case messaging_verb::TABLET_STREAM_DATA:
     case messaging_verb::TABLET_CLEANUP:
     case messaging_verb::TABLET_REPAIR:
