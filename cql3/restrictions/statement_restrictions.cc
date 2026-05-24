@@ -2486,14 +2486,14 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
         // This means that p1 and p2 can have many different values (token is a hash, can have collisions).
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
         expr::expression token_restriction = replace_partition_token(_partition_key_restrictions, token_column, *_schema);
-        _idx_tbl_ck_prefix = std::vector{to_predicate_on_column(token_restriction, token_column, _schema.get())};
+        _idx_tbl_ck_prefix = std::make_unique<std::vector<predicate>>(std::vector{to_predicate_on_column(token_restriction, token_column, _schema.get())});
 
         return;
     }
 
     // If we're here, it means the index cannot be on a partition column: process_partition_key_restrictions()
     // avoids indexing when _partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
-    _idx_tbl_ck_prefix = std::vector<predicate>(1 + _schema->partition_key_size(), predicate{
+    _idx_tbl_ck_prefix = std::make_unique<std::vector<predicate>>(1 + _schema->partition_key_size(), predicate{
         .solve_for = nullptr,  // FIXME: this is all overwritten later. Should be refactored.
         .filter = expr::expression(expr::conjunction{}),
         .on = on_column{nullptr}, // Illegal but will be overwritten
@@ -2575,7 +2575,7 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema,
     }
 
     // Local index clustering key is (indexed column, base clustering key)
-    _idx_tbl_ck_prefix = std::vector<predicate>();
+    _idx_tbl_ck_prefix = std::make_unique<std::vector<predicate>>();
     _idx_tbl_ck_prefix->reserve(1 + _clustering_prefix_restrictions.size());
 
     const column_definition& indexed_column = idx_tbl_schema.column_at(column_kind::clustering_key, 0);
@@ -2664,7 +2664,7 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
 
 get_clustering_bounds_fn_t
 statement_restrictions::build_get_global_index_token_clustering_ranges_fn() const {
-    if (!_idx_tbl_ck_prefix.has_value()) {
+    if (!_idx_tbl_ck_prefix) {
         return {};
     }
 
@@ -2693,7 +2693,7 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_to
 
 get_clustering_bounds_fn_t
 statement_restrictions::build_get_local_index_clustering_ranges_fn() const {
-    if (!_idx_tbl_ck_prefix.has_value()) {
+    if (!_idx_tbl_ck_prefix) {
         return {};
     }
 
