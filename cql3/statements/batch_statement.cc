@@ -365,6 +365,15 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 
     computed_function_values cached_fn_calls;
 
+    // Track LWT arithmetic columns and clustering key per statement to detect conflicts:
+    // if two statements target the same row and both do arithmetic on the same column,
+    // they both compute from the pre-batch value and the result would be incorrect.
+    struct stmt_col_info {
+        bytes ck_bytes;        // serialized clustering key, identifies the row within the partition
+        column_set lwt_cols;   // columns subject to LWT arithmetic (SET col = col +/- val)
+    };
+    std::vector<stmt_col_info> seen_stmts;
+
     for (size_t i = 0; i < _statements.size(); ++i) {
 
         modification_statement& statement = *_statements[i].statement;
@@ -386,6 +395,30 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         cached_fn_calls.merge(std::move(const_cast<cql3::query_options&>(statement_options).take_cached_pk_function_calls()));
 
         std::vector<query::clustering_range> ranges = statement.create_clustering_ranges(statement_options, json_cache);
+
+        if (statement.requires_lwt()) {
+            column_set my_lwt_cols = statement.lwt_arithmetic_columns();
+            if (my_lwt_cols.count() > 0) {
+                // LWT arithmetic UPDATEs always target a specific row; extract its key.
+                bytes my_ck_bytes = (!ranges.empty() && ranges.front().start())
+                        ? to_bytes(ranges.front().start()->value().representation())
+                        : bytes{};
+                for (const auto& prev : seen_stmts) {
+                    if (prev.ck_bytes != my_ck_bytes) {
+                        continue;
+                    }
+                    // Conflict: both statements do arithmetic on the same column in the same row.
+                    for (auto id = prev.lwt_cols.find_first(); id != column_set::npos; id = prev.lwt_cols.find_next(id)) {
+                        if (my_lwt_cols.test(id)) {
+                            throw exceptions::invalid_request_exception(
+                                format("Multiple arithmetic SET operations on column {} targeting the same row in the same BATCH",
+                                       schema->column_at(id).name_as_text()));
+                        }
+                    }
+                }
+                seen_stmts.emplace_back(stmt_col_info{std::move(my_ck_bytes), std::move(my_lwt_cols)});
+            }
+        }
 
         request->add_row_update(statement, std::move(ranges), std::move(json_cache), statement_options);
     }

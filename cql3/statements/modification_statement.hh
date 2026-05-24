@@ -192,6 +192,12 @@ public:
     // True if any of the update operations requires LWT for atomicity.
     bool requires_lwt() const { return _requires_lwt; }
 
+    // Returns the set of columns that are the target of LWT arithmetic operations
+    // (e.g., r in SET r = r + 1). These columns are both read (for the old value)
+    // and written (with the computed result), making them sensitive to stale reads
+    // when multiple statements in a batch touch the same row.
+    column_set lwt_arithmetic_columns() const;
+
     // Columns used in this statement conditions or operations.
     const column_set& columns_to_read() const { return _columns_to_read; }
 
