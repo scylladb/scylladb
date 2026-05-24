@@ -384,11 +384,12 @@ class SystemResourceMonitor:
     def _monitor_resources(self, tmpdir: Path) -> None:
         sqlite_writer = SQLiteWriter(tmpdir / DEFAULT_DB_NAME)
         try:
-            while not self.stop_event.is_set():
+            _ = psutil.cpu_percent()  # first non-blocking call returns meaningless 0.0. Skip it.
+            while not self.stop_event.wait(timeout=2.0):
                 vm = psutil.virtual_memory()
                 timeline_record = SystemResourceMetric(
                     host_id=HOST_ID,
-                    cpu=psutil.cpu_percent(interval=0.1),
+                    cpu=psutil.cpu_percent(),
                     memory_free=vm.free,
                     memory_available=vm.available,
                     memory_used=vm.used,
@@ -398,8 +399,5 @@ class SystemResourceMonitor:
                     timestamp=datetime.now(),
                 )
                 sqlite_writer.write_row(timeline_record, SYSTEM_RESOURCE_METRICS_TABLE)
-
-                # Control the frequency of updates, for example, every 2 seconds
-                sleep(2)
         finally:
             sqlite_writer.close()
