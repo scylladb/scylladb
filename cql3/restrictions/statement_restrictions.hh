@@ -208,7 +208,7 @@ private:
     /// Elements are conjunctions of single-column binary operators with the same LHS.
     /// Element order follows the indexing-table clustering key.
     /// In case of a global index the first element's (token restriction) RHS is a dummy value, it is filled later.
-    std::optional<std::vector<predicate>> _idx_tbl_ck_prefix;
+    std::unique_ptr<std::vector<predicate>> _idx_tbl_ck_prefix;
 
     /// Parts of _where defining the partition range.
     ///
