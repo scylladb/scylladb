@@ -165,6 +165,18 @@ public:
     service::frozen_topology_guard topo_guard;
 };
 
+class clone_sstable_request {
+public:
+    file_stream_id ops_id;
+    table_id table;
+    utils::UUID generation;      // sstables::generation_type, encoded as its underlying UUID
+    int32_t version;             // serialized sstables::sstable_version_types
+    int32_t format;              // serialized sstables::sstable_format_types
+    int32_t sstable_state;       // serialized sstables::sstable_state
+    seastar::shard_id dst_shard_id;
+    service::frozen_topology_guard topo_guard;
+};
+
 class stream_files_response {
 public:
     size_t stream_bytes = 0;
@@ -172,7 +184,13 @@ public:
 
 // The handler for the TABLET_STREAM_FILES verb. The receiver of this verb will
 // stream sstables files specified by the stream_files_request req.
-future<stream_files_response> tablet_stream_files_handler(replica::database& db, netw::messaging_service& ms, streaming::stream_files_request req);
+// For object-storage tables, it takes a snapshot and sends per-SSTable
+// CLONE_SSTABLE RPCs instead of byte-streaming via STREAM_BLOB.
+future<stream_files_response> tablet_stream_files_handler(replica::database& db, db::view::view_building_worker& vbw, netw::messaging_service& ms, streaming::stream_files_request req);
+
+// The handler for the CLONE_SSTABLE verb. The destination node performs a
+// server-side S3/GCS CopyObject for a single SSTable and loads the clone.
+future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, streaming::clone_sstable_request req);
 
 // Ask the src node to stream sstables to dst node for table in the given token range using TABLET_STREAM_FILES verb.
 future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id, replica::table& table, const dht::token_range& range, const locator::host_id& src, const locator::host_id& dst, seastar::shard_id dst_shard_id, netw::messaging_service& ms, abort_source& as, service::frozen_topology_guard topo_guard);

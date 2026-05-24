@@ -109,6 +109,7 @@ public:
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept override;
 
     virtual sstring prefix() const override { return _dir.native(); }
+    bool is_object_storage() const override { return false; }
     future<bool> exists(const sstable& sst, component_type type) const override {
         return file_exists(sst.get_filename(type).format());
     }
@@ -690,6 +691,8 @@ public:
     future<bool> exists(const sstable& sst, component_type type) const override {
         return _client->object_exists(make_object_name(sst, type), abort_source());
     }
+
+    bool is_object_storage() const override { return true; }
 
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs) {
         return _client->put_object(std::move(name), std::move(bufs), abort_source());
