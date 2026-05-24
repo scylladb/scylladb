@@ -814,28 +814,28 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                     co_await ser::streaming_rpc_verbs::send_clone_sstable(&ms, target.node, clone_req);
                 }
             } else {
-            // Byte-streaming path for local-filesystem SSTables.
-            auto sources = co_await create_stream_sources(sst_snapshot, reader);
-            auto newgen = fmt::to_string(sst_gen());
+                // Byte-streaming path for local-filesystem SSTables.
+                auto sources = co_await create_stream_sources(sst_snapshot, reader);
+                auto newgen = fmt::to_string(sst_gen());
 
-            for (auto&& s : sources) {
-                auto oldname = s->component_basename();
-                auto newname = get_sstable_name_with_generation(req.ops_id, oldname, newgen);
+                for (auto&& s : sources) {
+                    auto oldname = s->component_basename();
+                    auto newname = get_sstable_name_with_generation(req.ops_id, oldname, newgen);
 
-                blogger.debug("fstream[{}] Get name oldname={}, newname={}", req.ops_id, oldname, newname);
+                    blogger.debug("fstream[{}] Get name oldname={}, newname={}", req.ops_id, oldname, newname);
 
-                auto& info = files.emplace_back();
-                info.fops = file_ops::stream_sstables;
-                info.sstable_state = sst_state;
-                info.filename = std::move(newname);
-                info.source = [s = std::move(s)](const file_input_stream_options& options) {
-                    return s->input(options);
-                };
-            }
-            // ensure we mark the end of each component sequence.
-            if (!files.empty()) {
-                files.back().fops = file_ops::load_sstables;
-            }
+                    auto& info = files.emplace_back();
+                    info.fops = file_ops::stream_sstables;
+                    info.sstable_state = sst_state;
+                    info.filename = std::move(newname);
+                    info.source = [s = std::move(s)](const file_input_stream_options& options) {
+                        return s->input(options);
+                    };
+                }
+                // ensure we mark the end of each component sequence.
+                if (!files.empty()) {
+                    files.back().fops = file_ops::load_sstables;
+                }
             }
         }
         sstable_nr = sstables.size();
