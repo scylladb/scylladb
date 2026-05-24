@@ -3,12 +3,13 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-
+import asyncio
 import json
 import logging
 import pytest
 import random
 import time
+from enum import Enum
 from typing import TypeAlias, Any
 
 from cassandra.cluster import ConsistencyLevel, Session  # type: ignore
@@ -18,7 +19,7 @@ from cassandra.pool import Host  # type: ignore
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -341,3 +342,302 @@ async def test_read_repair_with_trace_logging(request, manager):
             found_read_repair |= "digest mismatch, starting read repair" == event.description
 
         assert found_read_repair
+
+
+class ReadRepairPhase(Enum):
+    READ = 1
+    WRITE = 2
+
+class QueryKind(Enum):
+    FORWARD = "forward"
+    REVERSED = "reversed"
+    RANGE = "range"
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize(
+    "failed_phase",
+    [
+        pytest.param(ReadRepairPhase.READ),
+        pytest.param(ReadRepairPhase.WRITE),
+    ]
+)
+@pytest.mark.parametrize(
+    "query_kind",
+    [
+        pytest.param(QueryKind.FORWARD, id="forward"),
+        pytest.param(QueryKind.REVERSED, id="reversed"),
+        pytest.param(QueryKind.RANGE, id="range"),
+    ]
+)
+async def test_read_repair_failure(manager: ManagerClient, failed_phase: ReadRepairPhase, query_kind: QueryKind):
+    cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "storage_proxy=trace"]
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="dc1")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        async with new_test_table(manager, ks, "pk bigint, ck bigint, c int, PRIMARY KEY (pk, ck)", " WITH speculative_retry = 'NONE'") as cf:
+
+            insert_stmt = cql.prepare(f"INSERT INTO {cf} (pk, ck, c) VALUES (?, ?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ONE
+
+            # Block writes on servers[0] so it becomes stale. servers[1] and servers[2]
+            # receive all writes and have up-to-date data.
+            cf_name = cf.split(".")[1]
+            await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": cf_name, "what": "throw"})
+            await asyncio.gather(*[cql.run_async(insert_stmt, (0, ck, ck)) for ck in range(0, 100)])
+            await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
+
+            # Fail servers[1] (a fresh replica) during the read or write phase.
+            # servers[0] (stale) remains healthy and always participates in reads
+            # and receives repair writes.
+            match failed_phase:
+                case ReadRepairPhase.READ:
+                    await manager.api.enable_injection(servers[1].ip_addr, "fail_mutation_query", one_shot=False, parameters={"ks_name": ks, "cf_name": cf.split(".")[1]})
+                case ReadRepairPhase.WRITE:
+                    await manager.api.enable_injection(servers[1].ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": cf.split(".")[1], "what": "throw"})
+
+            # Force servers[0] (stale) into every QUORUM read's target set.
+            # With RF=3 and 3 nodes, every node is a replica, but CL=QUORUM
+            # only selects 2. This injection ensures servers[0] is always
+            # selected, guaranteeing digest mismatch and read-repair on every read.
+            server0_host_id = await manager.get_host_id(servers[0].server_id)
+            for srv in servers:
+                await manager.api.enable_injection(srv.ip_addr, "force_read_target", one_shot=False, parameters={"host_id": server0_host_id})
+
+            # Open log files on all servers.
+            logs = []
+            for srv in servers:
+                log = await manager.server_open_log(srv.server_id)
+                logs.append(log)
+
+            # Read all 100 rows with CL=QUORUM. Each read includes servers[0] (stale),
+            # triggering read-repair. servers[1] may fail during read or write phase,
+            # but the read still succeeds and servers[0] gets repaired.
+            # After each read, verify that reconciliation was triggered.
+            #
+            # Build query list: range scan issues a single full-table query;
+            # forward/reversed issue per-row point queries.
+            match query_kind:
+                case QueryKind.RANGE:
+                    queries = [(f"SELECT * FROM {cf}", None)]
+                case QueryKind.REVERSED:
+                    queries = [(f"SELECT * FROM {cf} WHERE pk = 0 AND ck = {ck} ORDER BY ck DESC", ck) for ck in range(100)]
+                case QueryKind.FORWARD:
+                    queries = [(f"SELECT * FROM {cf} WHERE pk = 0 AND ck = {ck}", ck) for ck in range(100)]
+
+            for query, ck_filter in queries:
+                marks = [await log.mark() for log in logs]
+
+                resp = await cql.run_async(SimpleStatement(query, consistency_level=ConsistencyLevel.QUORUM))
+                if ck_filter is not None:
+                    assert resp
+                    assert resp[0] == (0, ck_filter, ck_filter)
+                else:
+                    assert len(resp) == 100, f"Expected 100 rows, got {len(resp)}"
+                    for row in resp:
+                        assert row == (0, row.ck, row.ck), f"Unexpected row: {row}"
+
+                reconciled = False
+                for log, mark in zip(logs, marks):
+                    if await log.grep("read-repair reconcile:", from_mark=mark):
+                        reconciled = True
+                        break
+                label = f"ck={ck_filter}" if ck_filter is not None else "range scan"
+                assert reconciled, f"No reconciliation triggered for {label}"
+
+            # Verify servers[0] has all rows via MUTATION_FRAGMENTS.
+            await manager.api.keyspace_flush(servers[0].ip_addr, ks)
+            rows = await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{cf_name})", host=hosts[0])
+            live_cks = {row.ck for row in rows if row.partition_region == 2}
+            expected_cks = set(range(100))
+            assert live_cks == expected_cks, \
+                f"Expected all 100 rows repaired on servers[0], got {len(live_cks)}: missing {expected_cks - live_cks}"
+
+
+class TombstoneKind(Enum):
+    ROW = "row"
+    PARTITION = "partition"
+    CELL = "cell"
+    RANGE = "range"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize(
+    "tombstone_kind",
+    [
+        pytest.param(TombstoneKind.ROW, id="row"),
+        pytest.param(TombstoneKind.PARTITION, id="partition"),
+        pytest.param(TombstoneKind.CELL, id="cell"),
+        pytest.param(TombstoneKind.RANGE, id="range"),
+    ]
+)
+async def test_read_repair_tombstone(manager: ManagerClient, tombstone_kind: TombstoneKind):
+    """Test that read-repair correctly propagates tombstones to stale replicas.
+
+    Setup: 3 nodes, RF=3. Insert 100 rows (pk=0 ck=0..49, pk=1 ck=0..49) with
+    CL=ALL so all nodes have the data. Then block writes on servers[0] and execute
+    deletes on the remaining nodes. servers[0] misses the deletes.
+
+    Read with CL=QUORUM triggers read-repair which should propagate the tombstones
+    to servers[0]. Verify via MUTATION_FRAGMENTS that the tombstones landed.
+    """
+    NUM_CKS = 50
+    DELETED_CKS = set(range(25))  # ck 0-24 deleted, ck 25-49 alive
+
+    cmdline = ["--hinted-handoff-enabled", "0"]
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="dc1")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        table_opts = " WITH speculative_retry = 'NONE'"
+        async with new_test_table(manager, ks, "pk bigint, ck bigint, c int, PRIMARY KEY (pk, ck)", table_opts) as cf:
+
+            # Step 1: Insert all rows with CL=ALL so every node has the data.
+            insert_stmt = cql.prepare(f"INSERT INTO {cf} (pk, ck, c) VALUES (?, ?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ALL
+            await asyncio.gather(*[
+                cql.run_async(insert_stmt, (pk, ck, ck))
+                for pk in (0, 1) for ck in range(NUM_CKS)
+            ])
+
+            # Step 2: Block writes on servers[0] and execute deletes.
+            # servers[0] misses these deletes and retains the original rows.
+            cf_name = cf.split(".")[1]
+            await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False,
+                                               parameters={"ks_name": ks, "cf_name": cf_name, "what": "throw"})
+
+            match tombstone_kind:
+                case TombstoneKind.ROW:
+                    delete_stmt = cql.prepare(f"DELETE FROM {cf} WHERE pk = ? AND ck = ?")
+                    delete_stmt.consistency_level = ConsistencyLevel.ONE
+                    await asyncio.gather(*[
+                        cql.run_async(delete_stmt, (pk, ck))
+                        for pk in (0, 1) for ck in DELETED_CKS
+                    ])
+                case TombstoneKind.PARTITION:
+                    # Delete only pk=0 entirely. pk=1 stays intact.
+                    await cql.run_async(SimpleStatement(
+                        f"DELETE FROM {cf} WHERE pk = 0",
+                        consistency_level=ConsistencyLevel.ONE))
+                case TombstoneKind.CELL:
+                    delete_stmt = cql.prepare(f"DELETE c FROM {cf} WHERE pk = ? AND ck = ?")
+                    delete_stmt.consistency_level = ConsistencyLevel.ONE
+                    await asyncio.gather(*[
+                        cql.run_async(delete_stmt, (pk, ck))
+                        for pk in (0, 1) for ck in DELETED_CKS
+                    ])
+                case TombstoneKind.RANGE:
+                    for pk in (0, 1):
+                        await cql.run_async(SimpleStatement(
+                            f"DELETE FROM {cf} WHERE pk = {pk} AND ck >= 0 AND ck < 25",
+                            consistency_level=ConsistencyLevel.ONE))
+
+            await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
+
+            # Step 3: Force servers[0] into every QUORUM read's target set.
+            server0_host_id = await manager.get_host_id(servers[0].server_id)
+            for srv in servers:
+                await manager.api.enable_injection(srv.ip_addr, "force_read_target", one_shot=False,
+                                                   parameters={"host_id": server0_host_id})
+
+            # Step 4: Read each row and verify correct results.
+            # Read-repair triggers because servers[0] has stale data (no tombstones).
+            for pk in (0, 1):
+                for ck in range(NUM_CKS):
+                    resp = await cql.run_async(SimpleStatement(
+                        f"SELECT * FROM {cf} WHERE pk = {pk} AND ck = {ck}",
+                        consistency_level=ConsistencyLevel.QUORUM))
+
+                    is_deleted = _is_deleted(tombstone_kind, pk, ck, DELETED_CKS)
+
+                    if tombstone_kind == TombstoneKind.CELL and is_deleted:
+                        # Cell tombstone: row exists but column c is null.
+                        assert resp, f"pk={pk} ck={ck}: expected row with c=None"
+                        assert resp[0] == (pk, ck, None), f"pk={pk} ck={ck}: expected (pk, ck, None), got {resp[0]}"
+                    elif is_deleted:
+                        # Row/partition/range tombstone: row is gone.
+                        assert not resp, f"pk={pk} ck={ck}: expected no row, got {resp}"
+                    else:
+                        # Not deleted: row is live.
+                        assert resp, f"pk={pk} ck={ck}: expected live row"
+                        assert resp[0] == (pk, ck, ck), f"pk={pk} ck={ck}: expected (pk, ck, ck), got {resp[0]}"
+
+            # Step 5: Verify tombstones were propagated to servers[0] via MUTATION_FRAGMENTS.
+            await manager.api.keyspace_flush(servers[0].ip_addr, ks)
+            mf_rows = await cql.run_async(
+                f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{cf_name})", host=hosts[0])
+
+            _verify_tombstones(mf_rows, tombstone_kind, NUM_CKS, DELETED_CKS)
+
+
+def _is_deleted(tombstone_kind: TombstoneKind, pk: int, ck: int, deleted_cks: set[int]) -> bool:
+    """Return True if this (pk, ck) should be deleted for the given tombstone kind."""
+    if tombstone_kind == TombstoneKind.PARTITION:
+        # Only pk=0 is deleted.
+        return pk == 0
+    return ck in deleted_cks
+
+
+def _verify_tombstones(mf_rows, tombstone_kind: TombstoneKind, num_cks: int, deleted_cks: set[int]):
+    """Verify MUTATION_FRAGMENTS on servers[0] shows tombstones were propagated."""
+
+    match tombstone_kind:
+        case TombstoneKind.ROW:
+            # For ck in deleted_cks, clustering rows should have a row tombstone.
+            for pk in (0, 1):
+                pk_rows = [r for r in mf_rows if r.pk == pk and r.partition_region == 2
+                           and r.mutation_fragment_kind == "clustering row"]
+                tombstoned_cks = set()
+                for row in pk_rows:
+                    metadata = json.loads(row.metadata)
+                    tombstone = metadata.get("tombstone")
+                    if tombstone:
+                        tombstoned_cks.add(row.ck)
+                assert tombstoned_cks >= deleted_cks, \
+                    f"pk={pk}: expected row tombstones for {deleted_cks}, got {tombstoned_cks}"
+
+        case TombstoneKind.PARTITION:
+            # pk=0 partition_start should have a non-empty tombstone.
+            pk0_starts = [r for r in mf_rows if r.pk == 0 and r.partition_region == 0]
+            assert pk0_starts, "pk=0: no partition_start found"
+            for ps in pk0_starts:
+                metadata = json.loads(ps.metadata)
+                assert metadata.get("tombstone"), \
+                    f"pk=0: expected partition tombstone, got {metadata}"
+            # pk=1 should NOT have a partition tombstone.
+            pk1_starts = [r for r in mf_rows if r.pk == 1 and r.partition_region == 0]
+            assert pk1_starts, "pk=1: no partition_start found"
+            for ps in pk1_starts:
+                metadata = json.loads(ps.metadata)
+                assert not metadata.get("tombstone"), \
+                    f"pk=1: unexpected partition tombstone: {metadata}"
+
+        case TombstoneKind.CELL:
+            # For ck in deleted_cks, column 'c' should have is_live: false.
+            for pk in (0, 1):
+                pk_rows = [r for r in mf_rows if r.pk == pk and r.partition_region == 2
+                           and r.mutation_fragment_kind == "clustering row"]
+                dead_cell_cks = set()
+                for row in pk_rows:
+                    metadata = json.loads(row.metadata)
+                    columns = metadata.get("columns", {})
+                    c_meta = columns.get("c", {})
+                    if c_meta and not c_meta.get("is_live", True):
+                        dead_cell_cks.add(row.ck)
+                assert dead_cell_cks >= deleted_cks, \
+                    f"pk={pk}: expected cell tombstones for {deleted_cks}, got {dead_cell_cks}"
+
+        case TombstoneKind.RANGE:
+            # For each pk, there should be range_tombstone_change fragments.
+            for pk in (0, 1):
+                rtc_rows = [r for r in mf_rows if r.pk == pk and r.partition_region == 2
+                            and r.mutation_fragment_kind == "range tombstone change"]
+                assert rtc_rows, \
+                    f"pk={pk}: expected range tombstone change fragments, found none"
+                # At minimum we expect one pair of range tombstone changes.
+                assert len(rtc_rows) >= 2, \
+                    f"pk={pk}: expected at least 2 range tombstone change fragments, got {len(rtc_rows)}"
