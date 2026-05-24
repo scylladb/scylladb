@@ -851,6 +851,10 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                 req.ops_id, sstable_nr, files.size(), files, req.range);
     }
     if (files.empty()) {
+        if (sstable_nr > 0) {
+            blogger.info("stream_sstables[{}] Finished cloning sstable_nr={} range={} (object-storage clone path, zero wire bytes)",
+                    req.ops_id, sstable_nr, req.range);
+        }
         co_return resp;
     }
     auto ops_start_time = std::chrono::steady_clock::now();
