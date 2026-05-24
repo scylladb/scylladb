@@ -410,8 +410,13 @@ private:
         shared_future<> completion{make_ready_future<>()};
         abort_source as;
         int compaction_disabled_counter{0};
+
+        bool is_empty() const noexcept {
+            return !running && compaction_disabled_counter == 0 && completion.available();
+        }
     };
-    absl::flat_hash_map<compaction_group*, std::unique_ptr<group_compaction_state>> _groups;
+    using group_compaction_state_map = absl::flat_hash_map<compaction_group*, std::unique_ptr<group_compaction_state>>;
+    group_compaction_state_map _groups;
 
 public:
     compaction_manager_impl(segment_manager_impl& sm, compaction_config cfg)
@@ -439,6 +444,12 @@ public:
     future<> split_compaction(replica::table&, compaction_group&, mutation_writer::classify_by_token_group) override;
 
 private:
+
+    void maybe_erase_state(group_compaction_state_map::iterator it) {
+        if (it->second->is_empty()) {
+            _groups.erase(it);
+        }
+    }
 
     std::vector<log_segment_id> select_segments_for_compaction(const segment_descriptor_hist&);
     future<> do_compact(compaction_group&, abort_source&);
@@ -1426,6 +1437,7 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(compact
         auto it = _groups.find(&cg);
         if (it != _groups.end()) {
             --it->second->compaction_disabled_counter;
+            maybe_erase_state(it);
         }
     });
 }
@@ -1443,6 +1455,7 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(compact
         auto it = _groups.find(&cg);
         if (it != _groups.end()) {
             --it->second->compaction_disabled_counter;
+            maybe_erase_state(it);
         }
     });
 }
@@ -1617,6 +1630,7 @@ future<> compaction_manager_impl::compact_segments(compaction_group& cg, std::ve
 
     // wait for read operations that use the old locations
     co_await index.await_pending_reads();
+    co_await utils::get_local_injector().inject("logstor_compaction_wait_before_remove_segments", utils::wait_for_message(std::chrono::seconds{60}));
 
     // Free the compacted segments
     auto& ss = cg.logstor_segments();
