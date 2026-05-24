@@ -166,7 +166,11 @@ class cache_mutation_reader final : public mutation_reader::impl {
     void restore_continuity_after_insertion(const mutation_partition::rows_type::iterator&);
 
     void insert_into_tracker(rows_entry& e) {
-        e.set_sketch_key(compute_sketch_key(_dk.token()));
+        if (e.dummy()) {
+            e.set_sketch_key(compute_sketch_key(_dk.token()));
+        } else {
+            e.set_sketch_key(compute_sketch_key(_dk.token(), e.key()));
+        }
         _snp->tracker()->insert(e);
     }
     void finish_reader() {

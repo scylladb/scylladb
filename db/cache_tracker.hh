@@ -179,11 +179,29 @@ public:
 //     multi-row partitions (clustering key tables), and
 // (b) within a partition, the SLRU recency ordering handles eviction.
 // Trade-off: we don't get scan protection *within* large partitions.
+// Partition-level sketch key — used for dummy/sentinel entries and
+// tables without clustering keys.
 inline uint64_t compute_sketch_key(const dht::token& tok) noexcept {
     // The token is already a hash (murmur3); use it directly.
     // No sentinel guard needed — evictable::has_sketch_key() distinguishes
     // "key set to 0" from "key not set" via a separate flag bit.
     return static_cast<uint64_t>(tok.raw());
+}
+
+// Row-level sketch key — mixes partition token with clustering key so each
+// row tracks its own frequency independently.  This prevents cold rows in
+// hot partitions from being over-protected by the partition's accumulated
+// frequency (the "parasitic row" problem).
+inline uint64_t compute_sketch_key(const dht::token& tok,
+                                    const clustering_key& ck) {
+    uint64_t h = static_cast<uint64_t>(tok.raw());
+    ck.representation().with_linearized([&] (bytes_view bv) {
+        for (auto byte : bv) {
+            h ^= static_cast<uint64_t>(byte);
+            h *= 0x9e3779b97f4a7c15ULL;
+        }
+    });
+    return h;
 }
 
 inline
