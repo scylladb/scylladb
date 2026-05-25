@@ -16,6 +16,7 @@ from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replicas
+from test.pylib.rest_client import read_barrier
 
 import asyncio
 import pytest
@@ -162,12 +163,12 @@ async def test_basic_write_read(manager: ManagerClient):
             leader_metrics_query = await manager.metrics.query(leader_host.address)
             leader_metrics = {
                 'scylla_strong_consistency_coordinator_write_latency_count': leader_metrics_query.get('scylla_strong_consistency_coordinator_write_latency_count') or 0,
-                'scylla_strong_consistency_coordinator_read_latency_count':  leader_metrics_query.get('scylla_strong_consistency_coordinator_read_latency_count') or 0,
+                'scylla_strong_consistency_coordinator_read_latency_count':  leader_metrics_query.get('scylla_strong_consistency_coordinator_read_latency_count', {'read_type': 'linearizable'}) or 0,
             }
             non_leader_metrics_query = await manager.metrics.query(non_leader_replica_host.address)
             non_leader_metrics = {
                 'scylla_strong_consistency_coordinator_write_node_bounces': non_leader_metrics_query.get('scylla_strong_consistency_coordinator_write_node_bounces') or 0,
-                'scylla_strong_consistency_coordinator_read_latency_count': non_leader_metrics_query.get('scylla_strong_consistency_coordinator_read_latency_count') or 0,
+                'scylla_strong_consistency_coordinator_read_latency_count': non_leader_metrics_query.get('scylla_strong_consistency_coordinator_read_latency_count', {'read_type': 'linearizable'}) or 0,
             }
             non_replica_metrics_query = await manager.metrics.query(non_replica_host.address)
             non_replica_metrics = {
@@ -216,7 +217,7 @@ async def test_basic_write_read(manager: ManagerClient):
         insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
         bound_insert_stmt = BoundStatement(insert_stmt)
         select_stmt = cql.prepare(f"SELECT * FROM {ks}.test WHERE pk = ?")
-        bound_select_stmt = BoundStatement(select_stmt, consistency_level=ConsistencyLevel.ONE)
+        bound_select_stmt = BoundStatement(select_stmt, consistency_level=ConsistencyLevel.QUORUM)
         bound_select_stmt.bind([10])
 
         logger.info(f"Run prepared INSERT statement on leader {leader_host}")
@@ -1466,3 +1467,100 @@ async def test_leader_cache_eliminates_redirect(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 25", host=non_replica_host)
             assert len(rows) == 1
             assert rows[0].value == 25
+
+@pytest.mark.asyncio
+async def test_read_forwarding(manager: ManagerClient):
+    """
+    Verify read forwarding behavior for strongly consistent tables:
+    - CL=QUORUM reads (linearizable) are forwarded to the raft leader
+    - CL=ONE reads (non-linearizable) work on any replica without forwarding
+    - Linearizability: a CL=QUORUM read after a write always sees the write
+    Use a 4-node cluster with RF=3 to have:
+    - a leader replica
+    - 2 follower replicas, one of which is not required for quorum
+    - a non-replica node
+    """
+
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    def host_by_host_id(host_id):
+        for hid, host in zip(host_ids, hosts):
+            if hid == host_id:
+                return host
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            for server in servers:
+                try:
+                    leader_host_id = await wait_for_leader(manager, server, group_id)
+                    break
+                except:
+                    continue
+
+            leader_host = host_by_host_id(leader_host_id)
+
+            tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
+            replica_host_ids = [replica[0] for replica in tablet_replicas]
+            non_leader_replica_host_id = [hid for hid in replica_host_ids if str(hid) != str(leader_host_id)][0]
+            non_leader_replica_host = host_by_host_id(non_leader_replica_host_id)
+            non_replica_host_id = [hid for hid in host_ids if str(hid) not in [str(r) for r in replica_host_ids]][0]
+            non_replica_host = host_by_host_id(non_replica_host_id)
+
+            async def get_metric(host, name, labels={}):
+                metrics = await manager.metrics.query(host.address)
+                return metrics.get(name, labels) or 0
+
+            async def check_read(cl, send_to, expect_fwd, read_type=None, sc_metric_host=None):
+                """Execute a read and verify forwarding behavior and coordinator metrics."""
+                label = f"CL={ConsistencyLevel.value_to_name[cl]} on {send_to.address}"
+                logger.info(f"Testing read: {label}")
+
+                stmt = SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1", consistency_level=cl)
+
+                fwd_before = await get_metric(send_to, 'scylla_transport_requests_forwarded_successfully')
+                sc_before = await get_metric(sc_metric_host, f'scylla_strong_consistency_coordinator_read_latency_count', {'read_type': read_type}) if read_type else None
+
+                rows = await cql.run_async(stmt, host=send_to)
+                assert len(rows) == 1
+                assert rows[0].c == 100
+
+                fwd_after = await get_metric(send_to, 'scylla_transport_requests_forwarded_successfully')
+                if expect_fwd:
+                    assert fwd_after > fwd_before, f"{label}: expected forwarding"
+                else:
+                    assert fwd_after == fwd_before, f"{label}: unexpected forwarding"
+
+                if read_type:
+                    sc_after = await get_metric(sc_metric_host, f'scylla_strong_consistency_coordinator_read_latency_count', {'read_type': read_type})
+                    assert sc_after > sc_before, f"{label}: expected {read_type} scylla_strong_consistency_coordinator_read_latency_count to increment on {sc_metric_host.address}"
+
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (1, 100)", host=leader_host)
+
+            # CL=QUORUM: linearizable, forwarded to leader
+            await check_read(ConsistencyLevel.QUORUM, leader_host, expect_fwd=False,
+                             read_type='linearizable', sc_metric_host=leader_host)
+            await check_read(ConsistencyLevel.QUORUM, non_leader_replica_host, expect_fwd=True,
+                             read_type='linearizable', sc_metric_host=leader_host)
+            await check_read(ConsistencyLevel.QUORUM, non_replica_host, expect_fwd=True,
+                             read_type='linearizable', sc_metric_host=leader_host)
+
+            # CL=ONE: no forwarding, executed on the local replica
+            await read_barrier(manager.api, non_leader_replica_host.address, group_id=group_id, timeout=30)
+            await check_read(ConsistencyLevel.ONE, non_leader_replica_host, expect_fwd=False,
+                             read_type='non_linearizable', sc_metric_host=non_leader_replica_host)
+
+            # --- Linearizability: write then CL=QUORUM read from follower ---
+            logger.info("Testing linearizability: write + CL=QUORUM read from follower (10 iterations)")
+            for i in range(10):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({100 + i}, {i * 10})")
+                read_stmt = SimpleStatement(f"SELECT * FROM {table} WHERE pk = {100 + i}", consistency_level=ConsistencyLevel.QUORUM)
+                rows = await cql.run_async(read_stmt, host=non_leader_replica_host)
+                assert len(rows) == 1, f"Expected 1 row for pk={100 + i}, got {len(rows)}"
+                assert rows[0].c == i * 10, f"Linearizability violation: pk={100 + i}, expected c={i * 10}, got c={rows[0].c}"

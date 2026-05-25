@@ -89,6 +89,17 @@ auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
     return timestamp_with_term{new_ts, term};
 }
 
+auto raft_server::begin_read(abort_source& as) -> begin_read_result {
+    const auto leader = _state.server->current_leader();
+    if (!leader) {
+        return need_wait_for_leader{_state.server->wait_for_leader(&as)};
+    }
+    if (leader != _state.server->id()) {
+        return raft::not_a_leader{leader};
+    }
+    return ok{};
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,

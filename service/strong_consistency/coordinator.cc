@@ -52,6 +52,7 @@ struct read_timeout : public exceptions::read_timeout_exception {
 void stats::register_stats() {
     namespace sm = seastar::metrics;
     sm::label reason_label("reason");
+    sm::label read_type_label("read_type");
 
     _metrics.add_group("strong_consistency_coordinator", {
         sm::make_summary("write_latency_summary", sm::description("Strong consistency write latency summary"),
@@ -85,11 +86,22 @@ void stats::register_stats() {
             .set_skip_when_empty(),
 
         sm::make_summary("read_latency_summary", sm::description("Strong consistency read latency summary"),
-            [this] { return to_metrics_summary(read.summary()); }).set_skip_when_empty(),
+            [this] { return to_metrics_summary(linearizable_read.summary()); })(read_type_label("linearizable"))
+            .set_skip_when_empty(),
 
         sm::make_histogram("read_latency", sm::description("Strong consistency read latency histogram"),
-            {}, [this] { return to_metrics_histogram(read.histogram()); })
-            .aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            {}, [this] { return to_metrics_histogram(linearizable_read.histogram()); })
+            .aggregate({seastar::metrics::shard_label})(read_type_label("linearizable"))
+            .set_skip_when_empty(),
+
+        sm::make_summary("read_latency_summary", sm::description("Strong consistency read latency summary"),
+            [this] { return to_metrics_summary(non_linearizable_read.summary()); })(read_type_label("non_linearizable"))
+            .set_skip_when_empty(),
+
+        sm::make_histogram("read_latency", sm::description("Strong consistency read latency histogram"),
+            {}, [this] { return to_metrics_histogram(non_linearizable_read.histogram()); })
+            .aggregate({seastar::metrics::shard_label})(read_type_label("non_linearizable"))
+            .set_skip_when_empty(),
 
         sm::make_counter("read_errors", read_errors_timeout,
             sm::description("number of strong consistency read requests that failed"),
@@ -390,6 +402,7 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
 auto coordinator::query(schema_ptr schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
+        read_type rtype,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as
@@ -400,19 +413,46 @@ auto coordinator::query(schema_ptr schema,
 
     utils::latency_counter lc;
     lc.start();
-    auto mark_read_latency = defer([this, &lc] { _stats.read.mark(lc.stop().latency()); });
+    auto& read_stats = (rtype == read_type::linearizable)
+        ? _stats.linearizable_read : _stats.non_linearizable_read;
+    auto mark_read_latency = defer([&read_stats, &lc] () mutable { read_stats.mark(lc.stop().latency()); });
 
     try {
-        auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token(), aoe.abort_source(), false);
+        auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token(), aoe.abort_source(), rtype == read_type::linearizable);
         if (auto* redirect = get_if<need_redirect>(&op_result)) {
             co_return std::move(*redirect);
         }
         auto& op = get<operation_ctx>(op_result);
 
-        co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
-            utils::wait_for_message(5min));
+        if (rtype == read_type::linearizable) {
+            // For linearizable reads we may need to forward to the raft leader.
+            while (true) {
+                auto disposition = op.raft_server.begin_read(aoe.abort_source());
+                if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
+                    const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
+                    const auto* target = find_replica(op.tablet_info, leader_host_id);
+                    if (!target) {
+                        on_internal_error(logger,
+                            ::format("query(): table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
+                                schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.tablet_info.replicas));
+                    }
+                    co_return need_redirect{*target};
+                }
+                if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+                    co_await std::move(wait_for_leader->future);
+                    continue;
+                }
+                break;
+            }
+        }
+        // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
 
-        co_await op.raft_server.server().read_barrier(&aoe.abort_source());
+        if (rtype == read_type::linearizable) {
+            co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
+                utils::wait_for_message(5min));
+
+            co_await op.raft_server.server().read_barrier(&aoe.abort_source());
+        }
 
         auto [result, cache_temp] = co_await _db.query(schema, cmd,
             query::result_options::only_result(), ranges, trace_state, timeout);
@@ -427,16 +467,17 @@ auto coordinator::query(schema_ptr schema,
         //     method was triggered.
         // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
         // * timed_out_error: Can be thrown by the abort_on_expiry.
+        // * seastar::condition_variable_timed_out: Can be thrown by begin_read's wait_for_leader.
         //
         // We handle them collectively here.
         if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
-                || try_catch<timed_out_error>(ex)) {
+                || try_catch<timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)) {
             logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_timeout;
             co_return coroutine::return_exception(read_timeout(schema->ks_name(), schema->cf_name()));
         } else {
-            logger.trace("mutate(): unknown exception {}, table {}.{}, read cmd {}",
+            logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_other;
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
