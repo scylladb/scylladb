@@ -5475,7 +5475,14 @@ class scylla_compaction_tasks(gdb.Command):
             task_list = [seastar_shared_ptr(t).get().dereference() for t in std_list(cm['_tasks'])]
 
         for task in task_list:
-            schema = schema_ptr(task['_compacting_table'].dereference()['_schema'])
+            compacting_table = task['_compacting_table']
+            try:
+                # _compacting_table is a compaction::compaction_group_view*
+                # downcast to the concrete type to access _t (table&) and its _schema
+                concrete = downcast_vptr(compacting_table)
+                schema = schema_ptr(concrete['_t']['_schema'])
+            except gdb.error:
+                schema = schema_ptr(compacting_table.dereference()['_schema'])
             key = 'type={}, state={:5}, {}'.format(task['_type'], str(task['_state']), schema.table_name())
             task_hist.add(key)
 
