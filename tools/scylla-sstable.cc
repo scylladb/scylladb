@@ -2583,7 +2583,7 @@ For more information, see: {}
                     typed_option<size_t>("memory-limit", 1 << 20, "the maximum amount of memory in bytes to use for the memtable buffering the query results (default 1MiB)"),
                     typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
                     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
-                    typed_option<std::string>("sstable-version", "SSTable format version, (e.g. \"me\", \"ms\")"),
+                    typed_option<std::string>("sstable-version", "SSTable format version, (e.g. \"me\", \"mt\")"),
             }},
             write_operation},
 /* script */
