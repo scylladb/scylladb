@@ -134,11 +134,9 @@ def jmx(request, rest_api_mock_server):
                 response=[])]
     set_expected_requests(rest_api_mock_server, expected_requests)
 
-    # Our nodetool launcher script ignores the host param, so this has to be 127.0.0.1, matching the internal default.
-    jmx_ip = "127.0.0.1"
-    jmx_port = random.randint(10000, 65535)
-    while jmx_port == api_port:
-        jmx_port = random.randint(10000, 65535)
+    # Bind JMX to the same per-module loopback IP as the REST mock.
+    jmx_ip = ip
+    jmx_port = 7199
 
     jmx_process = subprocess.Popen(
             [
@@ -147,6 +145,7 @@ def jmx(request, rest_api_mock_server):
                 "-p", str(api_port),
                 "-ja", jmx_ip,
                 "-jp", str(jmx_port),
+                f"-Djava.rmi.server.hostname={jmx_ip}",
             ],
             cwd=workdir, text=True)
 
