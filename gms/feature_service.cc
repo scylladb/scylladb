@@ -110,6 +110,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "GROUP0_SCHEMA_VERSIONING"sv,
         "VIEW_BUILD_STATUS_ON_GROUP0"sv,
         "CDC_GENERATIONS_V2"sv,
+        "HOST_ID_BASED_HINTED_HANDOFF"sv,
     };
 
     if (is_test_only_feature_deprecated()) {
