@@ -209,7 +209,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
     auto&& rp = buf_rp.position;
     try {
 
-        commitlog_entry_reader cer(buf);
+        commitlog_mutation_entry_reader cer(buf);
         auto& fm = cer.mutation();
 
         auto& local_cm = _column_mappings.local().map;

@@ -1023,7 +1023,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entry) {
 
                 for (auto& seg : segments) {
                     db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
-                        commitlog_entry_reader r(buf_rp.buffer);
+                        commitlog_mutation_entry_reader r(buf_rp.buffer);
                         auto& rp = buf_rp.position;
                         auto i = std::find(rps.begin(), rps.end(), rp);
                         // since we are looping, we can be reading last test cases 
@@ -1085,7 +1085,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
 
                 for (auto& seg : segments) {
                     db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
-                        commitlog_entry_reader r(buf_rp.buffer);
+                        commitlog_mutation_entry_reader r(buf_rp.buffer);
                         auto& rp = buf_rp.position;
                         auto i = std::find(rps.begin(), rps.end(), rp);
                         // since we are looping, we can be reading last test cases 
@@ -1899,7 +1899,7 @@ static future<> do_test_oversized_entry(size_t max_size_mb) {
                 auto&& rp = buf_rp.position;
 
                 BOOST_CHECK(rp2mut.count(rp));
-                commitlog_entry_reader cer(buf);
+                commitlog_mutation_entry_reader cer(buf);
                 auto& fm = cer.mutation();
                 auto m1 = fm.unfreeze(gen.schema());
                 auto m2 = rp2mut.at(rp).unfreeze(gen.schema());
