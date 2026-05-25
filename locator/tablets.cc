@@ -1035,9 +1035,37 @@ load_stats load_stats::from_v1(load_stats_v1&& stats) {
 }
 
 load_stats& load_stats::operator+=(const load_stats& s) {
+    static constexpr auto min_seq = std::numeric_limits<resize_decision::seq_number_t>::min();
+
+    // A prior source has been merged if we already aggregated at least once.
+    // This is distinct from checking tables.empty(): a source with no tables
+    // (e.g. a node that was down when the table was created) must still cause
+    // invalidation for tables reported by later sources.
+    bool had_prior_source = _aggregated;
+
     for (auto& [id, stats] : s.tables) {
+        bool is_new = !tables.contains(id);
         tables[id] += stats;
+        if (is_new && had_prior_source) {
+            tables[id].split_ready_seq_number = min_seq;
+        }
     }
+
+    // Tables in the destination that are absent from s were not reported by
+    // the current source — invalidate their split readiness.
+    // Guard: only invalidate when the destination already has tables from prior
+    // sources.  When `had_prior_source` is false the destination is the
+    // identity element and no invalidation is needed.
+    if (had_prior_source) {
+        for (auto& [id, table_stats] : tables) {
+            if (!s.tables.contains(id)) {
+                table_stats.split_ready_seq_number = min_seq;
+            }
+        }
+    }
+
+    _aggregated = true;
+
     for (auto& [host, cap] : s.capacity) {
         capacity[host] = cap;
     }
