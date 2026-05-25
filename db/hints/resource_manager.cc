@@ -7,8 +7,6 @@
  */
 
 #include "resource_manager.hh"
-#include "gms/inet_address.hh"
-#include "locator/token_metadata.hh"
 #include "manager.hh"
 #include "utils/log.hh"
 #include <boost/range/algorithm/for_each.hpp>
@@ -94,7 +92,7 @@ future<> space_watchdog::stop() noexcept {
 
 // Called under the end_point_hints_manager::file_update_mutex() of the corresponding end_point_hints_manager instance.
 future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager,
-        std::optional<std::variant<locator::host_id, gms::inet_address>> maybe_ep_key) {
+        std::optional<locator::host_id> maybe_ep_key) {
     // It may happen that we get here and the directory has already been deleted in the context of manager::drain_for().
     // In this case simply bail out.
     if (!co_await file_exists(path.native())) {
@@ -145,39 +143,26 @@ void space_watchdog::on_timer() {
                 // not hintable).
                 // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
                 // continue to enumeration - there is no one to change them.
-                auto maybe_variant = std::invoke([&] () -> std::optional<std::variant<locator::host_id, gms::inet_address>> {
+                auto maybe_host_id = std::invoke([&] () -> std::optional<locator::host_id> {
                     try {
-                        const auto hid_or_ep = locator::host_id_or_endpoint{de.name};
-
-                        // If hinted handoff is host-ID-based, hint directories representing IP addresses must've
-                        // been created by mistake and they're invalid. The same for pre-host-ID hinted handoff
-                        // -- hint directories representing host IDs are NOT valid.
-                        if (hid_or_ep.has_host_id() && shard_manager.uses_host_id()) {
-                            return std::variant<locator::host_id, gms::inet_address>(hid_or_ep.id());
-                        } else if (hid_or_ep.has_endpoint() && !shard_manager.uses_host_id()) {
-                            return std::variant<locator::host_id, gms::inet_address>(hid_or_ep.endpoint());
-                        } else {
-                            return std::nullopt;
-                        }
+                        return locator::host_id(utils::UUID(de.name));
                     } catch (...) {
                         return std::nullopt;
                     }
                 });
 
                 // Case 1: The directory is managed by an endpoint manager.
-                if (maybe_variant && shard_manager.have_ep_manager(*maybe_variant)) {
-                    const auto variant = *maybe_variant;
-                    return shard_manager.with_file_update_mutex_for(variant, [this, variant, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)] () mutable {
-                        return scan_one_ep_dir(dir / ep_name, shard_manager, variant);
+                if (maybe_host_id && shard_manager.have_ep_manager(*maybe_host_id)) {
+                    const auto host_id = *maybe_host_id;
+                    return shard_manager.with_file_update_mutex_for(host_id, [this, host_id, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)] () mutable {
+                        return scan_one_ep_dir(dir / ep_name, shard_manager, host_id);
                     });
                 }
-                // Case 2: The directory isn't managed by an endpoint manager, but it represents either an IP address,
-                //         or a host ID.
-                else if (maybe_variant) {
-                    return scan_one_ep_dir(dir / de.name, shard_manager, *maybe_variant);
+                // Case 2: The directory isn't managed by an endpoint manager, but it represents a host ID.
+                else if (maybe_host_id) {
+                    return scan_one_ep_dir(dir / de.name, shard_manager, *maybe_host_id);
                 }
-                // Case 3: The directory isn't managed by an endpoint manager, and it represents neither an IP address,
-                //         nor a host ID.
+                // Case 3: The directory isn't managed by an endpoint manager, and it doesn't represent a host ID.
                 else {
                     // We use trace here to prevent flooding logs with unnecessary information.
                     resource_manager_logger.trace("Encountered a hint directory of invalid name while scanning: {}", de.name);
