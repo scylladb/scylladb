@@ -1051,8 +1051,29 @@ load_stats load_stats::from_v1(load_stats_v1&& stats) {
 }
 
 load_stats& load_stats::operator+=(const load_stats& s) {
+    static constexpr auto min_seq = std::numeric_limits<resize_decision::seq_number_t>::min();
+
+    // If destination already has tables from prior sources, any table in s
+    // that is new to the destination was not reported by those prior
+    // sources — its split readiness is unknown and must be invalidated.
+    bool had_tables = !tables.empty();
+
     for (auto& [id, stats] : s.tables) {
+        bool is_new = !tables.contains(id);
         tables[id] += stats;
+        if (is_new && had_tables) {
+            tables[id].split_ready_seq_number = min_seq;
+        }
+    }
+
+    // Tables in the destination that are absent from s were not reported by
+    // the current source — invalidate their split readiness.
+    if (!s.tables.empty()) {
+        for (auto& [id, table_stats] : tables) {
+            if (!s.tables.contains(id)) {
+                table_stats.split_ready_seq_number = min_seq;
+            }
+        }
     }
     for (auto& [host, cap] : s.capacity) {
         capacity[host] = cap;
