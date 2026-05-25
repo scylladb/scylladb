@@ -3223,6 +3223,57 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_mutation_entry_writer
     force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
     return _segment_manager->allocate_when_possible(cl_entries_writer(sync, std::move(entry_writers)), timeout);
 }
+future<utils::chunked_vector<db::rp_handle>> db::commitlog::add_raft_entries(
+        const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers) {
+    class cl_raft_entries_writer final : public entry_writer {
+        utils::chunked_vector<commitlog_raft_log_entry_writer> _writers;
+        cf_id_type _id;
+
+    public:
+        utils::chunked_vector<rp_handle> res;
+
+        cl_raft_entries_writer(utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers, cf_id_type id)
+            : entry_writer(force_sync::yes, entry_writers.size())
+            , _writers(std::move(entry_writers))
+            , _id(id) {
+            res.reserve(_writers.size());
+        }
+        const cf_id_type& id(size_t) const override {
+            return _id;
+        }
+        size_t size(segment&) override {
+            size_t res = 0;
+            for (auto& w : _writers) {
+                res += w.size();
+            }
+            return res;
+        }
+        size_t size(segment&, size_t i) override {
+            return _writers.at(i).size();
+        }
+        size_t size() const override {
+            size_t res = 0;
+            for (auto& w : _writers) {
+                res += w.size();
+            }
+            return res;
+        }
+        void write(segment&, output& out, size_t i) const override {
+            _writers.at(i).write(out);
+        }
+        void result(size_t i, rp_handle h) override {
+            SCYLLA_ASSERT(i == res.size());
+            res.emplace_back(std::move(h));
+        }
+
+        using result_type = utils::chunked_vector<db::rp_handle>;
+
+        result_type result() {
+            return std::move(res);
+        }
+    };
+    return _segment_manager->allocate_when_possible(cl_raft_entries_writer(std::move(entry_writers), id), db::no_timeout);
+}
 
 db::commitlog::commitlog(config cfg)
         : _segment_manager(::make_shared<segment_manager>(std::move(cfg))) {

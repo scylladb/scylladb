@@ -238,6 +238,13 @@ public:
             utils::chunked_vector<commitlog_mutation_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
 
     /**
+     * Add N raft log entries to the commit log as a single operation (in a single segment).
+     * Always uses force_sync::yes.
+     */
+    future<utils::chunked_vector<rp_handle>> add_raft_entries(
+            const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers);
+
+    /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
      * given. Discards any commit log segments that are no longer used.
      *
