@@ -3004,9 +3004,9 @@ def write_build_file(f,
         build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-package.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
 
-        build $builddir/{mode}/dist/rpm: collect_pkgs | {' '.join(all_rpms)} $builddir/dist/{mode}/redhat dist-cqlsh-rpm dist-python3-rpm
+        build $builddir/{mode}/dist/rpm: collect_pkgs | $builddir/dist/{mode}/redhat dist-cqlsh-rpm dist-python3-rpm
           pkgs = {' '.join(all_rpms)}
-        build $builddir/{mode}/dist/deb: collect_pkgs | {' '.join(all_debs)} $builddir/dist/{mode}/debian dist-cqlsh-deb dist-python3-deb
+        build $builddir/{mode}/dist/deb: collect_pkgs | $builddir/dist/{mode}/debian dist-cqlsh-deb dist-python3-deb
           pkgs = {' '.join(all_debs)}
         build collect-dist-{mode}: phony $builddir/{mode}/dist/rpm $builddir/{mode}/dist/deb
         build {mode}-dist: phony dist-server-{mode} dist-server-debuginfo-{mode} dist-python3-{mode} dist-unified-{mode} dist-cqlsh-{mode}
