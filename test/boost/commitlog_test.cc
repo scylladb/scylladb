@@ -2467,4 +2467,147 @@ SEASTAR_TEST_CASE(test_commitlog_replay_segment_order) {
     });
 }
 
+
+SEASTAR_TEST_CASE(test_descriptor_parse_standard_format) {
+    // Standard format without tag: CommitLog-<ver>-<id>.log
+    using descriptor = db::commitlog::descriptor;
+
+    // Standard format without tag: CommitLog-4-12345.log
+    {
+        descriptor d("CommitLog-4-12345.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    // Older version
+    {
+        descriptor d("CommitLog-2-99999.log");
+        BOOST_CHECK_EQUAL(d.id, 99999);
+        BOOST_CHECK_EQUAL(d.ver, 2);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    // With full path
+    {
+        descriptor d("/var/lib/scylla/commitlog/CommitLog-4-67890.log");
+        BOOST_CHECK_EQUAL(d.id, 67890);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_tagged_format) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Tagged format: CommitLog-4-12345.variant.log
+    {
+        descriptor d("CommitLog-4-12345.variant.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "variant");
+    }
+
+    // Different tag
+    {
+        descriptor d("CommitLog-4-12345.custom.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "custom");
+    }
+
+    // Tagged with full path
+    {
+        descriptor d("/var/lib/scylla/commitlog/CommitLog-4-67890.variant.log");
+        BOOST_CHECK_EQUAL(d.id, 67890);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "variant");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_recycled_format) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Recycled without tag
+    {
+        descriptor d("Recycled-CommitLog-4-12345.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "");
+    }
+
+    // Recycled with tag
+    {
+        descriptor d("Recycled-CommitLog-4-12345.variant.log");
+        BOOST_CHECK_EQUAL(d.id, 12345);
+        BOOST_CHECK_EQUAL(d.ver, 4);
+        BOOST_CHECK_EQUAL(d.descriptor_tag, "variant");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_parse_invalid_format) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Missing .log extension
+    BOOST_CHECK_THROW(descriptor("CommitLog-4-12345"), std::domain_error);
+
+    // Wrong prefix
+    BOOST_CHECK_THROW(descriptor("WrongPrefix-4-12345.log"), std::domain_error);
+
+    // Numeric tag (tags must be alphabetic)
+    BOOST_CHECK_THROW(descriptor("CommitLog-4-12345.123.log"), std::domain_error);
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_filename_generation) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Without tag
+    {
+        descriptor d(12345, descriptor::FILENAME_PREFIX, 4, {}, {});
+        BOOST_CHECK_EQUAL(d.filename(), "CommitLog-4-12345.log");
+    }
+
+    // With tag
+    {
+        descriptor d(12345, descriptor::FILENAME_PREFIX, 4, {}, "variant");
+        BOOST_CHECK_EQUAL(d.filename(), "CommitLog-4-12345.variant.log");
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
+    using descriptor = db::commitlog::descriptor;
+
+    // Generate filename with tag, parse it back
+    {
+        descriptor d1(12345, descriptor::FILENAME_PREFIX, 4, {}, "variant");
+        auto fname = d1.filename();
+        auto d2 = descriptor(std::string(fname));
+        BOOST_CHECK_EQUAL(d2.id, 12345);
+        BOOST_CHECK_EQUAL(d2.ver, 4);
+        BOOST_CHECK_EQUAL(d2.descriptor_tag, "variant");
+    }
+
+    // Generate filename without tag, parse it back
+    {
+        descriptor d1(67890, descriptor::FILENAME_PREFIX, 4, {}, {});
+        auto fname = d1.filename();
+        auto d2 = descriptor(std::string(fname));
+        BOOST_CHECK_EQUAL(d2.id, 67890);
+        BOOST_CHECK_EQUAL(d2.ver, 4);
+        BOOST_CHECK_EQUAL(d2.descriptor_tag, "");
+    }
+
+    return make_ready_future<>();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
