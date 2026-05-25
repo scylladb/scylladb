@@ -2605,6 +2605,162 @@ SEASTAR_TEST_CASE(test_commitlog_replay_segment_order) {
     });
 }
 
+// Helper: verify column mapping is included in the first entry for a schema
+// version within a chunk, and omitted in subsequent entries.
+// `use_variant_format`: if true, use variant entry format with descriptor_tag;
+//                        if false, use legacy/non-variant format.
+static future<> do_test_schema_mapping_included_when_unknown(bool use_variant_format) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    if (use_variant_format) {
+        cfg.descriptor_tag = "variant";
+    }
+
+    return cl_test(cfg, [use_variant_format](commitlog& log) {
+        return seastar::async([&, use_variant_format] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            auto s = gen.schema();
+
+            constexpr int n = 3;
+            utils::chunked_vector<frozen_mutation> mutations;
+            utils::chunked_vector<commitlog_mutation_entry_writer> writers;
+
+            for (int i = 0; i < n; ++i) {
+                mutations.emplace_back(freeze(gen(1).front()));
+                writers.emplace_back(s, mutations.back(), commitlog::force_sync::no);
+            }
+
+            auto handles = log.add_entries(std::move(writers), db::timeout_clock::now() + 60s).get();
+            std::vector<replay_position> rps;
+            for (auto& h : handles) {
+                rps.emplace_back(h.rp());
+            }
+
+            log.sync_all_segments().get();
+
+            auto segments = log.get_active_segment_names();
+            BOOST_REQUIRE(!segments.empty());
+
+            size_t entry_idx = 0;
+            for (auto& seg : segments) {
+                db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                    auto it = std::find(rps.begin(), rps.end(), buf_rp.position);
+                    if (it == rps.end()) {
+                        return make_ready_future<>();
+                    }
+
+                    std::optional<column_mapping> mapping;
+                    if (use_variant_format) {
+                        commitlog_entry_reader cer(buf_rp.buffer, detail::commitlog_entry_serialization_format::variant);
+                        BOOST_REQUIRE(std::holds_alternative<mutation_entry>(cer.entry().item));
+                        mapping = std::get<mutation_entry>(cer.entry().item).mapping();
+                    } else {
+                        commitlog_mutation_entry_reader cer(buf_rp.buffer);
+                        mapping = cer.get_column_mapping();
+                    }
+
+                    if (entry_idx == 0) {
+                        BOOST_CHECK_MESSAGE(mapping.has_value(),
+                            "First entry should include column mapping");
+                    } else {
+                        BOOST_CHECK_MESSAGE(!mapping.has_value(),
+                            fmt::format("Entry {} should not include column mapping", entry_idx));
+                    }
+                    ++entry_idx;
+                    return make_ready_future<>();
+                }).get();
+            }
+            BOOST_CHECK_EQUAL(entry_idx, size_t(n));
+        });
+    });
+}
+
+// Helper: verify that after a sync boundary the column mapping is re-included.
+static future<> do_test_schema_mapping_reincluded_after_sync(bool use_variant_format) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    if (use_variant_format) {
+        cfg.descriptor_tag = "variant";
+    }
+
+    return cl_test(cfg, [use_variant_format](commitlog& log) {
+        return seastar::async([&, use_variant_format] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            auto s = gen.schema();
+
+            // First batch: 2 entries.
+            utils::chunked_vector<frozen_mutation> mutations1;
+            utils::chunked_vector<commitlog_mutation_entry_writer> writers1;
+            for (int i = 0; i < 2; ++i) {
+                mutations1.emplace_back(freeze(gen(1).front()));
+                writers1.emplace_back(s, mutations1.back(), commitlog::force_sync::no);
+            }
+            auto handles1 = log.add_entries(std::move(writers1), db::timeout_clock::now() + 60s).get();
+
+            log.sync_all_segments().get();
+
+            // Second batch: 2 entries after sync boundary.
+            utils::chunked_vector<frozen_mutation> mutations2;
+            utils::chunked_vector<commitlog_mutation_entry_writer> writers2;
+            for (int i = 0; i < 2; ++i) {
+                mutations2.emplace_back(freeze(gen(1).front()));
+                writers2.emplace_back(s, mutations2.back(), commitlog::force_sync::no);
+            }
+            auto handles2 = log.add_entries(std::move(writers2), db::timeout_clock::now() + 60s).get();
+
+            log.sync_all_segments().get();
+
+            std::vector<replay_position> rps;
+            for (auto& h : handles1) { rps.emplace_back(h.rp()); }
+            for (auto& h : handles2) { rps.emplace_back(h.rp()); }
+
+            auto segments = log.get_active_segment_names();
+            BOOST_REQUIRE(!segments.empty());
+
+            std::vector<bool> has_mapping;
+            for (auto& seg : segments) {
+                db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                    auto it = std::find(rps.begin(), rps.end(), buf_rp.position);
+                    if (it == rps.end()) {
+                        return make_ready_future<>();
+                    }
+
+                    if (use_variant_format) {
+                        commitlog_entry_reader cer(buf_rp.buffer, detail::commitlog_entry_serialization_format::variant);
+                        BOOST_REQUIRE(std::holds_alternative<mutation_entry>(cer.entry().item));
+                        has_mapping.push_back(std::get<mutation_entry>(cer.entry().item).mapping().has_value());
+                    } else {
+                        commitlog_mutation_entry_reader cer(buf_rp.buffer);
+                        has_mapping.push_back(cer.get_column_mapping().has_value());
+                    }
+                    return make_ready_future<>();
+                }).get();
+            }
+
+            BOOST_REQUIRE_EQUAL(has_mapping.size(), 4u);
+            BOOST_CHECK_MESSAGE(has_mapping[0], "First entry in batch 1 should include column mapping");
+            BOOST_CHECK_MESSAGE(!has_mapping[1], "Second entry in batch 1 should not include column mapping");
+            BOOST_CHECK_MESSAGE(has_mapping[2], "First entry in batch 2 should re-include column mapping");
+            BOOST_CHECK_MESSAGE(!has_mapping[3], "Second entry in batch 2 should not include column mapping");
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_mutation_entry_schema_mapping_included_when_unknown) {
+    return do_test_schema_mapping_included_when_unknown(false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_mutation_entry_schema_mapping_reincluded_after_sync) {
+    return do_test_schema_mapping_reincluded_after_sync(false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_schema_mapping_included_when_unknown) {
+    return do_test_schema_mapping_included_when_unknown(true);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_schema_mapping_reincluded_after_sync) {
+    return do_test_schema_mapping_reincluded_after_sync(true);
+}
 
 SEASTAR_TEST_CASE(test_descriptor_parse_standard_format) {
     // Standard format without tag: CommitLog-<ver>-<id>.log
