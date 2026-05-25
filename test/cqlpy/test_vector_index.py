@@ -22,7 +22,7 @@
 
 import pytest
 import json
-from .util import new_test_table, is_scylla, unique_name
+from .util import new_test_table, is_scylla, unique_name, config_value_context
 from cassandra.protocol import InvalidRequest, ConfigurationException
 
 supported_filtering_types = [
@@ -619,16 +619,119 @@ def test_sai_on_regular_column_rejected(cql, test_keyspace, scylla_only):
             cql.execute(f"CREATE CUSTOM INDEX ON {table}(x) USING 'sai'")
 
 
-def test_sai_entries_on_map_rejected(cql, test_keyspace, scylla_only):
-    """SAI ENTRIES index on a MAP column is rejected by ScyllaDB.
-    On Cassandra this is a common pattern for metadata filtering."""
-    schema = 'p int PRIMARY KEY, metadata_s map<text, text>'
+def test_sai_entries_on_map_rejected_without_flag(cql, test_keyspace, scylla_only):
+    """Without enable_cassio_compatibility, SAI ENTRIES on map is rejected
+    with a helpful message suggesting to enable the flag."""
+    schema = 'p int PRIMARY KEY, m map<text, text>'
     with new_test_table(cql, test_keyspace, schema) as table:
-        with pytest.raises(InvalidRequest, match='SAI.*only supported on vector columns'):
+        with pytest.raises(InvalidRequest, match='enable_cassio_compatibility'):
             cql.execute(
-                f"CREATE CUSTOM INDEX ON {table}(ENTRIES(metadata_s)) "
-                f"USING 'sai'"
+                f"CREATE CUSTOM INDEX ON {table}(ENTRIES(m)) USING 'sai'"
             )
+
+
+def test_sai_entries_on_map_creates_regular_index(cql, test_keyspace, scylla_only):
+    """SAI ENTRIES index on a MAP column (CassIO metadata pattern) is rewritten
+    to a regular secondary index on ScyllaDB with a compatibility warning."""
+    schema = 'p int PRIMARY KEY, metadata_s map<text, text>'
+    with config_value_context(cql, 'enable_cassio_compatibility', 'true'):
+        with new_test_table(cql, test_keyspace, schema) as table:
+            idx = unique_name()
+            result = cql.execute(
+                f"CREATE CUSTOM INDEX {idx} ON {table}(ENTRIES(metadata_s)) "
+                f"USING 'org.apache.cassandra.index.sai.StorageAttachedIndex'"
+            )
+            # Verify a compatibility warning was returned.
+            warnings = result.response_future.warnings
+            assert warnings is not None
+            warning_text = '\n'.join(warnings)
+            assert 'SAI' in warning_text
+            assert 'regular secondary index' in warning_text
+            # Verify the index was actually created.
+            ks, tbl = table.split('.')
+            rows = list(cql.execute(
+                "SELECT index_name FROM system_schema.indexes "
+                "WHERE keyspace_name = %s AND table_name = %s AND index_name = %s",
+                (ks.replace('"', ''), tbl.replace('"', ''), idx)
+            ))
+            assert len(rows) == 1
+
+
+def test_sai_entries_on_map_short_name(cql, test_keyspace, scylla_only):
+    """Same as above but using the short 'sai' class name alias."""
+    schema = 'p int PRIMARY KEY, m map<text, text>'
+    with config_value_context(cql, 'enable_cassio_compatibility', 'true'):
+        with new_test_table(cql, test_keyspace, schema) as table:
+            result = cql.execute(
+                f"CREATE CUSTOM INDEX ON {table}(ENTRIES(m)) USING 'sai'"
+            )
+            warnings = result.response_future.warnings
+            assert warnings is not None
+            assert any('SAI' in w for w in warnings)
+
+
+def test_sai_entries_on_map_with_options_rejected(cql, test_keyspace, scylla_only):
+    """SAI ENTRIES on map with WITH OPTIONS should be rejected — regular secondary
+    indexes do not support custom options and CassIO never passes them."""
+    schema = 'p int PRIMARY KEY, m map<text, text>'
+    with config_value_context(cql, 'enable_cassio_compatibility', 'true'):
+        with new_test_table(cql, test_keyspace, schema) as table:
+            # Non-empty options
+            with pytest.raises(InvalidRequest, match='cannot be rewritten.*WITH OPTIONS'):
+                cql.execute(
+                    f"CREATE CUSTOM INDEX ON {table}(ENTRIES(m)) "
+                    f"USING 'sai' WITH OPTIONS = {{'some_option': 'value'}}"
+                )
+            # Empty options map — still rejected because OPTIONS property is present
+            with pytest.raises(InvalidRequest, match='cannot be rewritten.*WITH OPTIONS'):
+                cql.execute(
+                    f"CREATE CUSTOM INDEX ON {table}(ENTRIES(m)) "
+                    f"USING 'sai' WITH OPTIONS = {{}}"
+                )
+
+
+def test_cassio_setup_mode_sync_simulation(cql, test_keyspace, scylla_only):
+    """Replay the exact DDL sequence that CassIO runs during SetupMode.SYNC
+    for LangChain vector stores (SCYLLADB-2113). This validates end-to-end
+    that the SAI rewrite allows the full CassIO setup flow to succeed."""
+    # CassIO creates a table with metadata_s MAP<TEXT,TEXT> and a vector column,
+    # then creates: (1) SAI index on vector, (2) SAI ENTRIES index on metadata_s.
+    schema = (
+        'row_id TEXT PRIMARY KEY, '
+        'body_blob TEXT, '
+        'attributes_blob TEXT, '
+        'metadata_s map<text, text>, '
+        'vector vector<float, 384>'
+    )
+    with config_value_context(cql, 'enable_cassio_compatibility', 'true'):
+        with new_test_table(cql, test_keyspace, schema) as table:
+            # (1) CassIO vector SAI index — rewritten to vector_index
+            cql.execute(
+                f"CREATE CUSTOM INDEX IF NOT EXISTS ON {table}(vector) "
+                f"USING 'org.apache.cassandra.index.sai.StorageAttachedIndex' "
+                f"WITH OPTIONS = {{'similarity_function': 'cosine'}}"
+            )
+            # (2) CassIO metadata SAI ENTRIES index — rewritten to regular index
+            idx_name = unique_name()
+            result = cql.execute(
+                f"CREATE CUSTOM INDEX IF NOT EXISTS {idx_name} ON {table}"
+                f"(ENTRIES(metadata_s)) "
+                f"USING 'org.apache.cassandra.index.sai.StorageAttachedIndex'"
+            )
+            # Verify warning about SAI rewrite
+            warnings = result.response_future.warnings
+            assert warnings is not None
+            assert any('SAI' in w and 'regular secondary index' in w for w in warnings)
+            # Verify both indexes exist in schema
+            ks, tbl = table.split('.')
+            ks = ks.replace('"', '')
+            tbl = tbl.replace('"', '')
+            rows = list(cql.execute(
+                "SELECT index_name FROM system_schema.indexes "
+                "WHERE keyspace_name = %s AND table_name = %s",
+                (ks, tbl)
+            ))
+            assert len(rows) == 2, f"Expected 2 indexes, got {len(rows)}: {rows}"
 
 
 def test_sai_on_nonexistent_column(cql, test_keyspace, skip_on_scylla_vnodes):

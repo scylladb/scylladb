@@ -133,17 +133,30 @@ static bool is_vector_capable_class(const sstring& class_name) {
     return class_name == "vector_index" || is_sai_class_name(class_name);
 }
 
-// When the custom class is SAI, verify that at least one target is a
-// vector column and rewrite the class to ScyllaDB's native "vector_index".
-// Non-vector single-column targets and multi-column (local-index partition
-// key) targets are skipped — they are treated as filtering columns by
-// vector_index::check_target().
-static void maybe_rewrite_sai_to_vector_index(
+// When the custom class is SAI, attempt to rewrite the index to a
+// ScyllaDB-native equivalent. Returns false when the rewrite is fully
+// transparent (vector_index), or true when the resulting index is only
+// partially compatible with Cassandra SAI semantics and the caller should
+// emit a warning to the user.
+//
+// 1. Vector columns: rewrite to ScyllaDB's native "vector_index".
+//    Non-vector single-column targets and multi-column (local-index
+//    partition key) targets are skipped — they are treated as filtering
+//    columns by vector_index::check_target().
+//
+// 2. CassIO metadata pattern (ENTRIES on a non-frozen map): clear the
+//    custom class so the index is created as a standard secondary index.
+//    This rewrite is only performed when the enable_cassio_compatibility
+//    configuration option is enabled (disabled by default).
+//
+// If neither pattern matches, throws invalid_request_exception.
+static bool maybe_rewrite_sai_index(
         const schema& schema,
         const std::vector<::shared_ptr<index_target>>& targets,
-        index_specific_prop_defs& props) {
+        index_specific_prop_defs& props,
+        bool cassio_compat) {
     if (!props.custom_class || !is_sai_class_name(*props.custom_class)) {
-        return;
+        return false;
     }
     for (const auto& target : targets) {
         auto* ident = std::get_if<::shared_ptr<column_identifier>>(&target->value);
@@ -158,7 +171,38 @@ static void maybe_rewrite_sai_to_vector_index(
         }
         if (dynamic_cast<const vector_type_impl*>(cd->type.get())) {
             props.custom_class = "vector_index";
-            return;
+            return false;
+        }
+    }
+    // No vector column found. Check if this is the CassIO metadata-map
+    // pattern: a single ENTRIES target on a non-frozen map column with no
+    // custom options (CassIO does not pass WITH OPTIONS for this index).
+    if (targets.size() == 1) {
+        const auto& target = targets.front();
+        if (target->type == index_target::target_type::keys_and_values) {
+            auto* ident = std::get_if<::shared_ptr<column_identifier>>(&target->value);
+            if (ident) {
+                auto cd = schema.get_column_definition((*ident)->name());
+                if (cd && cd->type->is_multi_cell() && cd->type->is_map()) {
+                    if (props.has_property(index_specific_prop_defs::KW_OPTIONS)) {
+                        throw exceptions::invalid_request_exception(
+                            "StorageAttachedIndex (SAI) on map entries cannot be "
+                            "rewritten to a regular secondary index when WITH OPTIONS "
+                            "are specified; remove the options or use a secondary index directly");
+                    }
+                    if (!cassio_compat) {
+                        throw exceptions::invalid_request_exception(
+                            "StorageAttachedIndex (SAI) on ENTRIES of a map column is not "
+                            "supported; if this is a CassIO/LangChain workload, enable the "
+                            "enable_cassio_compatibility configuration option to rewrite "
+                            "this index as a regular secondary index");
+                    }
+                    // Rewrite to a regular secondary index on map entries.
+                    props.custom_class.reset();
+                    props.is_custom = false;
+                    return true;
+                }
+            }
         }
     }
     throw exceptions::invalid_request_exception(
@@ -388,6 +432,21 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
         throw exceptions::invalid_request_exception(format("index names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _index_name.c_str()));
     }
 
+    validate_for_local_index(*schema);
+
+    std::vector<::shared_ptr<index_target>> targets;
+    for (auto& raw_target : _raw_targets) {
+        targets.emplace_back(raw_target->prepare(*schema));
+    }
+
+    bool cassio_compat = db.get_config().enable_cassio_compatibility();
+    if (maybe_rewrite_sai_index(*schema, targets, *_idx_properties, cassio_compat)) {
+        warnings.emplace_back(
+            "SAI (StorageAttachedIndex) is not supported by ScyllaDB. "
+            "This statement was rewritten to use a regular secondary index. "
+            "Metadata filtering behavior may differ from Cassandra SAI.");
+    }
+
     // Regular secondary indexes require rf-rack-validity.
     // Custom indexes need to validate this property themselves, if they need it.
     if (!_idx_properties || !_idx_properties->custom_class) {
@@ -407,15 +466,6 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
                 "eliminate a rack.");
         }
     }
-
-    validate_for_local_index(*schema);
-
-    std::vector<::shared_ptr<index_target>> targets;
-    for (auto& raw_target : _raw_targets) {
-        targets.emplace_back(raw_target->prepare(*schema));
-    }
-
-    maybe_rewrite_sai_to_vector_index(*schema, targets, *_idx_properties);
 
     if (_idx_properties && _idx_properties->custom_class) {
         auto custom_index_factory = secondary_index::secondary_index_manager::get_custom_class_factory(*_idx_properties->custom_class);

@@ -1296,6 +1296,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , vector_store_encryption_options(this, "vector_store_encryption_options", value_status::Used, {},
         "Options for encrypted connections to the vector store. These options are used for HTTPS URIs in `vector_store_primary_uri` and `vector_store_secondary_uri`. The available options are:\n"
         "* truststore: (Default: <not set, use system truststore>) Location of the truststore containing the trusted certificate for authenticating remote servers.")
+    , enable_cassio_compatibility(this, "enable_cassio_compatibility", liveness::LiveUpdate, value_status::Used, false,
+            "When enabled, ScyllaDB rewrites CassIO's SAI index DDL on map entries "
+            "(e.g. CREATE CUSTOM INDEX ... ON table(ENTRIES(col)) USING 'StorageAttachedIndex') "
+            "to a regular secondary index, allowing LangChain/CassIO applications to run "
+            "without DDL errors. Disabled by default.")
     /**
     * @Group Security properties
     * @GroupDescription Server and client security settings.
