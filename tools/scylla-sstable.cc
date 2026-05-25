@@ -2667,7 +2667,7 @@ directly expressed in CQL. Editing schema options (the part after WITH) is safe.
 
 The sstable version can be selected manually with the --sstable-version option,
 by default the latest supported version is used. Valid options are sstable
-versions which are supported for writing: mc, md, me, ms.
+versions which are supported for writing: mc, md, me, ms, mt.
 
 Mapping of input sstables to output sstables is printed to stdout.
 
@@ -3015,6 +3015,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
 
         feature_service.ms_sstable.enable();
+        feature_service.mt_sstable.enable();
         sstables::sstables_manager sst_man(
             "scylla_sstable",
             large_data_handler,
