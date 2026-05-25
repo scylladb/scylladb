@@ -620,6 +620,18 @@ public:
         bool inserted = false;
     };
 
+    // Returns the sketch key from an existing row in this partition for
+    // W-TinyLFU frequency tracking.  All rows in a partition share the same
+    // token-derived sketch key.  Returns 0 if no existing row has a key set.
+    uint64_t inherit_sketch_key() const {
+        for (auto& piv : _current_row) {
+            if (piv.it->has_sketch_key()) {
+                return piv.it->sketch_key();
+            }
+        }
+        return 0;
+    }
+
     // Makes sure that a rows_entry for the row under the cursor exists in the latest version.
     // Doesn't change logical value or continuity of the snapshot.
     // Can be called only when cursor is valid and pointing at a row.
@@ -648,6 +660,15 @@ public:
                 }
             }();
             rows_entry& re = *e;
+            // Propagate the partition's sketch key for W-TinyLFU frequency
+            // tracking.  Rows copied from older versions inherit it via the
+            // copy constructor; newly created dummy rows need it set explicitly.
+            if (!re.has_sketch_key()) {
+                auto k = inherit_sketch_key();
+                if (k) {
+                    re.set_sketch_key(k);
+                }
+            }
             if (_reversed) { // latest_i is not reliably a successor
                 re.set_continuous(false);
                 e->set_range_tombstone(range_tombstone_for_row());
@@ -726,6 +747,13 @@ public:
                 current_allocator().construct<rows_entry>(*_snp.version()->get_schema(), pos,
                     is_dummy(!pos.is_clustering_row()),
                     is_continuous::no));
+        // Propagate the partition's sketch key for W-TinyLFU frequency tracking.
+        {
+            auto k = inherit_sketch_key();
+            if (k) {
+                e->set_sketch_key(k);
+            }
+        }
         if (latest_i && latest_i->continuous()) {
             e->set_continuous(true);
             e->set_range_tombstone(latest_i->range_tombstone()); // See the "information monotonicity" rule.

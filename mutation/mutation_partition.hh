@@ -981,13 +981,21 @@ public:
         , _row(s, e._row)
         , _range_tombstone(e._range_tombstone)
         , _flags(e._flags)
-    { }
+    {
+        if (e.has_sketch_key()) {
+            set_sketch_key(e.sketch_key());
+        }
+    }
     rows_entry(const schema& our_schema, const schema& their_schema, const rows_entry& e)
         : _key(e._key)
         , _row(our_schema, their_schema, e._row)
         , _range_tombstone(e._range_tombstone)
         , _flags(e._flags)
-    { }
+    {
+        if (e.has_sketch_key()) {
+            set_sketch_key(e.sketch_key());
+        }
+    }
     // Valid only if !dummy()
     clustering_key& key() {
         return _key;

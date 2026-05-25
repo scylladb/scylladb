@@ -949,3 +949,176 @@ BOOST_AUTO_TEST_CASE(test_packed_segment_key_round_trip) {
     BOOST_REQUIRE_EQUAL(e.sketch_key(), 7777u);
     BOOST_REQUIRE(e.has_sketch_key());
 }
+
+// ---------------------------------------------------------------------------
+// MVCC eviction ordering tests
+// ---------------------------------------------------------------------------
+
+// Simulate MVCC version ordering: older version rows must be evicted before
+// newer version rows.  This is the invariant that partition_snapshot::touch()
+// preserves by only touching the latest version.
+//
+// The test creates "older" and "newer" entries sharing the same sketch key
+// (same partition).  Older entries are added first and never touched.
+// Newer entries are added later and touched.  Under eviction pressure,
+// older entries must be evicted before newer ones in all segments.
+
+BOOST_AUTO_TEST_CASE(test_mvcc_ordering_window_and_probation) {
+    // Older entries added first drift to probation via safe drain.
+    // Newer entries added later are also drained to probation but are
+    // then touched, moving them to protected.  Eviction should pick
+    // the older (untouched) entries from probation first.
+    lru l;
+
+    static constexpr int OLDER = 5;
+    static constexpr int NEWER = 5;
+    static constexpr uint64_t PARTITION_KEY = 0xDEAD;
+
+    std::unique_ptr<test_evictable> older[OLDER];
+    std::unique_ptr<test_evictable> newer[NEWER];
+
+    // Insert older version rows (never touched after insert)
+    for (int i = 0; i < OLDER; ++i) {
+        older[i] = std::make_unique<test_evictable>(i);
+        older[i]->set_sketch_key(PARTITION_KEY);
+        l.add(*older[i]);
+    }
+
+    // Insert newer version rows and touch them (simulating reads)
+    for (int i = 0; i < NEWER; ++i) {
+        newer[i] = std::make_unique<test_evictable>(100 + i);
+        newer[i]->set_sketch_key(PARTITION_KEY);
+        l.add(*newer[i]);
+    }
+    for (int round = 0; round < 3; ++round) {
+        for (int i = 0; i < NEWER; ++i) {
+            l.touch(*newer[i]);
+        }
+    }
+
+    // Evict — older entries should go first
+    for (int i = 0; i < OLDER; ++i) {
+        l.evict();
+    }
+
+    // All older entries should be evicted
+    for (int i = 0; i < OLDER; ++i) {
+        BOOST_REQUIRE_MESSAGE(older[i]->was_evicted,
+            "Older version entry " << i << " should be evicted before newer entries");
+    }
+    // All newer entries should survive
+    for (int i = 0; i < NEWER; ++i) {
+        BOOST_REQUIRE_MESSAGE(!newer[i]->was_evicted,
+            "Newer version entry " << i << " should survive (was touched)");
+    }
+
+    for (int i = 0; i < NEWER; ++i) {
+        if (newer[i]->is_linked()) l.remove(*newer[i]);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_mvcc_ordering_in_protected_segment) {
+    // Both older and newer entries reach the protected segment.
+    // Older entries are not touched again, so they drift to the front
+    // of protected and get demoted to probation.  Newer entries are
+    // continuously touched, staying at the back of protected.
+    // Under eviction, demoted older entries are evicted first.
+    lru l;
+
+    static constexpr int N = 10;
+    static constexpr uint64_t PARTITION_KEY = 0xBEEF;
+
+    std::unique_ptr<test_evictable> older[N];
+    std::unique_ptr<test_evictable> newer[N];
+
+    // Add older entries and touch once to promote to protected
+    for (int i = 0; i < N; ++i) {
+        older[i] = std::make_unique<test_evictable>(i);
+        older[i]->set_sketch_key(PARTITION_KEY);
+        l.add(*older[i]);
+    }
+    for (int i = 0; i < N; ++i) {
+        l.touch(*older[i]);  // probation → protected
+    }
+
+    // Add newer entries and touch to promote to protected
+    for (int i = 0; i < N; ++i) {
+        newer[i] = std::make_unique<test_evictable>(100 + i);
+        newer[i]->set_sketch_key(PARTITION_KEY);
+        l.add(*newer[i]);
+    }
+    for (int i = 0; i < N; ++i) {
+        l.touch(*newer[i]);  // probation → protected
+    }
+
+    // Now continuously touch ONLY the newer entries (simulating latest-version reads)
+    // Older entries drift to front of protected → get demoted to probation
+    for (int round = 0; round < 5; ++round) {
+        for (int i = 0; i < N; ++i) {
+            l.touch(*newer[i]);
+        }
+    }
+
+    // Evict N entries — older entries (demoted to probation or at front
+    // of protected) should go first
+    int older_evicted = 0;
+    int newer_evicted = 0;
+    for (int i = 0; i < N; ++i) {
+        l.evict();
+    }
+    for (int i = 0; i < N; ++i) {
+        if (older[i]->was_evicted) ++older_evicted;
+        if (newer[i]->was_evicted) ++newer_evicted;
+    }
+
+    // Older entries should be evicted preferentially
+    BOOST_REQUIRE_GT(older_evicted, newer_evicted);
+    BOOST_REQUIRE_MESSAGE(newer_evicted == 0,
+        "No newer entries should be evicted when older entries are available");
+
+    for (int i = 0; i < N; ++i) {
+        if (older[i]->is_linked()) l.remove(*older[i]);
+        if (newer[i]->is_linked()) l.remove(*newer[i]);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_mvcc_same_frequency_preserves_lru_order) {
+    // Even when entries share the same sketch key (same frequency),
+    // the admission gate should not reorder them — LRU within
+    // each segment determines eviction order.
+    lru l;
+
+    static constexpr int N = 20;
+    static constexpr uint64_t PARTITION_KEY = 0xCAFE;
+
+    std::unique_ptr<test_evictable> entries[N];
+    for (int i = 0; i < N; ++i) {
+        entries[i] = std::make_unique<test_evictable>(i);
+        entries[i]->set_sketch_key(PARTITION_KEY);
+        l.add(*entries[i]);
+    }
+
+    // No touches — all entries have equal frequency from add().
+    // Eviction should follow insertion order (oldest first).
+    std::vector<int> eviction_order;
+    for (int i = 0; i < N / 2; ++i) {
+        l.evict();
+        for (int j = 0; j < N; ++j) {
+            if (entries[j]->was_evicted &&
+                std::find(eviction_order.begin(), eviction_order.end(), j) == eviction_order.end()) {
+                eviction_order.push_back(j);
+            }
+        }
+    }
+
+    // Verify eviction happened in insertion order
+    for (size_t i = 1; i < eviction_order.size(); ++i) {
+        BOOST_REQUIRE_MESSAGE(eviction_order[i] > eviction_order[i-1],
+            "Entry " << eviction_order[i] << " was evicted after "
+            << eviction_order[i-1] << " but was inserted earlier");
+    }
+
+    for (int i = 0; i < N; ++i) {
+        if (entries[i]->is_linked()) l.remove(*entries[i]);
+    }
+}
