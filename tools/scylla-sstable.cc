@@ -2291,7 +2291,7 @@ For more information, see: {}
                     typed_option<std::string>("input-file", "the file containing the input"),
                     typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
                     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
-                    typed_option<std::string>("sstable-version", "SSTable format version, (e.g. \"me\", \"ms\")"),
+                    typed_option<std::string>("sstable-version", "SSTable format version, (e.g. \"me\", \"mt\")"),
             }},
             write_operation},
 /* script */

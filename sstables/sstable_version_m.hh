@@ -20,10 +20,10 @@ public:
     static const sstable_version_constants::component_map_t _component_map;
 };
 
-class sstable_version_constants_ms final : public sstable_version_constants {
+class sstable_version_constants_m_bti final : public sstable_version_constants {
 public:
     static const sstable_version_constants::component_map_t create_component_map();
-    sstable_version_constants_ms() = delete;
+    sstable_version_constants_m_bti() = delete;
     static const sstable_version_constants::component_map_t _component_map;
 };
 

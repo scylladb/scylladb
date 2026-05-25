@@ -115,7 +115,7 @@ Here are the different component types:
 * Clustering Key Index (`Rows.db`)  
   Trie-based index of clustering keys within partitions. Used in conjunction with `Partitions.db`
   as a replacement for `Index.db` and `Summary.db` in newest sstable formats.
-  (`da` in Cassandra, `ms` in Scylla).
+  (`da` in Cassandra, `ms`-`mt` in Scylla).
 
 
 * Temporary partition key hashes (`TemporaryHashes.db`)  
@@ -125,11 +125,11 @@ Here are the different component types:
 ### SSTable Format Version
 
 SSTable's on-disk format has changed over time.
-The versions currently supported by Scylla are: `ka`, `la`, `mc`, `md`, `me`, `ms`.
+The versions currently supported by Scylla are: `ka`, `la`, `mc`, `md`, `me`, `ms`, `mt`.
 Cassandra's convention is that the first letter determines
 the major format version, in ascending order, and the second letter -
 the minor version, starting from `a` onward.
-(`ms` is a Scylla-specific extension of `me`, so it breaks away from the `mc`-`me` series).
+(`ms`-`mt` are Scylla-specific extensions of `me`, so they break away from the `mc`-`me` series).
 
 The SSTable file names identify the SSTable format version.
 In addition, they provide the SSTable generation number and other metadata.
@@ -148,7 +148,7 @@ where:
 * `<big>` is an attribute that identifies the SSTable sub-format.
   (Only `big` sub-format is supported by Scylla at this time.
   Cassandra 5.0 introduced `bti` (which stands for `BIG, trie-indexed`).
-  Version `ms` is a hybrid between `big` and `bti`).
+  Versions `ms`-`mt` are a hybrid of `big` and `bti`).
 * `<component>` is the file's component type, as described above.
 
 ### Table Sub-directories
