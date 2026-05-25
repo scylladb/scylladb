@@ -114,7 +114,7 @@ class TestBypassCache(Tester):
         BIG-index sstables (like "me") use both types of caches.
         BTI-index sstables (like "ms") use only the former.
         """
-        return "scylla_sstables_index_page_cache_hits" if self.sstable_format == "ms" else "scylla_sstables_index_page_hits"
+        return "scylla_sstables_index_page_cache_hits" if self.sstable_format in ["ms", "mt"] else "scylla_sstables_index_page_hits"
 
     def verify_read_was_from_disk(self, node, query, session, index_cache_involved: bool = False):
         # TODO: After https://github.com/scylladb/scylla/issues/9968 remove index_cache_involved, assume that it is false
