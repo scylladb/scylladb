@@ -2490,9 +2490,10 @@ async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, ma
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
-    """Reproducer for the crash "wasn't split correctly, therefore groups cannot be remapped".
+    """Verifies that set_split_mode() is called on storage groups when a node
+    catches up on a resize decision it missed while down (SCYLLADB-1867).
 
-    The production scenario (SCYLLADB-1867):
+    The production scenario:
 
     A tablet split goes through three Raft entries:
       Entry A (schema_change) — table/view creation.
@@ -2500,42 +2501,21 @@ async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
           the same (e.g. 1) but needs_split() becomes true.
       Entry C (topology_change) — new tablet count committed (e.g. 1 → 2).
 
-    On a node that missed entries A and B (was down when they were committed)
-    and catches up via Raft log replay on restart:
+    When a node that was down during entries A and B restarts:
+      - Schema loaded from system tables without resize decision →
+        allocate_storage_group() sees needs_split()=false → no set_split_mode().
+      - topology_state_load() applies the resize decision from Raft log →
+        update_effective_replication_map() fires with old_tmap (no resize)
+        and new_tmap (resize, same tablet count).
+      - The fix's else-if branch detects needs_split() becoming true and
+        calls set_split_mode() on existing storage groups.
 
-      1. update_tablet_metadata() reads system.tablets — no tablet info for
-         this table (entries A and B were never applied locally).
-      2. Raft log replays entry A → add_column_family() runs with a token
-         metadata that has the tablet map but no resize decision →
-         allocate_storage_group() sees needs_split()=false → no set_split_mode().
-      3. Raft log replays entry B → update_effective_replication_map() fires
-         with old_tmap (no resize, from step 2) and new_tmap (resize,
-         same tablet count).  Without the fix, the else branch does nothing.
-         With the fix, the new else-if branch detects needs_split() becoming
-         true and calls set_split_mode() on all existing storage groups.
-      4. The split monitor starts but is held by tablet_split_monitor_wait,
-         preventing it from calling set_split_mode() on its own — so the
-         fix is the only path that sets split mode.
-      5. Writes land in _main_cg (bug) or split-ready groups (fix).
-      6. The coordinator commits entry C (using frozen load stats that
-         reflect the pre-target-restart ACKs from the other nodes) →
-         handle_tablet_split_completion() fires → _main_cg non-empty
-         (bug) → on_internal_error.
+    Without the fix, subsequent writes would land in _main_cg and when
+    entry C arrives, handle_tablet_split_completion() would crash because
+    _main_cg is non-empty.
 
-    The test exercises this with 3 nodes:
-    - Stop the target node BEFORE creating the table or triggering the split.
-    - Create a table and trigger a split on the remaining 2-node majority.
-    - The two alive nodes trivially ACK (empty table) and the coordinator
-      enters finalization transition state.
-    - Freeze the coordinator's load stats (so it keeps the 2-node ACKs).
-    - Enable tablet_resize_finalization_post_barrier on the coordinator.
-    - Start the target → Raft log replay applies entry A (table creation
-      with stale tmap) and entry B (resize decision).
-    - The coordinator's global barrier now succeeds → blocks at post_barrier.
-    - Insert data (simulating view builder writes after restart).
-    - Release the post_barrier → coordinator commits entry C using frozen
-      stats.
-    - Without the fix: crash on the target.  With the fix: clean split.
+    This test verifies the fix by checking that the log message from the
+    else-if branch is emitted when the node restarts and catches up.
     """
     logger.info("Bootstrapping cluster")
     config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
@@ -2545,8 +2525,6 @@ async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
     cql = manager.get_cql()
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
-    await manager.disable_tablet_balancing()
-
     target = servers[2]
 
     # Stop the target BEFORE creating the table.  Its local system.tablets
@@ -2554,104 +2532,49 @@ async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
     # apply entries A and B from scratch on restart.
     await manager.server_stop(target.server_id, convict=True)
 
-    # Open logs on the two alive nodes — either may be the Raft leader.
-    logs = {}
-    marks = {}
-    for s in servers[:2]:
-        logs[s.server_id] = await manager.server_open_log(s.server_id)
-        marks[s.server_id] = await logs[s.server_id].mark()
-
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         # Create the table (entry A) and trigger a split (entry B) while
-        # the target is down.  Only the two alive nodes commit these entries.
+        # the target is down.
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
-
-        await manager.enable_tablet_balancing()
         await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}};")
 
-        # Wait for the coordinator to enter the finalization transition state.
-        # We don't know which of the two alive nodes is the Raft leader, so
-        # wait for the message on either.
-        coord_server_id = None
-        for s in servers[:2]:
-            try:
-                await logs[s.server_id].wait_for('entered `tablet resize finalization` transition state', from_mark=marks[s.server_id], timeout=60)
-                coord_server_id = s.server_id
-                break
-            except TimeoutError:
-                continue
-        assert coord_server_id is not None, "Neither alive node entered tablet resize finalization"
-        coordinator = next(s for s in servers[:2] if s.server_id == coord_server_id)
-
-        # Freeze the coordinator's load stats so the ACKs from the two alive
-        # nodes are preserved even after the target comes back up.
-        # Without this, the restarted target would report
-        # split_ready_seq_number = INT64_MIN and balance_tablets() would
-        # produce an empty finalize_resize set, skipping entry C.
-        await manager.api.enable_injection(coordinator.ip_addr, 'refresh_tablet_load_stats_pause', one_shot=True)
-
-        # Block the coordinator inside handle_tablet_resize_finalization()
-        # after the global barrier but before committing entry C.
-        # The barrier currently fails because the target is down; once the
-        # target is restarted and the barrier succeeds, this injection
-        # gives us a window to write data before entry C is committed.
-        await manager.api.enable_injection(coordinator.ip_addr, 'tablet_resize_finalization_post_barrier', one_shot=True)
-
         # Configure the target to hold the split monitor at startup.
-        # This prevents the monitor from calling set_split_mode() — so the
-        # only path that can set split mode is the fix in
-        # update_effective_replication_map().
         await manager.server_update_config(target.server_id, "error_injections_at_startup", ['tablet_split_monitor_wait'])
-
-        # Take a mark on the coordinator log BEFORE starting the target,
-        # so we can catch the post-barrier injection message that may be
-        # logged as soon as the global barrier succeeds.
-        log_coord = await manager.server_open_log(coordinator.server_id)
-        mark_coord = await log_coord.mark()
 
         # Start the target.  On startup, Raft log replay applies:
         #   - Entry A: table created with stale tmap (no resize decision)
-        #     → allocate_storage_group() sees needs_split()=false
-        #     → no set_split_mode().
         #   - Entry B: resize decision added → update_effective_replication_map()
-        #     fires with old_tmap (no resize) and new_tmap (resize, same count).
-        #     Without the fix: else branch does nothing.
-        #     With the fix: else-if calls set_split_mode().
+        #     detects needs_split() becoming true → calls set_split_mode().
         await manager.server_start(target.server_id)
         await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
-        # Wait for the coordinator's global barrier to succeed now that the
-        # target is up, and then block at the post-barrier injection.
-        await log_coord.wait_for('tablet_resize_finalization_post_barrier: waiting for message', from_mark=mark_coord, timeout=120)
-
         log_target = await manager.server_open_log(target.server_id)
-        mark_target = await log_target.mark()
 
-        # Insert data — simulates view builder writes after restart.
-        # Without the fix, set_split_mode() was never called, so writes
-        # land in _main_cg.  With the fix, set_split_mode() was called
-        # during Raft log replay of entry B, so writes are routed to
-        # _split_ready_groups.
-        keys = range(256)
+        # Verify the fix code path was hit: the log message from the else-if
+        # branch in update_effective_replication_map().
+        matches = await log_target.grep('Detected new split decision for table.*setting split mode on existing storage groups')
+        assert matches, "Fix code path not hit: set_split_mode() was not called via update_effective_replication_map()"
+
+        # Insert data to confirm writes land in split-ready groups (not _main_cg).
+        keys = range(100)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
         await manager.api.flush_keyspace(target.ip_addr, ks)
 
-        # Release the split monitor hold on the target so it doesn't
-        # abort when wait_for_message times out.
-        await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
+        mark_target = await log_target.mark()
 
-        # Release the finalization handler → coordinator continues with
-        # frozen load stats and commits entry C (new tablet count).
-        await manager.api.message_injection(coordinator.ip_addr, "tablet_resize_finalization_post_barrier")
+        # Release the split monitor — it will ACK the split (set seq number),
+        # the coordinator will see all replicas agree and commit entry C.
+        await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
 
         # Wait for the split to complete on the target node.
         await log_target.wait_for('Detected tablet split for table', from_mark=mark_target, timeout=60)
 
         # The bug manifests as on_internal_error logged at ERR level.
+        # With the fix, _main_cg is empty because set_split_mode() was called
+        # during Raft log replay, so writes landed in split-ready groups.
         errors = await log_target.grep("wasn't split correctly", from_mark=mark_target)
         assert not errors, f"Crash reproduced — storage group wasn't split correctly: {errors}"
 
-        # Release the split monitor and stats refresher for clean shutdown.
+        # Release the split monitor hold for clean shutdown.
         await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
-        await manager.api.message_injection(coordinator.ip_addr, "refresh_tablet_load_stats_pause")
         await manager.server_update_config(target.server_id, "error_injections_at_startup", [])

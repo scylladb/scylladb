@@ -540,6 +540,13 @@ struct load_stats {
     // Size-based load balancing data
     tablet_load_stats_map tablet_stats;
 
+    // Distinguishes a default-constructed (null) load_stats from one that has
+    // been aggregated via operator+=.  A null element contributes nothing when
+    // merged, while an aggregated-but-empty stats (e.g. from a node that
+    // reports no tables) must still invalidate split readiness for tables
+    // reported by other nodes.
+    bool _aggregated = false;
+
     static load_stats from_v1(load_stats_v1&&);
 
     load_stats& operator+=(const load_stats& s);
