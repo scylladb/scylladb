@@ -31,6 +31,7 @@ target_sources(test-perf
     perf_row_cache_update.cc
     perf_simple_query.cc
     perf_cql_raw.cc
+    perf_compaction_efficiency.cc
     perf_sstable.cc
     perf_tablets.cc
     tablet_load_balancing.cc
