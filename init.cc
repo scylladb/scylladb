@@ -73,11 +73,14 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
 std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
     switch (sstables::version_from_string(cfg.sstable_format())) {
     case sstables::sstable_version_types::md:
-        startlog.warn("sstable_format must be 'me' or 'ms', '{}' is specified", cfg.sstable_format());
+        startlog.warn("sstable_format must be 'me' or 'mt', '{}' is specified", cfg.sstable_format());
         break;
     case sstables::sstable_version_types::me:
         break;
     case sstables::sstable_version_types::ms:
+        startlog.warn("sstable_format must be 'me' or 'mt', '{}' is specified", cfg.sstable_format());
+        break;
+    case sstables::sstable_version_types::mt:
         break;
     default:
         SCYLLA_ASSERT(false && "Invalid sstable_format");
