@@ -204,6 +204,7 @@ def main():
         kwargs['database_path'] = opts.database_path
 
     kwargs['live_policies'] = True
+    kwargs.setdefault('hostname', '127.0.0.1')
 
     s = KMIPServerWrapper(**kwargs)
     print("Starting...")
