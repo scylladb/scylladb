@@ -218,6 +218,7 @@ public:
     virtual void submit(replica::compaction_group&) = 0;
 
     virtual future<> stop_ongoing_compactions(replica::compaction_group&) = 0;
+    virtual future<> remove(replica::compaction_group&) = 0;
 
     virtual future<compaction_reenabler> disable_compaction(replica::compaction_group&) = 0;
     virtual compaction_reenabler disable_compaction_no_wait(replica::compaction_group&) = 0;
