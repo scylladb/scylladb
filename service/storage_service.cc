@@ -3260,8 +3260,13 @@ future<std::vector<std::byte>> storage_service::train_dict(utils::chunked_vector
     for (const auto& s : sample) {
         auto v = std::as_bytes(std::span(s));
         tmp.push_back(std::vector<std::byte>(v.begin(), v.end()));
+        // Samples are potentially very big (tens of MiB),
+        // so copying them might require more eviction work than
+        // fits within a task quota.
+        // Let's add a preemption point here.
+        co_await coroutine::maybe_yield();
     }
-    co_return co_await container().invoke_on(0, [tmp = std::move(tmp)] (auto& local) {
+    co_return co_await container().invoke_on(0, [tmp = std::move(tmp)] (auto& local) mutable {
         if (!local._train_dict) {
             on_internal_error(slogger, "retrain_dict: _train_dict not plugged");
         }
