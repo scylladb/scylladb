@@ -32,7 +32,8 @@ struct test_config {
     unsigned duration_in_seconds = 0;
     uint64_t warmup_operations = 0;
     unsigned warmup_duration = 0;
-    double rewrite_ratio = 0.5;
+    double rewrite_ratio = 0.25;
+    double delete_ratio = 0.25;
     sstring distribution = "gaussian";
     unsigned random_seed = 0;
     bool random_seed_given = false;
@@ -51,6 +52,7 @@ struct metrics {
     uint64_t total_operations = 0;
     uint64_t unique_writes = 0;
     uint64_t rewrites = 0;
+    uint64_t deletes = 0;
     uint64_t total_flushes = 0;
 
     // Write amplification tracking
@@ -108,8 +110,8 @@ struct metrics {
         fmt::print("\n=== Compaction Efficiency Benchmark Results ===\n");
         fmt::print("Strategy: {}\n", cfg.compaction_strategy);
         fmt::print("Random seed: {}\n", cfg.random_seed);
-        fmt::print("Operations: {} ({} unique, {} rewrites)\n",
-                   total_operations, unique_writes, rewrites);
+        fmt::print("Operations: {} ({} unique, {} rewrites, {} deletes)\n",
+                   total_operations, unique_writes, rewrites, deletes);
         fmt::print("Duration: {:.1f}s\n", duration_seconds());
         fmt::print("Throughput: {:.0f} ops/sec\n",
                    total_operations / duration_seconds());
@@ -180,6 +182,7 @@ struct metrics {
         root["total_operations"] = Json::Value::UInt64(total_operations);
         root["unique_writes"] = Json::Value::UInt64(unique_writes);
         root["rewrites"] = Json::Value::UInt64(rewrites);
+        root["deletes"] = Json::Value::UInt64(deletes);
         root["duration_seconds"] = fmt::format("{:.2f}", duration_seconds());
         root["throughput_ops_per_sec"] = fmt::format("{:.2f}", total_operations / duration_seconds());
         root["total_flushes"] = Json::Value::UInt64(total_flushes);
@@ -423,7 +426,8 @@ void do_compaction_efficiency_test(cql_test_env& env, test_config& cfg) {
         "  v bigint,"
         "  PRIMARY KEY (pk, ck)"
         ") WITH compaction = {{{}}}"
-        " AND tablets = {{'min_per_shard_tablet_count': '1'}}",
+        " AND tablets = {{'min_per_shard_tablet_count': '1'}}"
+        " AND tombstone_gc = {{'mode': 'immediate'}}",
         compaction_opts);
 
     if (cfg.default_time_to_live > 0) {
@@ -439,6 +443,10 @@ void do_compaction_efficiency_test(cql_test_env& env, test_config& cfg) {
     // Prepare the INSERT statement
     auto insert_id = env.prepare(
         "INSERT INTO ks.perf_compaction (pk, ck, v) VALUES (?, ?, ?)").get();
+
+    // Prepare the DELETE statement
+    auto delete_id = env.prepare(
+        "DELETE FROM ks.perf_compaction WHERE pk = ? AND ck = ?").get();
 
     workload_state state(cfg);
     metrics m;
@@ -460,7 +468,7 @@ void do_compaction_efficiency_test(cql_test_env& env, test_config& cfg) {
                 break;
             }
 
-            // Decide operation type: rewrite or unique write
+            // Decide operation type: unique write, rewrite, or delete
             double r = state.partition_rows.empty() ? 1.0 : state.uniform_01(state.rng);
 
             int64_t pk, ck;
@@ -470,8 +478,31 @@ void do_compaction_efficiency_test(cql_test_env& env, test_config& cfg) {
                 auto max_ck = state.partition_rows[pk];
                 std::uniform_int_distribution<int64_t> ck_dist(0, max_ck);
                 ck = ck_dist(state.rng);
+
+                int64_t v = state.rng();
+                env.execute_prepared(insert_id, {
+                    {cql3::raw_value::make_value(long_type->decompose(pk)),
+                     cql3::raw_value::make_value(long_type->decompose(ck)),
+                     cql3::raw_value::make_value(long_type->decompose(v))}
+                }).get();
+
                 if (!is_warmup) {
                     m.rewrites++;
+                }
+            } else if (r < cfg.rewrite_ratio + cfg.delete_ratio) {
+                // Delete: existing partition, existing row
+                pk = state.pick_existing_partition(cfg);
+                auto max_ck = state.partition_rows[pk];
+                std::uniform_int_distribution<int64_t> ck_dist(0, max_ck);
+                ck = ck_dist(state.rng);
+
+                env.execute_prepared(delete_id, {
+                    {cql3::raw_value::make_value(long_type->decompose(pk)),
+                     cql3::raw_value::make_value(long_type->decompose(ck))}
+                }).get();
+
+                if (!is_warmup) {
+                    m.deletes++;
                 }
             } else {
                 // Unique write: new partition or new row in existing partition
@@ -487,18 +518,18 @@ void do_compaction_efficiency_test(cql_test_env& env, test_config& cfg) {
                     pk = state.pick_existing_partition(cfg);
                     ck = ++state.partition_rows[pk];
                 }
+
+                int64_t v = state.rng();
+                env.execute_prepared(insert_id, {
+                    {cql3::raw_value::make_value(long_type->decompose(pk)),
+                     cql3::raw_value::make_value(long_type->decompose(ck)),
+                     cql3::raw_value::make_value(long_type->decompose(v))}
+                }).get();
+
                 if (!is_warmup) {
                     m.unique_writes++;
                 }
             }
-
-            // Execute the write
-            int64_t v = state.rng();
-            env.execute_prepared(insert_id, {
-                {cql3::raw_value::make_value(long_type->decompose(pk)),
-                 cql3::raw_value::make_value(long_type->decompose(ck)),
-                 cql3::raw_value::make_value(long_type->decompose(v))}
-            }).get();
 
             ops++;
             if (!is_warmup) {
@@ -621,8 +652,10 @@ int scylla_compaction_efficiency_main(int argc, char** argv) {
             "warmup operations before measurement")
         ("warmup-duration", bpo::value<unsigned>()->default_value(0),
             "warmup time in seconds")
-        ("rewrite-ratio", bpo::value<double>()->default_value(0.5),
+        ("rewrite-ratio", bpo::value<double>()->default_value(0.25),
             "ratio of rewrites (0.0-1.0)")
+        ("delete-ratio", bpo::value<double>()->default_value(0.25),
+            "ratio of deletes (0.0-1.0)")
         ("distribution", bpo::value<std::string>()->default_value("gaussian"),
             "key selection distribution: gaussian, uniform, zipfian")
         ("random-seed", bpo::value<unsigned>(),
@@ -671,6 +704,7 @@ int scylla_compaction_efficiency_main(int argc, char** argv) {
                 cfg.warmup_operations = app.configuration()["warmup-operations"].as<uint64_t>();
                 cfg.warmup_duration = app.configuration()["warmup-duration"].as<unsigned>();
                 cfg.rewrite_ratio = app.configuration()["rewrite-ratio"].as<double>();
+                cfg.delete_ratio = app.configuration()["delete-ratio"].as<double>();
                 cfg.distribution = app.configuration()["distribution"].as<std::string>();
                 cfg.random_seed = seed;
                 cfg.read_frequency = app.configuration()["read-frequency"].as<unsigned>();
@@ -722,6 +756,7 @@ int scylla_compaction_efficiency_main(int argc, char** argv) {
                     fmt::print("  operations: {}\n", cfg.operations);
                     fmt::print("  duration: {}s\n", cfg.duration_in_seconds);
                     fmt::print("  rewrite-ratio: {}\n", cfg.rewrite_ratio);
+                    fmt::print("  delete-ratio: {}\n", cfg.delete_ratio);
                     fmt::print("  distribution: {}\n", cfg.distribution);
                     fmt::print("  read-frequency: {}\n", cfg.read_frequency);
                     fmt::print("  compaction-strategy: {}\n", cfg.compaction_strategy);
