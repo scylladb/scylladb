@@ -25,6 +25,8 @@
 #include "test/lib/test_utils.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "utils/big_decimal.hh"
+#include "utils/multiprecision_int.hh"
 
 using namespace cql3;
 using namespace cql3::expr;
@@ -4931,4 +4933,493 @@ BOOST_AUTO_TEST_CASE(test_levellize_aggregation_depth) {
     BOOST_REQUIRE_EQUAL(aggregation_depth(e2), 3);
     // Somewhat fragile, but easiest way to test entire structure
     BOOST_REQUIRE_EQUAL(fmt::format("{:debug}", e2), "foo.my_agg(system.sum(system.$$first$$(r)), system.$$first$$(system.$$first$$(TTL(r))))");
+}
+
+// Helper: build an ADD binary_operator and evaluate it with no inputs (both sides are constants).
+static raw_value eval_add(expression lhs, expression rhs) {
+    return evaluate(binary_operator(std::move(lhs), oper_t::ADD, std::move(rhs)), evaluation_inputs{});
+}
+
+// Helper: deserialize a raw_value of a given type back into the typed value.
+template <typename T>
+static T raw_to(const raw_value& v, const data_type& t) {
+    return v.view().deserialize<T>(*t);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_add_fixed_width_integers) {
+    // int (32-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_add(make_int_const(3), make_int_const(4)), int32_type), 7);
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_add(make_int_const(-10), make_int_const(3)), int32_type), -7);
+
+    // tinyint (8-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int8_t>(eval_add(make_tinyint_const(10), make_tinyint_const(20)), byte_type), int8_t(30));
+
+    // smallint (16-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int16_t>(eval_add(make_smallint_const(100), make_smallint_const(200)), short_type), int16_t(300));
+
+    // bigint (64-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int64_t>(eval_add(make_bigint_const(1'000'000'000LL), make_bigint_const(2'000'000'000LL)), long_type),
+                        int64_t(3'000'000'000LL));
+    BOOST_REQUIRE_EQUAL(raw_to<int64_t>(eval_add(make_bigint_const(-1), make_bigint_const(-1)), long_type), int64_t(-2));
+
+    // type_of an ADD expression is the type of the operands
+    expression add_expr = binary_operator(make_int_const(1), oper_t::ADD, make_int_const(2));
+    BOOST_REQUIRE(type_of(add_expr) == int32_type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_add_floating_point) {
+    // float (32-bit)
+    float float_result = raw_to<float>(eval_add(make_float_const(1.5f), make_float_const(2.5f)), float_type);
+    BOOST_REQUIRE_CLOSE(float_result, 4.0f, 1e-5f);
+
+    // double (64-bit)
+    double double_result = raw_to<double>(eval_add(make_double_const(1.25), make_double_const(3.75)), double_type);
+    BOOST_REQUIRE_CLOSE(double_result, 5.0, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_add_varint) {
+    auto make_varint = [](int64_t v) -> constant {
+        return constant(raw_value::make_value(managed_bytes(varint_type->decompose(utils::multiprecision_int(v)))), varint_type);
+    };
+    auto result = eval_add(make_varint(1000000000000LL), make_varint(2000000000000LL));
+    auto expected = utils::multiprecision_int(3000000000000LL);
+    BOOST_REQUIRE_EQUAL(raw_to<utils::multiprecision_int>(result, varint_type), expected);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_add_decimal) {
+    auto make_decimal = [](const char* s) -> constant {
+        return constant(raw_value::make_value(managed_bytes(decimal_type->decompose(big_decimal(s)))), decimal_type);
+    };
+    auto result = eval_add(make_decimal("1.5"), make_decimal("2.5"));
+    big_decimal expected("4.0");
+    BOOST_REQUIRE_EQUAL(raw_to<big_decimal>(result, decimal_type), expected);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_add_null_propagation) {
+    // null on either or both sides propagates to null
+    constant null_int = constant::make_null(int32_type);
+    BOOST_REQUIRE_EQUAL(eval_add(null_int, make_int_const(5)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(eval_add(make_int_const(5), null_int), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(eval_add(null_int, null_int), raw_value::make_null());
+
+    constant null_bigint = constant::make_null(long_type);
+    BOOST_REQUIRE_EQUAL(eval_add(null_bigint, make_bigint_const(1)), raw_value::make_null());
+
+    constant null_float = constant::make_null(float_type);
+    BOOST_REQUIRE_EQUAL(eval_add(null_float, make_float_const(1.0f)), raw_value::make_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_add_overflow) {
+    // Fixed-width integers overflow with a clear exception
+    BOOST_REQUIRE_THROW(
+        eval_add(make_int_const(std::numeric_limits<int32_t>::max()), make_int_const(1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_add(make_int_const(std::numeric_limits<int32_t>::min()), make_int_const(-1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_add(make_bigint_const(std::numeric_limits<int64_t>::max()), make_bigint_const(1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_add(make_tinyint_const(std::numeric_limits<int8_t>::max()), make_tinyint_const(1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_add(make_smallint_const(std::numeric_limits<int16_t>::max()), make_smallint_const(1)),
+        exceptions::invalid_request_exception);
+}
+
+// varint and decimal support arbitrary precision and don't overflow when
+// going beyond the limits of int64 or double.
+BOOST_AUTO_TEST_CASE(evaluate_add_arbitrary_precision_no_overflow) {
+    auto make_varint = [](int64_t v) -> constant {
+        return constant(raw_value::make_value(managed_bytes(varint_type->decompose(utils::multiprecision_int(v)))), varint_type);
+    };
+    auto make_decimal = [](const char* s) -> constant {
+        return constant(raw_value::make_value(managed_bytes(decimal_type->decompose(big_decimal(s)))), decimal_type);
+    };
+
+    // varint: adding 1 to INT64_MAX must not overflow (result requires one extra bit)
+    auto big = constant(raw_value::make_value(managed_bytes(varint_type->decompose(
+            utils::multiprecision_int(std::numeric_limits<int64_t>::max())))), varint_type);
+    auto big_result = eval_add(big, make_varint(1));
+    utils::multiprecision_int expected_varint = utils::multiprecision_int(std::numeric_limits<int64_t>::max()) + 1;
+    BOOST_REQUIRE_EQUAL(raw_to<utils::multiprecision_int>(big_result, varint_type), expected_varint);
+
+    // decimal: adding 1 to a value above double's range (~1.8e308) is computed exactly
+    std::string large_str = "1" + std::string(309, '0'); // 10^309, well above DBL_MAX
+    std::string large_plus_one = large_str;
+    large_plus_one.back() = '1';
+    BOOST_REQUIRE_EQUAL(
+        raw_to<big_decimal>(eval_add(make_decimal(large_str.c_str()), make_decimal("1")), decimal_type),
+        big_decimal(large_plus_one.c_str()));
+}
+
+// The decimal type offers unlimited precision, but adding two numbers with
+// wildly different magnitudes - like 1 and 1e100000000 can require allocating
+// a huge number of digits, takes a huge amount of time and potentially
+// run out of memory. The expected behavior is to refuse this operation.
+// Reproduces SCYLLADB-1576.
+BOOST_AUTO_TEST_CASE(evaluate_add_large_magnitude) {
+    // SCYLLADB-1576: currently OOMs or churns CPU for a long time instead of
+    // throwing. Remove the next line when fixed.
+    return;
+
+    // 1e10000000 is stored compactly as (unscaled=1, scale=-100000000), but
+    // adding 1 to it forces alignment of decimal points, allocating 100 million
+    // digits and running out of memory.
+    auto make_decimal = [](const char* s) -> constant {
+        return constant(raw_value::make_value(managed_bytes(decimal_type->decompose(big_decimal(s)))), decimal_type);
+    };
+    BOOST_REQUIRE_THROW(
+        eval_add(make_decimal("1e100000000"), make_decimal("1")),
+        exceptions::invalid_request_exception);
+}
+
+// Adding two different numeric types is currently not supported and should
+// throw. If we implement this case in the future, this test will need to be
+// changed.
+BOOST_AUTO_TEST_CASE(evaluate_add_type_mismatch) {
+    BOOST_REQUIRE_THROW(
+        eval_add(make_int_const(1), make_bigint_const(1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_add(make_float_const(1.0f), make_double_const(1.0)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_add(make_int_const(1), make_float_const(1.0f)),
+        exceptions::invalid_request_exception);
+}
+
+// All tests above were on constants. Let's try a more complex expression with
+// non-constant subexpressions, like 1+(2+4) and (1+2)+4.
+BOOST_AUTO_TEST_CASE(evaluate_add_nested) {
+    // 1 + (2 + 4) == 7
+    expression inner = binary_operator(make_int_const(2), oper_t::ADD, make_int_const(4));
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_add(make_int_const(1), inner), int32_type), 7);
+
+    // (1 + 2) + 4 == 7
+    expression outer = binary_operator(make_int_const(1), oper_t::ADD, make_int_const(2));
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_add(outer, make_int_const(4)), int32_type), 7);
+}
+
+
+// ADD on non-numeric types should throw
+BOOST_AUTO_TEST_CASE(evaluate_add_non_numeric_type) {
+    BOOST_REQUIRE_THROW(
+        eval_add(make_text_const("hello"), make_text_const("world")),
+        exceptions::invalid_request_exception);
+
+    constant bool_const(raw_value::make_value(managed_bytes(boolean_type->decompose(true))), boolean_type);
+    BOOST_REQUIRE_THROW(
+        eval_add(bool_const, bool_const),
+        exceptions::invalid_request_exception);
+}
+
+// ADD binary_operator should print as "lhs + rhs"
+BOOST_AUTO_TEST_CASE(evaluate_add_printer) {
+    expression add_expr = binary_operator(make_int_const(3), oper_t::ADD, make_int_const(4));
+    BOOST_REQUIRE_EQUAL(expr_print(add_expr), "3 + 4");
+}
+
+// Arithmetic ADD on a column with a reversed type (DESC clustering key) must
+// work correctly, it should not consider int and reversed(int) to be different
+// types that cannot be added together.
+BOOST_AUTO_TEST_CASE(evaluate_add_reversed_type) {
+    // Schema with a DESC clustering key: equivalent to
+    // CREATE TABLE test_ks.test_cf (pk int, ck int, PRIMARY KEY (pk, ck)) WITH CLUSTERING ORDER BY (ck DESC);
+    schema_ptr test_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
+            .build();
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {
+        {"pk", make_int_raw(1)},
+        {"ck", make_int_raw(5)},
+    });
+
+    // ck + 3 should equal 8, regardless of the reversed type on ck
+    expression ck_col = column_value(test_schema->get_column_definition("ck"));
+    expression add_expr = binary_operator(ck_col, oper_t::ADD, make_int_const(3));
+    raw_value result = evaluate(add_expr, inputs);
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(result, int32_type), 8);
+
+    // Also verify that both operands having reversed type works (reversed + reversed)
+    constant reversed_const(raw_value::make_value(managed_bytes(int32_type->decompose(int32_t(3)))),
+                            reversed_type_impl::get_instance(int32_type));
+    raw_value result2 = evaluate(binary_operator(ck_col, oper_t::ADD, reversed_const), inputs);
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(result2, int32_type), 8);
+}
+
+// Helper: build a SUB binary_operator and evaluate it with no inputs (both sides are constants).
+static raw_value eval_sub(expression lhs, expression rhs) {
+    return evaluate(binary_operator(std::move(lhs), oper_t::SUB, std::move(rhs)), evaluation_inputs{});
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_sub_fixed_width_integers) {
+    // int (32-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_sub(make_int_const(10), make_int_const(3)), int32_type), 7);
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_sub(make_int_const(3), make_int_const(10)), int32_type), -7);
+
+    // tinyint (8-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int8_t>(eval_sub(make_tinyint_const(30), make_tinyint_const(10)), byte_type), int8_t(20));
+
+    // smallint (16-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int16_t>(eval_sub(make_smallint_const(300), make_smallint_const(100)), short_type), int16_t(200));
+
+    // bigint (64-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int64_t>(eval_sub(make_bigint_const(3'000'000'000LL), make_bigint_const(1'000'000'000LL)), long_type),
+                        int64_t(2'000'000'000LL));
+
+    // type_of a SUB expression is the type of the operands
+    expression sub_expr = binary_operator(make_int_const(5), oper_t::SUB, make_int_const(2));
+    BOOST_REQUIRE(type_of(sub_expr) == int32_type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_sub_floating_point) {
+    // float (32-bit)
+    float float_result = raw_to<float>(eval_sub(make_float_const(4.0f), make_float_const(1.5f)), float_type);
+    BOOST_REQUIRE_CLOSE(float_result, 2.5f, 1e-5f);
+
+    // double (64-bit)
+    double double_result = raw_to<double>(eval_sub(make_double_const(5.0), make_double_const(1.25)), double_type);
+    BOOST_REQUIRE_CLOSE(double_result, 3.75, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_sub_varint) {
+    auto make_varint = [](int64_t v) -> constant {
+        return constant(raw_value::make_value(managed_bytes(varint_type->decompose(utils::multiprecision_int(v)))), varint_type);
+    };
+    auto result = eval_sub(make_varint(3000000000000LL), make_varint(1000000000000LL));
+    BOOST_REQUIRE_EQUAL(raw_to<utils::multiprecision_int>(result, varint_type), utils::multiprecision_int(2000000000000LL));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_sub_decimal) {
+    auto make_decimal = [](const char* s) -> constant {
+        return constant(raw_value::make_value(managed_bytes(decimal_type->decompose(big_decimal(s)))), decimal_type);
+    };
+    auto result = eval_sub(make_decimal("4.0"), make_decimal("1.5"));
+    BOOST_REQUIRE_EQUAL(raw_to<big_decimal>(result, decimal_type), big_decimal("2.5"));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_sub_null_propagation) {
+    constant null_int = constant::make_null(int32_type);
+    BOOST_REQUIRE_EQUAL(eval_sub(null_int, make_int_const(5)), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(eval_sub(make_int_const(5), null_int), raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(eval_sub(null_int, null_int), raw_value::make_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_sub_overflow) {
+    BOOST_REQUIRE_THROW(
+        eval_sub(make_int_const(std::numeric_limits<int32_t>::min()), make_int_const(1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_sub(make_int_const(std::numeric_limits<int32_t>::max()), make_int_const(-1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_sub(make_bigint_const(std::numeric_limits<int64_t>::min()), make_bigint_const(1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_sub(make_tinyint_const(std::numeric_limits<int8_t>::min()), make_tinyint_const(1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_sub(make_smallint_const(std::numeric_limits<int16_t>::min()), make_smallint_const(1)),
+        exceptions::invalid_request_exception);
+}
+
+// SUB has a key advantage over ADD+NEG: negating MININT overflows, so
+// -1 + (-MININT) would throw, but -1 - MININT = MAXINT is perfectly valid.
+BOOST_AUTO_TEST_CASE(evaluate_sub_minint) {
+    // int32: -1 - INT32_MIN = INT32_MAX (valid, but -1 + (-INT32_MIN) overflows)
+    BOOST_REQUIRE_EQUAL(
+        raw_to<int32_t>(eval_sub(make_int_const(-1), make_int_const(std::numeric_limits<int32_t>::min())), int32_type),
+        std::numeric_limits<int32_t>::max());
+
+    // int64: -1 - INT64_MIN = INT64_MAX
+    BOOST_REQUIRE_EQUAL(
+        raw_to<int64_t>(eval_sub(make_bigint_const(-1), make_bigint_const(std::numeric_limits<int64_t>::min())), long_type),
+        std::numeric_limits<int64_t>::max());
+
+    // int8: -1 - INT8_MIN = INT8_MAX
+    BOOST_REQUIRE_EQUAL(
+        raw_to<int8_t>(eval_sub(make_tinyint_const(-1), make_tinyint_const(std::numeric_limits<int8_t>::min())), byte_type),
+        std::numeric_limits<int8_t>::max());
+
+    // int16: -1 - INT16_MIN = INT16_MAX
+    BOOST_REQUIRE_EQUAL(
+        raw_to<int16_t>(eval_sub(make_smallint_const(-1), make_smallint_const(std::numeric_limits<int16_t>::min())), short_type),
+        std::numeric_limits<int16_t>::max());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_sub_type_mismatch) {
+    BOOST_REQUIRE_THROW(
+        eval_sub(make_int_const(5), make_bigint_const(1)),
+        exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_THROW(
+        eval_sub(make_float_const(1.0f), make_double_const(1.0)),
+        exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_sub_non_numeric_type) {
+    BOOST_REQUIRE_THROW(
+        eval_sub(make_text_const("hello"), make_text_const("world")),
+        exceptions::invalid_request_exception);
+}
+
+// SUB binary_operator should print as "lhs - rhs"
+BOOST_AUTO_TEST_CASE(evaluate_sub_printer) {
+    expression sub_expr = binary_operator(make_int_const(10), oper_t::SUB, make_int_const(3));
+    BOOST_REQUIRE_EQUAL(expr_print(sub_expr), "10 - 3");
+}
+
+// Arithmetic SUB on a column with a reversed type (DESC clustering key) must work correctly.
+BOOST_AUTO_TEST_CASE(evaluate_sub_reversed_type) {
+    schema_ptr test_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
+            .build();
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {
+        {"pk", make_int_raw(1)},
+        {"ck", make_int_raw(10)},
+    });
+
+    // ck - 3 should equal 7, regardless of the reversed type on ck
+    expression ck_col = column_value(test_schema->get_column_definition("ck"));
+    raw_value result = evaluate(binary_operator(ck_col, oper_t::SUB, make_int_const(3)), inputs);
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(result, int32_type), 7);
+}
+
+// Helper: evaluate a NEG unary_operator with a constant operand.
+static raw_value eval_neg(expression expr) {
+    return evaluate(unary_operator{unary_oper_t::NEG, std::move(expr)}, evaluation_inputs{});
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_fixed_width_integers) {
+    // int (32-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_neg(make_int_const(5)), int32_type), -5);
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_neg(make_int_const(-7)), int32_type), 7);
+
+    // tinyint (8-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int8_t>(eval_neg(make_tinyint_const(10)), byte_type), int8_t(-10));
+
+    // smallint (16-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int16_t>(eval_neg(make_smallint_const(300)), short_type), int16_t(-300));
+
+    // bigint (64-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int64_t>(eval_neg(make_bigint_const(1'000'000'000LL)), long_type), int64_t(-1'000'000'000LL));
+
+    // type_of a NEG expression is the type of the operand
+    expression neg_expr = unary_operator{unary_oper_t::NEG, make_int_const(1)};
+    BOOST_REQUIRE(type_of(neg_expr) == int32_type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_floating_point) {
+    // float (32-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<float>(eval_neg(make_float_const(3.5f)), float_type), -3.5f);
+
+    // double (64-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<double>(eval_neg(make_double_const(-2.5)), double_type), 2.5);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_varint) {
+    auto make_varint = [](int64_t v) -> constant {
+        return constant(raw_value::make_value(managed_bytes(varint_type->decompose(utils::multiprecision_int(v)))), varint_type);
+    };
+    BOOST_REQUIRE_EQUAL(
+        raw_to<utils::multiprecision_int>(eval_neg(make_varint(42)), varint_type),
+        utils::multiprecision_int(-42));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_decimal) {
+    auto make_decimal = [](const char* s) -> constant {
+        return constant(raw_value::make_value(managed_bytes(decimal_type->decompose(big_decimal(s)))), decimal_type);
+    };
+    BOOST_REQUIRE_EQUAL(
+        raw_to<big_decimal>(eval_neg(make_decimal("3.14")), decimal_type),
+        big_decimal("-3.14"));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_null_propagation) {
+    // NEG(null) → null for any numeric type
+    BOOST_REQUIRE(eval_neg(constant::make_null(int32_type)).is_null());
+    BOOST_REQUIRE(eval_neg(constant::make_null(long_type)).is_null());
+    BOOST_REQUIRE(eval_neg(constant::make_null(float_type)).is_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_overflow) {
+    // Negating the minimum value of each signed integer type overflows
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_int_const(std::numeric_limits<int32_t>::min())),
+        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_tinyint_const(std::numeric_limits<int8_t>::min())),
+        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_smallint_const(std::numeric_limits<int16_t>::min())),
+        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_bigint_const(std::numeric_limits<int64_t>::min())),
+        exceptions::invalid_request_exception);
+}
+
+// varint supports arbitrary precision, so negating INT64_MIN doesn't overflow.
+BOOST_AUTO_TEST_CASE(evaluate_neg_arbitrary_precision_no_overflow) {
+    utils::multiprecision_int min_val(std::numeric_limits<int64_t>::min());
+    constant c(raw_value::make_value(managed_bytes(varint_type->decompose(min_val))), varint_type);
+    BOOST_REQUIRE_EQUAL(
+        raw_to<utils::multiprecision_int>(eval_neg(c), varint_type),
+        -min_val);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_non_numeric_type) {
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_text_const("hello")),
+        exceptions::invalid_request_exception);
+
+    constant bool_const(raw_value::make_value(managed_bytes(boolean_type->decompose(true))), boolean_type);
+    BOOST_REQUIRE_THROW(
+        eval_neg(bool_const),
+        exceptions::invalid_request_exception);
+}
+
+// NEG unary_operator should print as "(-operand)"
+BOOST_AUTO_TEST_CASE(evaluate_neg_printer) {
+    expression neg_expr = unary_operator{unary_oper_t::NEG, make_int_const(3)};
+    BOOST_REQUIRE_EQUAL(expr_print(neg_expr), "(-3)");
+}
+
+// Arithmetic NEG on a column with a reversed type (DESC clustering key)
+// must work correctly, and not think reverse(int) is an unsupported type.
+BOOST_AUTO_TEST_CASE(evaluate_neg_reversed_type) {
+    // Schema with a DESC clustering key: equivalent to
+    // CREATE TABLE test_ks.test_cf (pk int, ck int, PRIMARY KEY (pk, ck)) WITH CLUSTERING ORDER BY (ck DESC);
+    schema_ptr test_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
+            .build();
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {
+        {"pk", make_int_raw(1)},
+        {"ck", make_int_raw(5)},
+    });
+
+    // -ck should equal -5
+    expression ck_col = column_value(test_schema->get_column_definition("ck"));
+    expression neg_expr = unary_operator{unary_oper_t::NEG, ck_col};
+    raw_value result = evaluate(neg_expr, inputs);
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(result, int32_type), -5);
 }

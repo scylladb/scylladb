@@ -340,6 +340,38 @@ You can use lightweight transactions for any of the following activities:
 
       (8 rows)
 
+Arithmetic SET in a LWT update (ScyllaDB extension)
+----------------------------------------------------
+
+ScyllaDB allows ``SET col = col + value`` and ``SET col = col - value`` on
+non-counter numeric columns in a conditional ``UPDATE``. Because the statement
+is executed as an LWT, the read-modify-write is atomic: no separate read and
+no race condition. An ``IF`` condition is required; without it ScyllaDB
+rejects the statement.
+
+If the column is null, the arithmetic result is also null (standard SQL
+null-propagation semantics), so the column remains unset. To catch an
+uninitialized column, use an ``IF`` condition that checks the column directly
+(e.g. ``IF r != null``) rather than ``IF EXISTS``.
+
+.. code-block:: cql
+
+   -- Initialize a row, with numeric regular column r set to 0:
+   INSERT INTO mytable (pk, ck, r) VALUES (1, 1, 0) IF NOT EXISTS;
+
+   -- Increment r atomically:
+   UPDATE mytable SET r = r + 1 WHERE pk = 1 AND ck = 1 IF EXISTS;
+
+   -- Increment r atomically - and visibly fail if r was not initialized:
+   UPDATE mytable SET r = r + 1 WHERE pk = 1 AND ck = 1 IF r != null;
+
+   -- Decrement r by 5 only when the value is large enough:
+   UPDATE mytable SET r = r - 5 WHERE pk = 1 AND ck = 1 IF r >= 5;
+
+.. note::
+
+   This syntax is a ScyllaDB extension and is not supported by Apache Cassandra.
+
 Update a table using a LWT
 --------------------------
 

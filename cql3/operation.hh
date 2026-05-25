@@ -66,10 +66,30 @@ public:
     }
 
     /**
-    * @return whether the operation requires a read of the previous value to be executed
-    * (only lists setterByIdx, discard and discardByIdx requires that).
+    * @return whether the operation requires a read of the previous value to
+    * be executed. In traditional CQL only a few specific list operations
+    * perform read before the write, *non-atomically*:
+    *   - lists::setter_by_index (SET c[i] = v)
+    *   - lists::discarder (SET c = c - [v])
+    *   - lists::discarder_by_index (DELETE c[i])
+    *
+    * We're gradually adding ScyllaDB-only CQL extensions to allow additional
+    * expressions that need to read the old value of the row, e.g.,
+    * SET r = r + 1. The operations will set require_read() to true, but will
+    * also set requires_lwt() to true to require that this operation must be
+    * execute in an LWT update - and this will guarantee that so the read-
+    * modify-write operation is atomic.
     */
     virtual bool requires_read() const {
+        return false;
+    }
+
+    /**
+     * @return whether the operation is only valid in an LWT (conditional)
+     * update. For example, non-counter arithmetic (e.g. SET r = r + 1 on a
+     * regular column) requires LWT so that the read-modify-write is atomic.
+     */
+    virtual bool requires_lwt() const {
         return false;
     }
 

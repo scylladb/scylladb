@@ -449,6 +449,9 @@ public:
     sstring to_string_impl(const data_value& v) const;
     bytes from_string(std::string_view text) const;
     bool is_counter() const;
+    /// True for numeric types that support arithmetic operations, including
+    /// integers and floating point of all sizes, decimal and varint.
+    bool is_arithmetic() const;
     bool is_string() const;
     bool is_collection() const;
     bool is_map() const { return _kind == kind::map; }

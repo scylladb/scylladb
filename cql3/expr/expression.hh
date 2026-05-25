@@ -57,6 +57,7 @@ struct allow_local_index_tag {};
 using allow_local_index = bool_class<allow_local_index_tag>;
 
 struct binary_operator;
+struct unary_operator;
 struct conjunction;
 struct column_value;
 struct subscript;
@@ -77,6 +78,7 @@ template <typename T>
 concept ExpressionElement
         = std::same_as<T, conjunction>
         || std::same_as<T, binary_operator>
+        || std::same_as<T, unary_operator>
         || std::same_as<T, column_value>
         || std::same_as<T, subscript>
         || std::same_as<T, unresolved_identifier>
@@ -97,6 +99,7 @@ template <typename Func>
 concept invocable_on_expression
         = std::invocable<Func, conjunction>
         && std::invocable<Func, binary_operator>
+        && std::invocable<Func, unary_operator>
         && std::invocable<Func, column_value>
         && std::invocable<Func, subscript>
         && std::invocable<Func, unresolved_identifier>
@@ -117,6 +120,7 @@ template <typename Func>
 concept invocable_on_expression_ref
         = std::invocable<Func, conjunction&>
         && std::invocable<Func, binary_operator&>
+        && std::invocable<Func, unary_operator&>
         && std::invocable<Func, column_value&>
         && std::invocable<Func, subscript&>
         && std::invocable<Func, unresolved_identifier&>
@@ -221,7 +225,10 @@ const column_value& get_subscripted_column(const subscript&);
 /// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
 const column_value& get_subscripted_column(const expression&);
 
-enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, NOT_IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE };
+enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, NOT_IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE, ADD, SUB };
+
+/// The operator of a unary expression.
+enum class unary_oper_t { NEG };
 
 /// Describes the nature of clustering-key comparisons.  Useful for implementing SCYLLA_CLUSTERING_BOUND.
 enum class comparison_order : char {
@@ -246,6 +253,15 @@ struct binary_operator {
     binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order = comparison_order::cql);
 
     friend bool operator==(const binary_operator&, const binary_operator&) = default;
+};
+
+// A unary operation on an expression.
+// Currently only negation (unary_oper_t::NEG) for numeric types is supported.
+struct unary_operator {
+    unary_oper_t op;
+    expression operand;
+
+    friend bool operator==(const unary_operator&, const unary_operator&) = default;
 };
 
 // A conjunction of expressions separated by the AND keyword.
@@ -469,7 +485,8 @@ struct expression::impl final {
             conjunction, binary_operator, column_value, unresolved_identifier,
             column_mutation_attribute, function_call, cast, field_selection,
             bind_variable, untyped_constant, constant, tuple_constructor,
-            collection_constructor, usertype_constructor, subscript, temporary>;
+            collection_constructor, usertype_constructor, subscript, temporary,
+            unary_operator>;
     variant_type v;
     impl(variant_type v) : v(std::move(v)) {}
 };
@@ -602,4 +619,17 @@ struct fmt::formatter<cql3::expr::oper_t> {
 
 private:
     static std::string_view to_string(const cql3::expr::oper_t& op);
+};
+
+template <>
+struct fmt::formatter<cql3::expr::unary_oper_t> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const cql3::expr::unary_oper_t& op, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", to_string(op));
+    }
+
+private:
+    static std::string_view to_string(const cql3::expr::unary_oper_t& op);
 };

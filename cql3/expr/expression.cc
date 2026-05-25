@@ -21,11 +21,14 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "index/secondary_index_manager.hh"
+#include "types/concrete_types.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/vector.hh"
 #include "utils/like_matcher.hh"
+#include "utils/big_decimal.hh"
+#include "utils/multiprecision_int.hh"
 #include "query/query-result-reader.hh"
 #include "types/user.hh"
 #include "cql3/functions/scalar_function.hh"
@@ -72,6 +75,7 @@ static cql3::raw_value do_evaluate(const tuple_constructor&, const evaluation_in
 static cql3::raw_value do_evaluate(const collection_constructor&, const evaluation_inputs&);
 static cql3::raw_value do_evaluate(const usertype_constructor&, const evaluation_inputs&);
 static cql3::raw_value do_evaluate(const function_call&, const evaluation_inputs&);
+static cql3::raw_value do_evaluate(const unary_operator&, const evaluation_inputs&);
 
 namespace {
 
@@ -341,6 +345,10 @@ bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_h
                 }
             case oper_t::NOT_IN:
                 on_internal_error(expr_logger, "NOT IN operator on limits(), despite being rejected via !is_slice()");
+            case oper_t::ADD:
+                on_internal_error(expr_logger, "ADD operator on limits()");
+            case oper_t::SUB:
+                on_internal_error(expr_logger, "SUB operator on limits()");
             }
         }
     }
@@ -832,6 +840,9 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
             },
             [&] (const temporary& t) {
                 out = fmt::format_to(out, "@temporary{}", t.index);
+            },
+            [&] (const unary_operator& uo) {
+                out = fmt::format_to(out, "({}{})", uo.op, to_printer(uo.operand));
             }
         }, pr.expr_to_print);
     return out;
@@ -965,6 +976,9 @@ bool recurse_until(const expression& e, const noncopyable_function<bool (const e
                 }
                 return false;
             },
+            [&] (const unary_operator& uo) {
+                return recurse_until(uo.operand, predicate_fun);
+            },
             [](LeafExpression auto const&) {
                 return false;
             }
@@ -1040,6 +1054,9 @@ expression search_and_replace(const expression& e,
                         .type = s.type,
                     };
                 },
+                [&] (const unary_operator& uo) -> expression {
+                    return unary_operator{uo.op, recurse(uo.operand)};
+                },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
                 },
@@ -1092,6 +1109,111 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
     return constant_val.view().deserialize<bool>(*boolean_type);
 }
 
+static raw_value arithmetic_add(const expression& lhs_expr, const expression& rhs_expr, const evaluation_inputs& inputs) {
+    raw_value lhs_val = evaluate(lhs_expr, inputs);
+    raw_value rhs_val = evaluate(rhs_expr, inputs);
+    if (lhs_val.is_null() || rhs_val.is_null()) {
+        // null plus anything is null:
+        return raw_value::make_null();
+    }
+    const abstract_type& t = type_of(lhs_expr)->without_reversed();
+    if (const abstract_type& rhs_t = type_of(rhs_expr)->without_reversed(); rhs_t != t) {
+        throw exceptions::invalid_request_exception(
+            format("Arithmetic ADD on different types ({} and {}) is not yet supported",
+                t.cql3_type_name(), rhs_t.cql3_type_name()));
+    }
+    bytes result = lhs_val.view().with_linearized([&](bytes_view lhs_bv) -> bytes {
+        return rhs_val.view().with_linearized([&](bytes_view rhs_bv) -> bytes {
+            return visit(t, make_visitor(
+                [&] <typename T> (const integer_type_impl<T>& itype) -> bytes {
+                    T l = value_cast<T>(itype.deserialize(lhs_bv));
+                    T r = value_cast<T>(itype.deserialize(rhs_bv));
+                    T res;
+                    if (__builtin_add_overflow(l, r, &res)) {
+                        throw exceptions::invalid_request_exception("Arithmetic ADD overflow");
+                    }
+                    return serialized(res);
+                },
+                [&] <typename T> (const floating_type_impl<T>& ftype) -> bytes {
+                    T l = value_cast<T>(ftype.deserialize(lhs_bv));
+                    T r = value_cast<T>(ftype.deserialize(rhs_bv));
+                    return serialized(l + r);
+                },
+                [&] (const varint_type_impl& vtype) -> bytes {
+                    utils::multiprecision_int l = value_cast<utils::multiprecision_int>(vtype.deserialize(lhs_bv));
+                    utils::multiprecision_int r = value_cast<utils::multiprecision_int>(vtype.deserialize(rhs_bv));
+                    return serialized(l + r);
+                },
+                [&] (const decimal_type_impl& dtype) -> bytes {
+                    // NOTE: This addition is susceptible to SCYLLADB-1576 - adding
+                    // two decimals with wildly different scales (e.g. 1 and
+                    // 1e100000000) can cause huge allocations and CPU usage.
+                    // This case should be caught and rejected in big_decimal's
+                    // implementation, not here.
+                    big_decimal l = value_cast<big_decimal>(dtype.deserialize(lhs_bv));
+                    big_decimal r = value_cast<big_decimal>(dtype.deserialize(rhs_bv));
+                    return serialized(l + r);
+                },
+                [&] (const abstract_type& atype) -> bytes {
+                    throw exceptions::invalid_request_exception(
+                        format("Arithmetic ADD is not supported for type {}", atype.cql3_type_name()));
+                }
+            ));
+        });
+    });
+    return raw_value::make_value(managed_bytes(result));
+}
+
+static raw_value arithmetic_sub(const expression& lhs_expr, const expression& rhs_expr, const evaluation_inputs& inputs) {
+    raw_value lhs_val = evaluate(lhs_expr, inputs);
+    raw_value rhs_val = evaluate(rhs_expr, inputs);
+    if (lhs_val.is_null() || rhs_val.is_null()) {
+        // null minus anything is null:
+        return raw_value::make_null();
+    }
+    const abstract_type& t = type_of(lhs_expr)->without_reversed();
+    if (const abstract_type& rhs_t = type_of(rhs_expr)->without_reversed(); rhs_t != t) {
+        throw exceptions::invalid_request_exception(
+            format("Arithmetic SUB on different types ({} and {}) is not yet supported",
+                t.cql3_type_name(), rhs_t.cql3_type_name()));
+    }
+    bytes result = lhs_val.view().with_linearized([&](bytes_view lhs_bv) -> bytes {
+        return rhs_val.view().with_linearized([&](bytes_view rhs_bv) -> bytes {
+            return visit(t, make_visitor(
+                [&] <typename T> (const integer_type_impl<T>& itype) -> bytes {
+                    T l = value_cast<T>(itype.deserialize(lhs_bv));
+                    T r = value_cast<T>(itype.deserialize(rhs_bv));
+                    T res;
+                    if (__builtin_sub_overflow(l, r, &res)) {
+                        throw exceptions::invalid_request_exception("Arithmetic SUB overflow");
+                    }
+                    return serialized(res);
+                },
+                [&] <typename T> (const floating_type_impl<T>& ftype) -> bytes {
+                    T l = value_cast<T>(ftype.deserialize(lhs_bv));
+                    T r = value_cast<T>(ftype.deserialize(rhs_bv));
+                    return serialized(l - r);
+                },
+                [&] (const varint_type_impl& vtype) -> bytes {
+                    utils::multiprecision_int l = value_cast<utils::multiprecision_int>(vtype.deserialize(lhs_bv));
+                    utils::multiprecision_int r = value_cast<utils::multiprecision_int>(vtype.deserialize(rhs_bv));
+                    return serialized(l + (-r));
+                },
+                [&] (const decimal_type_impl& dtype) -> bytes {
+                    big_decimal l = value_cast<big_decimal>(dtype.deserialize(lhs_bv));
+                    big_decimal r = value_cast<big_decimal>(dtype.deserialize(rhs_bv));
+                    return serialized(l - r);
+                },
+                [&] (const abstract_type& atype) -> bytes {
+                    throw exceptions::invalid_request_exception(
+                        format("Arithmetic SUB is not supported for type {}", atype.cql3_type_name()));
+                }
+            ));
+        });
+    });
+    return raw_value::make_value(managed_bytes(result));
+}
+
 static
 cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_inputs& inputs) {
     if (binop.order == comparison_order::clustering) {
@@ -1101,6 +1223,10 @@ cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_input
     bool_or_null binop_result(false);
 
     switch (binop.op) {
+        case oper_t::ADD:
+            return arithmetic_add(binop.lhs, binop.rhs, inputs);
+        case oper_t::SUB:
+            return arithmetic_sub(binop.lhs, binop.rhs, inputs);
         case oper_t::EQ:
             binop_result = equal(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
@@ -1336,6 +1462,51 @@ static
 cql3::raw_value
 do_evaluate(const temporary& t, const evaluation_inputs& inputs) {
     return inputs.temporaries[t.index];
+}
+
+static
+cql3::raw_value
+do_evaluate(const unary_operator& uo, const evaluation_inputs& inputs) {
+    // For now, this is do-nothing switch() supporting only the NEG operator.
+    // It will ask the compiler to warn us if we ever add a new type of unary
+    // operator and forget to update this function to handle it.
+    switch (uo.op) {
+    case unary_oper_t::NEG:
+        break;
+    }
+    raw_value operand_val = evaluate(uo.operand, inputs);
+    if (operand_val.is_null()) {
+        return raw_value::make_null();
+    }
+    const abstract_type& t = type_of(uo.operand)->without_reversed();
+    bytes result = operand_val.view().with_linearized([&](bytes_view bv) -> bytes {
+        return visit(t, make_visitor(
+            [&] <typename T> (const integer_type_impl<T>& itype) -> bytes {
+                T v = value_cast<T>(itype.deserialize(bv));
+                T res;
+                if (__builtin_sub_overflow(T(0), v, &res)) {
+                    throw exceptions::invalid_request_exception("Arithmetic negation overflow");
+                }
+                return serialized(res);
+            },
+            [&] <typename T> (const floating_type_impl<T>& ftype) -> bytes {
+                return serialized(-value_cast<T>(ftype.deserialize(bv)));
+            },
+            [&] (const varint_type_impl& vtype) -> bytes {
+                utils::multiprecision_int v = value_cast<utils::multiprecision_int>(vtype.deserialize(bv));
+                return serialized(-v);
+            },
+            [&] (const decimal_type_impl& dtype) -> bytes {
+                big_decimal v = value_cast<big_decimal>(dtype.deserialize(bv));
+                return serialized(-v);
+            },
+            [&] (const abstract_type& atype) -> bytes {
+                throw exceptions::invalid_request_exception(
+                    format("Arithmetic negation is not supported for type {}", atype.cql3_type_name()));
+            }
+        ));
+    });
+    return raw_value::make_value(managed_bytes(result));
 }
 
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
@@ -1915,6 +2086,9 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
         [](untyped_constant&) {},
         [](constant&) {},
         [](temporary&) {},
+        [&](unary_operator& uo) {
+            fill_prepare_context(uo.operand, ctx);
+        },
     }, e);
 }
 
@@ -1952,7 +2126,11 @@ type_of(const expression& e) {
             return boolean_type;
         },
         [] (const binary_operator& e) {
-            // All our binary operators are relations
+            // Arithmetic operators return the type of their operands;
+            // all other (comparison) operators return boolean.
+            if (e.op == oper_t::ADD || e.op == oper_t::SUB) {
+                return type_of(e.lhs);
+            }
             return boolean_type;
         },
         [] (const column_value& e) {
@@ -1989,6 +2167,9 @@ type_of(const expression& e) {
                     return t;
                 },
             }, e.type);
+        },
+        [] (const unary_operator& uo) {
+            return type_of(uo.operand);
         },
         [] (const ExpressionElement auto& e) -> data_type {
             return e.type;
@@ -2287,6 +2468,9 @@ aggregation_depth(const cql3::expr::expression& e) {
         },
         [] (const usertype_constructor& uc) {
             return max_over_range(uc.elements | std::views::values);
+        },
+        [] (const unary_operator& uo) {
+            return aggregation_depth(uo.operand);
         }
     }, e);
 }
@@ -2376,6 +2560,10 @@ levellize_aggregation_depth(const cql3::expr::expression& e, unsigned desired_de
         [&] (usertype_constructor uc) -> expression {
             recurse_over_range(uc.elements | std::views::values);
             return uc;
+        },
+        [&] (unary_operator uo) -> expression {
+            recurse(uo.operand);
+            return uo;
         }
     }, e);
 }
@@ -2582,6 +2770,20 @@ std::string_view fmt::formatter<cql3::expr::oper_t>::to_string(const cql3::expr:
         return "IS NOT";
     case oper_t::LIKE:
         return "LIKE";
+    case oper_t::ADD:
+        return "+";
+    case oper_t::SUB:
+        return "-";
     }
-    __builtin_unreachable();
+    on_internal_error(cql3::expr::expr_logger, fmt::format("unexpected oper_t value {}", static_cast<int>(op)));
+}
+
+std::string_view fmt::formatter<cql3::expr::unary_oper_t>::to_string(const cql3::expr::unary_oper_t& op) {
+    using cql3::expr::unary_oper_t;
+
+    switch (op) {
+    case unary_oper_t::NEG:
+        return "-";
+    }
+    on_internal_error(cql3::expr::expr_logger, fmt::format("unexpected unary_oper_t value {}", static_cast<int>(op)));
 }

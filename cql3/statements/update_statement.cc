@@ -497,6 +497,10 @@ update_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
     }
     prepare_conditions(db, *schema, ctx, *stmt);
     stmt->process_where_clause(db, _where_clause, ctx);
+    if (stmt->requires_lwt() && !stmt->has_conditions()) {
+        throw exceptions::invalid_request_exception(
+            "SET with a column expression (e.g. col = col + 1) requires an LWT condition (e.g., IF col != NULL or IF EXISTS) to ensure atomic read-before-write");
+    }
     return stmt;
 }
 

@@ -32,9 +32,20 @@ public:
 #endif
 public:
     class setter : public operation_skip_if_unset {
+        bool _requires_read;
     public:
-        using operation_skip_if_unset::operation_skip_if_unset;
+        setter(const column_definition& column, expr::expression e);
 
+        virtual bool requires_read() const override { return _requires_read; }
+        virtual bool requires_lwt() const override {
+            // An expression that requires reading a value from the row, e.g.,
+            // SET r = r + 1, requires LWT for atomicity and should not be allowed
+            // on non-LWT requests. In one special case, namely a list update
+            // "UPDATE t SET mylist[0] = 5 WHERE ...", we do allow reading the old
+            // row without LWT or atomicity - but this case is not handled by
+            // constants::setter so we don't need to support it here.
+            return _requires_read;
+        }
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
 
         static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value);

@@ -10,12 +10,28 @@
 
 #include "cql3/constants.hh"
 #include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
+#include "types/concrete_types.hh"
 
 namespace cql3 {
 
+constants::setter::setter(const column_definition& column, expr::expression e)
+    : operation_skip_if_unset(column, std::move(e))
+    , _requires_read(_e && expr::find_in_expression<expr::column_value>(*_e, [](const expr::column_value& cv) {
+        // primary key columns are always available to an update, they don't
+        // require a read.
+        return !cv.col->is_primary_key();
+    }) != nullptr)
+{ }
+
 void
 constants::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    auto value = expr::evaluate(*_e, params._options);
+    auto value = _requires_read
+        ? params.evaluate_on_prefetched_row(
+            *_e,
+            m.key(),
+            column.is_static() ? clustering_key_prefix::make_empty() : prefix)
+        : expr::evaluate(*_e, params._options);
     execute(m, prefix, params, column, value.view());
 }
 
@@ -63,4 +79,6 @@ expr::expression
 constants::setter::prepare_new_value_for_broadcast_tables() const {
     return *_e;
 }
+
+
 }

@@ -1344,6 +1344,19 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             }
             return result;
         },
+        [&] (const unary_operator& uo) -> std::optional<expression> {
+            // Prepare the operand; unary_operator preserves its operand's type.
+            auto prepared_operand = try_prepare_expression(uo.operand, db, keyspace, schema_opt, receiver);
+            if (!prepared_operand) {
+                return std::nullopt;
+            }
+            unary_operator result{uo.op, std::move(*prepared_operand)};
+            // Constant folding: if the operand is fully known, evaluate now.
+            if (is<constant>(result.operand)) {
+                return constant(evaluate(result, query_options::DEFAULT), type_of(result.operand));
+            }
+            return result;
+        },
         [&] (const conjunction& conj) -> std::optional<expression> {
             return prepare_conjunction(conj, db, keyspace, schema_opt, receiver);
         },
@@ -1455,6 +1468,9 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         [&] (const binary_operator&) -> test_result {
             on_internal_error(expr_logger, "binary_operators are not yet reachable via test_assignment()");
         },
+        [&] (const unary_operator&) -> test_result {
+            on_internal_error(expr_logger, "unary_operators are not yet reachable via test_assignment()");
+        },
         [&] (const conjunction&) -> test_result {
             on_internal_error(expr_logger, "conjunctions are not yet reachable via test_assignment()");
         },
@@ -1548,6 +1564,9 @@ test_assignment_any_size_float_vector(const expression& expr) {
             return validate_assignment(value.type);
         },
         [&] (const binary_operator&) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const unary_operator&) -> test_result {
             return NOT_ASSIGNABLE;
         },
         [&] (const conjunction&) -> test_result {
