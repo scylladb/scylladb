@@ -7862,4 +7862,115 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_changes_after_tablet_migration) {
     }, std::move(cfg)).get();
 }
 
+// Verifies that load_stats::operator+= correctly invalidates
+// split_ready_seq_number when a source has no tables.
+// Regression test for the scenario where node_A reports empty tables
+// (e.g. was down when a table was created) and node_B reports table1
+// with a non-trivial seq number.  The aggregated result must invalidate
+// table1's split_ready_seq_number because node_A did not report it.
+SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
+    static constexpr auto min_seq = std::numeric_limits<resize_decision::seq_number_t>::min();
+    static constexpr auto max_seq = std::numeric_limits<resize_decision::seq_number_t>::max();
+
+    auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+    auto table2 = table_id(utils::UUID_gen::get_time_UUID());
+
+    // Case 1: node_A has no tables, node_B has table1 with seq=2.
+    // Result must invalidate table1 because node_A didn't report it.
+    {
+        load_stats node_a;
+        // node_a.tables is empty — node was down when table was created
+
+        load_stats node_b;
+        node_b.tables[table1] = table_load_stats{.size_in_bytes = 100, .split_ready_seq_number = 2};
+
+        load_stats agg;
+        agg += node_a;
+        agg += node_b;
+
+        BOOST_REQUIRE(agg.tables.contains(table1));
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, min_seq);
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].size_in_bytes, 100);
+    }
+
+    // Case 2: reverse order — node_B first (has table1), then node_A (empty).
+    // Result must also invalidate table1.
+    {
+        load_stats node_a;
+
+        load_stats node_b;
+        node_b.tables[table1] = table_load_stats{.size_in_bytes = 100, .split_ready_seq_number = 2};
+
+        load_stats agg;
+        agg += node_b;
+        agg += node_a;
+
+        BOOST_REQUIRE(agg.tables.contains(table1));
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, min_seq);
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].size_in_bytes, 100);
+    }
+
+    // Case 3: both nodes report the same table — no invalidation, take min.
+    {
+        load_stats node_a;
+        node_a.tables[table1] = table_load_stats{.size_in_bytes = 50, .split_ready_seq_number = 3};
+
+        load_stats node_b;
+        node_b.tables[table1] = table_load_stats{.size_in_bytes = 70, .split_ready_seq_number = 5};
+
+        load_stats agg;
+        agg += node_a;
+        agg += node_b;
+
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, 3);
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].size_in_bytes, 120);
+    }
+
+    // Case 4: each node reports a different table — both invalidated.
+    {
+        load_stats node_a;
+        node_a.tables[table1] = table_load_stats{.size_in_bytes = 50, .split_ready_seq_number = 3};
+
+        load_stats node_b;
+        node_b.tables[table2] = table_load_stats{.size_in_bytes = 70, .split_ready_seq_number = 5};
+
+        load_stats agg;
+        agg += node_a;
+        agg += node_b;
+
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, min_seq);
+        BOOST_REQUIRE_EQUAL(agg.tables[table2].split_ready_seq_number, min_seq);
+    }
+
+    // Case 5: identity element — single source, no invalidation.
+    {
+        load_stats node_a;
+        node_a.tables[table1] = table_load_stats{.size_in_bytes = 100, .split_ready_seq_number = 7};
+
+        load_stats agg;
+        agg += node_a;
+
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, 7);
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].size_in_bytes, 100);
+    }
+
+    // Case 6: default-constructed table_load_stats has max seq (no contribution).
+    // After adding a source with seq=4 to one with max, result is min(max, 4) = 4.
+    {
+        load_stats node_a;
+        node_a.tables[table1] = table_load_stats{.size_in_bytes = 50, .split_ready_seq_number = max_seq};
+
+        load_stats node_b;
+        node_b.tables[table1] = table_load_stats{.size_in_bytes = 50, .split_ready_seq_number = 4};
+
+        load_stats agg;
+        agg += node_a;
+        agg += node_b;
+
+        BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, 4);
+    }
+
+    return make_ready_future<>();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
