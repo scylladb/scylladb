@@ -945,7 +945,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
             auto m = md.build(s);
 
             auto fm = freeze(m);
-            commitlog_entry_writer cew(s, fm, db::commitlog::force_sync::yes);
+            commitlog_mutation_entry_writer cew(s, fm, db::commitlog::force_sync::yes);
             cl.add_entry(m.column_family_id(), cew, db::no_timeout).get();
             return sharder.shard_for_reads(m.token());
         };
@@ -988,11 +988,11 @@ using namespace std::chrono_literals;
 SEASTAR_TEST_CASE(test_commitlog_add_entry) {
     return cl_test([](commitlog& log) {
         return seastar::async([&] {
-            using force_sync = commitlog_entry_writer::force_sync;
+            using force_sync = commitlog_mutation_entry_writer::force_sync;
 
             constexpr auto n = 10;
             for (auto fs : { force_sync(false), force_sync(true) }) {
-                std::vector<commitlog_entry_writer> writers;
+                std::vector<commitlog_mutation_entry_writer> writers;
                 utils::chunked_vector<frozen_mutation> mutations;
                 std::vector<replay_position> rps;
 
@@ -1051,11 +1051,11 @@ SEASTAR_TEST_CASE(test_commitlog_add_entry) {
 SEASTAR_TEST_CASE(test_commitlog_add_entries) {
     return cl_test([](commitlog& log) {
         return seastar::async([&] {
-            using force_sync = commitlog_entry_writer::force_sync;
+            using force_sync = commitlog_mutation_entry_writer::force_sync;
 
             constexpr auto n = 10;
             for (auto fs : { force_sync(false), force_sync(true) }) {
-                utils::chunked_vector<commitlog_entry_writer> writers;
+                utils::chunked_vector<commitlog_mutation_entry_writer> writers;
                 utils::chunked_vector<frozen_mutation> mutations;
                 std::vector<replay_position> rps;
 
@@ -1856,7 +1856,7 @@ static future<> do_test_oversized_entry(size_t max_size_mb) {
         auto log = co_await commitlog::create_commitlog(cfg);
         auto size = log.max_record_size() * 2;
 
-        utils::chunked_vector<commitlog_entry_writer> writers;
+        utils::chunked_vector<commitlog_mutation_entry_writer> writers;
         utils::chunked_vector<frozen_mutation> mutations;
 
         size_t tot = 0; 

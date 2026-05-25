@@ -14,7 +14,7 @@
 #include <seastar/core/simple-stream.hh>
 
 template<typename Output>
-void commitlog_entry_writer::serialize(Output& out) const {
+void commitlog_mutation_entry_writer::serialize(Output& out) const {
     [this, wr = ser::writer_of_commitlog_entry<Output>(out)] () mutable {
         if (_with_schema) {
             return std::move(wr).write_mapping(_schema->get_column_mapping());
@@ -24,13 +24,13 @@ void commitlog_entry_writer::serialize(Output& out) const {
     }().write_mutation(_mutation).end_commitlog_entry();
 }
 
-void commitlog_entry_writer::compute_size() {
+void commitlog_mutation_entry_writer::compute_size() {
     seastar::measuring_output_stream ms;
     serialize(ms);
     _size = ms.size();
 }
 
-void commitlog_entry_writer::write(ostream& out) const {
+void commitlog_mutation_entry_writer::write(ostream& out) const {
     serialize(out);
 }
 

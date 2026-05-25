@@ -83,7 +83,7 @@ public:
     frozen_mutation&& mutation() && { return std::move(_mutation); }
 };
 
-class commitlog_entry_writer {
+class commitlog_mutation_entry_writer {
 public:
     using force_sync = db::commitlog_force_sync;
 private:
@@ -97,7 +97,7 @@ private:
     void serialize(Output&) const;
     void compute_size();
 public:
-    commitlog_entry_writer(schema_ptr s, const frozen_mutation& fm, force_sync sync)
+    commitlog_mutation_entry_writer(schema_ptr s, const frozen_mutation& fm, force_sync sync)
         : _schema(std::move(s)), _mutation(fm), _sync(sync)
     {}
 

@@ -3108,15 +3108,15 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
     return _segment_manager->allocate_when_possible(serializer_func_entry_writer(id, size, std::move(func), sync), timeout);
 }
 
-future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
+future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_mutation_entry_writer& cew, timeout_clock::time_point timeout)
 {
     SCYLLA_ASSERT(id == cew.schema()->id());
 
     class cl_entry_writer final : public entry_writer {
-        commitlog_entry_writer _writer;
+        commitlog_mutation_entry_writer _writer;
     public:
         rp_handle res;
-        cl_entry_writer(const commitlog_entry_writer& wr) 
+        cl_entry_writer(const commitlog_mutation_entry_writer& wr) 
             : entry_writer(wr.sync()), _writer(wr) 
         {}
         const cf_id_type& id(size_t) const override {
@@ -3152,15 +3152,15 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
 }
 
 future<utils::chunked_vector<db::rp_handle>>
-db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
+db::commitlog::add_entries(utils::chunked_vector<commitlog_mutation_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
     class cl_entries_writer final : public entry_writer {
-        utils::chunked_vector<commitlog_entry_writer> _writers;
+        utils::chunked_vector<commitlog_mutation_entry_writer> _writers;
         std::unordered_set<table_schema_version> _known;
         const segment* _sizes_computed = nullptr;
     public:
         utils::chunked_vector<rp_handle> res;
 
-        cl_entries_writer(force_sync sync, utils::chunked_vector<commitlog_entry_writer> entry_writers)
+        cl_entries_writer(force_sync sync, utils::chunked_vector<commitlog_mutation_entry_writer> entry_writers)
             : entry_writer(sync, entry_writers.size()), _writers(std::move(entry_writers))
         {
             res.reserve(_writers.size());
@@ -3192,7 +3192,7 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_w
             return w.size();
         }
         size_t size() const override {
-            return std::accumulate(_writers.begin(), _writers.end(), size_t(0), [](size_t acc, const commitlog_entry_writer& w) {
+            return std::accumulate(_writers.begin(), _writers.end(), size_t(0), [](size_t acc, const commitlog_mutation_entry_writer& w) {
                 return w.mutation_size() + acc;
             });
         }
