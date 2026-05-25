@@ -13,17 +13,46 @@ SSTable Version Support
 
    * - SSTable Version
      - ScyllaDB Version
+<<<<<<< HEAD
    * - 3.x ('ms')
+||||||| parent of 8dcb5cdd43 (sstables: introduce sstable format version `mt`)
+   * - 3.x (``ms``)
+=======
+   * - 3.x ('mt')
+     - 2026.2 and above
+   * - 3.x ('ms')
+>>>>>>> 8dcb5cdd43 (sstables: introduce sstable format version `mt`)
      - 2025.4 and above
    * - 3.x ('me')
      - 2022.2 and above
    * - 3.x ('md')
      - 2021.1
 
-* The supported formats are ``me`` and ``ms``.
+* The supported formats are ``me`` and ``mt``.
 * The ``md`` format is used only when upgrading from an existing cluster using
   ``md``. The ``sstable_format`` parameter is ignored if it is set to ``md``.
+* The ``ms`` format has been superseded by ``mt``, and is used only when upgrading
+  from an existing cluster using ``ms``. If the ``sstable_format`` parameter is
+  set to ``ms``, ``mt`` files will be written.
 * Note: The ``sstable_format`` parameter specifies the SSTable format used for
   **writes**. The legacy SSTable formats (``ka``, ``la``, ``mc``) remain
   supported for reads, which is essential for restoring clusters from existing
   backups.
+<<<<<<< HEAD
+||||||| parent of 8dcb5cdd43 (sstables: introduce sstable format version `mt`)
+
+The ms Format: Trie-Based SSTable Index
+-----------------------------------------
+
+The ``ms`` format introduces a *trie-based* SSTable index.
+
+For a detailed description of the trie index format, see :doc:`SSTable ms Index </architecture/sstable/sstable3/sstable-ms-index>`.
+=======
+
+The ms Format: Trie-Based SSTable Index
+-----------------------------------------
+
+The ``ms`` format introduces a *trie-based* SSTable index.
+
+For a detailed description of the trie index format, see :doc:`SSTable ms Index </architecture/sstable/sstable3/sstable-ms-index>`.
+>>>>>>> 8dcb5cdd43 (sstables: introduce sstable format version `mt`)
