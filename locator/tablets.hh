@@ -85,6 +85,9 @@ enum class tablet_layout {
     arbitrary
 };
 
+sstring tablet_layout_to_string(tablet_layout);
+tablet_layout tablet_layout_from_string(const sstring&);
+
 /// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
 struct global_tablet_id {
     table_id table;
@@ -1181,4 +1184,9 @@ struct fmt::formatter<locator::tablet_task_type> : fmt::formatter<string_view> {
 template <>
 struct fmt::formatter<locator::tablet_repair_incremental_mode> : fmt::formatter<string_view> {
     auto format(const locator::tablet_repair_incremental_mode&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_layout> : fmt::formatter<string_view> {
+    auto format(const locator::tablet_layout&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
