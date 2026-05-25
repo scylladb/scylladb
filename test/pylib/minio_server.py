@@ -11,7 +11,7 @@ import os
 import argparse
 import asyncio
 from asyncio.subprocess import Process
-from typing import Generator, Optional
+from typing import Optional
 import json
 import logging
 import pathlib
@@ -32,13 +32,16 @@ class MinioServer:
     ENV_ACCESS_KEY = 'AWS_ACCESS_KEY_ID'
     ENV_SECRET_KEY = 'AWS_SECRET_ACCESS_KEY'
     DEFAULT_REGION = 'local'
+    DEFAULT_PORT = 9000
+    DEFAULT_CONSOLE_PORT = 9001
 
     log_file: BufferedWriter
 
     def __init__(self, tempdir_base, address, logger):
         self.srv_exe = shutil.which('minio')
         self.address = address
-        self.port = None
+        self.port = self.DEFAULT_PORT
+        self.console_port = self.DEFAULT_CONSOLE_PORT
         self.tempdir_base = pathlib.Path(tempdir_base)
         tempdir = tempfile.mkdtemp(dir=tempdir_base, prefix="minio-")
         self.tempdir = pathlib.Path(tempdir)
@@ -156,12 +159,6 @@ class MinioServer:
         return {'Statement': statement,
                 'Version': '2012-10-17'}
 
-    def _get_local_ports(self, num_ports: int) -> Generator[int, None, None]:
-        with open('/proc/sys/net/ipv4/ip_local_port_range', encoding='ascii') as port_range:
-            min_port, max_port = map(int, port_range.read().split())
-        for _ in range(num_ports):
-            yield random.randint(min_port, max_port)
-
     @staticmethod
     def create_conf(url: str, region: str):
         endpoint = {'name': url,
@@ -180,7 +177,7 @@ class MinioServer:
         self.logger.info(f'Starting minio server at {self.address}:{port}')
         cmd = await asyncio.create_subprocess_exec(
             self.srv_exe,
-            *[ 'server', '--address', f'{self.address}:{port}', self.rootdir ],
+            *[ 'server', '--address', f'{self.address}:{port}', '--console-address', f'{self.address}:{self.console_port}', self.rootdir ],
             preexec_fn=os.setsid,
             stderr=self.log_file,
             stdout=self.log_file,
@@ -239,24 +236,12 @@ class MinioServer:
 
     async def start(self):
         if self.srv_exe is None:
-            self.logger.error("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
-            return
+            raise RuntimeError("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
 
         self.log_file = self.log_filename.open("wb")
         os.mkdir(self.rootdir)
 
-        retries = 42  # just retry a fixed number of times
-        for port in self._get_local_ports(retries):
-            try:
-                self.cmd = await self._run_server(port)
-                self.port = port
-            except RuntimeError:
-                pass
-            else:
-                break
-        else:
-            self.logger.error("Failed to start Minio server")
-            return
+        self.cmd = await self._run_server(self.port)
 
         self._set_environ()
 
