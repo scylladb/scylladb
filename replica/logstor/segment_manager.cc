@@ -439,17 +439,12 @@ public:
 
     void submit(compaction_group&) override;
     future<> stop_ongoing_compactions(compaction_group&) override;
+    future<> remove(compaction_group&) override;
     future<compaction_reenabler> disable_compaction(replica::compaction_group&) override;
     compaction_reenabler disable_compaction_no_wait(replica::compaction_group&) override;
     future<> split_compaction(replica::table&, compaction_group&, mutation_writer::classify_by_token_group) override;
 
 private:
-
-    void maybe_erase_state(group_compaction_state_map::iterator it) {
-        if (it->second->is_empty()) {
-            _groups.erase(it);
-        }
-    }
 
     std::vector<log_segment_id> select_segments_for_compaction(const segment_descriptor_hist&);
     future<> do_compact(compaction_group&, abort_source&);
@@ -1418,7 +1413,11 @@ future<> compaction_manager_impl::stop_ongoing_compactions(compaction_group& cg)
     auto& state = *it->second;
     state.as.request_abort();
     co_await state.completion.get_future();
-    _groups.erase(it);
+}
+
+future<> compaction_manager_impl::remove(compaction_group& cg) {
+    co_await stop_ongoing_compactions(cg);
+    _groups.erase(&cg);
 }
 
 future<compaction_reenabler> compaction_manager_impl::disable_compaction(compaction_group& cg) {
@@ -1437,7 +1436,6 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(compact
         auto it = _groups.find(&cg);
         if (it != _groups.end()) {
             --it->second->compaction_disabled_counter;
-            maybe_erase_state(it);
         }
     });
 }
@@ -1455,7 +1453,6 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(compact
         auto it = _groups.find(&cg);
         if (it != _groups.end()) {
             --it->second->compaction_disabled_counter;
-            maybe_erase_state(it);
         }
     });
 }

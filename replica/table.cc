@@ -3217,6 +3217,9 @@ future<> compaction_group::stop(sstring reason) noexcept {
   for (auto view : all_views()) {
     co_await _t._compaction_manager.remove(*view, reason);
   }
+    if (_t.uses_logstor()) {
+        co_await get_logstor_compaction_manager().remove(*this);
+    }
 
     if (flush_future.failed()) {
         co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
