@@ -10,6 +10,7 @@
 #include <random>
 #include <algorithm>
 #include <numeric>
+#include <sstream>
 #include <json/json.h>
 
 #include <seastar/core/app-template.hh>
@@ -41,7 +42,7 @@ struct test_config {
     sstring compaction_strategy = "IncrementalCompactionStrategy";
     unsigned min_flush_interval = 100;
     unsigned max_flush_interval = 2000;
-    uint64_t min_sstable_size = 10000;
+    std::map<sstring, sstring> compaction_options;
     sstring output_format = "text";
     bool verbose = false;
 };
@@ -411,16 +412,21 @@ void do_compaction_efficiency_test(cql_test_env& env, test_config& cfg) {
     using clk = std::chrono::steady_clock;
 
     // Create table with configured compaction strategy
+    sstring compaction_opts = fmt::format("'class': '{}'", cfg.compaction_strategy);
+    for (auto& [k, v] : cfg.compaction_options) {
+        compaction_opts += fmt::format(", '{}': '{}'", k, v);
+    }
+
     sstring create_table_cql = fmt::format(
         "CREATE TABLE ks.perf_compaction ("
         "  pk bigint,"
         "  ck bigint,"
         "  v bigint,"
         "  PRIMARY KEY (pk, ck)"
-        ") WITH compaction = {{'class': '{}', 'min_sstable_size': '{}'}}"
+        ") WITH compaction = {{{}}}"
         " AND tablets = {{'min_per_shard_tablet_count': '1'}}"
         " AND tombstone_gc = {{'mode': 'immediate'}}",
-        cfg.compaction_strategy, cfg.min_sstable_size);
+        compaction_opts);
 
     if (cfg.default_time_to_live > 0) {
         create_table_cql += fmt::format(" AND default_time_to_live = {}",
@@ -652,8 +658,8 @@ int scylla_compaction_efficiency_main(int argc, char** argv) {
             "min operations between flushes")
         ("max-flush-interval", bpo::value<unsigned>()->default_value(2000),
             "max operations between flushes")
-        ("min-sstable-size", bpo::value<uint64_t>()->default_value(10000),
-            "min_sstable_size compaction strategy option (bytes)")
+        ("compaction-options", bpo::value<std::string>()->default_value(""),
+            "compaction strategy options as key=value,key=value (min_sstable_size=10000 added by default)")
         ("output-format", bpo::value<std::string>()->default_value("text"),
             "output format: text, json")
         ("verbose", bpo::bool_switch()->default_value(false),
@@ -694,7 +700,23 @@ int scylla_compaction_efficiency_main(int argc, char** argv) {
                 cfg.compaction_strategy = app.configuration()["compaction-strategy"].as<std::string>();
                 cfg.min_flush_interval = app.configuration()["min-flush-interval"].as<unsigned>();
                 cfg.max_flush_interval = app.configuration()["max-flush-interval"].as<unsigned>();
-                cfg.min_sstable_size = app.configuration()["min-sstable-size"].as<uint64_t>();
+                // Parse compaction options from key=value,key=value format
+                auto opts_str = app.configuration()["compaction-options"].as<std::string>();
+                if (!opts_str.empty()) {
+                    std::istringstream iss(opts_str);
+                    std::string pair;
+                    while (std::getline(iss, pair, ',')) {
+                        auto eq = pair.find('=');
+                        if (eq == std::string::npos) {
+                            throw std::invalid_argument(fmt::format("invalid compaction option (expected key=value): {}", pair));
+                        }
+                        cfg.compaction_options[sstring(pair.substr(0, eq))] = sstring(pair.substr(eq + 1));
+                    }
+                }
+                // Add default min_sstable_size if not explicitly provided
+                if (!cfg.compaction_options.contains("min_sstable_size")) {
+                    cfg.compaction_options["min_sstable_size"] = "10000";
+                }
                 cfg.output_format = app.configuration()["output-format"].as<std::string>();
                 cfg.verbose = app.configuration()["verbose"].as<bool>();
                 if (cfg.output_format != "text" && cfg.output_format != "json") {
@@ -716,7 +738,9 @@ int scylla_compaction_efficiency_main(int argc, char** argv) {
                     fmt::print("  compaction-strategy: {}\n", cfg.compaction_strategy);
                     fmt::print("  min-flush-interval: {}\n", cfg.min_flush_interval);
                     fmt::print("  max-flush-interval: {}\n", cfg.max_flush_interval);
-                    fmt::print("  min-sstable-size: {}\n", cfg.min_sstable_size);
+                    for (auto& [k, v] : cfg.compaction_options) {
+                        fmt::print("  compaction.{}={}\n", k, v);
+                    }
                     if (cfg.default_time_to_live > 0) {
                         fmt::print("  default-time-to-live: {}s\n", cfg.default_time_to_live);
                     }

@@ -21,10 +21,12 @@ public:
     static constexpr auto MIN_SSTABLE_SIZE_KEY = "min_sstable_size";
     static constexpr auto BUCKET_LOW_KEY = "bucket_low";
     static constexpr auto BUCKET_HIGH_KEY = "bucket_high";
+    static constexpr auto CUMULATIVE_BUCKET_THRESHOLD_KEY = "cumulative_bucket_threshold";
 private:
     uint64_t min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
     double bucket_low = DEFAULT_BUCKET_LOW;
     double bucket_high = DEFAULT_BUCKET_HIGH;
+    std::optional<double> cumulative_bucket_threshold;
 public:
     incremental_compaction_strategy_options(const std::map<sstring, sstring>& options);
 
@@ -56,6 +58,8 @@ private:
     static std::vector<sstable_run_and_length> create_run_and_length_pairs(const std::vector<sstables::frozen_sstable_run>& runs);
 
     static std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
+    static std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets_legacy(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
+    static std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets_cumulative(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
 
     std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs) const {
         return get_buckets(runs, _options);

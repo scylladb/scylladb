@@ -109,10 +109,32 @@ static std::optional<double> validate_space_amplification_goal(const std::map<ss
     return space_amplification_goal;
 }
 
+static std::optional<double> validate_cumulative_bucket_threshold(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options,
+        incremental_compaction_strategy_options::CUMULATIVE_BUCKET_THRESHOLD_KEY);
+    if (tmp_value) {
+        auto threshold = cql3::statements::property_definitions::to_double(
+            incremental_compaction_strategy_options::CUMULATIVE_BUCKET_THRESHOLD_KEY, tmp_value, 0.0);
+        if (threshold <= 0.0) {
+            throw exceptions::configuration_exception(fmt::format("{} value ({}) must be greater than 0.0",
+                incremental_compaction_strategy_options::CUMULATIVE_BUCKET_THRESHOLD_KEY, threshold));
+        }
+        return threshold;
+    }
+    return std::nullopt;
+}
+
+static std::optional<double> validate_cumulative_bucket_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto threshold = validate_cumulative_bucket_threshold(options);
+    unchecked_options.erase(incremental_compaction_strategy_options::CUMULATIVE_BUCKET_THRESHOLD_KEY);
+    return threshold;
+}
+
 incremental_compaction_strategy_options::incremental_compaction_strategy_options(const std::map<sstring, sstring>& options) {
     min_sstable_size = validate_min_sstable_size(options);
     bucket_low = validate_bucket_low(options);
     bucket_high = validate_bucket_high(options);
+    cumulative_bucket_threshold = validate_cumulative_bucket_threshold(options);
 }
 
 // options is a map of compaction strategy options and their values.
@@ -128,6 +150,21 @@ void incremental_compaction_strategy_options::validate(const std::map<sstring, s
     }
     validate_fragment_size(options, unchecked_options);
     validate_space_amplification_goal(options, unchecked_options);
+    auto cumulative = validate_cumulative_bucket_threshold(options, unchecked_options);
+    if (cumulative) {
+        if (compaction_strategy_impl::get_value(options, BUCKET_LOW_KEY)) {
+            throw exceptions::configuration_exception(fmt::format("{} cannot be combined with {}",
+                CUMULATIVE_BUCKET_THRESHOLD_KEY, BUCKET_LOW_KEY));
+        }
+        if (compaction_strategy_impl::get_value(options, BUCKET_HIGH_KEY)) {
+            throw exceptions::configuration_exception(fmt::format("{} cannot be combined with {}",
+                CUMULATIVE_BUCKET_THRESHOLD_KEY, BUCKET_HIGH_KEY));
+        }
+        if (compaction_strategy_impl::get_value(options, incremental_compaction_strategy::SPACE_AMPLIFICATION_GOAL_OPTION)) {
+            throw exceptions::configuration_exception(fmt::format("{} cannot be combined with {}",
+                CUMULATIVE_BUCKET_THRESHOLD_KEY, incremental_compaction_strategy::SPACE_AMPLIFICATION_GOAL_OPTION));
+        }
+    }
     compaction_strategy_impl::validate_min_max_threshold(options, unchecked_options);
 }
 
@@ -170,6 +207,15 @@ incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<s
 
 std::vector<std::vector<sstables::frozen_sstable_run>>
 incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options) {
+    if (options.cumulative_bucket_threshold) {
+        return get_buckets_cumulative(runs, options);
+    }
+    return get_buckets_legacy(runs, options);
+}
+
+// Legacy STCS-style average-based bucketing.
+std::vector<std::vector<sstables::frozen_sstable_run>>
+incremental_compaction_strategy::get_buckets_legacy(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options) {
     auto sorted_runs = create_run_and_length_pairs(runs);
 
     std::sort(sorted_runs.begin(), sorted_runs.end(), [] (sstable_run_and_length& i, sstable_run_and_length& j) {
@@ -215,6 +261,72 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
     }
 
     return bucket_list;
+}
+
+// Cumulative-sum bucket selection algorithm.
+//
+// Sorts runs ascending by effective size (using min_sstable_size as a floor),
+// then scans from largest to smallest. For each candidate head, if the
+// cumulative effective size of all smaller runs meets the cumulative_bucket_threshold
+// relative to the head, a non-singleton bucket is formed from runs[0..head].
+// Runs above the head become singleton buckets.
+//
+// The resulting bucket vector is ordered largest singletons first, with the
+// non-singleton bucket (if any) last.
+//
+// At most one non-singleton bucket can be formed (the remaining runs above the
+// head failed the cumulative condition with even more mass below them, so they
+// cannot form a non-singleton bucket among themselves).
+std::vector<std::vector<sstables::frozen_sstable_run>>
+incremental_compaction_strategy::get_buckets_cumulative(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options) {
+    if (runs.empty()) {
+        return {};
+    }
+
+    auto threshold = *options.cumulative_bucket_threshold;
+
+    auto effective_size = [&options] (const sstables::frozen_sstable_run& r) -> uint64_t {
+        return std::max(r->data_size(), options.min_sstable_size);
+    };
+
+    // Sort runs ascending by effective_size, tiebreak by data_size
+    auto sorted_runs = runs;
+    std::sort(sorted_runs.begin(), sorted_runs.end(), [&] (const auto& a, const auto& b) {
+        auto ea = effective_size(a);
+        auto eb = effective_size(b);
+        return ea < eb || (ea == eb && a->data_size() < b->data_size());
+    });
+
+    auto n = sorted_runs.size();
+
+    // Compute cumulative sum of all effective sizes
+    uint64_t cumulative = 0;
+    for (const auto& r : sorted_runs) {
+        cumulative += effective_size(r);
+    }
+
+    using bucket_type = std::vector<sstables::frozen_sstable_run>;
+    std::vector<bucket_type> buckets;
+
+    // Scan from largest to smallest. For each candidate head, subtract its
+    // effective_size from cumulative. If the remaining cumulative sum (of all
+    // runs below the head) meets the threshold, form a non-singleton bucket
+    // from runs[0..head]. Otherwise, the head becomes a singleton.
+    for (size_t head = n - 1; head >= 1; head--) {
+        cumulative -= effective_size(sorted_runs[head]);
+        if (cumulative >= threshold * effective_size(sorted_runs[head])) {
+            // Non-singleton bucket: runs[0..head]
+            bucket_type bucket(sorted_runs.begin(), sorted_runs.begin() + head + 1);
+            buckets.push_back(std::move(bucket));
+            return buckets;
+        }
+        // Singleton bucket
+        buckets.push_back({sorted_runs[head]});
+    }
+
+    // No non-singleton bucket found. The last remaining run is a singleton.
+    buckets.push_back({sorted_runs[0]});
+    return buckets;
 }
 
 std::vector<sstables::frozen_sstable_run>
@@ -288,6 +400,37 @@ incremental_compaction_strategy::find_garbage_collection_job(const compaction::c
     // making it possible to purge them.
 
     // Start from the largest tier as it's more likely to satisfy conditions for tombstones to be purged.
+    // In cumulative mode, buckets are ordered largest singletons first, non-singleton last.
+    // In legacy mode, buckets are ordered smallest first, largest last.
+    if (_options.cumulative_bucket_threshold) {
+        auto it = buckets.begin();
+        for (; it != buckets.end(); it++) {
+            if (can_garbage_collect(*it)) {
+                break;
+            }
+        }
+        if (it == buckets.end()) {
+            clogger.debug("ICS: nothing to garbage collect in {} buckets for {}.{}", buckets.size(), t.schema()->ks_name(), t.schema()->cf_name());
+            return compaction_descriptor();
+        }
+
+        size_bucket_t& first_bucket = *it;
+        std::vector<sstables::frozen_sstable_run> input = std::move(first_bucket);
+
+        if (buckets.size() >= 2) {
+            it = it == buckets.begin() ? std::next(it) : std::prev(it);
+
+            size_bucket_t& second_bucket = *it;
+
+            input.reserve(input.size() + second_bucket.size());
+            std::move(second_bucket.begin(), second_bucket.end(), std::back_inserter(input));
+        }
+        clogger.debug("ICS: starting garbage collection on {} runs for {}.{}", input.size(), t.schema()->ks_name(), t.schema()->cf_name());
+
+        return compaction_descriptor(runs_to_sstables(std::move(input)), 0, _fragment_size);
+    }
+
+    // Legacy mode: iterate from largest (rbegin) to smallest (rend).
     auto it = buckets.rbegin();
     for (; it != buckets.rend(); it++) {
         if (can_garbage_collect(*it)) {
@@ -328,14 +471,30 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     auto buckets = get_buckets(candidates);
 
-    if (is_any_bucket_interesting(buckets, min_threshold)) {
-        std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
-    }
-    // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
-    if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
-        std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+    if (_options.cumulative_bucket_threshold) {
+        // Cumulative mode: the only possible non-singleton bucket is the last one.
+        size_t threshold = t.compaction_enforce_min_threshold() ? min_threshold : 2;
+        if (!buckets.empty() && is_bucket_interesting(buckets.back(), threshold)) {
+            auto& bucket = buckets.back();
+            // Truncate to max_threshold, keeping the smallest runs (at the
+            // beginning of the ascending-sorted bucket). Compacting
+            // similarly-sized small runs together is more efficient than
+            // compacting them with a much larger head run.
+            if (bucket.size() > max_threshold) {
+                bucket.resize(max_threshold);
+            }
+            co_return compaction_descriptor(runs_to_sstables(std::move(bucket)), 0, _fragment_size);
+        }
+    } else {
+        if (is_any_bucket_interesting(buckets, min_threshold)) {
+            std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
+            co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        }
+        // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
+        if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
+            std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
+            co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        }
     }
 
     // The cross-tier behavior is only triggered once we're done with all the pending same-tier compaction to
@@ -349,7 +508,7 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         co_return desc;
     }
 
-    if (_space_amplification_goal) {
+    if (_space_amplification_goal && !_options.cumulative_bucket_threshold) {
         if (buckets.size() < 2) {
             co_return compaction_descriptor();
         }

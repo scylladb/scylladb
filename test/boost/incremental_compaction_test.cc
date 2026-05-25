@@ -293,6 +293,164 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
     with_sag_test(SAG(1.5), TABLE_INITIAL_SA(1));
 }
 
+// Test the cumulative-sum bucket selection algorithm used by ICS
+// when cumulative_bucket_threshold is set.
+//
+// Creates runs of specific sizes and verifies that the bucketing algorithm
+// correctly groups runs based on the cumulative-sum condition:
+//   cumulative_below >= cumulative_bucket_threshold * effective_size(head)
+//
+// The algorithm scans from largest to smallest. At most one non-singleton
+// bucket can be formed. Runs above the bucket head become singletons.
+SEASTAR_THREAD_TEST_CASE(incremental_compaction_cumulative_bucket_test) {
+    auto builder = schema_builder("tests", "incremental_compaction_cumulative_bucket_test")
+        .with_column("id", utf8_type, column_kind::partition_key)
+        .with_column("value", int32_type);
+    auto s = builder.build();
+
+    struct bucket_test {
+        test_env& _env;
+        mutable table_for_tests _cf;
+        compaction::incremental_compaction_strategy _ics;
+
+        static compaction::incremental_compaction_strategy make_ics() {
+            std::map<sstring, sstring> options;
+            // Use a small min_sstable_size to avoid the floor interfering with
+            // carefully-chosen run sizes.
+            options.emplace("min_sstable_size", "1");
+            options.emplace("cumulative_bucket_threshold", "0.5");
+            return compaction::incremental_compaction_strategy(options);
+        }
+
+        bucket_test(test_env& env, schema_ptr s)
+            : _env(env)
+            , _cf(env.make_table_for_tests(s))
+            , _ics(make_ics())
+        {
+        }
+
+        shared_sstable make_sstable_with_size(size_t sstable_data_size) {
+            auto sst = _env.make_sstable(_cf->schema(), "/nowhere/in/particular", _env.new_generation(), sstable_version_types::md, big);
+            auto keys = tests::generate_partition_keys(2, _cf->schema(), local_shard_only::yes);
+            sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, sstable_data_size);
+            return sst;
+        }
+
+        void populate(const std::vector<size_t>& run_sizes) {
+            for (auto size : run_sizes) {
+                auto sst = make_sstable_with_size(size);
+                column_family_test(_cf).add_sstable(sst).get();
+            }
+        }
+
+        // Get compaction descriptor and return the number of runs selected.
+        size_t get_compaction_run_count() {
+            auto& table_s = _cf.as_compaction_group_view();
+            auto control = make_strategy_control_for_test(false);
+            auto desc = _ics.get_sstables_for_compaction(table_s, *control).get();
+            if (desc.sstables.empty()) {
+                return 0;
+            }
+            // Count distinct runs in the selected sstables
+            std::unordered_set<sstables::run_id> run_ids;
+            for (auto& sst : desc.sstables) {
+                run_ids.insert(sst->run_identifier());
+            }
+            return run_ids.size();
+        }
+
+        future<> stop() {
+            return _cf.stop();
+        }
+    };
+
+    // Test 1: Runs of equal size should form a bucket when count >= min_threshold.
+    // 4 runs of size 100MB each. With threshold=0.5, cumulative of 3 runs (300MB)
+    // is >= 0.5 * 100MB, so all 4 should be in one bucket.
+    test_env::do_with_async([&] (test_env& env) {
+        bucket_test test(env, s);
+        test.populate({100'000'000, 100'000'000, 100'000'000, 100'000'000});
+        auto count = test.get_compaction_run_count();
+        BOOST_REQUIRE_EQUAL(count, 4);
+        test.stop().get();
+    }).get();
+
+    // Test 2: Runs too few to meet min_threshold should not compact.
+    // 3 runs of equal size. min_threshold=4 (enforced), so no compaction.
+    test_env::do_with_async([&] (test_env& env) {
+        bucket_test test(env, s);
+        test.populate({100'000'000, 100'000'000, 100'000'000});
+        auto count = test.get_compaction_run_count();
+        BOOST_REQUIRE_EQUAL(count, 0);
+        test.stop().get();
+    }).get();
+
+    // Test 3: One large run and many small runs.
+    // 1 run of 1GB + 4 runs of 200MB each. The 4 small runs have cumulative 800MB,
+    // which is >= 0.5 * 1GB, so all 5 runs should be in one bucket.
+    test_env::do_with_async([&] (test_env& env) {
+        bucket_test test(env, s);
+        test.populate({1'000'000'000, 200'000'000, 200'000'000, 200'000'000, 200'000'000});
+        auto count = test.get_compaction_run_count();
+        BOOST_REQUIRE_EQUAL(count, 5);
+        test.stop().get();
+    }).get();
+
+    // Test 4: One very large run and a few small runs that don't meet the threshold.
+    // 1 run of 1GB + 2 runs of 100MB each. Cumulative of 2 small = 200MB.
+    // 200MB < 0.5 * 1GB = 500MB, so the large run is a singleton.
+    // 2 runs below form a non-singleton bucket, but 2 < min_threshold=4, so no compaction.
+    test_env::do_with_async([&] (test_env& env) {
+        bucket_test test(env, s);
+        test.populate({1'000'000'000, 100'000'000, 100'000'000});
+        auto count = test.get_compaction_run_count();
+        BOOST_REQUIRE_EQUAL(count, 0);
+        test.stop().get();
+    }).get();
+
+    // Test 5: Geometric progression where cumulative-sum triggers at the right level.
+    // Runs: 1000, 500, 250, 125, 63 (geometric, ratio ~2x).
+    // With threshold=0.5:
+    // - head=1000: cumulative_below=938. 938 >= 0.5*1000=500. Yes, all 5 in one bucket.
+    test_env::do_with_async([&] (test_env& env) {
+        bucket_test test(env, s);
+        test.populate({63'000'000, 125'000'000, 250'000'000, 500'000'000, 1'000'000'000});
+        auto count = test.get_compaction_run_count();
+        BOOST_REQUIRE_EQUAL(count, 5);
+        test.stop().get();
+    }).get();
+
+    // Test 6: Two clearly separated tiers.
+    // 1 run of 10GB + 4 runs of 10MB. The small runs' cumulative is 40MB.
+    // 40MB < 0.5 * 10GB, so the large run is a singleton.
+    // The 4 small runs form a bucket (cumulative of 3 small = 30MB >= 0.5 * 10MB).
+    test_env::do_with_async([&] (test_env& env) {
+        bucket_test test(env, s);
+        test.populate({10'000'000'000, 10'000'000, 10'000'000, 10'000'000, 10'000'000});
+        auto count = test.get_compaction_run_count();
+        BOOST_REQUIRE_EQUAL(count, 4);
+        test.stop().get();
+    }).get();
+
+    // Test 7: Single run should produce no compaction.
+    test_env::do_with_async([&] (test_env& env) {
+        bucket_test test(env, s);
+        test.populate({1'000'000'000});
+        auto count = test.get_compaction_run_count();
+        BOOST_REQUIRE_EQUAL(count, 0);
+        test.stop().get();
+    }).get();
+
+    // Test 8: Empty table should produce no compaction.
+    test_env::do_with_async([&] (test_env& env) {
+        bucket_test test(env, s);
+        test.populate({});
+        auto count = test.get_compaction_run_count();
+        BOOST_REQUIRE_EQUAL(count, 0);
+        test.stop().get();
+    }).get();
+}
+
 SEASTAR_TEST_CASE(basic_garbage_collection_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto tmp = tmpdir();
