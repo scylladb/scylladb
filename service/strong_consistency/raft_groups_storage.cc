@@ -8,7 +8,6 @@
 #include "service/strong_consistency/raft_groups_storage.hh"
 
 #include "cql3/untyped_result_set.hh"
-#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "raft/raft.hh"
 #include "utils/UUID.hh"
@@ -19,13 +18,9 @@
 #include "serializer_impl.hh"
 #include "idl/raft_storage.dist.impl.hh"
 
-#include "cql3/statements/batch_statement.hh"
-#include "cql3/statements/modification_statement.hh"
 #include "cql3/query_processor.hh"
 
-#include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>
-#include <seastar/coroutine/maybe_yield.hh>
 
 namespace service::strong_consistency {
 
@@ -37,10 +32,7 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_
     , _group_id(std::move(gid))
     , _server_id(std::move(server_id))
     , _qp(qp)
-    , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
     , _pending_op_fut(make_ready_future<>())
-    // max_mutation_size = 1/2 of commitlog segment size, thus _max_mutation_size is set 1/3 of commitlog segment size to leave space for metadata.
-    , _max_mutation_size(_qp.db().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 3)
 {
     rgslog.trace("Creating raft_groups_storage for group_id={}, server_id={}, shard={}", _group_id, _server_id, _shard);
     if (shard > std::numeric_limits<int16_t>::max()) {
@@ -48,11 +40,6 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_
         on_internal_error(rgslog, fmt::format("Shard value {} exceeds maximum allowed {}", shard, std::numeric_limits<int16_t>::max()));
     }
     _shard = static_cast<uint16_t>(shard);
-    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, term, \"index\", data) VALUES (?, ?, ?, ?, ?)",
-        db::system_keyspace::RAFT_GROUPS);
-    auto prepared_stmt_ptr = _qp.prepare_internal(store_cql);
-    shared_ptr<cql3::cql_statement> cql_stmt = prepared_stmt_ptr->statement;
-    _store_entry_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
 }
 
 future<> raft_groups_storage::store_term_and_vote(raft::term_t term, raft::server_id vote) {
@@ -173,103 +160,14 @@ future<> raft_groups_storage::store_snapshot_descriptor(const raft::snapshot_des
                     cql3::query_processor::cache_internal::yes);
         }
 
-        co_await update_snapshot_and_truncate_log_tail(snap, preserve_log_entries);
-        // Also remove the corresponding replay position handles from raft_commitlog
-        // so that commitlog segments can be reclaimed.
+        co_await update_snapshot(snap);
+        // Release replay position handles for entries covered by the snapshot.
+        // state_machine::apply() only acquires handles for command entries;
+        // configuration and dummy entries retain their handles in the map
+        // and are cleaned up here.
         raft::index_t log_tail_index(snap.idx.value() - preserve_log_entries);
         _raft_commitlog.truncate_log_tail(log_tail_index);
     });
-}
-
-future<size_t> raft_groups_storage::do_store_log_entries_one_batch(const std::vector<raft::log_entry_ptr>& entries, size_t start_idx) {
-    std::vector<cql3::statements::batch_statement::single_statement> batch_stmts;
-    // statement values that can be allocated at once (one contiguous allocation)
-    std::vector<std::vector<cql3::raw_value>> stmt_values;
-    // fragmented storage for log_entries data
-    std::vector<fragmented_temporary_buffer> stmt_data_views;
-    // statement value views -- required for `query_options` to consume `fragmented_temporary_buffer::view`
-    std::vector<cql3::raw_value_view_vector_with_unset> stmt_value_views;
-    const size_t entries_size = entries.size();
-    batch_stmts.reserve(entries_size);
-    stmt_values.reserve(entries_size);
-    stmt_data_views.reserve(entries_size);
-    stmt_value_views.reserve(entries_size);
-
-    size_t size = 0;
-    size_t idx = start_idx;
-
-    for (; idx < entries_size; idx++) {
-        auto& eptr = entries[idx];
-        auto data_tmp_buf = fragmented_temporary_buffer::allocate_to_fit(ser::get_sizeof(eptr->data));
-        auto data_out_str = data_tmp_buf.get_ostream();
-        ser::serialize(data_out_str, eptr->data);
-        if (size && size + data_tmp_buf.size_bytes() > _max_mutation_size) {
-            break;
-        }
-        size += data_tmp_buf.size_bytes();
-        batch_stmts.emplace_back(cql3::statements::batch_statement::single_statement(_store_entry_stmt, false));
-
-        // don't include serialized "data" here since it will require to linearize the stream
-        std::vector<cql3::raw_value> single_stmt_values;
-        // Silly workaround for https://bugs.llvm.org/show_bug.cgi?id=51515
-        single_stmt_values.reserve(4);
-        single_stmt_values.emplace_back(cql3::raw_value::make_value(short_type->decompose(int16_t(_shard))));
-        single_stmt_values.emplace_back(cql3::raw_value::make_value(timeuuid_type->decompose(_group_id.id)));
-        single_stmt_values.emplace_back(cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->term.value()))));
-        single_stmt_values.emplace_back(cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->idx.value()))));
-
-        stmt_values.emplace_back(std::move(single_stmt_values));
-        stmt_data_views.emplace_back(std::move(data_tmp_buf));
-
-        // allocate value views
-        std::vector<cql3::raw_value_view> value_views;
-        value_views.reserve(5); // 5 is the number of required values for the insertion query
-        for (const cql3::raw_value& raw : stmt_values.back()) {
-            value_views.push_back(raw.view());
-        }
-        value_views.emplace_back(
-            cql3::raw_value_view::make_value(
-                fragmented_temporary_buffer::view(stmt_data_views.back())));
-        stmt_value_views.emplace_back(std::move(value_views));
-
-        co_await coroutine::maybe_yield();
-    }
-
-    auto batch_options = cql3::query_options::make_batch_options(
-        cql3::query_options(
-            cql3::default_cql_config,
-            db::consistency_level::ONE,
-            std::nullopt,
-            std::vector<cql3::raw_value>{},
-            false,
-            cql3::query_options::specific_options::DEFAULT
-            ),
-        std::move(stmt_value_views));
-
-    cql3::statements::batch_statement batch(
-        cql3::statements::batch_statement::type::UNLOGGED,
-        std::move(batch_stmts),
-        cql3::attributes::none(),
-        _qp.get_cql_stats());
-
-    co_await batch.execute(_qp, _dummy_query_state, batch_options, std::nullopt);
-
-    if (idx != entries_size) {
-        co_return idx;
-    }
-
-    co_return 0;
-}
-
-future<> raft_groups_storage::do_store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
-    if (entries.empty()) {
-        co_return;
-    }
-
-    size_t idx = 0;
-    do {
-        idx = co_await do_store_log_entries_one_batch(entries, idx);
-    } while (idx != 0);
 }
 
 future<> raft_groups_storage::store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
@@ -287,18 +185,13 @@ future<> raft_groups_storage::abort() {
     return std::move(_pending_op_fut);
 }
 
-future<> raft_groups_storage::update_snapshot_and_truncate_log_tail(const raft::snapshot_descriptor &snap, size_t preserve_log_entries) {
-    // Update snapshot and truncate logs in `system.raft_groups` atomically
-    raft::index_t log_tail_idx(snap.idx.value() - preserve_log_entries);
-    static const auto store_latest_id_and_truncate_log_tail_cql = format(
-        "BEGIN UNLOGGED BATCH"
-        "   INSERT INTO system.{} (shard, group_id, snapshot_id) VALUES (?, ?, ?);"   // store latest id
-        "   DELETE FROM system.{} WHERE shard = ? AND group_id = ? AND \"index\" <= ?;"   // truncate log tail
-        "APPLY BATCH",
-        db::system_keyspace::RAFT_GROUPS, db::system_keyspace::RAFT_GROUPS);
+future<> raft_groups_storage::update_snapshot(const raft::snapshot_descriptor &snap) {
+    static const auto update_snapshot_cql = format(
+        "INSERT INTO system.{} (shard, group_id, snapshot_id) VALUES (?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
     return _qp.execute_internal(
-        store_latest_id_and_truncate_log_tail_cql,
-        {int16_t(_shard), _group_id.id, snap.id.id, int16_t(_shard), _group_id.id, int64_t(log_tail_idx.value())},
+        update_snapshot_cql,
+        {int16_t(_shard), _group_id.id, snap.id.id},
         cql3::query_processor::cache_internal::yes
     ).discard_result();
 }
