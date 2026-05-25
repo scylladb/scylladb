@@ -14,7 +14,6 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
-#include <seastar/core/shared_mutex.hh>
 #include <seastar/util/noncopyable_function.hh>
 
 // Scylla includes.
@@ -80,9 +79,6 @@ private:
 
     enum class state {
         started,        // Hinting is currently allowed (start() has completed).
-        migrating,      // The hint manager is being migrated from using IPs to name
-                        // hint directories to using host IDs for that purpose. No new
-                        // incoming hints will be accepted as long as this is the state.
         replay_allowed, // Replaying (sending) hints is allowed.
         draining_all,   // Accepting new hints is not allowed. All endpoint managers
                         // are being drained because the node is leaving the cluster.
@@ -92,7 +88,6 @@ private:
 
     using state_set = enum_set<super_enum<state,
         state::started,
-        state::migrating,
         state::replay_allowed,
         state::draining_all,
         state::stopping>>;
@@ -146,13 +141,7 @@ private:
 
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
-    bool _uses_host_id = false;
-    std::any _migration_callback = std::nullopt;
-    future<> _migrating_done = make_ready_future();
-
-    // Unique lock if and only if there is an ongoing migration to the host-ID-based hinted handoff.
-    // Shared lock if and only if there is a fiber already executing `manager::wait_for_sync_point`.
-    seastar::shared_mutex _migration_mutex{};
+    static constexpr bool _uses_host_id = true;
 
 public:
     manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
@@ -367,26 +356,6 @@ private:
     /// Iterates over existing hint directories and for each, if the corresponding endpoint is present
     /// in locator::topology, creates an endpoint manager.
     future<> initialize_endpoint_managers();
-
-    /// Renames host directories named after IPs to host IDs.
-    ///
-    /// In the past, hosts were identified by their IPs. Now we use host IDs for that purpose,
-    /// but we want to ensure that old hints don't get lost if possible. This function serves
-    /// this purpose. It's only necessary when upgrading Scylla.
-    ///
-    /// This function should ONLY be called by `manager::start()` and `manager::perform_migration()`.
-    ///
-    /// Calling this function again while the previous call has not yet finished
-    /// is undefined behavior.
-    future<> migrate_ip_directories();
-
-    /// Migrates this hint manager to using host IDs, i.e. when a call to this function ends,
-    /// the names of hint directories will start being represented by host IDs instead of IPs.
-    ///
-    /// This function suspends hinted handoff throughout its execution. Among other consequences,
-    /// ALL requested sync points will be canceled, i.e. an exception will be issued
-    /// in the corresponding futures.
-    future<> perform_migration();
 
 public:
     /// Performs draining for all nodes that have already left the cluster.
