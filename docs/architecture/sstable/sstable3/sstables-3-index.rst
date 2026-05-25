@@ -131,24 +131,6 @@ Its size is the same as the value stored in ``promoted_index_blocks_count``. The
 
 It is possible to read those offsets (commonly referred to as "offsets map") directly without reading the entire promoted index. This, in turn, allows searching through the promoted index using binary search which results in O(log N) reads instead of O (N). 
 
-References
-..........
-
-The following code parts in Cassandra deal with index serialisation/de-serialisation:
-
-* `ColumnIndex.java, buildRowIndex`_ 
-
-* `RowIndexEntry.java`_ 
-
-* `IndexInfo.java`_
-
-.. _`ColumnIndex.java, buildRowIndex`: https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/db/ColumnIndex.java
-
-.. _`IndexInfo.java`: https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/io/sstable/IndexInfo.java
-
-.. _`RowIndexEntry.java`: https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/db/RowIndexEntry.java
-
-
 Additional Information
 ----------------------
 
