@@ -30,6 +30,7 @@
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "component_type.hh"
+#include "enum_set.hh"
 #include "sstables/exceptions.hh"
 #include "column_translation.hh"
 #include "stats.hh"
@@ -199,6 +200,30 @@ class delayed_commit_changes {
 public:
     future<> commit();
 };
+
+// Set of recognized component types; excludes Unknown, which is not a real
+// component. The sizeof check fails if an enumerator is missing from the list.
+template <component_type... Cs>
+struct component_list {
+    static_assert(sizeof...(Cs) == num_component_types, "component_list must name every component_type below Unknown");
+    using set = enum_set<super_enum<component_type, Cs...>>;
+};
+using component_set = component_list<
+        component_type::Index,
+        component_type::CompressionInfo,
+        component_type::Data,
+        component_type::TOC,
+        component_type::Summary,
+        component_type::Digest,
+        component_type::CRC,
+        component_type::Filter,
+        component_type::Statistics,
+        component_type::TemporaryTOC,
+        component_type::TemporaryStatistics,
+        component_type::Scylla,
+        component_type::Rows,
+        component_type::Partitions,
+        component_type::TemporaryHashes>::set;
 
 class sstable_stream_sink_impl;
 
@@ -570,8 +595,16 @@ private:
         return component_name(*this, f);
     }
 
-    std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
+    // Set of recognized component types present for this sstable.
+    component_set _recognized_components;
     std::unique_ptr<std::vector<sstring>> _unrecognized_components;
+
+    void add_component(component_type c) noexcept {
+        _recognized_components.set(c);
+    }
+    void remove_component(component_type c) noexcept {
+        _recognized_components.remove(c);
+    }
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     column_translation _column_translation;
@@ -695,6 +728,12 @@ private:
     uint32_t _toc_digest{};
 public:
     bool has_component(component_type f) const;
+    template<typename Func>
+    void for_each_component(Func&& fn) const {
+        for (auto c : _recognized_components) {
+            fn(c);
+        }
+    }
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
 
