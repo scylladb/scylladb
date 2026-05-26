@@ -172,7 +172,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
             on_internal_error(logger, 
                 ::format("table {}, tablet {} raft group {} background error {}", 
                     tablet.table, tablet.tablet, group_id, e));
-        }
+        },
+        .tag = format("sc-{}", group_id)
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
