@@ -23,6 +23,9 @@ import decimal
 from botocore.exceptions import ClientError
 from contextlib import contextmanager, ExitStack
 
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
+
 from test.alternator.util import is_aws, new_test_table, create_test_table, random_string
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
@@ -1377,3 +1380,11 @@ def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only
             S3Bucket='my-bucket',
             ExportTime=int(time.time()) + 60 * 5 + 60,
         )
+
+
+# Test that the internal system-distributed tables for alternator export to S3 exist and are queryable.
+@pytest.mark.parametrize("table_name", ['alternator_export_to_s3_exports', 'alternator_export_to_s3_client_tokens'])
+def test_export_to_s3_checks_if_internal_tables_exist(cql, table_name):
+    statement = SimpleStatement(f"SELECT * FROM system_distributed.{table_name} LIMIT 1", consistency_level=ConsistencyLevel.ONE)
+    # we don't care about the results, we just want to make sure the read succeeds
+    cql.execute(statement)
