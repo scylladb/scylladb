@@ -165,7 +165,7 @@ def start_ldap(host: Host, port: int, instance_root: Path, toxiproxy_byte_limit:
         cmd = ['slapadd', '-F', instance_path]
         subprocess.check_output(cmd, input='\n\n'.join(DEFAULT_ENTRIES).encode('ascii'), stderr=subprocess.STDOUT)
     except CalledProcessError as e:
-        logging.critical("toxiproxy-cli failed: %s: s%", e, e.stdout)
+        logging.critical("toxiproxy-cli failed: %s: %s", e, e.stdout)
         raise 
     # Set up the server.
     SLAPD_URLS = f'ldap://:{port}/ ldaps://:{port + 1}/'
