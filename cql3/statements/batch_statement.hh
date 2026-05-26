@@ -91,11 +91,7 @@ public:
                     std::unique_ptr<attributes> attrs,
                     cql_stats& stats);
 
-    const std::vector<single_statement>& statements() const { return _statements; }
-
-    audit::audit_info_ptr audit_info() const {
-        return audit::audit::create_audit_info(audit::statement_category::DML, sstring(), sstring(), true);
-    }
+    audit::audit_info_ptr audit_info() const;
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 

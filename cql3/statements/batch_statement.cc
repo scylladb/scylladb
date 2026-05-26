@@ -70,6 +70,21 @@ batch_statement::batch_statement(type type_,
 {
 }
 
+audit::audit_info_ptr batch_statement::audit_info() const {
+    auto ai = audit::audit::create_audit_info(audit::statement_category::DML, sstring(), sstring(), true);
+    if (!ai) {
+        return nullptr;
+    }
+
+    std::vector<const audit::audit_info*> batch_infos;
+    batch_infos.reserve(_statements.size());
+    for (const auto& s : _statements) {
+        batch_infos.emplace_back(s.statement->get_audit_info());
+    }
+    ai->set_batch_infos(std::move(batch_infos));
+    return ai;
+}
+
 bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
 {
     return std::ranges::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
@@ -291,6 +306,10 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     ++_stats.batches;
     _stats.statements_in_batches += _statements.size();
 
+    if (_statements.empty()) {
+        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(make_shared<cql_transport::messages::result_message::void_message>());
+    }
+
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
     auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
 
@@ -505,5 +524,3 @@ audit::statement_category batch_statement::category() const {
 }
 
 }
-
-
