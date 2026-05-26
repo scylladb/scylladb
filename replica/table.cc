@@ -671,6 +671,7 @@ future<> storage_group_manager::stop_storage_groups() noexcept {
 void storage_group_manager::clear_storage_groups() {
     for (auto& [id, sg]: _storage_groups) {
         sg->clear_sstables();
+        sg->clear_logstor_segments();
     }
 }
 
@@ -3266,9 +3267,21 @@ void compaction_group::clear_sstables() {
     _maintenance_sstables = make_maintenance_sstable_set();
 }
 
+void compaction_group::clear_logstor_segments() {
+    if (_logstor_state) {
+        _logstor_state->clear_segments();
+    }
+}
+
 void storage_group::clear_sstables() {
     for_each_compaction_group([] (const compaction_group_ptr& cg) {
         cg->clear_sstables();
+    });
+}
+
+void storage_group::clear_logstor_segments() {
+    for_each_compaction_group([] (const compaction_group_ptr& cg) {
+        cg->clear_logstor_segments();
     });
 }
 

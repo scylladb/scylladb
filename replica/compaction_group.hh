@@ -182,6 +182,9 @@ public:
     // Clear sstable sets
     void clear_sstables();
 
+    // Unlink logstor segments from this group without freeing them, for shutdown.
+    void clear_logstor_segments();
+
     // Clear memtable(s) content
     future<> clear_memtables();
 
@@ -443,6 +446,7 @@ public:
 
     // Clear sstable sets
     void clear_sstables();
+    void clear_logstor_segments();
 };
 
 using storage_group_ptr = lw_shared_ptr<storage_group>;

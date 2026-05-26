@@ -85,6 +85,10 @@ struct segment_set {
     segment_descriptor_hist _segments;
     size_t _segment_count{0};
 
+    ~segment_set() {
+        clear();
+    }
+
     future<> merge(segment_set& other) {
         while (!other._segments.empty()) {
             auto& desc = other._segments.one_of_largest();
@@ -119,6 +123,21 @@ struct segment_set {
         desc.owner = nullptr;
         --desc.ref_count;
         --_segment_count;
+    }
+
+    // unlink all segments for shutdown.
+    // don't decrement ref_count because the segments are still owned
+    // by this group and we don't want to free them.
+    void clear() {
+        while (!empty()) {
+            auto& desc = _segments.one_of_largest();
+            if (desc.owner != this) {
+                on_internal_error(logstor_logger, "remove_segment called not from the owner");
+            }
+            _segments.erase(desc);
+            desc.owner = nullptr;
+            --_segment_count;
+        }
     }
 
     size_t segment_count() const noexcept {
@@ -345,6 +364,10 @@ public:
 
     void add_logstor_segment(segment_descriptor& desc) {
         _logstor_segments.add_segment(desc);
+    }
+
+    void clear_segments() {
+        _logstor_segments.clear();
     }
 
     void write_to_separator(log_record_writer, segment_ref, std::optional<segment_sequence>, separator_write_completion);
