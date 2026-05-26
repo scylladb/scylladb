@@ -820,6 +820,7 @@ private:
     bool _small_table_optimization_tm_calculated = false;
     service::frozen_topology_guard _frozen_topology_guard;
     service::topology_guard _topology_guard;
+    optimized_optional<seastar::abort_source::subscription> _session_abort_sub;
     const bool _is_eligible_to_repair_rejection;
 private:
     incremental_repair_meta _incremental_repair_meta;
@@ -855,6 +856,12 @@ public:
     }
     uint32_t repair_meta_id() const {
         return _repair_meta_id;
+    }
+    void set_session_abort_subscription(optimized_optional<seastar::abort_source::subscription> sub) {
+        _session_abort_sub = std::move(sub);
+    }
+    void clear_session_abort_subscription() {
+        _session_abort_sub = {};
     }
     const std::optional<repair_sync_boundary>& current_sync_boundary() const {
         return _current_sync_boundary;
@@ -1006,6 +1013,7 @@ public:
         if (_stopped) {
             return _stopped->get_future();
         }
+        clear_session_abort_subscription();
         promise<> stopped;
         _stopped.emplace(stopped.get_future());
         auto gate_future = _gate.close();
@@ -1830,6 +1838,10 @@ public:
     repair_row_level_stop_handler(repair_service& rs, locator::host_id from, uint32_t repair_meta_id, sstring ks_name, sstring cf_name, dht::token_range range, bool mark_as_repaired) {
         rlogger.debug("<<< Finished Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}",
                 rs.my_host_id(), from, repair_meta_id, ks_name, cf_name, range);
+        if (utils::get_local_injector().enter("repair_row_level_stop_skip_cleanup")) {
+            rlogger.info("repair_row_level_stop_handler: skipping cleanup due to error injection, repair_meta_id={}", repair_meta_id);
+            co_return;
+        }
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::row_level_stop_started);
         co_await rs.remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range), mark_as_repaired);
@@ -3812,6 +3824,37 @@ repair_service::insert_repair_meta(
         rm->set_repair_state_for_local_node(repair_state::row_level_start_finished);
     } else {
         rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
+    }
+    if (topo_guard != service::null_topology_guard) {
+        auto& session_as = service::get_topology_session_manager().get_session_abort_source(topo_guard);
+        auto sub = session_as.subscribe([this, id, topo_guard] () noexcept {
+            auto it = repair_meta_map().find(id);
+            if (it == repair_meta_map().end()) {
+                return;
+            }
+            auto rm = it->second;
+            repair_meta_map().erase(it);
+            rlogger.info("Session {} closed, removing repair_meta_id {} for node {}", topo_guard, id.repair_meta_id, id.ip);
+            // Copy captures to stack locals before stop(), because stop() calls
+            // clear_session_abort_subscription() which destroys this closure object.
+            // After that, the outer lambda's captures (id, topo_guard) are freed.
+            // Stack locals remain valid for the inner lambda to capture from.
+            auto local_id = id;
+            auto local_topo_guard = topo_guard;
+            // Start stop() in the background. The topology_guard (gate::holder) inside
+            // repair_meta is released when stop() completes and the shared_ptr drops,
+            // which ensures session drain waits for this cleanup to finish.
+            (void)rm->stop().handle_exception([rm, local_id, local_topo_guard] (auto ep) {
+                rlogger.warn("Session {}: failed to stop orphaned repair_meta_id {} for node {}: {}", local_topo_guard, local_id.repair_meta_id, local_id.ip, ep);
+            });
+        });
+        if (!sub) {
+            repair_meta_map().erase(id);
+            rlogger.info("Session {} already closed, removing late repair_meta_id {} for node {}", topo_guard, id.repair_meta_id, id.ip);
+            co_await rm->stop();
+            co_return;
+        }
+        rm->set_session_abort_subscription(std::move(sub));
     }
 }
 
