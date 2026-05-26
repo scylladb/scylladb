@@ -1084,16 +1084,24 @@ OK
 +-------------+-----+
 > -- list contains
 > update lwt set c=0 where a = 1 if listint contains null;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:42 no viable alternative at input 'contains'">
++-------------+-----------+
+| [applied]   | listint   |
+|-------------+-----------|
+| False       | null      |
++-------------+-----------+
 > -- map contains
 > update lwt set c=0 where a = 1 if mapint contains key 1;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input 'contains'">
++-------------+----------+
+| [applied]   | mapint   |
+|-------------+----------|
+| False       | null     |
++-------------+----------+
 > -- set contains
 > update lwt set c=0 where a = 1 if setint contains key 1;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input 'contains'">
+Error from server: code=2200 [Invalid query] message="Cannot use CONTAINS KEY on non-map column setint"
 > -- multi-value set contaias
 > update lwt set c=0 where a = 1 if setint contains key 1;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input 'contains'">
+Error from server: code=2200 [Invalid query] message="Cannot use CONTAINS KEY on non-map column setint"
 > -- addressing map element
 > update lwt set c=0 where a = 1 if mapint[2] = 3;
 +-------------+----------+
