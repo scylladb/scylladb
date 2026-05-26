@@ -152,6 +152,8 @@ struct leader {
 class fsm {
     // id of this node
     server_id _my_id;
+    // Human-readable tag for log messages (distinguishes raft instances)
+    sstring _tag;
     // What state the server is in. The default is follower.
     std::variant<follower, candidate, leader> _state;
     // _current_term, _voted_for && _log are persisted in persistence
@@ -343,7 +345,7 @@ protected: // For testing
     }
 
 public:
-    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
+    explicit fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, log log,
             index_t commit_idx, failure_detector& failure_detector, fsm_config conf,
             seastar::condition_variable& sm_events);
 
@@ -542,7 +544,7 @@ void fsm::step(server_id from, const follower& c, Message&& msg) {
         // extra round trip.
         become_candidate(false, true);
     } else if constexpr (std::is_same_v<Message, read_quorum>) {
-        logger.trace("[{}] receive read_quorum from {} for read id {}", _my_id, from, msg.id);
+        logger.trace("[{}] receive read_quorum from {} for read id {}", _tag, from, msg.id);
         advance_commit_idx(msg.leader_commit_idx);
         send_to(from, read_quorum_reply{_current_term, _commit_idx, msg.id});
     }
@@ -571,7 +573,7 @@ void fsm::step(server_id from, Message&& msg) {
         server_id leader{};
 
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
-            _my_id, _current_term, from, msg.current_term);
+            _tag, _current_term, from, msg.current_term);
 
         if constexpr (std::is_same_v<Message, append_request> ||
                       std::is_same_v<Message, install_snapshot> ||
@@ -581,7 +583,7 @@ void fsm::step(server_id from, Message&& msg) {
             // Got a reply to read barrier with higher term. This should not happen.
             // Log and ignore
             logger.error("{} [term: {}] ignoring read barrier reply with higher term {}",
-                _my_id, _current_term, msg.current_term);
+                _tag, _current_term, msg.current_term);
             return;
         }
 
@@ -617,7 +619,7 @@ void fsm::step(server_id from, Message&& msg) {
         } else {
             // Ignore other cases
             logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
-                _my_id, _current_term, from, msg.current_term);
+                _tag, _current_term, from, msg.current_term);
         }
         return;
 
