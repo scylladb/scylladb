@@ -550,8 +550,22 @@ private:
         return component_name(*this, f);
     }
 
-    std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
+    // Bitmask of recognized component types present for this sstable.
+    // component_type has 16 values, so uint32_t provides room for growth.
+    static_assert(static_cast<unsigned>(component_type::Unknown) < 32,
+                  "component_type values must fit in a uint32_t bitmask");
+    uint32_t _recognized_components = 0;
     std::vector<sstring> _unrecognized_components;
+
+    static uint32_t component_mask(component_type c) noexcept {
+        return uint32_t(1) << static_cast<unsigned>(c);
+    }
+    void add_component(component_type c) noexcept {
+        _recognized_components |= component_mask(c);
+    }
+    void remove_component(component_type c) noexcept {
+        _recognized_components &= ~component_mask(c);
+    }
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     column_translation _column_translation;
@@ -653,6 +667,15 @@ private:
     uint32_t _toc_digest{};
 public:
     bool has_component(component_type f) const;
+    template<typename Func>
+    void for_each_component(Func&& fn) const {
+        auto bits = _recognized_components;
+        while (bits) {
+            auto idx = __builtin_ctz(bits);
+            fn(static_cast<component_type>(idx));
+            bits &= bits - 1;
+        }
+    }
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
 

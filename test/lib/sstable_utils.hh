@@ -109,7 +109,7 @@ public:
         return _sst->read_summary_entry(i);
     }
 
-    auto& get_components() {
+    auto get_components() const {
         return _sst->_recognized_components;
     }
 
@@ -128,8 +128,8 @@ public:
     future<sstable_ptr> store(sstring dir, sstables::generation_type generation) {
         _sst->_generation = generation;
         co_await _sst->_storage->change_dir_for_test(dir);
-        _sst->_recognized_components.erase(component_type::Index);
-        _sst->_recognized_components.erase(component_type::Data);
+        _sst->remove_component(component_type::Index);
+        _sst->remove_component(component_type::Data);
         co_await seastar::async([sst = _sst] {
             sst->open_sstable("test");
             sst->write_statistics();
@@ -157,7 +157,7 @@ public:
         _sst->_index_file_size = std::max(1UL, uint64_t(data_file_size * 0.1));
         _sst->_metadata_size_on_disk = std::max(1UL, uint64_t(data_file_size * 0.01));
         // scylla component must be present for a sstable to be considered fully expired.
-        _sst->_recognized_components.insert(component_type::Scylla);
+        _sst->add_component(component_type::Scylla);
         _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
         _sst->_first = dht::decorate_key(*_sst->_schema, first_key);
         _sst->_last = dht::decorate_key(*_sst->_schema, last_key);
@@ -173,7 +173,7 @@ public:
 
     void rewrite_toc_without_component(component_type component) {
         SCYLLA_ASSERT(component != component_type::TOC);
-        _sst->_recognized_components.erase(component);
+        _sst->remove_component(component);
         remove_file(fmt::to_string(_sst->toc_filename())).get();
         _sst->_storage->open(*_sst);
         _sst->seal_sstable(false).get();
@@ -206,7 +206,7 @@ public:
     }
 
     void write_filter() {
-        _sst->_recognized_components.insert(component_type::Filter);
+        _sst->add_component(component_type::Filter);
         _sst->write_filter();
     }
 

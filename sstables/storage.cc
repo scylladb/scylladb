@@ -861,8 +861,13 @@ future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_conte
         co_await sstables_registry.update_entry_status(owner(), node_owner, sst.generation(), status_removing);
     }
 
-    co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
-        co_await delete_object(make_object_name(sst, type));
+    // Delete all recognized components in parallel
+    std::vector<component_type> components;
+    sst.for_each_component([&] (component_type c) {
+        components.push_back(c);
+    });
+    co_await coroutine::parallel_for_each(components, [this, &sst] (component_type c) -> future<> {
+        co_await delete_object(make_object_name(sst, c));
     });
 
     co_await sstables_registry.delete_entry(owner(), node_owner, sst.generation());
