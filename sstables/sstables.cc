@@ -942,7 +942,10 @@ future<> sstable::read_toc(sstable_open_config cfg) noexcept {
                 try {
                     add_component(reverse_map(c, sstable_version_constants::get_component_map(_version)));
                 } catch (std::out_of_range& oor) {
-                    _unrecognized_components.push_back(c);
+                    if (!_unrecognized_components) {
+                        _unrecognized_components = std::make_unique<std::vector<sstring>>();
+                    }
+                    _unrecognized_components->push_back(c);
                     sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, toc_filename());
                 }
             }
@@ -1638,6 +1641,9 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
 future<> sstable::copy_components(const sstable& src) {
     set_components(co_await src._components.copy());
     _recognized_components = src._recognized_components;
+    if (src._unrecognized_components) {
+        _unrecognized_components = std::make_unique<std::vector<sstring>>(*src._unrecognized_components);
+    }
 }
 
 bool sstable::should_update_repaired_at(int64_t repaired_at) const {
@@ -3006,12 +3012,15 @@ sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& 
 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
     std::vector<std::pair<component_type, sstring>> all;
-    all.reserve(__builtin_popcount(_recognized_components) + _unrecognized_components.size());
+    size_t unrecognized_size = _unrecognized_components ? _unrecognized_components->size() : 0;
+    all.reserve(__builtin_popcount(_recognized_components) + unrecognized_size);
     for_each_component([&] (component_type c) {
         all.push_back(std::make_pair(c, sstable_version_constants::get_component_map(_version).at(c)));
     });
-    for (auto& c : _unrecognized_components) {
-        all.push_back(std::make_pair(component_type::Unknown, c));
+    if (_unrecognized_components) {
+        for (auto& c : *_unrecognized_components) {
+            all.push_back(std::make_pair(component_type::Unknown, c));
+        }
     }
     return all;
 }
