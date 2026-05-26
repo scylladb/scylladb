@@ -22,11 +22,11 @@ class statement_restrictions;
 }
 } // namespace cql3
 
-namespace vector_search {
+namespace cql3::statements::external_search {
 
 struct prepared_rhs {
     data_type type;
-    cql3::expr::expression expr;
+    expr::expression expr;
 };
 
 struct prepared_restriction {
@@ -34,7 +34,7 @@ struct prepared_restriction {
     rjson::value lhs_json;
     std::variant<rjson::value, prepared_rhs> rhs;
 
-    rjson::value rhs_to_json(const cql3::query_options& options) const;
+    rjson::value rhs_to_json(const query_options& options) const;
 };
 
 class prepared_filter {
@@ -51,7 +51,7 @@ public:
     }
 
     /// Serializes the prepared filter to JSON compatible with the Vector Store service filtering API.
-    rjson::value to_json(const cql3::query_options& options) const;
+    rjson::value to_json(const query_options& options) const;
 };
 
 /// Prepares a filter from CQL statement restrictions for use in Vector Store service.
@@ -59,4 +59,4 @@ public:
 /// and prepares them for serialization to JSON compatible to Vector Store service filtering API.
 prepared_filter prepare_filter(const cql3::restrictions::statement_restrictions& restrictions, bool allow_filtering);
 
-} // namespace vector_search
+} // namespace cql3::statements::external_search

@@ -9,8 +9,8 @@
 #pragma once
 
 #include "cql3/statements/select_statement.hh"
+#include "cql3/statements/external_search/filter.hh"
 #include "vector_search/vector_store_client.hh"
-#include "vector_search/filter.hh"
 
 #include <optional>
 
@@ -47,7 +47,7 @@ select_statement::ordering_comparator_type get_similarity_ordering_comparator(
 class vector_indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
     prepared_ann_ordering_type _prepared_ann_ordering;
-    vector_search::prepared_filter _prepared_filter;
+    external_search::prepared_filter _prepared_filter;
     mutable gc_clock::time_point _query_start_time_point;
 
 public:
@@ -63,7 +63,7 @@ public:
             ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
             ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
             prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit, std::optional<expr::expression> per_partition_limit,
-            cql_stats& stats, const secondary_index::index& index, vector_search::prepared_filter prepared_filter, std::unique_ptr<cql3::attributes> attrs);
+            cql_stats& stats, const secondary_index::index& index, external_search::prepared_filter prepared_filter, std::unique_ptr<cql3::attributes> attrs);
 
 private:
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute(

@@ -196,7 +196,7 @@ select_statement::ordering_comparator_type get_similarity_ordering_comparator(st
         ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs) {
 
-    auto prepared_filter = vector_search::prepare_filter(*restrictions, parameters->allow_filtering());
+    auto prepared_filter = external_search::prepare_filter(*restrictions, parameters->allow_filtering());
 
     return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
             std::move(group_by_cell_indices), is_reversed, std::move(ordering_comparator), std::move(prepared_ann_ordering), std::move(limit),
@@ -208,7 +208,7 @@ vector_indexed_table_select_statement::vector_indexed_table_select_statement(sch
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
         prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index,
-        vector_search::prepared_filter prepared_filter, std::unique_ptr<attributes> attrs)
+        external_search::prepared_filter prepared_filter, std::unique_ptr<attributes> attrs)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit,
               per_partition_limit, stats, std::move(attrs)}
     , _index{index}

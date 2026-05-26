@@ -1062,6 +1062,7 @@ scylla_core = (['message/messaging_service.cc',
                 'cql3/statements/batch_statement.cc',
                 'cql3/statements/select_statement.cc',
                 'cql3/statements/external_search/vector_indexed_table_select_statement.cc',
+                'cql3/statements/external_search/filter.cc',
                 'cql3/statements/use_statement.cc',
                 'cql3/statements/index_prop_defs.cc',
                 'cql3/statements/index_target.cc',
@@ -1388,7 +1389,6 @@ scylla_core = (['message/messaging_service.cc',
                 'vector_search/dns.cc',
                 'vector_search/client.cc',
                 'vector_search/clients.cc',
-                'vector_search/filter.cc',
                 'vector_search/truststore.cc'
                 ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
