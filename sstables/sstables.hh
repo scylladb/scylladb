@@ -367,11 +367,15 @@ public:
     }
 
     const std::set<generation_type>& compaction_ancestors() const {
-        return _compaction_ancestors;
+        static const std::set<generation_type> empty;
+        return _compaction_ancestors ? *_compaction_ancestors : empty;
     }
 
     void add_ancestor(generation_type generation) {
-        _compaction_ancestors.insert(generation);
+        if (!_compaction_ancestors) {
+            _compaction_ancestors = std::make_unique<std::set<generation_type>>();
+        }
+        _compaction_ancestors->insert(generation);
     }
 
     // Returns true iff this sstable contains data which belongs to many shards.
@@ -572,7 +576,8 @@ private:
     std::optional<open_flags> _open_mode;
     // _compaction_ancestors track which sstable generations were used to generate this sstable.
     // it is then used to generate the ancestors metadata in the statistics or scylla components.
-    std::set<generation_type> _compaction_ancestors;
+    // Lazily allocated — only populated during compaction output.
+    std::unique_ptr<std::set<generation_type>> _compaction_ancestors;
     file _index_file;
     seastar::shared_ptr<cached_file> _cached_index_file;
     file _data_file;
