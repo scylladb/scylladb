@@ -32,6 +32,7 @@
 #include "auth/authenticated_user.hh"
 
 #include "db/config.hh"
+#include "utils/chunked_string.hh"
 
 BOOST_AUTO_TEST_SUITE(auth_test)
 
@@ -195,7 +196,7 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
 
 	    auto msg = cquery_nofail(e, format("SELECT timeout FROM {}", "system.service_levels_v2"));
         assert_that(msg).is_rows().with_rows({
-            {duration_type->from_string("5ms")},
+            {to_bytes(duration_type->from_string("5ms"))},
             {{}}, // `sl:driver`
         });
 
@@ -203,7 +204,7 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
 
 	    msg = cquery_nofail(e, format("SELECT timeout FROM {} WHERE service_level = 'sl'", "system.service_levels_v2"));
         assert_that(msg).is_rows().with_rows({{
-            duration_type->from_string("35s")
+            to_bytes(duration_type->from_string("35s"))
         }});
 
         // Setting a timeout value of 0 makes little sense, but it's great for testing

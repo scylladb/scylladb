@@ -13,6 +13,7 @@
 #include "bytes.hh"
 #include "cql3/error_listener.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/chunked_string.hh"
 
 namespace cql3 {
 
@@ -34,7 +35,7 @@ class error_collector : public error_listener<RecognizerType, ExceptionBaseType>
     /**
      * The CQL query.
      */
-    const std::string_view _query;
+    const utils::chunked_string_view _query;
 
     /**
      * An empty bitset to be used as a workaround for AntLR null dereference
@@ -50,7 +51,7 @@ public:
      *
      * @param query the CQL query that will be parsed
      */
-    error_collector(const std::string_view& query) : _query(query) {}
+    error_collector(utils::chunked_string_view query) : _query(query) {}
 
     /**
      * Format and throw a new \c exceptions::syntax_exception.

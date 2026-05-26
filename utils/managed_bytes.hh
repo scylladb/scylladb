@@ -13,16 +13,14 @@
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
 #include "utils/fragment_range.hh"
+#include "utils/managed_bytes_fwd.hh"
 #include <seastar/util/alloc_failure_injector.hh>
 #include <type_traits>
 #include <utility>
+#include <iterator>
+#include <cstddef>
 
 class bytes_ostream;
-
-template <mutable_view is_mutable_view>
-class managed_bytes_basic_view;
-using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
-using managed_bytes_mutable_view = managed_bytes_basic_view<mutable_view::yes>;
 
 // Used to store managed_bytes data in layout 3. (See the doc comment of managed_bytes).
 // Also used as the underlying storage for bytes_ostream.
@@ -480,6 +478,62 @@ public:
         });
         return func(bv);
     }
+
+    template <typename CharT>
+    requires std::is_same_v<CharT, value_type> || std::is_same_v<CharT, value_type_maybe_const> || std::is_same_v<CharT, char> || std::is_same_v<CharT, const char>
+    class byte_iterator {
+        managed_bytes_basic_view _view;
+
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type        = CharT;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = value_type*;
+        using reference         = value_type&;
+
+        byte_iterator() = default;
+
+        explicit byte_iterator(managed_bytes_basic_view view)
+            : _view(view)
+        {}
+
+        reference operator*() const {
+            // value_type might be unsigned, but the underlying data is always signed, so we need to cast it.
+            return reinterpret_cast<reference>(_view.front());
+        }
+
+        byte_iterator& operator++() {
+            _view.remove_prefix(1);
+            return *this;
+        }
+        byte_iterator operator++(int) {
+            auto copy = *this;
+            ++*this;
+            return copy;
+        }
+
+        difference_type operator-(const byte_iterator& o) const {
+            return static_cast<difference_type>(o._view.size_bytes()) - static_cast<difference_type>(_view.size_bytes());
+        }
+
+        bool operator==(const byte_iterator& o) const noexcept {
+            return _view.size_bytes() == o._view.size_bytes();
+        }
+        bool operator!=(const byte_iterator& o) const noexcept {
+            return !(*this == o);
+        }
+    };
+
+    using const_iterator = byte_iterator<value_type_maybe_const>;
+    // For immutable views, iterator and const_iterator are the same (like std::string_view).
+    // For mutable views, iterator allows non-const access.
+    using iterator = std::conditional_t<is_mutable == mutable_view::yes, byte_iterator<value_type>, const_iterator>;
+
+    const_iterator begin() const { return const_iterator(*this); }
+    const_iterator end() const { return const_iterator(); }
+
+    iterator begin() { return iterator(*this); }
+    iterator end() { return iterator(); }
 
     friend managed_bytes_basic_view<mutable_view::no> build_managed_bytes_view_from_internals(bytes_view current_fragment, multi_chunk_blob_storage* next_fragment, size_t size);
 };

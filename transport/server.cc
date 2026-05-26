@@ -50,6 +50,7 @@
 #include "service/query_state.hh"
 #include "service/client_state.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/chunked_string.hh"
 #include "client_data.hh"
 #include "cql3/query_processor.hh"
 #include "auth/authenticator.hh"
@@ -1553,7 +1554,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
         cql3::dialect dialect) {
-    utils::result_with_exception_ptr<std::string_view> query = in.read_long_string_view();
+    utils::result_with_exception_ptr<utils::chunked_string> query = in.read_long_chunked_string();
     if (!query) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(query).assume_error());
     }
@@ -1595,11 +1596,11 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
 
-    utils::result_with_exception_ptr<std::string_view> query_sv = in.read_long_string_view();
-    if (!query_sv) {
-        return make_exception_future<std::unique_ptr<cql_server::response>>(std::move(query_sv).assume_error());
+    utils::result_with_exception_ptr<utils::chunked_string> query_result = in.read_long_chunked_string();
+    if (!query_result) {
+        return make_exception_future<std::unique_ptr<cql_server::response>>(std::move(query_result).assume_error());
     }
-    auto query = sstring(query_sv.assume_value());
+    auto query = std::move(query_result).assume_value();
     auto dialect = get_dialect();
 
     tracing::add_query(trace_state, query);
@@ -1745,7 +1746,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
 
         switch (kind.assume_value()) {
         case 0: {
-            utils::result_with_exception_ptr<std::string_view> query = in.read_long_string_view();
+            utils::result_with_exception_ptr<utils::chunked_string> query = in.read_long_chunked_string();
             if (!query) {
                 return make_exception_future<cql_server::process_fn_return_type>(std::move(query).assume_error());
             }

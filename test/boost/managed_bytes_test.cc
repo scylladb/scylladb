@@ -9,9 +9,12 @@
 #define BOOST_TEST_MODULE core
 
 #include "utils/managed_bytes.hh"
+#include "utils/chunked_string.hh"
 #include "utils/serialization.hh"
 #include "test/lib/random_utils.hh"
 #include <boost/test/unit_test.hpp>
+#include <iterator>
+#include <memory>
 #include <unordered_set>
 
 struct fragmenting_allocation_strategy : standard_allocation_strategy {
@@ -412,3 +415,243 @@ static constexpr bool constexpr_managed_bytes() {
 }
 
 static_assert(constexpr_managed_bytes());
+
+// Factory for managed_bytes instances whose backing memory is allocated
+// through a fragmenting_allocation_strategy.  The factory must outlive
+// all managed_bytes it produces.  Returned pointers use a custom deleter
+// that frees through the factory's allocator.
+class managed_bytes_factory {
+    fragmenting_allocation_strategy _alloc;
+
+    struct deleter {
+        fragmenting_allocation_strategy* alloc;
+        void operator()(managed_bytes* mb) const {
+            with_allocator(*alloc, [&] {
+                delete mb;
+            });
+        }
+    };
+public:
+    using pointer = std::unique_ptr<managed_bytes, deleter>;
+
+    // frag_size is the desired *data payload* per fragment.  The allocator
+    // limit must also account for the per-fragment metadata overhead so that
+    // managed_bytes' internal max_seg() computes back to frag_size.
+    managed_bytes_factory(size_t frag_size)
+        : _alloc(frag_size + std::max(sizeof(multi_chunk_blob_storage), sizeof(single_chunk_blob_storage)))
+    {}
+
+    // Build a managed_bytes holding `data`, fragmented so that each
+    // fragment is exactly the configured frag_size bytes (the last
+    // fragment may be shorter).
+    pointer make(bytes_view data) {
+        managed_bytes* mb;
+        with_allocator(_alloc, [&] {
+            mb = new managed_bytes(data);
+        });
+        return pointer(mb, deleter{&_alloc});
+    }
+};
+
+// Fragment size used by byte_iterator tests: small enough to guarantee many
+// chunk boundaries for 100-byte inputs (4-byte payload → 25 fragments, 24
+// cross-chunk transitions).
+static constexpr size_t iter_frag_size = 4;
+
+// Convenience: cast a managed_bytes value_type (int8_t) to uint8_t for
+// comparison against bytes literals without sign-extension surprises.
+static uint8_t as_u8(managed_bytes_view::value_type v) {
+    return static_cast<uint8_t>(v);
+}
+
+BOOST_AUTO_TEST_CASE(test_byte_iterator_empty) {
+    // An empty managed_bytes view has begin() == end() and yields no elements.
+    managed_bytes mb;
+    auto v = managed_bytes_view(mb);
+    BOOST_CHECK(v.begin() == v.end());
+    BOOST_CHECK(!(v.begin() != v.end()));
+}
+
+BOOST_AUTO_TEST_CASE(test_byte_iterator_forward_traversal) {
+    // Forward iteration with pre-increment visits every byte in order,
+    // correctly crossing chunk boundaries.
+    managed_bytes_factory factory(iter_frag_size);
+    auto b = tests::random::get_bytes(100);
+    auto mb = factory.make(b);
+    auto v = managed_bytes_view(*mb);
+
+    size_t idx = 0;
+    for (auto it = v.begin(); it != v.end(); ++it, ++idx) {
+        BOOST_CHECK_EQUAL(as_u8(*it), as_u8(b[idx]));
+    }
+    BOOST_CHECK_EQUAL(idx, b.size());
+}
+
+BOOST_AUTO_TEST_CASE(test_byte_iterator_post_increment) {
+    // Post-increment returns a copy of the iterator before advancing, while
+    // the original moves forward.
+    managed_bytes_factory factory(iter_frag_size);
+    auto b = tests::random::get_bytes(100);
+    auto mb = factory.make(b);
+    auto v = managed_bytes_view(*mb);
+
+    auto it = v.begin();
+    for (size_t i = 0; i < b.size(); ++i) {
+        auto prev = it++;
+        BOOST_CHECK_EQUAL(as_u8(*prev), as_u8(b[i]));
+    }
+    BOOST_CHECK(it == v.end());
+}
+
+BOOST_AUTO_TEST_CASE(test_byte_iterator_equality) {
+    managed_bytes_factory factory(iter_frag_size);
+    auto b = tests::random::get_bytes(100);
+    auto mb = factory.make(b);
+    auto v = managed_bytes_view(*mb);
+
+    // begin() == begin(), end() == end()
+    BOOST_CHECK(v.begin() == v.begin());
+    BOOST_CHECK(v.end()   == v.end());
+    // begin() != end() for non-empty view
+    BOOST_CHECK(v.begin() != v.end());
+
+    // Two iterators advanced the same number of steps compare equal.
+    auto it1 = v.begin();
+    auto it2 = v.begin();
+    for (size_t i = 0; i < 13; ++i) { ++it1; ++it2; }
+    BOOST_CHECK(it1 == it2);
+    ++it1;
+    BOOST_CHECK(it1 != it2);
+}
+
+BOOST_AUTO_TEST_CASE(test_byte_iterator_distance) {
+    // operator- returns the signed distance between two iterators.
+    managed_bytes_factory factory(iter_frag_size);
+    auto b = tests::random::get_bytes(100);
+    auto mb = factory.make(b);
+    auto v = managed_bytes_view(*mb);
+
+    auto begin = v.begin();
+    auto end   = v.end();
+    // Distance from end to begin equals -(size). Note the subtraction is
+    // defined as (lhs._pos - rhs._pos) cast to ptrdiff_t — see the
+    // implementation — so end - begin == size.
+    BOOST_CHECK_EQUAL(end - begin, static_cast<std::ptrdiff_t>(b.size()));
+    BOOST_CHECK_EQUAL(begin - end, -static_cast<std::ptrdiff_t>(b.size()));
+
+    // Advance to a mid-point and verify partial distances.
+    auto mid = v.begin();
+    for (size_t i = 0; i < 37; ++i) {
+        ++mid;
+    }
+    BOOST_CHECK_EQUAL(mid - begin,  37);
+    BOOST_CHECK_EQUAL(end  - mid,   static_cast<std::ptrdiff_t>(b.size()) - 37);
+}
+
+BOOST_AUTO_TEST_CASE(test_byte_iterator_mutable) {
+    // The mutable iterator (iterator, not const_iterator) allows writing
+    // through operator* and must traverse correctly too.
+    managed_bytes_factory factory(iter_frag_size);
+    auto b = tests::random::get_bytes(100);
+    auto mb = factory.make(b);
+    auto mv = managed_bytes_mutable_view(*mb);
+
+    // Increment every byte by 1 using the mutable forward iterator.
+    for (auto it = mv.begin(); it != mv.end(); ++it) {
+        ++(*it);
+    }
+
+    // Verify via the immutable view.
+    auto v = managed_bytes_view(*mb);
+    size_t idx = 0;
+    for (auto it = v.begin(); it != v.end(); ++it, ++idx) {
+        BOOST_CHECK_EQUAL(as_u8(*it), static_cast<uint8_t>(as_u8(b[idx]) + 1));
+    }
+}
+
+// Round-trip helper: encode `data` as hex, store it as a managed_bytes
+// fragmented at `frag_size`, run the fragmented from_hex(), and check the
+// result equals the original bytes.
+static void check_fragmented_from_hex(bytes_view data, size_t frag_size) {
+    sstring hex = to_hex(data);
+    bytes_view hex_bv(reinterpret_cast<const int8_t*>(hex.data()), hex.size());
+    managed_bytes_factory factory(frag_size);
+    auto fragmented_hex = factory.make(hex_bv);
+    managed_bytes result = utils::from_hex(utils::chunked_string_view(managed_bytes_view(*fragmented_hex)));
+    BOOST_CHECK_EQUAL(to_bytes(result), bytes(data));
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_empty) {
+    // Empty input should produce an empty managed_bytes.
+    managed_bytes result = utils::from_hex(utils::chunked_string_view());
+    BOOST_CHECK(result.empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_single_fragment) {
+    // The entire hex string lives in one fragment — baseline correctness.
+    for (size_t size : sizes) {
+        auto b = tests::random::get_bytes(size);
+        // Large fragment so it never splits.
+        check_fragmented_from_hex(b, 8192);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_even_fragment_size) {
+    // Fragment size is even: hex pairs always land inside a single fragment.
+    for (size_t size : sizes) {
+        auto b = tests::random::get_bytes(size);
+        // Fragment size of 4 hex chars == 2 decoded bytes.
+        check_fragmented_from_hex(b, 4);
+        check_fragmented_from_hex(b, 8);
+        check_fragmented_from_hex(b, 64);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_odd_fragment_size) {
+    // Fragment size is odd: hex pairs regularly straddle fragment boundaries.
+    // This is the critical case fixed by the carry-over logic.
+    for (size_t size : sizes) {
+        auto b = tests::random::get_bytes(size);
+        check_fragmented_from_hex(b, 1);  // every nibble is its own fragment
+        check_fragmented_from_hex(b, 3);
+        check_fragmented_from_hex(b, 5);
+        check_fragmented_from_hex(b, 7);
+        check_fragmented_from_hex(b, alloc_size);      // 63 — odd
+        check_fragmented_from_hex(b, alloc_size + 2);  // 65 — odd
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_nibble_per_fragment) {
+    // Extreme case: fragment size = 1, so every character is its own fragment.
+    // All pairs straddle boundaries.
+    auto b = tests::random::get_bytes(16);
+    check_fragmented_from_hex(b, 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_known_value) {
+    // Sanity check against a known hex/bytes pair.
+    // "deadbeef" -> {0xde, 0xad, 0xbe, 0xef}
+    const sstring hex = "deadbeef";
+    const bytes expected = {'\xde', '\xad', '\xbe', '\xef'};
+
+    for (size_t frag_size : {1, 2, 3, 4, 7, 8, 16}) {
+        bytes_view hex_bv(reinterpret_cast<const int8_t*>(hex.data()), hex.size());
+        managed_bytes_factory factory(frag_size);
+        auto fragmented_hex = factory.make(hex_bv);
+        managed_bytes result = utils::from_hex(utils::chunked_string_view(managed_bytes_view(*fragmented_hex)));
+        BOOST_CHECK_EQUAL(to_bytes(result), expected);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_from_hex_odd_length_throws) {
+    // A hex string with odd total length must always throw, regardless of
+    // fragmentation.
+    const sstring hex = "abc";  // 3 chars — odd
+    bytes_view hex_bv(reinterpret_cast<const int8_t*>(hex.data()), hex.size());
+
+    for (size_t frag_size : {1, 2, 3, 8}) {
+        managed_bytes_factory factory(frag_size);
+        auto fragmented_hex = factory.make(hex_bv);
+        BOOST_CHECK_THROW(utils::from_hex(utils::chunked_string_view(managed_bytes_view(*fragmented_hex))), std::invalid_argument);
+    }
+}

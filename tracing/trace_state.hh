@@ -14,6 +14,7 @@
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/checked_ptr.hh>
 #include "tracing/tracing.hh"
+#include "utils/chunked_string.hh"
 #include "gms/inet_address.hh"
 #include "auth/authenticated_user.hh"
 #include "db/consistency_level_type.hh"
@@ -362,17 +363,7 @@ private:
      *
      * @param val the query string
      */
-    void add_query(sstring &&val);
-
-    /**
-     * Store a query string.
-     *
-     * This value will eventually be stored in a params<string, string> map of a tracing session
-     * with a 'query' key.
-     *
-     * @param val the query string
-     */
-    void add_query(std::string_view val);
+     void add_query(utils::chunked_string val);
 
     /**
      * Store a custom session parameter.
@@ -493,8 +484,7 @@ private:
     friend void set_request_size(const trace_state_ptr& p, size_t s) noexcept;
     friend void set_response_size(const trace_state_ptr& p, size_t s) noexcept;
     friend void set_batchlog_endpoints(const trace_state_ptr& p, const host_id_vector_replica_set& val);
-    friend void add_query(const trace_state_ptr& p, sstring &&val);
-    friend void add_query(const trace_state_ptr& p, std::string_view val);
+    friend void add_query(const trace_state_ptr& p, utils::chunked_string val);
     friend void add_session_param(const trace_state_ptr& p, std::string_view key, std::string_view val);
     friend void set_common_query_parameters(const trace_state_ptr& p, db::consistency_level consistency,
         const std::optional<db::consistency_level>& serial_consistency, api::timestamp_type timestamp);
@@ -620,15 +610,9 @@ inline void set_batchlog_endpoints(const trace_state_ptr& p, const host_id_vecto
     }
 }
 
-inline void add_query(const trace_state_ptr& p, sstring &&val) {
+inline void add_query(const trace_state_ptr& p, utils::chunked_string val) {
     if (p) {
         p->add_query(std::move(val));
-    }
-}
-
-inline void add_query(const trace_state_ptr& p, std::string_view val) {
-    if (p) {
-        p->add_query(val);
     }
 }
 

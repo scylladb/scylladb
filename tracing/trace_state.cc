@@ -11,6 +11,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "tracing/trace_state.hh"
 #include "mutation/timestamp.hh"
+#include "utils/chunked_string.hh"
 
 #include "cql3/values.hh"
 #include "cql3/query_options.hh"
@@ -29,7 +30,7 @@ struct trace_state::params_values {
 
     std::optional<host_id_vector_replica_set> batchlog_endpoints;
     std::optional<api::timestamp_type> user_timestamp;
-    std::vector<sstring> queries;
+    std::vector<utils::chunked_string> queries;
     std::optional<db::consistency_level> cl;
     std::optional<db::consistency_level> serial_cl;
     std::optional<int32_t> page_size;
@@ -75,12 +76,8 @@ void trace_state::set_response_size(size_t s) noexcept {
     _records->session_rec.response_size = s;
 }
 
-void trace_state::add_query(sstring &&val) {
+void trace_state::add_query(utils::chunked_string val) {
     _params_ptr->queries.emplace_back(std::move(val));
-}
-
-void trace_state::add_query(std::string_view val) {
-    _params_ptr->queries.emplace_back(sstring{ val });
 }
 
 void trace_state::add_session_param(std::string_view key, std::string_view val) {
@@ -145,11 +142,11 @@ void trace_state::build_parameters_map() {
     auto& queries = vals.queries;
     if (!queries.empty()) {
         if (queries.size() == 1) {
-            params_map.emplace("query", queries[0]);
+            params_map.emplace("query", queries[0].linearize());
         } else {
             // BATCH
             for (size_t i = 0; i < queries.size(); ++i) {
-                params_map.emplace(format("query[{:d}]", i), queries[i]);
+                params_map.emplace(format("query[{:d}]", i), queries[i].linearize());
             }
         }
     }

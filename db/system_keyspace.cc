@@ -57,6 +57,7 @@
 #include "replica/database.hh"
 #include "db/compaction_history_entry.hh"
 #include "mutation/async_utils.hh"
+#include "utils/chunked_string.hh"
 
 #include <unordered_map>
 

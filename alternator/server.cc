@@ -9,6 +9,7 @@
 #include "alternator/server.hh"
 #include "audit/audit.hh"
 #include "alternator/executor_util.hh"
+#include "utils/chunked_string.hh"
 #include "gms/application_state.hh"
 #include "utils/log.hh"
 #include <fmt/ranges.h>
@@ -543,7 +544,7 @@ static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_
     if (tracing_instance.trace_next_query() || tracing_instance.slow_query_tracing_enabled()) {
         trace_state = create_tracing_session(tracing_instance);
         tracing::add_session_param(trace_state, "alternator_op", op);
-        tracing::add_query(trace_state, truncated_content_view(query, max_users_query_size_in_trace_output).take_as_sstring());
+        tracing::add_query(trace_state, utils::chunked_string(truncated_content_view(query, max_users_query_size_in_trace_output).as_view()));
         tracing::begin(trace_state, seastar::format("Alternator {}", op), client_state.get_client_address());
         if (!username.empty()) {
             tracing::set_username(trace_state, auth::authenticated_user(username));
