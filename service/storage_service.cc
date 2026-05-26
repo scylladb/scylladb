@@ -482,7 +482,14 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
 
     auto process_left_node = [&] (raft::server_id id, locator::host_id host_id, std::optional<gms::inet_address> ip, bool notify) -> future<> {
         if (ip) {
-            sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(*ip));
+            // Don't remove from system.peers if the node is still referenced by tablet metadata.
+            // The IP needs to remain available in the address_map after restart so that
+            // operations like store_hint can resolve the host_id to an IP.
+            // The entry will be removed from system.peers when the node becomes "released"
+            // (all tablet migrations referencing it complete).
+            if (t.left_nodes_rs.find(id) == t.left_nodes_rs.end()) {
+                sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(*ip));
+            }
 
             co_await _gossiper.force_remove_endpoint(host_id, gms::null_permit_id);
             if (notify) {
@@ -621,6 +628,14 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     if (prev_released) {
         auto nodes_to_release = get_released_nodes(t, *tmptr);
         std::erase_if(nodes_to_release, [&] (const auto& host_id) { return prev_released->contains(host_id); });
+        // Remove from system.peers now that the node is no longer referenced by tablet metadata.
+        // This completes the deferred removal from process_left_node.
+        for (const auto& host_id : nodes_to_release) {
+            auto ip = _address_map.find(host_id);
+            if (ip) {
+                sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(*ip));
+            }
+        }
         std::copy(nodes_to_release.begin(), nodes_to_release.end(), std::back_inserter(nodes_to_notify.released));
     }
 

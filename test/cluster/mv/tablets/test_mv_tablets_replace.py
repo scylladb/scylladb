@@ -64,8 +64,7 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
         server_to_down = await find_server_by_host_id(manager, servers, HostID(str(base_replicas[0][0])))
 
         logger.info('Downing a node to be replaced')
-        # convict=False to avoid triggering SCYLLADB-1996
-        await manager.server_stop(server_to_replace.server_id, convict=False)
+        await manager.server_stop(server_to_replace.server_id)
 
         logger.info('Blocking tablet rebuild')
         coord = await get_topology_coordinator(manager)
@@ -84,8 +83,7 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
         await coord_log.wait_for('tablet_transition_updates: waiting', from_mark=coord_mark)
 
         if server_to_down.server_id != server_to_replace.server_id:
-            # convict=False to avoid triggering SCYLLADB-1996
-            await manager.server_stop(server_to_down.server_id, convict=False)
+            await manager.server_stop(server_to_down.server_id)
 
         # The update is supposed to go to the second replica only, since the other one is downed.
         # If pairing would shift, the update to the view would be lost because the first replica
@@ -97,6 +95,18 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
 
         if server_to_down.server_id != server_to_replace.server_id:
             await manager.server_start(server_to_down.server_id)
+
+            # After restart, server_to_down gets its host_id -> IP mapping from system.peers,
+            # but since server_to_replace is already down and being replaced, its IP may have
+            # already been erased from system.peers. If the view replica hasn't been yet
+            # migrated from the server_to_replace, if we write to the base replica paired with it,
+            # we'll try to write a view update hint to it, which requires the IP mapping.
+            # We perform such a write here to trigger the view update and verify that the IP mapping
+            # is actually still present and the update goes through.
+            # This write reproduces SCYLLADB-1996
+            logger.info('Writing on restarted node to trigger view update to replaced node')
+            server_to_down_cql = await manager.get_cql_exclusive(server_to_down)
+            await server_to_down_cql.run_async(SimpleStatement(f"INSERT INTO {ks}.test (pk, c) VALUES (7, 8)", consistency_level=ConsistencyLevel.ONE))
 
         logger.info('Unblocking tablet rebuild')
         if coord_serv.server_id != server_to_down.server_id:
