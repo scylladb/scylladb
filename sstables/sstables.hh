@@ -702,7 +702,7 @@ private:
     // The mutate semaphore is used to serialize operations like rewrite_statistics
     // with linking or moving the sstable between directories.
     mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
-    std::optional<sstring> _cloned_to_sstable_filename;
+    std::unique_ptr<sstring> _cloned_to_sstable_filename;
     // Used only for writing sstable.
     scylla_metadata::components_digests _components_digests;
     uint32_t _toc_digest{};
@@ -1228,7 +1228,7 @@ public:
     // Set on the source of a component rewrite (see link_with_rewritten_component()):
     // the basename of the Data component of the sstable it was cloned into. Lets holders
     // of a reference to the replaced sstable find its current generation in the table.
-    const std::optional<sstring>& cloned_to_sstable_filename() const noexcept {
+    const std::unique_ptr<sstring>& cloned_to_sstable_filename() const noexcept {
         return _cloned_to_sstable_filename;
     }
 
