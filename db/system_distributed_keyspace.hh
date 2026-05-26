@@ -83,6 +83,17 @@ public:
      * remote location metadata per datacenter. */
     static constexpr auto SNAPSHOT_REMOTE_LOCATIONS = "snapshot_remote_locations";
 
+    /* This table is used by the Alternator export to S3 code to store the metadata of each
+     * export, keyed by its ARN. The node driving an export writes its progress here, and
+     * DescribeExport/ListExports read from it. */
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_EXPORTS = "alternator_export_to_s3_exports";
+
+    /* This table is used by the Alternator export to S3 code to make ExportTableToPointInTime
+     * idempotent: it maps the client token of a request to the export which that request
+     * created. The node accepting a request writes the token here and later looks it up to
+     * detect a repeated request. */
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS = "alternator_export_to_s3_client_tokens";
+
     static constexpr uint64_t SNAPSHOT_SSTABLES_TTL_SECONDS = std::chrono::seconds(std::chrono::days(3)).count();
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
