@@ -1061,6 +1061,10 @@ private:
             replica::distributed_loader::init_non_system_keyspaces(_db, _proxy, _sys_ks).get();
 
             _db.invoke_on_all([] (replica::database& db) {
+                return db.recover_logstor();
+            }).get();
+
+            _db.invoke_on_all([] (replica::database& db) {
                 db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {
                     replica::table& t = *table;
                     t.enable_auto_compaction();
