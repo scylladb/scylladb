@@ -112,7 +112,7 @@ def compact_keyspace(cql, ks, flush_memtables=True):
         requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params)
     else:
         args = [] if not flush_memtables else ["--flush-memtables", "false"]
-        args.extend([ks, cf])
+        args.extend([ks])
         run_nodetool(cql, "compact", *args)
 
 def take_snapshot(cql, table, tag, skip_flush):
