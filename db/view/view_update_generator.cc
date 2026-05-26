@@ -242,6 +242,9 @@ future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::
     for (auto& sst : sstables) {
         _progress_tracker->on_sstable_registration(sst);
     }
+    auto deregister_sstables = defer([this, &sstables] {
+        _progress_tracker->on_sstables_deregistration(sstables);
+    });
 
     co_await utils::get_local_injector().inject("view_update_generator_pause_before_processing",
             utils::wait_for_message(std::chrono::minutes(5)));
@@ -254,8 +257,6 @@ future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::
     if (result == stop_iteration::yes) {
         throw abort_requested_exception{};
     }
-
-    _progress_tracker->on_sstables_deregistration(sstables);
 
     auto end_time = db_clock::now();
     auto duration = std::chrono::duration<float>(end_time - start_time);
