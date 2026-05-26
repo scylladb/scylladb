@@ -143,11 +143,12 @@ public:
         sstables_registry& _sstables_registry;
         table_id _table_id;
         locator::host_id _node_owner;
+        db::consistency_level _cl;
 
         future<> garbage_collect(storage&);
 
     public:
-        sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, table_id tid, locator::host_id node_owner);
+        sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, table_id tid, locator::host_id node_owner, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
@@ -174,6 +175,7 @@ private:
     lw_shared_ptr<const data_dictionary::storage_options> _storage_opts;
     sstable_state _state;
     io_error_handler_gen _error_handler_gen;
+    db::consistency_level _registry_read_cl = db::consistency_level::LOCAL_QUORUM;
     std::unique_ptr<storage> _storage;
     std::unique_ptr<components_lister> _lister;
     std::unique_ptr<dht::sharder> _sharder_ptr;
@@ -220,11 +222,13 @@ private:
           std::variant<std::unique_ptr<dht::sharder>, const dht::sharder*> sharder,
           lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
           sstable_state state,
-          io_error_handler_gen error_handler_gen);
+          io_error_handler_gen error_handler_gen,
+          db::consistency_level registry_read_cl = db::consistency_level::LOCAL_QUORUM);
 public:
     sstable_directory(replica::table& table,
             sstable_state state,
-            io_error_handler_gen error_handler_gen);
+            io_error_handler_gen error_handler_gen,
+            db::consistency_level registry_read_cl = db::consistency_level::LOCAL_QUORUM);
     sstable_directory(replica::table& table,
             sstable_state state,
             lw_shared_ptr<const data_dictionary::storage_options> storage_opts,

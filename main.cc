@@ -1901,8 +1901,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting system distributed keyspace");
-            sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
-            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
+            sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy), cfg->check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)).get();
+            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [&db] {
+                db.invoke_on_all([] (replica::database& db) {
+                    db.unplug_sstables_registry();
+                }).get();
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
             });
 
@@ -2436,6 +2439,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 self_heal_service_levels_version(sys_ks.local(), qp.local(), group0_client, stop_signal.as_local_abort_source());
             }
 
+            // Populate object-storage keyspaces whose SSTable loading was deferred
+            // during init_non_system_keyspaces because the sstables registry
+            // (in system_distributed) was not available yet. At this point,
+            // the registry is plugged and the node is fully joined.
+            replica::distributed_loader::populate_object_storage_keyspaces(db, sys_ks).get();
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");

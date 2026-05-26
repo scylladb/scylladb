@@ -1142,24 +1142,6 @@ schema_ptr system_keyspace::broadcast_kv_store() {
     return schema;
 }
 
-schema_ptr system_keyspace::sstables_registry() {
-    static thread_local auto schema = [] {
-        auto id = generate_legacy_id(NAME, SSTABLES_REGISTRY);
-        return schema_builder(NAME, SSTABLES_REGISTRY, id)
-            .with_column("table_id", uuid_type, column_kind::partition_key)
-            .with_column("node_owner", uuid_type, column_kind::partition_key)
-            .with_column("generation", timeuuid_type, column_kind::clustering_key)
-            .with_column("status", utf8_type)
-            .with_column("state", utf8_type)
-            .with_column("version", utf8_type)
-            .with_column("format", utf8_type)
-            .set_comment("SSTables ownership table")
-            .with_hash_version()
-            .build();
-    }();
-    return schema;
-}
-
 schema_ptr system_keyspace::tablets() {
     static thread_local auto schema = replica::make_tablets_schema();
     return schema;
@@ -2275,10 +2257,6 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     }
 
     r.insert(r.end(), {tablets()});
-
-    if (cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
-        r.insert(r.end(), {sstables_registry()});
-    }
 
     if (cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
         r.insert(r.end(), {raft_groups(), raft_groups_snapshots(), raft_groups_snapshot_config()});
@@ -3475,48 +3453,6 @@ system_keyspace::read_cdc_generation_opt(utils::UUID id) {
     }
 
     co_return cdc::topology_description{std::move(entries)};
-}
-
-future<> system_keyspace::sstables_registry_create_entry(table_id tid, locator::host_id node_owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {
-    static const auto req = format("INSERT INTO system.{} (table_id, node_owner, generation, status, state, version, format) VALUES (?, ?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
-    slogger.trace("Inserting {}.{}.{} into {}", tid, node_owner, desc.generation, SSTABLES_REGISTRY);
-    co_await execute_cql(req, tid.id, node_owner.uuid(), desc.generation, status, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
-}
-
-future<> system_keyspace::sstables_registry_update_entry_status(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstring status) {
-    static const auto req = format("UPDATE system.{} SET status = ? WHERE table_id = ? AND node_owner = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Updating {}.{}.{} -> status={} in {}", tid, node_owner, gen, status, SSTABLES_REGISTRY);
-    co_await execute_cql(req, status, tid.id, node_owner.uuid(), gen).discard_result();
-}
-
-future<> system_keyspace::sstables_registry_update_entry_state(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstables::sstable_state state) {
-    static const auto req = format("UPDATE system.{} SET state = ? WHERE table_id = ? AND node_owner = ? AND generation = ?", SSTABLES_REGISTRY);
-    auto new_state = sstables::state_to_dir(state);
-    slogger.trace("Updating {}.{}.{} -> state={} in {}", tid, node_owner, gen, new_state, SSTABLES_REGISTRY);
-    co_await execute_cql(req, new_state, tid.id, node_owner.uuid(), gen).discard_result();
-}
-
-future<> system_keyspace::sstables_registry_delete_entry(table_id tid, locator::host_id node_owner, sstables::generation_type gen) {
-    static const auto req = format("DELETE FROM system.{} WHERE table_id = ? AND node_owner = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Removing {}.{}.{} from {}", tid, node_owner, gen, SSTABLES_REGISTRY);
-    co_await execute_cql(req, tid.id, node_owner.uuid(), gen).discard_result();
-
-}
-
-future<> system_keyspace::sstables_registry_list(table_id tid, locator::host_id node_owner, sstable_registry_entry_consumer consumer) {
-    static const auto req = format("SELECT status, state, generation, version, format FROM system.{} WHERE table_id = ? AND node_owner = ?", SSTABLES_REGISTRY);
-    slogger.trace("Listing {}.{} entries from {}", tid, node_owner, SSTABLES_REGISTRY);
-
-    co_await _qp.query_internal(req, db::consistency_level::ONE, { tid.id, node_owner.uuid() }, 1000, [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
-        auto status = row.get_as<sstring>("status");
-        auto state = sstables::state_from_dir(row.get_as<sstring>("state"));
-        auto gen = sstables::generation_type(row.get_as<utils::UUID>("generation"));
-        auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
-        auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
-        sstables::entry_descriptor desc(gen, ver, fmt, sstables::component_type::TOC);
-        co_await consumer(std::move(status), std::move(state), std::move(desc));
-        co_return stop_iteration::no;
-    });
 }
 
 future<service::topology_request_state> system_keyspace::get_topology_request_state(utils::UUID id, bool require_entry) {

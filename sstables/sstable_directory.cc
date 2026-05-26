@@ -56,10 +56,11 @@ sstable_directory::filesystem_components_lister::filesystem_components_lister(st
 {
 }
 
-sstable_directory::sstables_registry_components_lister::sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, table_id tid, locator::host_id node_owner)
+sstable_directory::sstables_registry_components_lister::sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, table_id tid, locator::host_id node_owner, db::consistency_level cl)
         : _sstables_registry(sstables_registry)
         , _table_id(std::move(tid))
         , _node_owner(node_owner)
+        , _cl(cl)
 {
 }
 
@@ -90,7 +91,7 @@ sstable_directory::make_components_lister() {
                     if (owner.id.is_null()) {
                         on_internal_error(sstlog, fmt::format("{} storage options is missing 'owner'", os.type));
                     }
-                    return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), owner, _manager.get_local_host_id());
+                    return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), owner, _manager.get_local_host_id(), _registry_read_cl);
                 }
             }, os.location);
         }
@@ -99,14 +100,16 @@ sstable_directory::make_components_lister() {
 
 sstable_directory::sstable_directory(replica::table& table,
         sstable_state state,
-        io_error_handler_gen error_handler_gen)
+        io_error_handler_gen error_handler_gen,
+        db::consistency_level registry_read_cl)
     : sstable_directory(
         table.get_sstables_manager(),
         table.schema(),
         std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()),
         table.get_storage_options_ptr(),
         std::move(state),
-        std::move(error_handler_gen)
+        std::move(error_handler_gen),
+        registry_read_cl
     )
 {}
 
@@ -164,12 +167,14 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         std::variant<unique_sharder_ptr, const dht::sharder*> sharder,
         lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
         sstable_state state,
-        io_error_handler_gen error_handler_gen)
+        io_error_handler_gen error_handler_gen,
+        db::consistency_level registry_read_cl)
     : _manager(manager)
     , _schema(std::move(schema))
     , _storage_opts(std::move(storage_opts))
     , _state(state)
     , _error_handler_gen(error_handler_gen)
+    , _registry_read_cl(registry_read_cl)
     , _storage(make_storage(_manager, *_storage_opts, _state))
     , _lister(make_components_lister())
     , _sharder_ptr(std::holds_alternative<unique_sharder_ptr>(sharder) ? std::move(std::get<unique_sharder_ptr>(sharder)) : nullptr)
@@ -446,7 +451,7 @@ future<> sstable_directory::sstables_registry_components_lister::process(sstable
         dirlog.debug("Processing {} entry from {}", desc.generation, _table_id);
         return directory.process_descriptor(std::move(desc), flags,
                                             [&directory] { return *directory._storage_opts; });
-    });
+    }, _cl);
 }
 
 future<> sstable_directory::restore_components_lister::process(sstable_directory& directory, process_flags flags) {
@@ -499,7 +504,7 @@ future<> sstable_directory::sstables_registry_components_lister::garbage_collect
         dirlog.info("Removing dangling {} {} entry", desc.generation, status);
         gens_to_remove.insert(desc.generation);
         co_await st.remove_by_registry_entry(std::move(desc));
-    }));
+    }), _cl);
     co_await coroutine::parallel_for_each(gens_to_remove, [this] (auto gen) -> future<> {
         co_await _sstables_registry.delete_entry(_table_id, _node_owner, gen);
     });

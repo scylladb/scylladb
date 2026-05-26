@@ -7,6 +7,7 @@
  */
 
 #include "utils/assert.hh"
+#include "utils/overloaded_functor.hh"
 #include <seastar/core/sstring.hh>
 #include <fmt/ranges.h>
 #include <fmt/format.h>
@@ -16,8 +17,10 @@
 #include <seastar/testing/test_fixture.hh>
 
 #include "db/config.hh"
+#include "sstables/sstables.hh"
 #include "sstables/object_storage_client.hh"
 #include "sstables/storage.hh"
+#include "schema/schema_builder.hh"
 #include "utils/upload_progress.hh"
 
 #include "test/lib/test_utils.hh"
@@ -103,3 +106,62 @@ SEASTAR_TEST_CASE(test_large_file_upload_s3, *boost::unit_test::precondition(tes
 SEASTAR_FIXTURE_TEST_CASE(test_large_file_upload_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_file_upload(test_env_config{ .storage = make_test_object_storage_options("GS") }, large_size);
 }
+
+// Exercises the sstable_stream_sink_impl::output() path with object storage.
+// Before the fix, output() used open_file() which for S3 returns a readable_file
+// (read-only). Writing through it threw std::logic_error("unsupported operation
+// on s3 readable file"), breaking tablet migration streaming entirely.
+static future<> test_stream_sink_write(test_env_config cfg) {
+    return test_env::do_with_async([](test_env& env) {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v", utf8_type)
+            .build();
+
+        auto version = get_highest_sstable_version();
+        auto format = sstable::format_types::big;
+        auto generation = env.new_generation();
+        auto& mgr = env.manager();
+        auto s_opts = env.get_storage_options();
+
+        // Populate the storage-specific location fields — get_storage_options()
+        // returns a raw copy without dir (local) or location (object storage),
+        // mirroring what make_sstable() does in test_services.cc.
+        std::visit(overloaded_functor {
+            [&env] (data_dictionary::storage_options::local& o) { o.dir = env.tempdir().path().native(); },
+            [&s] (data_dictionary::storage_options::object_storage& o) { o.location = s->id(); },
+        }, s_opts.value);
+
+        // Build a TOC component filename — create_stream_sink expects a component
+        // filename and parses generation/version/format/component from it.
+        auto toc_basename = sstable::component_basename(
+                s->ks_name(), s->cf_name(), version, generation, format, component_type::TOC);
+
+        // Create the stream sink for the TOC component (which becomes TemporaryTOC internally).
+        // The TOC path is simplest — it doesn't require loading/saving scylla metadata.
+        sstable_stream_sink_cfg sink_cfg { .last_component = false, .leave_unsealed = true };
+        auto sink = create_stream_sink(s, mgr, s_opts, sstable_state::normal, toc_basename, sink_cfg);
+
+        // This is the call that threw std::logic_error before the fix.
+        auto out = sink->output(file_open_options{}, file_output_stream_options{}).get();
+
+        // Write some data to verify the stream is actually writable.
+        auto data = tests::random::get_bytes(4096);
+        out.write(reinterpret_cast<const char*>(data.data()), data.size()).get();
+        out.flush().get();
+        out.close().get();
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(test_stream_sink_write_local) {
+    return test_stream_sink_write(test_env_config{});
+}
+
+SEASTAR_TEST_CASE(test_stream_sink_write_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    return test_stream_sink_write(test_env_config{ .storage = make_test_object_storage_options("S3") });
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_stream_sink_write_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_stream_sink_write(test_env_config{ .storage = make_test_object_storage_options("GS") });
+}
+

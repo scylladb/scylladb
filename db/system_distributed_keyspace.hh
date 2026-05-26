@@ -14,6 +14,9 @@
 #include "locator/host_id.hh"
 #include "dht/token.hh"
 #include "sstables/types.hh"
+#include "sstables/open_info.hh"
+#include "sstables/sstables_registry.hh"
+#include "db/consistency_level_type.hh"
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
@@ -72,6 +75,7 @@ public:
     static constexpr auto SNAPSHOT_SSTABLES = "snapshot_sstables";
 
     static constexpr uint64_t SNAPSHOT_SSTABLES_TTL_SECONDS = std::chrono::seconds(std::chrono::days(3)).count();
+    static constexpr auto SSTABLES_REGISTRY = "sstables";
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
     struct context {
@@ -82,19 +86,20 @@ private:
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
     service::storage_proxy& _sp;
+    bool _with_sstables_registry;
 
     bool _started = false;
     bool _forced_cdc_timestamps_schema_sync = false;
 
 public:
-    static std::vector<schema_ptr> all_distributed_tables();
-
-    system_distributed_keyspace(cql3::query_processor&, service::migration_manager&, service::storage_proxy&);
+    static std::vector<schema_ptr> all_distributed_tables(bool with_sstables_registry);
+    system_distributed_keyspace(cql3::query_processor&, service::migration_manager&, service::storage_proxy&, bool with_sstables_registry);
 
     future<> start();
     future<> stop();
 
     bool started() const { return _started; }
+    bool has_sstables_registry() const noexcept { return _with_sstables_registry; }
 
     future<> create_cdc_desc(db_clock::time_point, const cdc::topology_description&, context);
     future<bool> cdc_desc_exists(db_clock::time_point, context);
@@ -130,6 +135,14 @@ public:
                                             sstables::sstable_id sstable_id,
                                             dht::token start_token,
                                             is_downloaded downloaded) const;
+
+    using sstable_registry_entry_consumer = sstables::sstables_registry::entry_consumer;
+    db::consistency_level sstables_registry_write_cl() const;
+    future<> sstables_registry_create_entry(table_id tid, locator::host_id node_owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc);
+    future<> sstables_registry_update_entry_status(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstring status);
+    future<> sstables_registry_update_entry_state(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstables::sstable_state state);
+    future<> sstables_registry_delete_entry(table_id tid, locator::host_id node_owner, sstables::generation_type gen);
+    future<> sstables_registry_list(table_id tid, locator::host_id node_owner, sstable_registry_entry_consumer consumer, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
 
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
