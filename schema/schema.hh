@@ -618,10 +618,6 @@ private:
     };
     raw_schema _raw;
     schema_static_props _static_props;
-    // Populated only for compact storage tables (legacy).
-    // For non-compact tables, left default-constructed (empty) and
-    // v3_all_columns()/all_columns_by_name() delegate to all_columns().
-    v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
     std::unique_ptr<::view_info> _view_info;
     mutable schema_ptr _cdc_schema;
@@ -642,6 +638,11 @@ private:
     column_count_type _static_column_count;
 
     std::vector<const column_definition*> _all_columns_in_select_order;
+
+    // Populated only for compact storage tables (legacy).
+    // For non-compact tables, left default-constructed (empty) and
+    // v3_all_columns()/all_columns_by_name() delegate to all_columns().
+    v3_columns _v3_columns;
 
     extensions_map& extensions() {
         return _raw._props.extensions;
@@ -1023,7 +1024,7 @@ public:
     // Returns the CQL3-view columns: for compact storage tables, this is the
     // v3-transformed layout; for non-compact tables, returns all_columns().
     const std::vector<column_definition>& v3_all_columns() const noexcept {
-        if (!_v3_columns.all_columns().empty()) {
+        if (is_compact_table()) {
             return _v3_columns.all_columns();
         }
         return all_columns();
@@ -1035,7 +1036,7 @@ public:
     // to rebuild), and v3_columns keeps its own _columns_by_name for compact
     // tables. No allocation or copy on the DDL path.
     const std::unordered_map<bytes, const column_definition*>& all_columns_by_name() const {
-        if (!_v3_columns.columns_by_name().empty()) {
+        if (is_compact_table()) {
             return _v3_columns.columns_by_name();
         }
         return columns_by_name();
