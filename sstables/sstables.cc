@@ -1637,7 +1637,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         new_sst->seal_sstable(false).get();
         new_sst->open_data().get();
 
-        _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        _cloned_to_sstable_filename = std::make_unique<sstring>(new_sst->component_basename(component_type::Data));
         return new_sst;
     });
 }
@@ -3813,7 +3813,7 @@ sstable::unlink(const atomic_delete_context* ctx) noexcept {
 
     try {
         if (_cloned_to_sstable_filename) {
-            co_await get_large_data_handler().maybe_update_large_data_entries_sstable_name(shared_from_this(), _cloned_to_sstable_filename.value());
+            co_await get_large_data_handler().maybe_update_large_data_entries_sstable_name(shared_from_this(), *_cloned_to_sstable_filename);
         } else {
             co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
         }
