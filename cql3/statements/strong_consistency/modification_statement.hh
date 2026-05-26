@@ -22,6 +22,14 @@ class modification_statement : public cql_statement_opt_metadata {
 public:
     modification_statement(shared_ptr<base_statement> statement);
 
+    shared_ptr<base_statement> inner() const {
+        return _statement;
+    }
+
+    const base_statement& inner_statement() const {
+        return *_statement;
+    }
+
     future<shared_ptr<result_message>> execute(query_processor& qp, service::query_state& state,
         const query_options& options, std::optional<service::group0_guard> guard) const override;
 
@@ -29,7 +37,12 @@ public:
         service::query_state& qs, const query_options& options,
         std::optional<service::group0_guard> guard) const override;
 
+    mutation get_mutation(const query_options& options, api::timestamp_type ts,
+            base_statement::json_cache_opt& json_cache, const std::vector<dht::partition_range>& keys) const;
+
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
+
+    void validate(query_processor& qp, const service::client_state& state) const override;
 
     uint32_t get_bound_terms() const override;
 
