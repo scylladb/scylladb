@@ -673,7 +673,7 @@ private:
         }
         return *_mutate_sem;
     }
-    std::optional<sstring> _cloned_to_sstable_filename;
+    std::unique_ptr<sstring> _cloned_to_sstable_filename;
     // Used only for writing sstable.
     scylla_metadata::components_digests _components_digests;
     uint32_t _toc_digest{};
