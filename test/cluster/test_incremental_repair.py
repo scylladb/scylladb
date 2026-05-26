@@ -115,6 +115,80 @@ async def get_sstables_for_server(manager, server, ks):
     sstables = get_sstables(node_workdir, ks, 'test')
     return sstables
 
+def parse_compaction_lineage(log_lines, ks, table='test'):
+    """Parse compaction/scrub DEBUG log lines for ks.table.
+
+    Returns a dict {uuid: {'inputs': [repaired_at, ...], 'outputs': [repaired_at, ...]}}
+    containing only completed operations (both input and output lines observed).
+
+    Handles two log formats:
+      Scrub:   [Scrub ks.table UUID] Scrubbing in <mode> mode [sst:...:repaired_at=N, ...]
+               [Scrub ks.table UUID] Finished scrubbing in <mode> mode N sstables to [sst:...:repaired_at=N]
+      Compact: [Compact|Major ks.table UUID] Compacting [sst:...:repaired_at=N, ...]
+               [Compact|Major ks.table UUID] Compacted N sstables to [sst:...:repaired_at=N]
+    """
+    prefix = re.escape(f'{ks}.{table}')
+    scrub_in_re  = re.compile(rf'\[Scrub {prefix} ([0-9a-f-]+)\] Scrubbing in \S+ mode \[(.+)\]')
+    scrub_out_re = re.compile(rf'\[Scrub {prefix} ([0-9a-f-]+)\] Finished scrubbing in \S+ mode \d+ sstables to \[(.+)\]')
+    comp_in_re   = re.compile(rf'\[(?:Compact|Major) {prefix} ([0-9a-f-]+)\] Compacting \[(.+)\]')
+    comp_out_re  = re.compile(rf'\[(?:Compact|Major) {prefix} ([0-9a-f-]+)\] Compacted \d+ sstables to \[(.+)\]')
+
+    ops = {}
+    for line, _ in log_lines:
+        for pattern, key in [(scrub_in_re, 'inputs'), (scrub_out_re, 'outputs'),
+                             (comp_in_re, 'inputs'), (comp_out_re, 'outputs')]:
+            m = pattern.search(line)
+            if m:
+                uuid, sst_list = m.group(1), m.group(2)
+                ras = [int(v) for v in re.findall(r'repaired_at=(\d+)', sst_list)]
+                ops.setdefault(uuid, {})[key] = ras
+                break
+
+    return {uuid: v for uuid, v in ops.items() if 'inputs' in v and 'outputs' in v}
+
+
+def assert_repaired_at_preserved(lineage, ops_name):
+    """Assert that every completed compaction/scrub operation preserved repaired_at.
+
+    Two invariants:
+      1. All input sstables in a single operation must share the same repaired_at
+         (no mixing of repaired and unrepaired sstables).
+      2. The output repaired_at must equal the (uniform) input repaired_at
+         (no silent promotion or demotion).
+    """
+    for uuid, op in lineage.items():
+        input_ras  = op['inputs']
+        output_ras = op['outputs']
+        unique_in  = set(input_ras)
+        unique_out = set(output_ras)
+        assert len(unique_in) == 1, (
+            f"[{ops_name}] compaction {uuid} mixed sstables with different repaired_at values: "
+            f"inputs={input_ras}"
+        )
+        assert unique_in == unique_out, (
+            f"[{ops_name}] compaction {uuid} changed repaired_at: "
+            f"inputs={input_ras} -> outputs={output_ras}"
+        )
+
+
+def get_repaired_at_from_ssts(sst_files, scylla_path):
+    """Return {sstable_path: repaired_at} for all given sstables in a single subprocess call."""
+    if not sst_files:
+        return {}
+    cmd = [scylla_path, "sstable", "dump-statistics"] + list(sst_files)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    output = json.loads(result.stdout)
+    sstables = output.get("sstables", {})
+    return {sst: sstables.get(sst, {}).get("stats", {}).get("repaired_at") for sst in sst_files}
+
+async def get_repaired_at_map(manager, servers, ks, scylla_path):
+    """Return {server_id: {sstable_path: repaired_at}} for all sstables on all servers."""
+    result = {}
+    for server in servers:
+        ssts = await get_sstables_for_server(manager, server, ks)
+        result[server.server_id] = get_repaired_at_from_ssts(ssts, scylla_path)
+    return result
+
 async def verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks, repaired_keys, unrepaired_keys):
     async def process_server_keys(server):
         node_workdir = await manager.server_get_workdir(server.server_id)
@@ -288,18 +362,27 @@ async def do_tablet_incremental_repair_and_ops(manager: ManagerClient, ops: str)
     nr_keys = 100
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await prepare_cluster_for_incremental_repair(manager, nr_keys, cmdline=['--logger-log-level', 'compaction=debug'])
     token = -1
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
-    marks = [await log.mark() for log in logs]
+    map_before_first = await get_repaired_at_map(manager, servers, ks, scylla_path)
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
-    # 1 add 0 skip 1 mark
-    for log, mark in zip(logs, marks):
-        sst_add, sst_skip, sst_mark = await get_sst_status("First", log, from_mark=mark)
-        assert len(sst_add) == 1
-        assert len(sst_skip) == 0
-        assert len(sst_mark) == 1
+    map_after_first = await get_repaired_at_map(manager, servers, ks, scylla_path)
+
+    # Servers that had at least one sstable repaired during the first repair are
+    # replicas for the token=-1 tablet.  Only these servers should be expected to
+    # show newly-repaired sstables after the second repair.
+    first_repair_servers = {
+        srv_id
+        for srv_id, sst_map in map_after_first.items()
+        for sst, ra in sst_map.items()
+        if ra > map_before_first[srv_id].get(sst, 0)
+    }
 
     await insert_keys(cql, ks, current_key, current_key + nr_keys)
     current_key += nr_keys
+
+    # Take log marks on every server before the op so we can grep only the op's lines.
+    op_marks = [await log.mark() for log in logs]
 
     # Test ops does not mix up repaired and unrepaired sstables together
     for server in servers:
@@ -316,15 +399,33 @@ async def do_tablet_incremental_repair_and_ops(manager: ManagerClient, ops: str)
         else:
             assert False # Wrong ops
 
-    marks = [await log.mark() for log in logs]
-    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
+    # Assert that every compaction/scrub the op triggered on the test table preserved
+    # repaired_at exactly: no mixing of repaired and unrepaired sstables in one job,
+    # and no silent promotion or demotion of repaired_at on output sstables.
+    op_log_pattern = rf'\[(?:Scrub|Compact|Major) {re.escape(ks)}\.test '
+    for log, mark in zip(logs, op_marks):
+        log_lines = await log.grep(op_log_pattern, from_mark=mark)
+        lineage = parse_compaction_lineage(log_lines, ks)
+        assert_repaired_at_preserved(lineage, ops)
 
-    # 1 add 1 skip 1 mark
-    for log, mark in zip(logs, marks):
-        sst_add, sst_skip, sst_mark = await get_sst_status("Second", log, from_mark=mark)
-        assert len(sst_add) == 1
-        assert len(sst_mark) == 1
-        assert len(sst_skip) == 1
+    map_before_second = await get_repaired_at_map(manager, servers, ks, scylla_path)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
+    map_after_second = await get_repaired_at_map(manager, servers, ks, scylla_path)
+
+    # repaired_at must not decrease on any surviving sstable
+    for srv_id, sst_map in map_after_second.items():
+        for sst, ra in sst_map.items():
+            if sst in map_before_second[srv_id]:
+                assert ra >= map_before_second[srv_id][sst], \
+                    f"[after second repair] {sst} repaired_at decreased from {map_before_second[srv_id][sst]} to {ra}"
+
+    # Servers that participated in the first repair must have at least one newly-repaired
+    # sstable after the second repair (they hold unrepaired sstables from insert_keys).
+    for srv_id in first_repair_servers:
+        newly_repaired = [sst for sst, ra in map_after_second[srv_id].items()
+                         if ra > map_before_second[srv_id].get(sst, 0)]
+        assert newly_repaired, \
+            f"[after second repair] server {srv_id} (first-repair replica) had no newly-repaired sstables"
 
 async def test_tablet_incremental_repair_and_scrubsstables_abort(manager: ManagerClient):
     await do_tablet_incremental_repair_and_ops(manager, 'scrub_abort')
