@@ -75,3 +75,4 @@ def run_async(self, *args, all_pages = True, **kwargs) -> asyncio.Future:
     # See issue #11289.
     kwargs.setdefault("timeout", 200.0)
     return _wrap_future(self.execute_async(*args, **kwargs), all_pages = all_pages)
+
