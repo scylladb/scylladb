@@ -121,6 +121,8 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
         //FIXME: discarded future.
         (void)qp.container().invoke_on(0, [&mm = mm.container(), create_cql = _create_cql] (cql3::query_processor& qp) -> future<> {
             co_return co_await table_helper::setup_table(qp, mm.local(), create_cql);
+        }).handle_exception([keyspace = _keyspace, name = _name] (std::exception_ptr ep) {
+            tlogger.debug("Failed to create {}.{} table in best-effort recovery path: {}", keyspace, name, ep);
         });
 
         // We throw the bad_column_family exception because the caller
