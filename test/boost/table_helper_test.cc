@@ -35,6 +35,23 @@
 
 BOOST_AUTO_TEST_SUITE(table_helper_test)
 
+SEASTAR_TEST_CASE(test_best_effort_setup_table_failure_is_consumed) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        auto& qp = env.local_qp();
+        auto& mm = env.migration_manager().local();
+
+        const sstring create_cql = "CREATE TABLE IF NOT EXISTS missing_ks.t (id int PRIMARY KEY)";
+        const sstring insert_cql = "INSERT INTO missing_ks.t (id) VALUES (?)";
+
+        table_helper helper("missing_ks", "t", create_cql, insert_cql);
+        service::query_state qs(service::client_state::for_internal_calls(), empty_service_permit());
+
+        BOOST_REQUIRE_THROW(helper.cache_table_info(qp, mm, qs).get(), bad_column_family);
+
+        seastar::yield().get();
+    });
+}
+
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
 
 SEASTAR_TEST_CASE(test_concurrent_invalidation) {
@@ -97,15 +114,5 @@ SEASTAR_TEST_CASE(test_concurrent_invalidation) {
 }
 
 #endif // SCYLLA_ENABLE_ERROR_INJECTION
-
-#ifndef SCYLLA_ENABLE_ERROR_INJECTION
-// The only test in this suite requires error injection support. Without this
-// dummy case the suite would be empty, which causes boost to report
-// "test tree is empty" and pytest to exit with code 5 ("no tests collected"),
-// failing CI in modes (e.g. release) where error injection is disabled.
-BOOST_AUTO_TEST_CASE(test_skipped_no_error_injection) {
-    BOOST_TEST_MESSAGE("table_helper_test requires SCYLLA_ENABLE_ERROR_INJECTION; skipping");
-}
-#endif
 
 BOOST_AUTO_TEST_SUITE_END()
