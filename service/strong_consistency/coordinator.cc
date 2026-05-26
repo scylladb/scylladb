@@ -241,7 +241,8 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
         if (use_leader_cache) {
             if (const auto cached = _groups_manager.leader_cache().get(raft_info.group_id)) {
                 if (const auto* target = find_replica(tablet_info, *cached)) {
-                    co_return redirect_to_leader(*target, _groups_manager, raft_info.group_id);
+                    return make_ready_future<value_or_redirect<operation_ctx>>(
+                        redirect_to_leader(*target, _groups_manager, raft_info.group_id));
                 }
                 // Cached leader is no longer a replica, evict it.
                 _groups_manager.leader_cache().erase(raft_info.group_id);
@@ -250,23 +251,25 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
         auto target = select_closest_replica(_gossiper, tablet_info.replicas, token,
                 erm->get_token_metadata().get_topology());
         if (use_leader_cache) {
-            co_return redirect_to_leader(target, _groups_manager, raft_info.group_id);
+            return make_ready_future<value_or_redirect<operation_ctx>>(
+                redirect_to_leader(target, _groups_manager, raft_info.group_id));
         }
-        co_return redirect_to_replica(target);
+        return make_ready_future<value_or_redirect<operation_ctx>>(redirect_to_replica(target));
     }
 
-    co_await utils::get_local_injector().inject("sc_coordinator_wait_before_acquire_server",
-            utils::wait_for_message(5min));
-
-    auto raft_server = co_await _groups_manager.acquire_server(schema.id(), raft_info.group_id, as);
-
-    co_return operation_ctx {
-        .erm = std::move(erm),
-        .raft_server = std::move(raft_server),
-        .tablet_id = tablet_id,
-        .raft_info = raft_info,
-        .tablet_info = tablet_info
-    };
+    return utils::get_local_injector().inject(
+        "sc_coordinator_wait_before_acquire_server", utils::wait_for_message(5min)
+    ).then([this, tid = schema.id(), &raft_info, &as] {
+        return _groups_manager.acquire_server(tid, raft_info.group_id, as);
+    }).then([erm = std::move(erm), tablet_id, &raft_info, &tablet_info] (raft_server server) mutable {
+        return make_ready_future<value_or_redirect<operation_ctx>>(operation_ctx {
+            .erm = std::move(erm),
+            .raft_server = std::move(server),
+            .tablet_id = tablet_id,
+            .raft_info = raft_info,
+            .tablet_info = tablet_info
+        });
+    });
 }
 
 coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper)
