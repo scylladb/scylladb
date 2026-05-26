@@ -6035,7 +6035,7 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
         t.arm(timeout);
 
         try {
-            while (!g0_server.current_leader() || *params.replaced_id == g0_server.current_leader()) {
+            while (*params.replaced_id == g0_server.current_leader()) {
                 // FIXME: Wait for the next term instead of sleeping in a loop
                 // Waiting for state change is not enough because a new leader
                 // might be chosen without us going through the candidate state.
