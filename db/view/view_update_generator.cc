@@ -239,6 +239,7 @@ future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::
         _progress_tracker->on_sstable_registration(sst);
     }
 
+
     // Generate view updates from staging sstables
     auto start_time = db_clock::now();
     auto [result, input_size] = co_await seastar::async([this, table, &sstables] {
@@ -256,6 +257,7 @@ future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::
     vug_logger.info("Processed {}.{}: {} sstables in {}ms = {}", s->ks_name(), s->cf_name(), sstables.size(),
                     std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(),
                     utils::pretty_printed_throughput(input_size, duration));
+
 
     // Move staging sstables to table's base directory
     co_await table->move_sstables_from_staging(sstables);
