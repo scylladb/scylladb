@@ -111,6 +111,8 @@ public:
     virtual void validate(query_processor& qp, const service::client_state& state) const override;
 
     const std::vector<single_statement>& get_statements();
+
+    virtual std::optional<std::vector<shared_ptr<cql3::statements::modification_statement>>> get_batch_statements() const override;
 private:
     future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
             bool local, api::timestamp_type now, service::query_state& query_state) const;

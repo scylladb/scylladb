@@ -438,6 +438,12 @@ void batch_statement::build_cas_result_set_metadata() {
     _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
 }
 
+std::optional<std::vector<shared_ptr<cql3::statements::modification_statement>>> batch_statement::get_batch_statements() const {
+    return _statements
+            | std::views::transform([] (const single_statement& ss) { return ss.statement; })
+            | std::ranges::to<std::vector>();
+}
+
 namespace raw {
 
 std::unique_ptr<prepared_statement>
