@@ -1185,3 +1185,66 @@ async def test_aborted_decommision_reenables_snapshot(manager: ManagerClient, ob
         logger.info("Decommissioned was aborted. Creating snapshot")
         await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
         await take_snapshot_on_one_server(ks, servers[0], manager, logger)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_keyspace_during_tablet_restore(manager: ManagerClient, object_storage):
+    """Verify that dropping a keyspace while tablet restore is downloading
+    SSTables does not crash the node.
+
+    The restore path in sstables_loader calls find_column_family() and then
+    download_sstable() which writes SSTable components to the table's data
+    directory.  If DROP KEYSPACE is applied concurrently, the data directory
+    is removed while download_sstable is writing — causing an ENOENT abort.
+
+    Uses the 'pause_download_sstable' error injection to pause the download
+    after find_column_family() has succeeded (table still exists), then issues
+    DROP KEYSPACE and releases the injection to trigger the race.
+
+    The fix acquires a stream_in_progress() phaser guard before downloading,
+    which makes table::stop() block until the download completes.
+    """
+    topology = topo(rf=2, nodes=2, racks=1, dcs=1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    num_keys = 24
+    tablet_count = 4
+
+    ks = unique_name("ks_")
+    cf = "test"
+
+    await cql.run_async(
+        f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}")
+    await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk text PRIMARY KEY, value int) WITH tablets = {{'min_tablet_count': {tablet_count}}}")
+    insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+    insert_stmt.consistency_level = ConsistencyLevel.ALL
+    await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+    await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, cf, object_storage, manager, logger) for s in servers))
+
+    await cql.run_async(f"DROP KEYSPACE {ks}")
+    await cql.run_async(
+        f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}")
+    await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk text PRIMARY KEY, value int) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}}")
+
+    await manager.api.enable_injection(servers[1].ip_addr, "pause_download_sstable", one_shot=True)
+    server_log = await manager.server_open_log(servers[1].server_id)
+    log_mark = await server_log.mark()
+
+    manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
+    tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+
+    await server_log.wait_for("pause_download_sstable: waiting for message", from_mark=log_mark)
+
+    # Issue DROP concurrently — with the fix stream_in_progress() guard blocks
+    # table::stop() until download completes; without the fix the data directory
+    # is removed and download_sstable gets ENOENT → node aborts.
+    drop_task = asyncio.ensure_future(cql.run_async(f"DROP KEYSPACE {ks}"))
+    await server_log.wait_for(f"Dropping keyspace {ks}", from_mark=log_mark)
+
+    await manager.api.message_injection(servers[1].ip_addr, "pause_download_sstable")
+
+    await drop_task
