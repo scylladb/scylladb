@@ -10,6 +10,7 @@
 
 #include "utils/UUID.hh"
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/semaphore.hh>
@@ -42,6 +43,7 @@ public:
 private:
     session_id _id;
     seastar::named_gate _gate;
+    seastar::abort_source _as;
     std::optional<shared_future<>> _closed;
     link_type _link;
 public:
@@ -81,6 +83,7 @@ public:
     /// Can be called many times.
     void start_closing() noexcept {
         if (!_closed) {
+            _as.request_abort();
             _closed = seastar::shared_future<>(_gate.close());
         }
     }
@@ -93,6 +96,10 @@ public:
 
     session_id id() const {
         return _id;
+    }
+
+    seastar::abort_source& abort_source() noexcept {
+        return _as;
     }
 
     size_t gate_count() const {
@@ -116,6 +123,10 @@ public:
     session_manager();
 
     session::guard enter_session(session_id id);
+
+    /// Returns the abort_source associated with a session.
+    /// Throws if the session does not exist.
+    seastar::abort_source& get_session_abort_source(session_id id);
 
     /// Creates a session on this shard if it doesn't exist yet.
     /// If the session already exists does nothing.

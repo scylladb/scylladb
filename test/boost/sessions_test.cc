@@ -96,4 +96,133 @@ SEASTAR_TEST_CASE(test_session_closing) {
     });
 }
 
+// Verifies that when a session is closed, subscribers to its abort_source
+// are notified, enabling them to release their session guards and unblock
+// drain_closing_sessions(). This is the mechanism used to clean up orphaned
+// repair_meta instances on follower nodes.
+SEASTAR_TEST_CASE(test_session_abort_source_unblocks_drain) {
+    return seastar::async([] {
+        session_manager mgr;
+
+        auto id = session_id(utils::make_random_uuid());
+        mgr.create_session(id);
+
+        // Simulate a repair_meta holding a session guard
+        auto guard = std::make_optional<session::guard>(mgr.enter_session(id));
+        BOOST_REQUIRE(guard->valid());
+
+        // Subscribe to the session's abort_source (as insert_repair_meta does)
+        auto& session_as = mgr.get_session_abort_source(id);
+        BOOST_REQUIRE(!session_as.abort_requested());
+
+        bool aborted = false;
+        auto sub = session_as.subscribe([&] () noexcept {
+            aborted = true;
+            // Release the guard (simulates repair_meta cleanup)
+            guard.reset();
+        });
+        BOOST_REQUIRE(sub);
+
+        // Close the session — this should fire the abort_source
+        mgr.initiate_close_of_sessions_except({});
+        BOOST_REQUIRE(aborted);
+        BOOST_REQUIRE(!guard.has_value());
+        BOOST_REQUIRE(session_as.abort_requested());
+
+        // drain should complete immediately since the guard was released
+        mgr.drain_closing_sessions().get();
+    });
+}
+
+// Verifies that subscribing to an already-closed session's abort_source
+// returns an empty subscription (abort already requested).
+SEASTAR_TEST_CASE(test_session_abort_source_already_closed) {
+    return seastar::async([] {
+        session_manager mgr;
+
+        auto id = session_id(utils::make_random_uuid());
+        mgr.create_session(id);
+
+        mgr.initiate_close_of_sessions_except({});
+
+        auto& session_as = mgr.get_session_abort_source(id);
+        BOOST_REQUIRE(session_as.abort_requested());
+
+        // Subscribing after abort returns empty subscription
+        bool called = false;
+        auto sub = session_as.subscribe([&] () noexcept {
+            called = true;
+        });
+        BOOST_REQUIRE(!sub);
+        BOOST_REQUIRE(!called);
+
+        mgr.drain_closing_sessions().get();
+    });
+}
+
+// Verifies the late-subscription path used by insert_repair_meta(): if the
+// session is already closing, subscribe() returns an empty subscription and the
+// caller must release its guard explicitly.
+SEASTAR_TEST_CASE(test_session_abort_source_already_closed_requires_immediate_cleanup) {
+    return seastar::async([] {
+        session_manager mgr;
+
+        auto id = session_id(utils::make_random_uuid());
+        mgr.create_session(id);
+
+        auto guard = std::make_optional<session::guard>(mgr.enter_session(id));
+
+        mgr.initiate_close_of_sessions_except({});
+
+        auto& session_as = mgr.get_session_abort_source(id);
+        BOOST_REQUIRE(session_as.abort_requested());
+
+        bool called = false;
+        auto sub = session_as.subscribe([&] () noexcept {
+            called = true;
+        });
+        BOOST_REQUIRE(!sub);
+        BOOST_REQUIRE(!called);
+
+        auto f = mgr.drain_closing_sessions();
+        BOOST_REQUIRE(!f.available());
+
+        // This mirrors the insert_repair_meta() fix: when subscribe() returns
+        // empty, the late entrant must clean itself up immediately.
+        guard.reset();
+        f.get();
+    });
+}
+
+// Verifies that drain blocks until the abort subscriber releases the guard.
+SEASTAR_TEST_CASE(test_session_abort_source_drain_blocks_without_release) {
+    return seastar::async([] {
+        session_manager mgr;
+
+        auto id = session_id(utils::make_random_uuid());
+        mgr.create_session(id);
+
+        auto guard = std::make_optional<session::guard>(mgr.enter_session(id));
+
+        // Subscribe but do NOT release the guard in the callback
+        auto& session_as = mgr.get_session_abort_source(id);
+        bool aborted = false;
+        auto sub = session_as.subscribe([&] () noexcept {
+            aborted = true;
+            // Intentionally not releasing guard here
+        });
+
+        mgr.initiate_close_of_sessions_except({});
+        BOOST_REQUIRE(aborted);
+
+        // drain should block because the guard is still held
+        auto f = mgr.drain_closing_sessions();
+        BOOST_REQUIRE(!f.available());
+
+        // Now release the guard — drain should complete
+        guard.reset();
+        f.get();
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
