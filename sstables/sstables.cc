@@ -1027,7 +1027,10 @@ future<> sstable::read_toc(sstable_open_config cfg) noexcept {
                 try {
                     _recognized_components.insert(reverse_map(c, sstable_version_constants::get_component_map(_version)));
                 } catch (std::out_of_range& oor) {
-                    _unrecognized_components.push_back(c);
+                    if (!_unrecognized_components) {
+                        _unrecognized_components = std::make_unique<std::vector<sstring>>();
+                    }
+                    _unrecognized_components->push_back(c);
                     sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, toc_filename());
                 }
             }
@@ -1796,12 +1799,12 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
     return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_id] {
         // Serialize with the other on-disk mutations of this sstable (change_state(),
-        // snapshot(), pick_up_from_upload(), unlink()), which all take _mutate_sem too.
+        // snapshot(), pick_up_from_upload(), unlink()), which all take mutate_sem() too.
         // Without this lock a concurrent change_state() -- e.g. the view update generator
         // moving a staging sstable to the base directory -- can relocate this sstable's
         // component files while we resolve their paths, hard-link them and read the Scylla
         // component below, causing a file-not-found abort. See SCYLLADB-3263.
-        auto lock = get_units(_mutate_sem, 1).get();
+        auto lock = get_units(mutate_sem(), 1).get();
 
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
@@ -1882,7 +1885,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         new_sst->seal_sstable(false).get();
         new_sst->open_data().get();
 
-        _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
+        _cloned_to_sstable_filename = std::make_unique<sstring>(new_sst->component_basename(component_type::Data));
         return new_sst;
     });
 }
@@ -2100,7 +2103,9 @@ future<> sstable::drop_caches() {
     if (_cached_rows_file) {
         co_await _cached_rows_file->evict_gently();
     }
-    co_await _index_cache->evict_gently();
+    if (_index_cache) {
+        co_await _index_cache->evict_gently();
+    }
 }
 
 // Return the filter format for the given sstable version
@@ -3184,30 +3189,33 @@ sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& 
 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
     std::vector<std::pair<component_type, sstring>> all;
-    all.reserve(_recognized_components.size() + _unrecognized_components.size());
+    size_t unrecognized_size = _unrecognized_components ? _unrecognized_components->size() : 0;
+    all.reserve(_recognized_components.size() + unrecognized_size);
     for (auto& c : _recognized_components) {
         all.push_back(std::make_pair(c, sstable_version_constants::get_component_map(_version).at(c)));
     }
-    for (auto& c : _unrecognized_components) {
-        all.push_back(std::make_pair(component_type::Unknown, c));
+    if (_unrecognized_components) {
+        for (auto& c : *_unrecognized_components) {
+            all.push_back(std::make_pair(component_type::Unknown, c));
+        }
     }
     return all;
 }
 
 future<> sstable::snapshot(const sstring& name) const {
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     co_await _storage->snapshot(*this, format("{}/{}", sstables::snapshots_dir, name));
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     co_await _storage->change_state(*this, to, _generation, delay_commit);
     _state = to;
 }
 
 future<> sstable::pick_up_from_upload(sstable_state to, generation_type new_generation) {
     // just in case, not really needed as the sstable is not yet in use while in the upload dir
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     co_await _storage->change_state(*this, to, new_generation, nullptr);
     _generation = std::move(new_generation);
     _state = to;
@@ -3601,7 +3609,7 @@ future<std::optional<uint32_t>> sstable::read_digest() {
     }
     // Serialize with change_state()/unlink(): the component is opened by name, so a concurrent
     // move would leave us with a stale path and a file-not-found abort (SCYLLADB-4526).
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     if (_components->digest) {
         co_return *_components->digest;
     }
@@ -3698,7 +3706,7 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
         co_return _components->checksum->shared_from_this();
     }
     // See read_digest().
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     if (_components->checksum) {
         co_return _components->checksum->shared_from_this();
     }
@@ -4205,7 +4213,7 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 future<>
 sstable::unlink(const atomic_deletion* deletion) noexcept {
     // Serialize with other calls to unlink or potentially ongoing mutations.
-    auto lock = co_await get_units(_mutate_sem, 1);
+    auto lock = co_await get_units(mutate_sem(), 1);
     if (_unlinked_at) {
         co_return;
     }
@@ -4217,7 +4225,7 @@ sstable::unlink(const atomic_deletion* deletion) noexcept {
 
     try {
         if (_cloned_to_sstable_filename) {
-            co_await get_large_data_handler().maybe_update_large_data_entries_sstable_name(shared_from_this(), _cloned_to_sstable_filename.value());
+            co_await get_large_data_handler().maybe_update_large_data_entries_sstable_name(shared_from_this(), *_cloned_to_sstable_filename);
         } else {
             co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
         }
@@ -4392,8 +4400,6 @@ sstable::sstable(schema_ptr schema,
     , _storage(make_storage(manager, _schema, storage, _state))
     , _version(v)
     , _format(f)
-    , _index_cache(std::make_unique<partition_index_cache>(
-            manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region(), manager.get_cache_tracker().get_partition_index_cache_stats()))
     , _now(now)
     , _read_error_handler(error_handler_gen(sstable_read_error))
     , _write_error_handler(error_handler_gen(sstable_write_error))
@@ -4404,6 +4410,14 @@ sstable::sstable(schema_ptr schema,
     , _ignore_component_digest_mismatch(_manager.get_config().ignore_component_digest_mismatch)
 {
     manager.add(this);
+}
+
+partition_index_cache& sstable::index_cache() {
+    if (!_index_cache) {
+        auto& ct = _manager.get_cache_tracker();
+        _index_cache = std::make_unique<partition_index_cache>(ct.get_lru(), ct.region(), ct.get_partition_index_cache_stats());
+    }
+    return *_index_cache;
 }
 
 file sstable::uncached_index_file() {
@@ -4435,7 +4449,9 @@ future<> sstable::destroy() {
         ex = std::current_exception();
     }
 
-    co_await _index_cache->evict_gently();
+    if (_index_cache) {
+        co_await _index_cache->evict_gently();
+    }
     if (_cached_index_file) {
         co_await _cached_index_file->evict_gently();
     }

@@ -385,11 +385,15 @@ public:
     }
 
     const std::set<generation_type>& compaction_ancestors() const {
-        return _compaction_ancestors;
+        static const std::set<generation_type> empty;
+        return _compaction_ancestors ? *_compaction_ancestors : empty;
     }
 
     void add_ancestor(generation_type generation) {
-        _compaction_ancestors.insert(generation);
+        if (!_compaction_ancestors) {
+            _compaction_ancestors = std::make_unique<std::set<generation_type>>();
+        }
+        _compaction_ancestors->insert(generation);
     }
 
     // Returns true iff this sstable contains data which belongs to many shards.
@@ -569,14 +573,15 @@ private:
     }
 
     std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
-    std::vector<sstring> _unrecognized_components;
+    std::unique_ptr<std::vector<sstring>> _unrecognized_components;
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     column_translation _column_translation;
     std::optional<open_flags> _open_mode;
     // _compaction_ancestors track which sstable generations were used to generate this sstable.
     // it is then used to generate the ancestors metadata in the statistics or scylla components.
-    std::set<generation_type> _compaction_ancestors;
+    // Lazily allocated — only populated during compaction output.
+    std::unique_ptr<std::set<generation_type>> _compaction_ancestors;
     file _index_file;
     seastar::shared_ptr<cached_file> _cached_index_file;
     file _data_file;
@@ -602,9 +607,16 @@ private:
     utils::observable<sstable&> _on_closed;
     utils::observable<sstable&> _on_delete;
 
-    lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
-    lw_shared_ptr<file_input_stream_history> _partition_range_history = make_lw_shared<file_input_stream_history>();
-    lw_shared_ptr<file_input_stream_history> _index_history = make_lw_shared<file_input_stream_history>();
+    // Created on first read; many sstables never use some of them.
+    lw_shared_ptr<file_input_stream_history> _single_partition_history;
+    lw_shared_ptr<file_input_stream_history> _partition_range_history;
+    lw_shared_ptr<file_input_stream_history> _index_history;
+    static lw_shared_ptr<file_input_stream_history> get_history(lw_shared_ptr<file_input_stream_history>& h) {
+        if (!h) {
+            h = make_lw_shared<file_input_stream_history>();
+        }
+        return h;
+    }
 
     schema_ptr _schema;
     generation_type _generation{0};
@@ -617,7 +629,9 @@ private:
     const format_types _format;
 
     filter_tracker _filter_tracker;
+    // Only big-format index reads use it, so it is created on first use.
     std::unique_ptr<partition_index_cache> _index_cache;
+    partition_index_cache& index_cache();
 
     enum class mark_for_deletion {
         implicit = -1,
@@ -685,8 +699,15 @@ private:
 
     // The mutate semaphore is used to serialize operations like rewrite_statistics
     // with linking or moving the sstable between directories.
-    mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
-    std::optional<sstring> _cloned_to_sstable_filename;
+    // Created on first use: most live sstables never link, snapshot or unlink.
+    mutable std::unique_ptr<named_semaphore> _mutate_sem;
+    named_semaphore& mutate_sem() const {
+        if (!_mutate_sem) {
+            _mutate_sem = std::make_unique<named_semaphore>(1, named_semaphore_exception_factory{"sstable mutate"});
+        }
+        return *_mutate_sem;
+    }
+    std::unique_ptr<sstring> _cloned_to_sstable_filename;
     // Used only for writing sstable.
     scylla_metadata::components_digests _components_digests;
     uint32_t _toc_digest{};
@@ -1206,7 +1227,7 @@ public:
     // Set on the source of a component rewrite (see link_with_rewritten_component()):
     // the basename of the Data component of the sstable it was cloned into. Lets holders
     // of a reference to the replaced sstable find its current generation in the table.
-    const std::optional<sstring>& cloned_to_sstable_filename() const noexcept {
+    const std::unique_ptr<sstring>& cloned_to_sstable_filename() const noexcept {
         return _cloned_to_sstable_filename;
     }
 

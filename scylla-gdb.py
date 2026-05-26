@@ -2263,7 +2263,10 @@ class scylla_active_sstables(gdb.Command):
     def invoke(self, arg, from_tty):
         def count_index_lists(sst):
             # Each cache entry already accounts for itself and its page's memory.
-            cache = std_unique_ptr(sst['_index_cache']).get().dereference()
+            cache_ptr = std_unique_ptr(sst['_index_cache']).get()
+            if int(cache_ptr) == 0:  # created on first index read
+                return 0
+            cache = cache_ptr.dereference()
             return sum(int(e['_size_in_allocator']) for e in bplus_tree(cache['_cache']))
 
         sstables = dict()  # name -> sstable*
@@ -6031,7 +6034,11 @@ class scylla_sstable_index_cache(gdb.Command):
                 sst = seastar_lw_shared_ptr(arg).get()
             else:
                 sst = arg
-            cache = std_unique_ptr(sst['_index_cache']).get().dereference()
+            cache_ptr = std_unique_ptr(sst['_index_cache']).get()
+            if int(cache_ptr) == 0:
+                gdb.write("Index cache not created\n")
+                return
+            cache = cache_ptr.dereference()
         tree = bplus_tree(cache['_cache'])
         loaded_pages = 0
         loading_pages = 0
