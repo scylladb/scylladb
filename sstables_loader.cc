@@ -1035,6 +1035,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             std::vector<std::vector<minimal_sst_info>> local_min_infos(smp::count);
             co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos](const auto& sst) -> future<> {
                 auto& table = loader._db.local().find_column_family(tid.table);
+                auto stream_guard = table.stream_in_progress();
                 auto min_info = co_await download_sstable(loader._db.local(), table, sst, llog);
                 local_min_infos[min_info.shard].emplace_back(std::move(min_info));
             });

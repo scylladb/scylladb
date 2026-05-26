@@ -22,6 +22,7 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
     auto components = sstable->all_components();
 
     utils::get_local_injector().inject("fail_download_sstable", [] { throw std::runtime_error("Failing sstable download"); });
+    co_await utils::get_local_injector().inject("pause_download_sstable", utils::wait_for_message(std::chrono::seconds(60)));
 
     // Move the TOC to the front to be processed first since `sstables::create_stream_sink` takes care
     // of creating behind the scene TemporaryTOC instead of usual one. This assures that in case of failure
