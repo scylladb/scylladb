@@ -571,7 +571,7 @@ private:
     }
 
     std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
-    std::vector<sstring> _unrecognized_components;
+    std::unique_ptr<std::vector<sstring>> _unrecognized_components;
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     column_translation _column_translation;
