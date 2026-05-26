@@ -997,3 +997,31 @@ def test_create_vector_index_accepts_255_key_columns(cql, test_keyspace, scylla_
     schema = f'{pk_cols}, v vector<float, 3>, PRIMARY KEY (({pk_names}))'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+
+# Tests for vector_index-specific CREATE INDEX options: quantization, oversampling, rescoring.
+# All tests use scylla_only because these options are ScyllaDB-specific.
+def test_vector_index_option_quantization_validation(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p int primary key, v vector<float, 2>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for quantization in ['f32', 'f16', 'bf16', 'i8', 'b1', 'F32', 'F16', 'BF16', 'I8', 'B1']:
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'quantization': '{quantization}'}}")
+        with pytest.raises(InvalidRequest, match="Invalid value in option 'quantization' for vector index"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'quantization': 'invalid_value'}}")
+
+def test_vector_index_option_oversampling_validation(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p int primary key, v vector<float, 2>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for factor in ['1.0', '50.5', '100.0', '10', '1e1', '1000000e-4', '0x10', '  9  ']:
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'oversampling': {factor}}}")
+        for factor in ['0.9', '100.1', '0', '-5', "'abc'", "'   '", "NaN", "INFINITY"]:
+            with pytest.raises(InvalidRequest, match="Invalid value in option 'oversampling' for vector index"):
+                cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'oversampling': {factor}}}")
+
+def test_vector_index_option_rescoring_validation(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p int primary key, v vector<float, 2>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for rescoring in ['true', 'false', 'True', 'False', 'TRUE', 'FALSE']:
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'rescoring': '{rescoring}'}}")
+        for rescoring in ['invalid_value', '0', '1', ' true', 'false ']:
+            with pytest.raises(InvalidRequest, match="Invalid value in option 'rescoring' for vector index"):
+                cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'rescoring': '{rescoring}'}}")
