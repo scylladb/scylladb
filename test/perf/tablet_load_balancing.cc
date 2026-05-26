@@ -59,7 +59,7 @@ future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "") {
         if (!test_ks_name.empty()) {
             ks_name = test_ks_name;
         }
-        return *schema_builder(ks_name, id.to_sstring(), id)
+        return *schema_builder(this_smp_shard_count(), ks_name, id.to_sstring(), id)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("r1", int32_type)
                 .build();

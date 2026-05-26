@@ -326,7 +326,7 @@ future<> paxos_store::stop() {
 }
 
 schema_ptr paxos_store::create_paxos_state_schema(const schema& s) {
-    schema_builder builder(std::nullopt, s.ks_name(), paxos_state_table_name(s.cf_name()),
+    schema_builder builder(this_smp_shard_count(), std::nullopt, s.ks_name(), paxos_state_table_name(s.cf_name()),
         // partition key
         {{"row_key", bytes_type}}, // byte representation of a row key that hashes to the same token as original
         // clustering key

@@ -1744,28 +1744,28 @@ SEASTAR_TEST_CASE(test_drop_quarantined_sstables) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
-    auto table_gc_mode_timeout = schema_builder("test", "table_gc_mode_timeout")
+    auto table_gc_mode_timeout = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_timeout")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "timeout"} }))
             .set_gc_grace_seconds(10)
             .build();
-    auto table_gc_mode_disabled = schema_builder("test", "table_gc_mode_disabled")
+    auto table_gc_mode_disabled = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_disabled")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "disabled"} }))
             .build();
-    auto table_gc_mode_immediate = schema_builder("test", "table_gc_mode_immediate")
+    auto table_gc_mode_immediate = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_immediate")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "immediate"} }))
             .build();
-    auto table_gc_mode_repair1 = schema_builder("test", "table_gc_mode_repair1")
+    auto table_gc_mode_repair1 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair1")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
             .build();
-    auto table_gc_mode_repair2 = schema_builder("test", "table_gc_mode_repair2")
+    auto table_gc_mode_repair2 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair2")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "288"} }))
             .build();
-    auto table_gc_mode_repair3 = schema_builder("test", "table_gc_mode_repair3")
+    auto table_gc_mode_repair3 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair3")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "388"} }))
             .build();
@@ -1775,7 +1775,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
             builder.set_is_group0_table();
         }
     });
-    auto table_gc_mode_group0 = schema_builder("test", "table_gc_mode_group0")
+    auto table_gc_mode_group0 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_group0")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .build();
 
@@ -1836,12 +1836,12 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
-    auto table_gc_mode_repair1 = schema_builder("test", "table_gc_mode_repair1")
+    auto table_gc_mode_repair1 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair1")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
             .build();
 
-    auto table_gc_mode_repair2 = schema_builder("test", "table_gc_mode_repair2")
+    auto table_gc_mode_repair2 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair2")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
             .build();
@@ -2052,7 +2052,7 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     shared_tombstone_gc_state shared_state;
 
     for (auto gc_mode : {tombstone_gc_mode::timeout, tombstone_gc_mode::disabled, tombstone_gc_mode::immediate, tombstone_gc_mode::repair}) {
-        auto schema = schema_builder("ks", "tbl")
+        auto schema = schema_builder(this_smp_shard_count(), "ks", "tbl")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({{"mode", fmt::to_string(gc_mode)}}))
             .build();

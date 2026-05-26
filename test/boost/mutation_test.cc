@@ -117,7 +117,7 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto s = schema_builder(some_keyspace, some_column_family)
+        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", int32_type, column_kind::clustering_key)
                     .with_column("r1", int32_type)
@@ -145,7 +145,7 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
 }
 
 SEASTAR_TEST_CASE(test_multi_level_row_tombstones) {
-    auto s = schema_builder(some_keyspace, some_column_family)
+    auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("c1", int32_type, column_kind::clustering_key)
                 .with_column("c2", int32_type, column_kind::clustering_key)
@@ -183,7 +183,7 @@ SEASTAR_TEST_CASE(test_multi_level_row_tombstones) {
 }
 
 SEASTAR_TEST_CASE(test_row_tombstone_updates) {
-    auto s = schema_builder(some_keyspace, some_column_family)
+    auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("c1", int32_type, column_kind::clustering_key)
                 .with_column("c2", int32_type, column_kind::clustering_key)
@@ -365,7 +365,7 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
-        auto s = schema_builder(some_keyspace, some_column_family)
+        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", int32_type, column_kind::clustering_key)
                     .with_column("s1", my_map_type, column_kind::static_column)
@@ -404,7 +404,7 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
-        auto s = schema_builder(some_keyspace, some_column_family)
+        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", int32_type, column_kind::clustering_key)
                     .with_column("s1", my_set_type, column_kind::static_column)
@@ -443,7 +443,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto my_list_type = list_type_impl::get_instance(int32_type, true);
-        auto s = schema_builder(some_keyspace, some_column_family)
+        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", int32_type, column_kind::clustering_key)
                     .with_column("s1", my_list_type, column_kind::static_column)
@@ -487,7 +487,7 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
             {int32_type, utf8_type, long_type, utf8_type},
             true);
 
-    auto s = schema_builder(some_keyspace, some_column_family)
+    auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("c1", int32_type, column_kind::clustering_key)
                 .with_column("s1", ut, column_kind::static_column)
@@ -553,7 +553,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
     const auto value_type = utf8_type;
     const auto collection_type = map_type_impl::get_instance(key_type, value_type, true);
 
-    auto schema = schema_builder("test", "test_large_collection_allocation")
+    auto schema = schema_builder(this_smp_shard_count(), "test", "test_large_collection_allocation")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("v", collection_type)
         .build();
@@ -646,7 +646,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_serialization_exception_safety) {
 
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    auto s = schema_builder(some_keyspace, some_column_family)
+    auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("c1", int32_type, column_kind::clustering_key)
                 .with_column("r1", int32_type)
@@ -697,7 +697,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
 
 SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
   return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type)
         .build();
@@ -781,7 +781,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    auto s = schema_builder(some_keyspace, some_column_family)
+    auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                 .with_column("p1", int32_type, column_kind::partition_key)
                 .with_column("c1", int32_type, column_kind::clustering_key)
                 .with_column("r1", int32_type)
@@ -957,7 +957,7 @@ static query::partition_slice make_full_slice(const schema& s) {
 
 SEASTAR_TEST_CASE(test_querying_of_mutation) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type, column_kind::regular_column)
             .build();
@@ -983,7 +983,7 @@ SEASTAR_TEST_CASE(test_querying_of_mutation) {
 
 SEASTAR_TEST_CASE(test_partition_with_no_live_data_is_absent_in_data_query_results) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("sc1", bytes_type, column_kind::static_column)
             .with_column("ck", bytes_type, column_kind::clustering_key)
@@ -1006,7 +1006,7 @@ SEASTAR_TEST_CASE(test_partition_with_no_live_data_is_absent_in_data_query_resul
 
 SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_results_even_if_static_row_was_not_queried) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("sc1", bytes_type, column_kind::static_column)
             .with_column("ck", bytes_type, column_kind::clustering_key)
@@ -1032,7 +1032,7 @@ SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_
 
 SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("v1", bytes_type, column_kind::regular_column)
@@ -1058,7 +1058,7 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
 
 SEASTAR_TEST_CASE(test_row_counting) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("sc1", bytes_type, column_kind::static_column)
             .with_column("ck", bytes_type, column_kind::clustering_key)
@@ -1108,7 +1108,7 @@ SEASTAR_TEST_CASE(test_row_counting) {
 }
 
 SEASTAR_TEST_CASE(test_tombstone_apply) {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type, column_kind::regular_column)
             .build();
@@ -1132,7 +1132,7 @@ SEASTAR_TEST_CASE(test_tombstone_apply) {
 }
 
 SEASTAR_TEST_CASE(test_marker_apply) {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("v", bytes_type, column_kind::regular_column)
@@ -1381,7 +1381,7 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         mutation_application_stats app_stats;
 
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("sc1", bytes_type, column_kind::static_column)
             .with_column("ck", bytes_type, column_kind::clustering_key)
@@ -1485,7 +1485,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto s = schema_builder(some_keyspace, some_column_family)
+        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("s1", bytes_type, column_kind::static_column)
                     .build();
@@ -1634,7 +1634,7 @@ SEASTAR_TEST_CASE(test_mutation_upgrade_of_equal_mutations) {
 SEASTAR_TEST_CASE(test_mutation_upgrade) {
     return seastar::async([] {
         auto make_builder = [] {
-            return schema_builder("ks", "cf")
+            return schema_builder(this_smp_shard_count(), "ks", "cf")
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("ck", bytes_type, column_kind::clustering_key);
         };
@@ -1733,7 +1733,7 @@ SEASTAR_TEST_CASE(test_mutation_upgrade) {
 
 SEASTAR_THREAD_TEST_CASE(test_mutation_upgrade_type_change) {
     auto make_builder = [] {
-        return schema_builder("ks", "cf")
+        return schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key);
     };
@@ -1808,7 +1808,7 @@ SEASTAR_THREAD_TEST_CASE(test_row_marker_expiry) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_querying_expired_rows) {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .build();
@@ -1857,7 +1857,7 @@ SEASTAR_THREAD_TEST_CASE(test_querying_expired_rows) {
 
 SEASTAR_TEST_CASE(test_querying_expired_cells) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("s1", bytes_type, column_kind::static_column)
@@ -1946,7 +1946,7 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
 }
 
 SEASTAR_TEST_CASE(test_tombstone_purge) {
-    auto builder = schema_builder("tests", "tombstone_purge")
+    auto builder = schema_builder(this_smp_shard_count(), "tests", "tombstone_purge")
         .with_column("id", utf8_type, column_kind::partition_key)
         .with_column("value", int32_type);
     builder.set_gc_grace_seconds(0);
@@ -1970,7 +1970,7 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
 }
 
 SEASTAR_TEST_CASE(test_slicing_mutation) {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("v", int32_type)
@@ -2047,7 +2047,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation) {
 
 SEASTAR_TEST_CASE(test_trim_rows) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("ck", int32_type, column_kind::clustering_key)
                 .with_column("v", int32_type)
@@ -2105,7 +2105,7 @@ SEASTAR_TEST_CASE(test_trim_rows) {
 
 SEASTAR_TEST_CASE(test_collection_cell_diff) {
     return seastar::async([] {
-        auto s = schema_builder(some_keyspace, some_column_family)
+        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                     .with_column("p", utf8_type, column_kind::partition_key)
                     .with_column("v", list_type_impl::get_instance(bytes_type, true))
                     .build();
@@ -2776,7 +2776,7 @@ SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
 // after all MVCC versions are merged.
 // Overaccounting leads to assertion failure in ~flush_memory_accounter.
 SEASTAR_THREAD_TEST_CASE(test_row_size_is_immune_to_application_order) {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("v1", utf8_type)
             .with_column("v2", utf8_type)
@@ -3145,7 +3145,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
 
 // Reproducer for #4567: "appending_hash<row> ignores cells after first null"
 SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_4567) {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("ck", bytes_type, column_kind::clustering_key)
         .with_column("r1", bytes_type)
@@ -3343,7 +3343,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_rebuilder_v2_flush) {
 SEASTAR_TEST_CASE(mutation_with_dummy_clustering_row_is_consumed_monotonically) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        schema_ptr s = schema_builder{"ks", "cf"}
+        schema_ptr s = schema_builder{this_smp_shard_count(), "ks", "cf"}
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck1", bytes_type, column_kind::clustering_key)
             .build();
@@ -3419,7 +3419,7 @@ SEASTAR_THREAD_TEST_CASE(test_position_in_partition_order_with_prefix_keys) {
     using pip = position_in_partition;
     using pipv = position_in_partition_view;
 
-    schema_ptr s = schema_builder("ks", "cf")
+    schema_ptr s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", utf8_type, column_kind::partition_key)
         .with_column("ck1", utf8_type, column_kind::clustering_key)
         .with_column("ck2", utf8_type, column_kind::clustering_key)
@@ -3971,7 +3971,7 @@ SEASTAR_TEST_CASE(test_tracing_format) {
 SEASTAR_TEST_CASE(test_compact_and_expire_cell_stats) {
     const auto collection_type = map_type_impl::get_instance(int32_type, int32_type, true);
 
-    auto schema = schema_builder("test", "test_compact_and_expire_cell_stats")
+    auto schema = schema_builder(this_smp_shard_count(), "test", "test_compact_and_expire_cell_stats")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("static_atomic", int32_type, column_kind::static_column)

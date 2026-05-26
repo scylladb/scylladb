@@ -2178,7 +2178,7 @@ SEASTAR_TEST_CASE(test_gentle_schema_upgrades) {
         auto ts_drop = api::new_timestamp();
         auto ts2 = api::new_timestamp();
 
-        auto s1 = schema_builder("ks", "cf")
+        auto s1 = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", utf8_type, column_kind::clustering_key)
             .with_column("s1", utf8_type, column_kind::static_column)

@@ -53,7 +53,7 @@ static std::generator<dht::ring_position_view> generate_rpvs(const schema& strin
 // Performs key conversion to BTI format for various keys,
 // and checks that this encoding doesn't change the ordering of keys.
 BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_order) {
-    auto s = schema_builder("ks", "t")
+    auto s = schema_builder(1, "ks", "t")
         .with_column("pk1", utf8_type, column_kind::partition_key)
         .with_column("pk2", utf8_type, column_kind::partition_key)
         .build();
@@ -88,7 +88,7 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_ord
 // 2.5 Checks that reading `enc` again gives a result consistent with the
 //     modification and the trim.
 BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_trim) {
-    auto s = schema_builder("ks", "t")
+    auto s = schema_builder(1, "ks", "t")
     .with_column("pk1", utf8_type, column_kind::partition_key)
     .with_column("pk2", utf8_type, column_kind::partition_key)
     .build();
@@ -168,7 +168,7 @@ static std::generator<position_in_partition_view> generate_pipvs(const schema& s
 // Performs key conversion to BTI format for various keys,
 // and checks that this encoding doesn't change the ordering of keys.
 BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_clustering_position_preserves_order) {
-    auto s = schema_builder("ks", "t")
+    auto s = schema_builder(1, "ks", "t")
         .with_column("pk", long_type, column_kind::partition_key)
         .with_column("ck1", utf8_type, column_kind::clustering_key)
         .with_column("ck2", utf8_type, column_kind::clustering_key)
@@ -193,7 +193,7 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_clustering_position_preserv
 // Just like test_lazy_comparable_bytes_from_ring_position_trim,
 // but for clustering positions.
 BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_clustering_position_trim) {
-    auto s = schema_builder("ks", "t")
+    auto s = schema_builder(1, "ks", "t")
     .with_column("pk", long_type, column_kind::partition_key)
     .with_column("ck1", utf8_type, column_kind::clustering_key)
     .with_column("ck2", utf8_type, column_kind::clustering_key)

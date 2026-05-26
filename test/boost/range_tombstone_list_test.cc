@@ -19,7 +19,7 @@
 
 #include <seastar/util/defer.hh>
 
-static thread_local schema_ptr s = schema_builder("ks", "cf")
+static thread_local schema_ptr s = schema_builder(1, "ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck1", int32_type, column_kind::clustering_key)
         .with_column("ck2", int32_type, column_kind::clustering_key)

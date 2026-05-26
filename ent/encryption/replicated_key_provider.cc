@@ -366,7 +366,7 @@ future<> replicated_key_provider::validate() const {
 schema_ptr encrypted_keys_table() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(replicated_key_provider_factory::KSNAME, TABLENAME);
-        return schema_builder(replicated_key_provider_factory::KSNAME, TABLENAME, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), replicated_key_provider_factory::KSNAME, TABLENAME, std::make_optional(id))
                 .with_column("key_file", utf8_type, column_kind::partition_key)
                 .with_column("cipher", utf8_type, column_kind::partition_key)
                 .with_column("strength", int32_type, column_kind::clustering_key)

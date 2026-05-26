@@ -1686,7 +1686,7 @@ future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr ss
     //
     // This will help avoid conflicts when querying sstables of system-tables
     // and allows cql_test_env to work with a simple config (no EAR setup).
-    auto builder = schema_builder(keyspace_name, sstable_schema->cf_name());
+    auto builder = schema_builder(this_smp_shard_count(), keyspace_name, sstable_schema->cf_name());
     for (const auto& col_kind : {column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column}) {
         for (const auto& col : sstable_schema->columns(col_kind)) {
             builder.with_column(col.name(), col.type, col_kind, col.view_virtual());

@@ -441,7 +441,7 @@ SEASTAR_TEST_CASE(test_rebuild_from_temporary_hashes) {
     return test_env::do_with_async([] (test_env& env) {
         const float bloom_filter_fp_chance = 0.01;
         const float approx_expected_filter_bytes_per_element = 1.25;
-        auto s = schema_builder("ks", "test_rebuild_from_temporary_hashes")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "test_rebuild_from_temporary_hashes")
                 .with_column("pk", long_type, column_kind::partition_key)
                 .set_bloom_filter_fp_chance(bloom_filter_fp_chance)
                 .build();

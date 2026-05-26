@@ -67,7 +67,7 @@ private:
         : _ws(ws)
         , _wc(wc)
     {
-        auto sb = schema_builder(ks_name, cf_name)
+        auto sb = schema_builder(this_smp_shard_count(), ks_name, cf_name)
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", utf8_type, column_kind::clustering_key)
             .with_column("s1", utf8_type, ws ? column_kind::static_column : column_kind::regular_column)

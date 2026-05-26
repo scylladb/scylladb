@@ -554,7 +554,7 @@ make_partition_key_generator(sharded<replica::database>& db, schema_ptr schema, 
 schema_ptr generate_output_schema_from_underlying_schema(schema_ptr underlying_schema) {
     const auto& ks = underlying_schema->ks_name();
     const auto tbl = format("{}_$mutation_fragments", underlying_schema->cf_name());
-    auto sb = schema_builder(ks, tbl, generate_legacy_id(ks, tbl));
+    auto sb = schema_builder(this_smp_shard_count(), ks, tbl, generate_legacy_id(ks, tbl));
     // partition key
     for (const auto& pk_col : underlying_schema->partition_key_columns()) {
         sb.with_column(pk_col.name(), pk_col.type, column_kind::partition_key);

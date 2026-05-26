@@ -834,7 +834,7 @@ namespace {
 
 schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec) {
     auto engine = std::mt19937{seed};
-    auto builder = schema_builder(spec.keyspace_name(), spec.table_name(engine));
+    auto builder = schema_builder(this_smp_shard_count(), spec.keyspace_name(), spec.table_name(engine));
 
     auto pk_columns = spec.partition_key_columns(engine);
     SCYLLA_ASSERT(!pk_columns.empty()); // Let's not pull in boost::test here

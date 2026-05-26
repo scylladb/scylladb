@@ -49,7 +49,7 @@ public:
 
 schema_ptr test_table_schema() {
     static thread_local auto s = [] {
-        schema_builder builder("ks", "cf", generate_legacy_id("ks", "cf"), bytes_type);
+        schema_builder builder(this_smp_shard_count(), "ks", "cf", generate_legacy_id("ks", "cf"), bytes_type);
         builder.with_column("p", bytes_type, column_kind::partition_key);
         builder.with_column("c", int32_type);
         return builder.build(schema_builder::compact_storage::no);

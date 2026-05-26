@@ -69,7 +69,7 @@ schema_ptr make_tablets_schema() {
     // replica_set_type = frozen<list<tablet_replica>>
     auto id = generate_legacy_id(db::system_keyspace::NAME, db::system_keyspace::TABLETS);
     // Bump the schema version offset for tablet repair scheduler columns
-    auto builder = schema_builder(db::system_keyspace::NAME, db::system_keyspace::TABLETS, id);
+    auto builder = schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, db::system_keyspace::TABLETS, id);
     builder
             .with_column("table_id", uuid_type, column_kind::partition_key)
             .with_column("tablet_count", int32_type, column_kind::static_column)
@@ -106,7 +106,7 @@ schema_ptr make_tablets_schema() {
 
 schema_ptr make_raft_schema(sstring name, bool is_group0) {
     auto id = generate_legacy_id(db::system_keyspace::NAME, name);
-    auto builder = schema_builder(db::system_keyspace::NAME, name, std::optional(id));
+    auto builder = schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, name, std::optional(id));
     if (!is_group0) {
         if (!strongly_consistent_tables_enabled) {
             on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
@@ -144,7 +144,7 @@ schema_ptr make_raft_schema(sstring name, bool is_group0) {
 
 schema_ptr make_raft_snapshots_schema(sstring name, bool is_group0) {
     auto id = generate_legacy_id(db::system_keyspace::NAME, name);
-    auto builder = schema_builder(db::system_keyspace::NAME, name, std::optional(id));
+    auto builder = schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, name, std::optional(id));
     if (!is_group0) {
         if (!strongly_consistent_tables_enabled) {
             on_internal_error(tablet_logger, "Can't create raft snapshots table for strongly consistent tablets when the feature is disabled");
@@ -174,7 +174,7 @@ schema_ptr make_raft_snapshots_schema(sstring name, bool is_group0) {
 
 schema_ptr make_raft_snapshot_config_schema(sstring name, bool is_group0) {
     auto id = generate_legacy_id(db::system_keyspace::NAME, name);
-    auto builder = schema_builder(db::system_keyspace::NAME, name, std::optional(id));
+    auto builder = schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, name, std::optional(id));
     if (!is_group0) {
         if (!strongly_consistent_tables_enabled) {
             on_internal_error(tablet_logger, "Can't create raft snapshot config table for strongly consistent tablets when the feature is disabled");

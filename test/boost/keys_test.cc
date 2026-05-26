@@ -19,7 +19,7 @@
 #include "idl/keys.dist.impl.hh"
 
 BOOST_AUTO_TEST_CASE(test_key_is_prefixed_by) {
-    auto s_ptr = schema_builder("", "")
+    auto s_ptr = schema_builder(1, "", "")
             .with_column("c1", bytes_type, column_kind::partition_key)
             .with_column("c2", bytes_type, column_kind::clustering_key)
             .with_column("c3", bytes_type, column_kind::clustering_key)
@@ -41,7 +41,7 @@ BOOST_AUTO_TEST_CASE(test_key_is_prefixed_by) {
 }
 
 BOOST_AUTO_TEST_CASE(test_key_component_iterator) {
-    auto s_ptr = schema_builder("", "")
+    auto s_ptr = schema_builder(1, "", "")
             .with_column("c1", bytes_type, column_kind::partition_key)
             .with_column("c2", bytes_type, column_kind::clustering_key)
             .with_column("c3", bytes_type, column_kind::clustering_key)
@@ -70,7 +70,7 @@ BOOST_AUTO_TEST_CASE(test_key_component_iterator) {
 }
 
 BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_non_composite_key) {
-    auto s_ptr = schema_builder("", "")
+    auto s_ptr = schema_builder(1, "", "")
             .with_column("c1", bytes_type, column_kind::partition_key)
             .build();
     const schema& s = *s_ptr;
@@ -91,7 +91,7 @@ BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_non_composite_key) {
 }
 
 BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_composite_keys) {
-    auto s_ptr = schema_builder("", "")
+    auto s_ptr = schema_builder(1, "", "")
             .with_column("c1", bytes_type, column_kind::partition_key)
             .with_column("c2", bytes_type, column_kind::partition_key)
             .build();
@@ -119,7 +119,7 @@ BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_composite_keys) {
 }
 
 BOOST_AUTO_TEST_CASE(test_conversions_between_view_and_wrapper) {
-    auto s_ptr = schema_builder("", "")
+    auto s_ptr = schema_builder(1, "", "")
             .with_column("c1", bytes_type, column_kind::partition_key)
             .build();
     const schema& s = *s_ptr;
@@ -147,7 +147,7 @@ T reserialize(const T& v) {
 }
 
 BOOST_AUTO_TEST_CASE(test_serialization) {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(1, "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type)
             .build();
@@ -160,7 +160,7 @@ BOOST_AUTO_TEST_CASE(test_serialization) {
 
 
 BOOST_AUTO_TEST_CASE(test_from_nodetool_style_string_single_partition_key) {
-    auto s1 = schema_builder("", "")
+    auto s1 = schema_builder(1, "", "")
             .with_column("c1", utf8_type, column_kind::partition_key)
             .with_column("c2", bytes_type, column_kind::clustering_key)
             .with_column("c3", bytes_type, column_kind::clustering_key)
@@ -178,7 +178,7 @@ BOOST_AUTO_TEST_CASE(test_from_nodetool_style_string_single_partition_key) {
 }
 
 BOOST_AUTO_TEST_CASE(test_from_nodetool_style_string_composite_partition_key) {
-    auto s2 = schema_builder("", "")
+    auto s2 = schema_builder(1, "", "")
             .with_column("c1", utf8_type, column_kind::partition_key)
             .with_column("c2", utf8_type, column_kind::partition_key)
             .with_column("c3", bytes_type, column_kind::clustering_key)

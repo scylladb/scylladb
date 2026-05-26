@@ -39,7 +39,7 @@ static std::vector<dht::ring_position> make_ring(schema_ptr s, int n_keys) {
 
 SEASTAR_TEST_CASE(test_get_restricted_ranges) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();

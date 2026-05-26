@@ -154,7 +154,7 @@ api::timestamp_type system_keyspace::schema_creation_timestamp() {
 
 schema_ptr system_keyspace::hints() {
     static thread_local auto hints = [] {
-        schema_builder builder(generate_legacy_id(NAME, HINTS), NAME, HINTS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, HINTS), NAME, HINTS,
         // partition key
         {{"target_id", uuid_type}},
         // clustering key
@@ -178,7 +178,7 @@ schema_ptr system_keyspace::hints() {
 
 schema_ptr system_keyspace::batchlog() {
     static thread_local auto batchlog = [] {
-        schema_builder builder(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -204,7 +204,7 @@ schema_ptr system_keyspace::batchlog() {
 
 schema_ptr system_keyspace::batchlog_v2() {
     static thread_local auto batchlog_v2 = [] {
-        schema_builder builder(generate_legacy_id(NAME, BATCHLOG_V2), NAME, BATCHLOG_V2,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, BATCHLOG_V2), NAME, BATCHLOG_V2,
         // partition key
         {{"version", int32_type}, {"stage", byte_type}, {"shard", int32_type}},
         // clustering key
@@ -229,7 +229,7 @@ schema_ptr system_keyspace::batchlog_v2() {
 /*static*/ schema_ptr system_keyspace::paxos() {
     static thread_local auto paxos = [] {
         // FIXME: switch to the new schema_builder interface (with_column(...), etc)
-        schema_builder builder(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
         // partition key
         {{"row_key", bytes_type}}, // byte representation of a row key that hashes to the same token as original
         // clustering key
@@ -264,7 +264,7 @@ thread_local data_type cdc_generation_ts_id_type = tuple_type_impl::get_instance
 schema_ptr system_keyspace::topology() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, TOPOLOGY);
-        return schema_builder(NAME, TOPOLOGY, std::optional(id))
+        return schema_builder(this_smp_shard_count(), NAME, TOPOLOGY, std::optional(id))
             .with_column("key", utf8_type, column_kind::partition_key)
             .with_column("host_id", uuid_type, column_kind::clustering_key)
             .with_column("datacenter", utf8_type)
@@ -311,7 +311,7 @@ schema_ptr system_keyspace::topology() {
 schema_ptr system_keyspace::topology_requests() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, TOPOLOGY_REQUESTS);
-        return schema_builder(NAME, TOPOLOGY_REQUESTS, std::optional(id))
+        return schema_builder(this_smp_shard_count(), NAME, TOPOLOGY_REQUESTS, std::optional(id))
             .with_column("id", timeuuid_type, column_kind::partition_key)
             .with_column("initiating_host", uuid_type)
             .with_column("request_type", utf8_type)
@@ -341,7 +341,7 @@ extern thread_local data_type cdc_streams_set_type;
 schema_ptr system_keyspace::cdc_generations_v3() {
     thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, CDC_GENERATIONS_V3);
-        return schema_builder(NAME, CDC_GENERATIONS_V3, {id})
+        return schema_builder(this_smp_shard_count(), NAME, CDC_GENERATIONS_V3, {id})
             /* This is a single-partition table with key 'cdc_generations'. */
             .with_column("key", utf8_type, column_kind::partition_key)
             /* The unique identifier of this generation. */
@@ -375,7 +375,7 @@ schema_ptr system_keyspace::cdc_generations_v3() {
 schema_ptr system_keyspace::cdc_streams_state() {
     thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, CDC_STREAMS_STATE);
-        return schema_builder(NAME, CDC_STREAMS_STATE, {id})
+        return schema_builder(this_smp_shard_count(), NAME, CDC_STREAMS_STATE, {id})
             .with_column("table_id", uuid_type, column_kind::partition_key)
             .with_column("last_token", long_type, column_kind::clustering_key)
             .with_column("stream_id", bytes_type)
@@ -390,7 +390,7 @@ schema_ptr system_keyspace::cdc_streams_state() {
 schema_ptr system_keyspace::cdc_streams_history() {
     thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, CDC_STREAMS_HISTORY);
-        return schema_builder(NAME, CDC_STREAMS_HISTORY, {id})
+        return schema_builder(this_smp_shard_count(), NAME, CDC_STREAMS_HISTORY, {id})
             .with_column("table_id", uuid_type, column_kind::partition_key)
             .with_column("timestamp", timestamp_type, column_kind::clustering_key)
             .with_column("stream_state", byte_type, column_kind::clustering_key)
@@ -444,7 +444,7 @@ schema_ptr system_keyspace::raft_groups_snapshot_config() {
 schema_ptr system_keyspace::repair_history() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, REPAIR_HISTORY);
-        return schema_builder(NAME, REPAIR_HISTORY, std::optional(id))
+        return schema_builder(this_smp_shard_count(), NAME, REPAIR_HISTORY, std::optional(id))
             .with_column("table_uuid", uuid_type, column_kind::partition_key)
             // The time is repair start time
             .with_column("repair_time", timestamp_type, column_kind::clustering_key)
@@ -464,7 +464,7 @@ schema_ptr system_keyspace::repair_history() {
 schema_ptr system_keyspace::repair_tasks() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, REPAIR_TASKS);
-        return schema_builder(NAME, REPAIR_TASKS, std::optional(id))
+        return schema_builder(this_smp_shard_count(), NAME, REPAIR_TASKS, std::optional(id))
             .with_column("task_uuid", uuid_type, column_kind::partition_key)
             .with_column("operation", utf8_type, column_kind::clustering_key)
             // First and last token for of the tablet
@@ -481,7 +481,7 @@ schema_ptr system_keyspace::repair_tasks() {
 
 schema_ptr system_keyspace::built_indexes() {
     static thread_local auto built_indexes = [] {
-        schema_builder builder(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
         // partition key
         {{"table_name", utf8_type}}, // table_name here is the name of the keyspace - don't be fooled
         // clustering key
@@ -504,7 +504,7 @@ schema_ptr system_keyspace::built_indexes() {
 
 /*static*/ schema_ptr system_keyspace::local() {
     static thread_local auto local = [] {
-        schema_builder builder(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
         // partition key
         {{"key", utf8_type}},
         // clustering key
@@ -559,7 +559,7 @@ schema_ptr system_keyspace::built_indexes() {
 
 /*static*/ schema_ptr system_keyspace::peers() {
     static thread_local auto peers = [] {
-        schema_builder builder(generate_legacy_id(NAME, PEERS), NAME, PEERS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, PEERS), NAME, PEERS,
         // partition key
         {{"peer", inet_addr_type}},
         // clustering key
@@ -592,7 +592,7 @@ schema_ptr system_keyspace::built_indexes() {
 
 /*static*/ schema_ptr system_keyspace::peer_events() {
     static thread_local auto peer_events = [] {
-        schema_builder builder(generate_legacy_id(NAME, PEER_EVENTS), NAME, PEER_EVENTS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, PEER_EVENTS), NAME, PEER_EVENTS,
         // partition key
         {{"peer", inet_addr_type}},
         // clustering key
@@ -617,7 +617,7 @@ schema_ptr system_keyspace::built_indexes() {
 
 /*static*/ schema_ptr system_keyspace::range_xfers() {
     static thread_local auto range_xfers = [] {
-        schema_builder builder(generate_legacy_id(NAME, RANGE_XFERS), NAME, RANGE_XFERS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, RANGE_XFERS), NAME, RANGE_XFERS,
         // partition key
         {{"token_bytes", bytes_type}},
         // clustering key
@@ -640,7 +640,7 @@ schema_ptr system_keyspace::built_indexes() {
 
 /*static*/ schema_ptr system_keyspace::compactions_in_progress() {
     static thread_local auto compactions_in_progress = [] {
-        schema_builder builder(generate_legacy_id(NAME, COMPACTIONS_IN_PROGRESS), NAME, COMPACTIONS_IN_PROGRESS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, COMPACTIONS_IN_PROGRESS), NAME, COMPACTIONS_IN_PROGRESS,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -666,7 +666,7 @@ schema_ptr system_keyspace::built_indexes() {
 
 /*static*/ schema_ptr system_keyspace::compaction_history() {
     static thread_local auto compaction_history = [] {
-        schema_builder builder(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -704,7 +704,7 @@ schema_ptr system_keyspace::built_indexes() {
 
 /*static*/ schema_ptr system_keyspace::sstable_activity() {
     static thread_local auto sstable_activity = [] {
-        schema_builder builder(generate_legacy_id(NAME, SSTABLE_ACTIVITY), NAME, SSTABLE_ACTIVITY,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, SSTABLE_ACTIVITY), NAME, SSTABLE_ACTIVITY,
         // partition key
         {
             {"keyspace_name", utf8_type},
@@ -733,7 +733,7 @@ schema_ptr system_keyspace::built_indexes() {
 
 schema_ptr system_keyspace::size_estimates() {
     static thread_local auto size_estimates = [] {
-        schema_builder builder(generate_legacy_id(NAME, SIZE_ESTIMATES), NAME, SIZE_ESTIMATES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, SIZE_ESTIMATES), NAME, SIZE_ESTIMATES,
             // partition key
             {{"keyspace_name", utf8_type}},
             // clustering key
@@ -759,7 +759,7 @@ schema_ptr system_keyspace::size_estimates() {
 
 /*static*/ schema_ptr system_keyspace::large_partitions() {
     static thread_local auto large_partitions = [] {
-        schema_builder builder(generate_legacy_id(NAME, LARGE_PARTITIONS), NAME, LARGE_PARTITIONS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, LARGE_PARTITIONS), NAME, LARGE_PARTITIONS,
         // partition key
         {{"keyspace_name", utf8_type}, {"table_name", utf8_type}},
         // clustering key
@@ -793,7 +793,7 @@ schema_ptr system_keyspace::size_estimates() {
 schema_ptr system_keyspace::large_rows() {
     static thread_local auto large_rows = [] {
         auto id = generate_legacy_id(NAME, LARGE_ROWS);
-        return schema_builder(NAME, LARGE_ROWS, std::optional(id))
+        return schema_builder(this_smp_shard_count(), NAME, LARGE_ROWS, std::optional(id))
                 .with_column("keyspace_name", utf8_type, column_kind::partition_key)
                 .with_column("table_name", utf8_type, column_kind::partition_key)
                 .with_column("sstable_name", utf8_type, column_kind::clustering_key)
@@ -814,7 +814,7 @@ schema_ptr system_keyspace::large_rows() {
 schema_ptr system_keyspace::large_cells() {
     static thread_local auto large_cells = [] {
         auto id = generate_legacy_id(NAME, LARGE_CELLS);
-        return schema_builder(NAME, LARGE_CELLS, id)
+        return schema_builder(this_smp_shard_count(), NAME, LARGE_CELLS, id)
                 .with_column("keyspace_name", utf8_type, column_kind::partition_key)
                 .with_column("table_name", utf8_type, column_kind::partition_key)
                 .with_column("sstable_name", utf8_type, column_kind::clustering_key)
@@ -838,7 +838,7 @@ schema_ptr system_keyspace::large_cells() {
 schema_ptr system_keyspace::corrupt_data() {
     static thread_local auto corrupt_data = [] {
         auto id = generate_legacy_id(NAME, CORRUPT_DATA);
-        return schema_builder(NAME, CORRUPT_DATA, id)
+        return schema_builder(this_smp_shard_count(), NAME, CORRUPT_DATA, id)
                 // partition key
                 .with_column("keyspace_name", utf8_type, column_kind::partition_key)
                 .with_column("table_name", utf8_type, column_kind::partition_key)
@@ -866,7 +866,7 @@ schema_ptr system_keyspace::corrupt_data() {
 
 /*static*/ schema_ptr system_keyspace::scylla_local() {
     static thread_local auto scylla_local = [] {
-        schema_builder builder(generate_legacy_id(NAME, SCYLLA_LOCAL), NAME, SCYLLA_LOCAL,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, SCYLLA_LOCAL), NAME, SCYLLA_LOCAL,
         // partition key
         {{"key", utf8_type}},
         // clustering key
@@ -890,7 +890,7 @@ schema_ptr system_keyspace::corrupt_data() {
 
 schema_ptr system_keyspace::batches() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, BATCHES), NAME, BATCHES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, BATCHES), NAME, BATCHES,
         // partition key
         {{"id", timeuuid_type}},
         // clustering key
@@ -918,7 +918,7 @@ schema_ptr system_keyspace::batches() {
 
 schema_ptr system_keyspace::truncated() {
     static thread_local auto local = [] {
-        schema_builder builder(generate_legacy_id(NAME, TRUNCATED), NAME, TRUNCATED,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, TRUNCATED), NAME, TRUNCATED,
         // partition key
         {{"table_uuid", uuid_type}},
         // clustering key
@@ -948,7 +948,7 @@ thread_local data_type replay_position_type = tuple_type_impl::get_instance({lon
 
 schema_ptr system_keyspace::commitlog_cleanups() {
     static thread_local auto local = [] {
-        schema_builder builder(generate_legacy_id(NAME, COMMITLOG_CLEANUPS), NAME, COMMITLOG_CLEANUPS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, COMMITLOG_CLEANUPS), NAME, COMMITLOG_CLEANUPS,
         // partition key
         {{"shard", int32_type}},
         // clustering key
@@ -975,7 +975,7 @@ schema_ptr system_keyspace::commitlog_cleanups() {
 
 schema_ptr system_keyspace::available_ranges() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, AVAILABLE_RANGES), NAME, AVAILABLE_RANGES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, AVAILABLE_RANGES), NAME, AVAILABLE_RANGES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -998,7 +998,7 @@ schema_ptr system_keyspace::available_ranges() {
 
 schema_ptr system_keyspace::views_builds_in_progress() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, VIEWS_BUILDS_IN_PROGRESS), NAME, VIEWS_BUILDS_IN_PROGRESS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, VIEWS_BUILDS_IN_PROGRESS), NAME, VIEWS_BUILDS_IN_PROGRESS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -1021,7 +1021,7 @@ schema_ptr system_keyspace::views_builds_in_progress() {
 
 schema_ptr system_keyspace::built_views() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, BUILT_VIEWS), NAME, BUILT_VIEWS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, BUILT_VIEWS), NAME, BUILT_VIEWS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -1045,7 +1045,7 @@ schema_ptr system_keyspace::built_views() {
 schema_ptr system_keyspace::scylla_views_builds_in_progress() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
-        return schema_builder(NAME, SCYLLA_VIEWS_BUILDS_IN_PROGRESS, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), NAME, SCYLLA_VIEWS_BUILDS_IN_PROGRESS, std::make_optional(id))
                 .with_column("keyspace_name", utf8_type, column_kind::partition_key)
                 .with_column("view_name", utf8_type, column_kind::clustering_key)
                 .with_column("cpu_id", int32_type, column_kind::clustering_key)
@@ -1060,7 +1060,7 @@ schema_ptr system_keyspace::scylla_views_builds_in_progress() {
 
 /*static*/ schema_ptr system_keyspace::cdc_local() {
     static thread_local auto cdc_local = [] {
-        schema_builder builder(generate_legacy_id(NAME, CDC_LOCAL), NAME, CDC_LOCAL,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, CDC_LOCAL), NAME, CDC_LOCAL,
         // partition key
         {{"key", utf8_type}},
         // clustering key
@@ -1097,7 +1097,7 @@ schema_ptr system_keyspace::scylla_views_builds_in_progress() {
 schema_ptr system_keyspace::group0_history() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, GROUP0_HISTORY);
-        return schema_builder(NAME, GROUP0_HISTORY, id)
+        return schema_builder(this_smp_shard_count(), NAME, GROUP0_HISTORY, id)
             // this is a single-partition table with key 'history'
             .with_column("key", utf8_type, column_kind::partition_key)
             // group0 state timeuuid, descending order
@@ -1115,7 +1115,7 @@ schema_ptr system_keyspace::group0_history() {
 schema_ptr system_keyspace::discovery() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, DISCOVERY);
-        return schema_builder(NAME, DISCOVERY, id)
+        return schema_builder(this_smp_shard_count(), NAME, DISCOVERY, id)
             // This is a single-partition table with key 'peers'
             .with_column("key", utf8_type, column_kind::partition_key)
             // Peer ip address
@@ -1133,7 +1133,7 @@ schema_ptr system_keyspace::discovery() {
 schema_ptr system_keyspace::broadcast_kv_store() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, BROADCAST_KV_STORE);
-        return schema_builder(NAME, BROADCAST_KV_STORE, id)
+        return schema_builder(this_smp_shard_count(), NAME, BROADCAST_KV_STORE, id)
             .with_column("key", utf8_type, column_kind::partition_key)
             .with_column("value", utf8_type)
             .with_hash_version()
@@ -1145,7 +1145,7 @@ schema_ptr system_keyspace::broadcast_kv_store() {
 schema_ptr system_keyspace::sstables_registry() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, SSTABLES_REGISTRY);
-        return schema_builder(NAME, SSTABLES_REGISTRY, id)
+        return schema_builder(this_smp_shard_count(), NAME, SSTABLES_REGISTRY, id)
             .with_column("table_id", uuid_type, column_kind::partition_key)
             .with_column("node_owner", uuid_type, column_kind::partition_key)
             .with_column("generation", timeuuid_type, column_kind::clustering_key)
@@ -1168,7 +1168,7 @@ schema_ptr system_keyspace::tablets() {
 schema_ptr system_keyspace::service_levels_v2() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, SERVICE_LEVELS_V2);
-        return schema_builder(NAME, SERVICE_LEVELS_V2, id)
+        return schema_builder(this_smp_shard_count(), NAME, SERVICE_LEVELS_V2, id)
                 .with_column("service_level", utf8_type, column_kind::partition_key)
                 .with_column("timeout", duration_type)
                 .with_column("workload_type", utf8_type)
@@ -1182,7 +1182,7 @@ schema_ptr system_keyspace::service_levels_v2() {
 schema_ptr system_keyspace::view_build_status_v2() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, VIEW_BUILD_STATUS_V2);
-        return schema_builder(NAME, VIEW_BUILD_STATUS_V2, id)
+        return schema_builder(this_smp_shard_count(), NAME, VIEW_BUILD_STATUS_V2, id)
                 .with_column("keyspace_name", utf8_type, column_kind::partition_key)
                 .with_column("view_name", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)
@@ -1195,7 +1195,7 @@ schema_ptr system_keyspace::view_build_status_v2() {
 
 schema_ptr system_keyspace::roles() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, ROLES), NAME, ROLES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, ROLES), NAME, ROLES,
         // partition key
         {{"role", utf8_type}},
         // clustering key
@@ -1222,7 +1222,7 @@ schema_ptr system_keyspace::roles() {
 
 schema_ptr system_keyspace::role_members() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, ROLE_MEMBERS), NAME, ROLE_MEMBERS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, ROLE_MEMBERS), NAME, ROLE_MEMBERS,
         // partition key
         {{"role", utf8_type}},
         // clustering key
@@ -1244,7 +1244,7 @@ schema_ptr system_keyspace::role_members() {
 
 schema_ptr system_keyspace::role_attributes() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, ROLE_ATTRIBUTES), NAME, ROLE_ATTRIBUTES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, ROLE_ATTRIBUTES), NAME, ROLE_ATTRIBUTES,
         // partition key
         {{"role", utf8_type}},
         // clustering key
@@ -1268,7 +1268,7 @@ schema_ptr system_keyspace::role_attributes() {
 
 schema_ptr system_keyspace::role_permissions() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, ROLE_PERMISSIONS), NAME, ROLE_PERMISSIONS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, ROLE_PERMISSIONS), NAME, ROLE_PERMISSIONS,
         // partition key
         {{"role", utf8_type}},
         // clustering key
@@ -1293,7 +1293,7 @@ schema_ptr system_keyspace::role_permissions() {
 schema_ptr system_keyspace::dicts() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, DICTS);
-        return schema_builder(NAME, DICTS, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), NAME, DICTS, std::make_optional(id))
                 .with_column("name", utf8_type, column_kind::partition_key)
                 .with_column("timestamp", timestamp_type)
                 .with_column("origin", uuid_type)
@@ -1307,7 +1307,7 @@ schema_ptr system_keyspace::dicts() {
 schema_ptr system_keyspace::view_building_tasks() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, VIEW_BUILDING_TASKS);
-        return schema_builder(NAME, VIEW_BUILDING_TASKS, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), NAME, VIEW_BUILDING_TASKS, std::make_optional(id))
                 .with_column("key", utf8_type, column_kind::partition_key)
                 .with_column("id", timeuuid_type, column_kind::clustering_key)
                 .with_column("min_task_id", timeuuid_type, column_kind::static_column)
@@ -1327,7 +1327,7 @@ schema_ptr system_keyspace::view_building_tasks() {
 schema_ptr system_keyspace::client_routes() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, CLIENT_ROUTES);
-        return schema_builder(NAME, CLIENT_ROUTES, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), NAME, CLIENT_ROUTES, std::make_optional(id))
                 .with_column("connection_id", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)
                 .with_column("address", utf8_type)

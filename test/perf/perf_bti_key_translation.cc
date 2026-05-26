@@ -19,7 +19,7 @@ struct lcb_mismatch_test {
     std::vector<sstables::clustering_info> keys;
     lcb_mismatch_test() {
         int n_columns = 16;
-        auto builder = schema_builder("ks", "t")
+        auto builder = schema_builder(this_smp_shard_count(), "ks", "t")
             .with_column("pk", int32_type, column_kind::partition_key);
         for (int i = 0; i <= n_columns; ++i) {
             builder.with_column(bytes(fmt::format("c{}", i).c_str()), int32_type, column_kind::clustering_key);

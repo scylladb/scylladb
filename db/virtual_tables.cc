@@ -67,7 +67,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "cluster_status");
-        return schema_builder(system_keyspace::NAME, "cluster_status", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "cluster_status", std::make_optional(id))
             .with_column("peer", inet_addr_type, column_kind::partition_key)
             .with_column("dc", utf8_type)
             .with_column("rack", utf8_type)
@@ -154,7 +154,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "token_ring");
-        return schema_builder(system_keyspace::NAME, "token_ring", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "token_ring", std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("start_token", utf8_type, column_kind::clustering_key)
@@ -255,7 +255,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "snapshots");
-        return schema_builder(system_keyspace::NAME, "snapshots", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "snapshots", std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("snapshot_name", utf8_type, column_kind::clustering_key)
@@ -348,7 +348,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "protocol_servers");
-        return schema_builder(system_keyspace::NAME, "protocol_servers", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "protocol_servers", std::make_optional(id))
             .with_column("name", utf8_type, column_kind::partition_key)
             .with_column("protocol", utf8_type)
             .with_column("protocol_version", utf8_type)
@@ -476,7 +476,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "runtime_info");
-        return schema_builder(system_keyspace::NAME, "runtime_info", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "runtime_info", std::make_optional(id))
             .with_column("group", utf8_type, column_kind::partition_key)
             .with_column("item", utf8_type, column_kind::clustering_key)
             .with_column("value", utf8_type)
@@ -616,7 +616,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::VERSIONS);
-        return schema_builder(system_keyspace::NAME, system_keyspace::VERSIONS, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, system_keyspace::VERSIONS, std::make_optional(id))
             .with_column("key", utf8_type, column_kind::partition_key)
             .with_column("version", utf8_type)
             .with_column("build_mode", utf8_type)
@@ -642,7 +642,7 @@ class db_config_table final : public streaming_virtual_table {
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "config");
-        return schema_builder(system_keyspace::NAME, "config", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "config", std::make_optional(id))
             .with_column("name", utf8_type, column_kind::partition_key)
             .with_column("type", utf8_type)
             .with_column("source", utf8_type)
@@ -744,7 +744,7 @@ class clients_table : public streaming_virtual_table {
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "clients");
-        return schema_builder(system_keyspace::NAME, "clients", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "clients", std::make_optional(id))
             .with_column("address", inet_addr_type, column_kind::partition_key)
             .with_column("port", int32_type, column_kind::clustering_key)
             .with_column("client_type", utf8_type, column_kind::clustering_key)
@@ -981,7 +981,7 @@ public:
 private:
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "raft_state");
-        return schema_builder(system_keyspace::NAME, "raft_state", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "raft_state", std::make_optional(id))
             .with_column("group_id", timeuuid_type, column_kind::partition_key)
             .with_column("disposition", ascii_type, column_kind::clustering_key) // can be 'CURRENT` or `PREVIOUS'
             .with_column("server_id", uuid_type, column_kind::clustering_key)
@@ -1180,7 +1180,7 @@ public:
 private:
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "load_per_node");
-        return schema_builder(system_keyspace::NAME, "load_per_node", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "load_per_node", std::make_optional(id))
             .with_column("node", uuid_type, column_kind::partition_key)
             .with_column("dc", utf8_type)
             .with_column("rack", utf8_type)
@@ -1289,7 +1289,7 @@ public:
 private:
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "tablet_sizes");
-        return schema_builder(system_keyspace::NAME, "tablet_sizes", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "tablet_sizes", std::make_optional(id))
             .with_column("table_id", uuid_type, column_kind::partition_key)
             .with_column("last_token", long_type, column_kind::clustering_key)
             .with_column("replicas", map_type_impl::get_instance(uuid_type, long_type, false))
@@ -1354,7 +1354,7 @@ public:
 private:
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::CDC_TIMESTAMPS);
-        return schema_builder(system_keyspace::NAME, system_keyspace::CDC_TIMESTAMPS, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, system_keyspace::CDC_TIMESTAMPS, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::partition_key)
             .with_column("timestamp", reversed_type_impl::get_instance(timestamp_type), column_kind::clustering_key)
@@ -1437,7 +1437,7 @@ public:
 private:
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::CDC_STREAMS);
-        return schema_builder(system_keyspace::NAME, system_keyspace::CDC_STREAMS, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, system_keyspace::CDC_STREAMS, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::partition_key)
             .with_column("timestamp", timestamp_type, column_kind::clustering_key)
@@ -1559,7 +1559,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::LARGE_PARTITIONS, 1);
-        schema_builder builder(system_keyspace::NAME, system_keyspace::LARGE_PARTITIONS, std::make_optional(id));
+        schema_builder builder(this_smp_shard_count(), system_keyspace::NAME, system_keyspace::LARGE_PARTITIONS, std::make_optional(id));
         builder.with_column("keyspace_name", utf8_type, column_kind::partition_key);
         builder.with_column("table_name", utf8_type, column_kind::partition_key);
         builder.with_column("sstable_name", utf8_type, column_kind::clustering_key);
@@ -1746,7 +1746,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::LARGE_ROWS, 1);
-        return schema_builder(system_keyspace::NAME, system_keyspace::LARGE_ROWS, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, system_keyspace::LARGE_ROWS, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::partition_key)
             .with_column("sstable_name", utf8_type, column_kind::clustering_key)
@@ -1917,7 +1917,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::LARGE_CELLS, 1);
-        return schema_builder(system_keyspace::NAME, system_keyspace::LARGE_CELLS, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, system_keyspace::LARGE_CELLS, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::partition_key)
             .with_column("sstable_name", utf8_type, column_kind::clustering_key)

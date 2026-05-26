@@ -30,7 +30,7 @@
 #include "readers/mutation_fragment_v1_stream.hh"
 
 static schema_builder new_table() {
-    return { "some_keyspace", "some_table" };
+    return { this_smp_shard_count(), "some_keyspace", "some_table" };
 }
 
 static api::timestamp_type new_timestamp() {

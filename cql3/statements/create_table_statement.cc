@@ -109,7 +109,7 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
  * @throws InvalidRequestException on failure to validate parsed parameters
  */
 schema_ptr create_table_statement::get_cf_meta_data(const data_dictionary::database db) const {
-    schema_builder builder{keyspace(), column_family(), _id};
+    schema_builder builder{this_smp_shard_count(), keyspace(), column_family(), _id};
     apply_properties_to(builder, db);
     return builder.build(_use_compact_storage ? schema_builder::compact_storage::yes : schema_builder::compact_storage::no);
 }

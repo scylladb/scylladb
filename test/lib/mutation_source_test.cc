@@ -814,7 +814,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
 static void test_range_queries(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type)
         .build();
@@ -1010,7 +1010,7 @@ static void test_time_window_clustering_slicing(tests::reader_concurrency_semaph
 
 static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
         .with_column("c1", int32_type, column_kind::clustering_key)
         .with_column("c2", int32_type, column_kind::clustering_key)
@@ -1791,7 +1791,7 @@ static mutation_sets generate_mutation_sets() {
     mutation_sets result;
 
     {
-        auto common_schema = schema_builder("ks", "test")
+        auto common_schema = schema_builder(this_smp_shard_count(), "ks", "test")
                 .with_column("pk_col", bytes_type, column_kind::partition_key)
                 .with_column("ck_col_1", bytes_type, column_kind::clustering_key)
                 .with_column("ck_col_2", bytes_type, column_kind::clustering_key)
@@ -2045,7 +2045,7 @@ private:
     }
 
     schema_ptr do_make_schema(data_type type, const char* ks_name, const char* cf_name) {
-        auto builder = schema_builder(ks_name, cf_name)
+        auto builder = schema_builder(this_smp_shard_count(), ks_name, cf_name)
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck1", bytes_type, column_kind::clustering_key)
                 .with_column("ck2", bytes_type, column_kind::clustering_key);

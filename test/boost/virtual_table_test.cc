@@ -26,7 +26,7 @@ public:
 
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "test");
-        return schema_builder(system_keyspace::NAME, "test", std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "test", std::make_optional(id))
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type)

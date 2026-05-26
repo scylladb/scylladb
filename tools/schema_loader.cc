@@ -509,7 +509,7 @@ schema_ptr load_schema_from_statistics(sstring keyspace, sstring table, const ss
     const auto& serialization_header = sstable->get_serialization_header();
     const auto& compression = sstable->get_compression();
 
-    auto builder = schema_builder(keyspace, table);
+    auto builder = schema_builder(this_smp_shard_count(), keyspace, table);
 
     // partition key
     {
@@ -574,7 +574,7 @@ schema_ptr load_schema_from_scylla_metadata(const sstables::shared_sstable& ssta
     const auto& scylla_metadata = *sstable->get_scylla_metadata();
     const auto& sstable_schema = *scylla_metadata.data.get<sstables::scylla_metadata_type::Schema, sstables::scylla_metadata::sstable_schema>();
 
-    auto builder = schema_builder(disk_string_to_string(sstable_schema.keyspace_name), disk_string_to_string(sstable_schema.table_name));
+    auto builder = schema_builder(this_smp_shard_count(), disk_string_to_string(sstable_schema.keyspace_name), disk_string_to_string(sstable_schema.table_name));
 
     builder.set_uuid(sstable_schema.id);
     builder.with_version(sstable_schema.version);
@@ -613,7 +613,7 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
         [host_id = locator::host_id::create_random_id()] { return host_id; }, *scf, abort, dbcfg.extensions().sstable_file_io_extensions());
     auto close_sst_man = deferred_close(sst_man);
 
-    schema_ptr bootstrap_schema = schema_builder(keyspace, table).with_column("pk", int32_type, column_kind::partition_key).build();
+    schema_ptr bootstrap_schema = schema_builder(this_smp_shard_count(), keyspace, table).with_column("pk", int32_type, column_kind::partition_key).build();
 
     auto ed_result = sstables::parse_path(sstable_path, keyspace, table);
     if (!ed_result) {

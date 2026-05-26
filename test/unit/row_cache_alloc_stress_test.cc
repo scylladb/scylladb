@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
         // able to populate cache with large mutations This test works only
         // with seastar's allocator.
         return seastar::async([] {
-            auto s = schema_builder("ks", "cf")
+            auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("v", bytes_type, column_kind::regular_column)

@@ -35,7 +35,7 @@ BOOST_AUTO_TEST_SUITE(schema_change_test)
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
-            auto partial = schema_builder("tests", "table")
+            auto partial = schema_builder(this_smp_shard_count(), "tests", "table")
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("v1", bytes_type);
 
@@ -71,7 +71,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
 SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
-            auto builder = schema_builder("tests", "table")
+            auto builder = schema_builder(this_smp_shard_count(), "tests", "table")
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("v1", bytes_type);
 
@@ -226,7 +226,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 
             e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
-            auto s1 = schema_builder("ks", "table1")
+            auto s1 = schema_builder(this_smp_shard_count(), "ks", "table1")
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("v1", bytes_type)
                     .build();
@@ -239,7 +239,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 
             auto&& keyspace = e.db().local().find_keyspace(s1->ks_name()).metadata();
 
-            auto s2 = schema_builder("ks", "table1", std::make_optional(s1->id()))
+            auto s2 = schema_builder(this_smp_shard_count(), "ks", "table1", std::make_optional(s1->id()))
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .without_column("v1", bytes_type, api::new_timestamp())
                     .build();
@@ -254,12 +254,12 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 
             // Add a new v1 and drop it
             {
-                auto s3 = schema_builder("ks", "table1", std::make_optional(s1->id()))
+                auto s3 = schema_builder(this_smp_shard_count(), "ks", "table1", std::make_optional(s1->id()))
                         .with_column("pk", bytes_type, column_kind::partition_key)
                         .with_column("v1", list_type_impl::get_instance(int32_type, true))
                         .build();
 
-                auto s4 = schema_builder("ks", "table1", std::make_optional(s1->id()))
+                auto s4 = schema_builder(this_smp_shard_count(), "ks", "table1", std::make_optional(s1->id()))
                         .with_column("pk", bytes_type, column_kind::partition_key)
                         .without_column("v1", list_type_impl::get_instance(int32_type, true), api::new_timestamp())
                         .build();
@@ -285,7 +285,7 @@ SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
 
             auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
-            auto s0 = schema_builder("ks", "table1")
+            auto s0 = schema_builder(this_smp_shard_count(), "ks", "table1")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("v1", bytes_type)
                 .build();
@@ -333,7 +333,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
 
             auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
-            auto s0 = schema_builder("ks", "table1")
+            auto s0 = schema_builder(this_smp_shard_count(), "ks", "table1")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("v1", bytes_type)
                 .build();
@@ -622,7 +622,7 @@ SEASTAR_TEST_CASE(test_schema_tables_use_null_sharder) {
 }
 
 SEASTAR_TEST_CASE(test_schema_make_reversed) {
-    auto schema = schema_builder("ks", get_name())
+    auto schema = schema_builder(this_smp_shard_count(), "ks", get_name())
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("v1", bytes_type)
@@ -646,7 +646,7 @@ SEASTAR_TEST_CASE(test_schema_make_reversed) {
 
 SEASTAR_TEST_CASE(test_schema_get_reversed) {
     return do_with_cql_env([] (cql_test_env& e) {
-        auto schema = schema_builder("ks", get_name())
+        auto schema = schema_builder(this_smp_shard_count(), "ks", get_name())
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("v1", bytes_type)

@@ -95,7 +95,7 @@ public:
 thread_local int size_calculator::nest::level = 0;
 
 static schema_ptr cassandra_stress_schema() {
-    return schema_builder("ks", "cf")
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("KEY", bytes_type, column_kind::partition_key)
         .with_column("C0", bytes_type)
         .with_column("C1", bytes_type)
@@ -144,7 +144,7 @@ struct mutation_settings {
 };
 
 static schema_ptr make_schema(const mutation_settings& settings) {
-    auto builder = schema_builder("ks", "cf")
+    auto builder = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("ck", bytes_type, column_kind::clustering_key);
 

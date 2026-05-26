@@ -239,7 +239,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
 SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result) {
     return seastar::async([] {
-        auto common_builder = schema_builder("ks", "cf")
+        auto common_builder = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key);
 
         auto s1 = common_builder
@@ -290,7 +290,7 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
 
 SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
     return seastar::async([] {
-        schema_ptr s = schema_builder("ks", "cf")
+        schema_ptr s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("col", bytes_type, column_kind::regular_column)
                 .build();
@@ -356,7 +356,7 @@ SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
 // Reproducer for #1753
 SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happens) {
     return seastar::async([] {
-        schema_ptr s = schema_builder("ks", "cf")
+        schema_ptr s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("col", bytes_type, column_kind::regular_column)
@@ -425,7 +425,7 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
 // Reproducer for #1746
 SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
     return seastar::async([] {
-        schema_ptr s = schema_builder("ks", "cf")
+        schema_ptr s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)
                 .with_column("col", bytes_type, column_kind::regular_column)
@@ -473,7 +473,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
 // Reproducer for #2854
 SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
     return seastar::async([] {
-        schema_ptr s = schema_builder("ks", "cf")
+        schema_ptr s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("col", bytes_type, column_kind::regular_column)
             .build();
@@ -801,7 +801,7 @@ SEASTAR_THREAD_TEST_CASE(test_range_tombstones_are_compacted_with_data) {
 
 SEASTAR_TEST_CASE(test_hash_is_cached) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();
@@ -1081,7 +1081,7 @@ SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
         sstring ks_name = "ks";
         sstring table_name = "table_name";
 
-        schema_ptr s = schema_builder(ks_name, table_name)
+        schema_ptr s = schema_builder(this_smp_shard_count(), ks_name, table_name)
             .with_column(to_bytes("pk"), int32_type, column_kind::partition_key)
             .with_column(to_bytes("ck"), int32_type, column_kind::clustering_key)
             .with_column(to_bytes("id"), int32_type)

@@ -776,7 +776,7 @@ SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
     reader_concurrency_semaphore sem2(reader_concurrency_semaphore::no_limits{}, "", reader_concurrency_semaphore::register_metrics::no); // to see the message for an unnamed semaphore
     auto stop_sem2 = deferred_stop(sem2);
 
-    auto schema = schema_builder("ks", "cf")
+    auto schema = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("v", int32_type)
         .build();

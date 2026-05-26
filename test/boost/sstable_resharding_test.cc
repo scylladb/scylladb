@@ -25,7 +25,7 @@
 using namespace sstables;
 
 static schema_builder get_schema_builder() {
-    return schema_builder("tests", "sstable_resharding_test")
+    return schema_builder(this_smp_shard_count(), "tests", "sstable_resharding_test")
         .with_column("id", utf8_type, column_kind::partition_key)
         .with_column("value", int32_type);
 }

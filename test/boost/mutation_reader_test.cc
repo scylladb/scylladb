@@ -73,7 +73,7 @@ BOOST_AUTO_TEST_SUITE(mutation_reader_test)
 namespace test_label = boost::unit_test;
 
 static schema_ptr make_schema() {
-    return schema_builder("ks", "cf")
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type, column_kind::regular_column)
         .build();
@@ -1370,7 +1370,7 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
         }
     };
 
-    const auto schema = schema_builder("ks", get_name())
+    const auto schema = schema_builder(this_smp_shard_count(), "ks", get_name())
             .with_column("p0", int32_type, column_kind::partition_key)
             .with_column("c0", int32_type, column_kind::clustering_key)
             .with_column("c1", int32_type, column_kind::clustering_key)
@@ -3751,7 +3751,7 @@ struct clustering_order_merger_test_generator {
     {}
 
     static schema_ptr make_schema() {
-        return schema_builder("ks", "t")
+        return schema_builder(this_smp_shard_count(), "ks", "t")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type, column_kind::regular_column)

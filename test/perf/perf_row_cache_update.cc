@@ -142,7 +142,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen, std::f
 }
 
 static void test_small_partitions() {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("v1", bytes_type, column_kind::regular_column)
         .with_column("v2", bytes_type, column_kind::regular_column)
@@ -162,7 +162,7 @@ static void test_small_partitions() {
 }
 
 static void test_partition_with_lots_of_small_rows() {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
         .with_column("v1", bytes_type, column_kind::regular_column)
@@ -186,7 +186,7 @@ static void test_partition_with_lots_of_small_rows() {
 }
 
 static void test_partition_with_lots_of_small_rows_covered_by_tombstone() {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("v1", bytes_type, column_kind::regular_column)
@@ -223,7 +223,7 @@ static void test_partition_with_lots_of_small_rows_covered_by_tombstone() {
 }
 
 static void test_partition_with_few_small_rows() {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
         .with_column("v1", bytes_type, column_kind::regular_column)
@@ -249,7 +249,7 @@ static void test_partition_with_few_small_rows() {
 }
 
 static void test_partition_with_lots_of_range_tombstones() {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
         .with_column("v1", bytes_type, column_kind::regular_column)
@@ -274,7 +274,7 @@ static void test_partition_with_lots_of_range_tombstones() {
 
 // This test case stresses handling of overlapping range tombstones
 static void test_partition_with_lots_of_range_tombstones_with_residuals() {
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("v1", bytes_type, column_kind::regular_column)

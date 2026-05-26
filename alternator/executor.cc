@@ -1436,7 +1436,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     tracing::add_alternator_table_name(trace_state, table_name);
 
-    schema_builder builder(keyspace_name, table_name);
+    schema_builder builder(this_smp_shard_count(), keyspace_name, table_name);
     auto [hash_key, range_key] = parse_key_schema(request, "");
     add_column(builder, hash_key, *attribute_definitions, column_kind::partition_key);
     unused_attribute_definitions.erase(hash_key);
@@ -1478,7 +1478,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
-            schema_builder view_builder(keyspace_name, vname);
+            schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(l, "Local Secondary Index");
             if (view_hash_key != hash_key) {
                 co_return api_error::validation("LocalSecondaryIndex hash key must match the base table hash key");
@@ -1531,7 +1531,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             elogger.trace("Adding GSI {}", index_name);
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
-            schema_builder view_builder(keyspace_name, vname);
+            schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(g, "GlobalSecondaryIndexes");
 
             // If an attribute is already a real column in the base table
@@ -2156,7 +2156,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         elogger.trace("Adding GSI {}", index_name);
                         // FIXME: read and handle "Projection" parameter. This will
                         // require the MV code to copy just parts of the attrs map.
-                        schema_builder view_builder(keyspace_name, vname);
+                        schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
                         auto [view_hash_key, view_range_key] = parse_key_schema(it->value, "GlobalSecondaryIndexUpdates");
                         // If an attribute is already a real column in the base
                         // table (i.e., a key attribute in the base table),

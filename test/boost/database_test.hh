@@ -31,7 +31,7 @@ future<> do_with_some_data_in_thread(std::vector<sstring> cf_names, std::functio
         do_with_cql_env_thread([cf_names = std::move(cf_names), func = std::move(func), create_mvs, num_keys] (cql_test_env& e) {
             for (const auto& cf_name : cf_names) {
                 e.create_table([&cf_name] (std::string_view ks_name) {
-                    return *schema_builder(ks_name, cf_name)
+                    return *schema_builder(this_smp_shard_count(), ks_name, cf_name)
                             .with_column("p1", utf8_type, column_kind::partition_key)
                             .with_column("c1", int32_type, column_kind::clustering_key)
                             .with_column("c2", int32_type, column_kind::clustering_key)

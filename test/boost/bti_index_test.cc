@@ -892,7 +892,7 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
 };
 
 SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
-    auto the_schema = schema_builder("ks", "t")
+    auto the_schema = schema_builder(this_smp_shard_count(), "ks", "t")
         .with_column("pk", short_type, column_kind::partition_key)
         .with_column("ck1", short_type, column_kind::clustering_key)
         .with_column("ck2", short_type, column_kind::clustering_key)

@@ -343,7 +343,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         warnings.emplace_back(std::move(warning_text));
     }
 
-    schema_builder builder{keyspace(), column_family()};
+    schema_builder builder{this_smp_shard_count(), keyspace(), column_family()};
     auto add_columns = [this, &builder] (std::vector<const column_definition*>& defs, column_kind kind) mutable {
         for (auto* def : defs) {
             auto&& type = _properties.get_reversable_type(*def->column_specification->name, def->type);
