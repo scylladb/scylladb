@@ -619,10 +619,6 @@ private:
     };
     raw_schema _raw;
     schema_static_props _static_props;
-    // Populated only for compact storage tables (legacy).
-    // For non-compact tables, left default-constructed (empty) and
-    // v3_all_columns()/all_columns_by_name() delegate to all_columns().
-    v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
     std::unique_ptr<::view_info> _view_info;
     mutable schema_ptr _cdc_schema;
@@ -643,6 +639,11 @@ private:
     column_count_type _static_column_count;
 
     std::vector<const column_definition*> _all_columns_in_select_order;
+
+    // Populated only for compact storage tables (legacy).
+    // For non-compact tables, left default-constructed (empty) and
+    // v3_all_columns()/all_columns_by_name() delegate to all_columns().
+    v3_columns _v3_columns;
 
     extensions_map& extensions() {
         return _raw._props.extensions;
