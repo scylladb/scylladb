@@ -58,6 +58,23 @@ static const seastar::metrics::label server_id_label("id");
 static const seastar::metrics::label log_entry_type("log_entry_type");
 static const seastar::metrics::label message_type("message_type");
 
+// Result types for do_on_leader_with_retries action lambda.
+// retry_with_leader: retry on the specified leader. If the leader is the
+//   same as current, waits for a tick to avoid tight loops (e.g. when a
+//   transient_error redirects us back to the same node).
+// retry_now: retry immediately on the current leader. The action already
+//   waited for state to advance (e.g. wait_for_apply), so no tick needed.
+// done: the action completed successfully, stop retrying.
+struct retry_with_leader { server_id leader; };
+struct retry_now {};
+struct done {};
+using do_on_leader_result = std::variant<retry_with_leader, retry_now, done>;
+
+template <typename AsyncAction>
+concept LeaderAction = requires(const server_id& leader, AsyncAction aa) {
+    { aa(leader) } -> std::same_as<future<do_on_leader_result>>;
+};
+
 class server_impl : public rpc_server, public server {
 public:
     explicit server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
@@ -330,13 +347,10 @@ private:
 
 
     seastar::named_gate _do_on_leader_gate;
-    // Call a function on a current leader until it returns stop_iteration::yes.
+    // Call a function on a current leader until it returns done{}.
     // Handles aborts and leader changes, adds a delay between
     // iterations to protect against tight loops.
-    template <typename AsyncAction>
-    requires requires(server_id& leader, AsyncAction aa) {
-        { aa(leader) } -> std::same_as<future<stop_iteration>>;
-    }
+    template <LeaderAction AsyncAction>
     future<> do_on_leader_with_retries(seastar::abort_source* as, AsyncAction&& action);
 
     future<> override_snapshot_thresholds();
@@ -694,21 +708,17 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
     }
 }
 
-template <typename AsyncAction>
-requires requires (server_id& leader, AsyncAction aa) {
-    { aa(leader) } -> std::same_as<future<stop_iteration>>;
-}
+template <LeaderAction AsyncAction>
 future<> server_impl::do_on_leader_with_retries(seastar::abort_source* as, AsyncAction&& action) {
-    server_id leader = _fsm->current_leader(), prev_leader{};
+    server_id leader = _fsm->current_leader();
 
     check_not_aborted();
     auto gh = _do_on_leader_gate.hold();
 
     while (true) {
         if (as && as->abort_requested()) {
-            throw request_aborted(format("Request aborted while performing action on leader, current leader: {}, previous leader: {}",
-                                         leader ? leader.to_sstring() : "unknown",
-                                         prev_leader ? prev_leader.to_sstring() : "unknown"));
+            throw request_aborted(format("Request aborted while performing action on leader, current leader: {}",
+                                         leader ? leader.to_sstring() : "unknown"));
         }
         check_not_aborted();
         if (leader == server_id{}) {
@@ -716,21 +726,23 @@ future<> server_impl::do_on_leader_with_retries(seastar::abort_source* as, Async
             leader = _fsm->current_leader();
             continue;
         }
-        if (prev_leader && leader == prev_leader) {
-            // This is to protect against tight loop in case we didn't get
-            // any new information about the current leader.
-            // This can happen if the server responds with a transient_error with
-            // an empty leader and the current node has not yet learned the new leader.
-            // We neglect an excessive delay if the newly elected leader is the same as
-            // the previous one, this supposed to be a rare.
-            co_await wait_for_next_tick(as);
-            prev_leader = leader = server_id{};
-            continue;
-        }
-        prev_leader = leader;
-        if (co_await action(leader) == stop_iteration::yes) {
+        auto result = co_await action(leader);
+        if (std::holds_alternative<done>(result)) {
             break;
         }
+        if (const auto* r = std::get_if<retry_with_leader>(&result)) {
+            if (r->leader && r->leader == leader) {
+                // The action redirected us back to the same leader.
+                // Wait for a tick to avoid tight loops — this can happen
+                // if the server responds with a transient_error pointing
+                // to itself and we haven't learned of a new leader yet.
+                co_await wait_for_next_tick(as);
+                leader = server_id{};
+            } else {
+                leader = r->leader;
+            }
+        }
+        // retry_now: just loop back immediately
     }
 }
 
@@ -755,7 +767,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
         co_return co_await wait_for_entry(eid, type, as);
     }
 
-    co_await do_on_leader_with_retries(as, [&](server_id& leader) -> future<stop_iteration> {
+    co_await do_on_leader_with_retries(as, [&](const server_id& leader) -> future<do_on_leader_result> {
         auto reply = co_await [&]() -> future<add_entry_reply> {
             if (leader == _id) {
                 logger.trace("[{}] an entry proceeds on a leader", _tag);
@@ -775,7 +787,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
         }();
         if (std::holds_alternative<raft::entry_id>(reply)) {
             co_await wait_for_entry(std::get<raft::entry_id>(reply), type, as);
-            co_return stop_iteration::yes;
+            co_return done{};
         }
         if (std::holds_alternative<raft::commit_status_unknown>(reply)) {
             // It should be impossible to obtain `commit_status_unknown` here
@@ -789,8 +801,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
         }
         const auto& e = std::get<transient_error>(reply);
         logger.trace("[{}] got {}", _tag, e);
-        leader = e.leader;
-        co_return stop_iteration::no;
+        co_return retry_with_leader{e.leader};
     });
 }
 
@@ -874,7 +885,7 @@ future<> server_impl::modify_config(std::vector<config_member> add, std::vector<
         throw raft::not_a_leader{_fsm->current_leader()};
     }
 
-    co_await do_on_leader_with_retries(as, [&](server_id& leader) -> future<stop_iteration> {
+    co_await do_on_leader_with_retries(as, [&](const server_id& leader) -> future<do_on_leader_result> {
         auto reply = co_await [&]() -> future<add_entry_reply> {
             if (leader == _id) {
                 // Make a copy since of the params since we may
@@ -895,12 +906,11 @@ future<> server_impl::modify_config(std::vector<config_member> add, std::vector<
             // Do not wait for the entry locally. The reply means that the leader committed it,
             // and there is no reason to wait for our local commit index to match.
             // See also #9981.
-            co_return stop_iteration::yes;
+            co_return done{};
         }
         if (const auto e = std::get_if<raft::transient_error>(&reply)) {
             logger.trace("[{}] got {}", _tag, *e);
-            leader = e->leader;
-            co_return stop_iteration::no;
+            co_return retry_with_leader{e->leader};
         }
         if (std::holds_alternative<not_a_member>(reply)) {
             co_await coroutine::return_exception(std::get<not_a_member>(reply));
@@ -1565,15 +1575,14 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
     logger.trace("[{}] read_barrier start", _tag);
     index_t read_idx;
 
-    co_await do_on_leader_with_retries(as, [&](server_id& leader) -> future<stop_iteration> {
+    co_await do_on_leader_with_retries(as, [&](const server_id& leader) -> future<do_on_leader_result> {
         auto applied = _applied_idx;
         read_barrier_reply res;
         try {
             res = co_await get_read_idx(leader, as);
         } catch (const transport_error& e) {
             logger.trace("[{}] read_barrier on {} resulted in {}; retrying", _tag, leader, e);
-            leader = server_id{};
-            co_return stop_iteration::no;
+            co_return retry_with_leader{server_id{}};
         }
         if (std::holds_alternative<std::monostate>(res)) {
             // the leader is not ready to answer because it did not
@@ -1581,14 +1590,13 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
             // committed (if non were since start of the attempt) and retry.
             logger.trace("[{}] read_barrier leader not ready", _tag);
             co_await wait_for_apply(++applied, as);
-            co_return stop_iteration::no;
+            co_return retry_now{};
         }
         if (std::holds_alternative<raft::not_a_leader>(res)) {
-            leader = std::get<not_a_leader>(res).leader;
-            co_return stop_iteration::no;
+            co_return retry_with_leader{std::get<not_a_leader>(res).leader};
         }
         read_idx = std::get<index_t>(res);
-        co_return stop_iteration::yes;
+        co_return done{};
     });
 
     logger.trace("[{}] read_barrier read index {}, applied index {}", _tag, read_idx, _applied_idx);
