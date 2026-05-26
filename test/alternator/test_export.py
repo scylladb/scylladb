@@ -357,3 +357,20 @@ def test_export_table_nonexistant_s3_bucket(test_table_s_for_export_only):
     assert final['FailureCode'] == 'S3NoSuchBucket'
     assert 'bucket does not exist' in final['FailureMessage']
 
+
+# Basic tests for alternator export to S3 system tables.
+# These tests verify that the system tables exist and are queryable.
+
+def test_export_to_s3_exports_table(cql):
+    results = cql.execute("SELECT * FROM system.alternator_export_to_s3_exports")
+    assert results is not None
+
+
+def test_export_to_s3_client_tokens_table(cql):
+    results = cql.execute("SELECT * FROM system.alternator_export_to_s3_client_tokens")
+    assert results is not None
+
+
+def test_export_to_s3_export_summaries_table(cql):
+    results = cql.execute("SELECT * FROM system.alternator_export_to_s3_export_summaries")
+    assert results is not None

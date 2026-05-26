@@ -1342,6 +1342,64 @@ schema_ptr system_keyspace::client_routes() {
     return schema;
 }
 
+schema_ptr system_keyspace::alternator_export_to_s3_exports() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, ALTERNATOR_EXPORT_TO_S3_EXPORTS);
+        return schema_builder(this_smp_shard_count(), NAME, ALTERNATOR_EXPORT_TO_S3_EXPORTS, std::optional(id))
+            .with_column("export_arn", utf8_type, column_kind::partition_key)
+            .with_column("table_arn", utf8_type)
+            .with_column("client_token", utf8_type)
+            .with_column("request", utf8_type)
+            .with_column("export_manifest", utf8_type)
+            .with_column("export_status", utf8_type)
+            .with_column("failure_code", utf8_type)
+            .with_column("failure_message", utf8_type)
+            .with_column("item_count", long_type)
+            .with_column("export_id_token", utf8_type)
+            .with_column("snapshot_tag", utf8_type)
+            .with_column("accepted_at", timestamp_type)
+            .with_column("completed_at", timestamp_type)
+            .with_column("node_id", utf8_type)
+            .with_column("metadata_expires_at", timestamp_type)
+            .set_comment("Alternator export to S3 export metadata")
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::alternator_export_to_s3_client_tokens() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS);
+        auto builder = schema_builder(this_smp_shard_count(), NAME, ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS, std::optional(id))
+            .with_column("client_token", utf8_type, column_kind::partition_key)
+            .with_column("table_arn", utf8_type)
+            .with_column("export_arn", utf8_type)
+            .with_column("request", utf8_type)
+            .set_comment("Alternator export to S3 client token idempotency");
+        builder.set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::hours(8)));
+        builder.with_hash_version();
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::alternator_export_to_s3_export_summaries() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, ALTERNATOR_EXPORT_TO_S3_EXPORT_SUMMARIES);
+        return schema_builder(this_smp_shard_count(), NAME, ALTERNATOR_EXPORT_TO_S3_EXPORT_SUMMARIES, std::optional(id))
+            .with_column("ph", utf8_type, column_kind::partition_key)
+            .with_column("export_arn", reversed_type_impl::get_instance(utf8_type), column_kind::clustering_key)
+            .with_column("table_arn", utf8_type)
+            .with_column("export_status", utf8_type)
+            .with_column("export_type", utf8_type)
+            .set_comment("Alternator export to S3 export summaries")
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
 future<system_keyspace::local_info> system_keyspace::load_local_info() {
     auto msg = co_await execute_cql(format("SELECT host_id, cluster_name, data_center, rack FROM system.{} WHERE key=?", LOCAL), sstring(LOCAL));
 
@@ -2268,7 +2326,8 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(), view_building_tasks(), client_routes(), cdc_streams_state(), cdc_streams_history()
+                    dicts(), view_building_tasks(), client_routes(), cdc_streams_state(), cdc_streams_history(),
+                    alternator_export_to_s3_exports(), alternator_export_to_s3_client_tokens(), alternator_export_to_s3_export_summaries()
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
