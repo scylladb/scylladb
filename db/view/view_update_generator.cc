@@ -240,6 +240,9 @@ future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::
     for (auto& sst : sstables) {
         _progress_tracker->on_sstable_registration(sst);
     }
+    auto deregister_sstables = defer([this, &sstables] {
+        _progress_tracker->on_sstables_deregistration(sstables);
+    });
 
 
     // Generate view updates from staging sstables
@@ -250,8 +253,6 @@ future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::
     if (result == stop_iteration::yes) {
         throw abort_requested_exception{};
     }
-
-    _progress_tracker->on_sstables_deregistration(sstables);
 
     auto end_time = db_clock::now();
     auto duration = std::chrono::duration<float>(end_time - start_time);
@@ -289,17 +290,15 @@ void view_update_generator::do_abort() noexcept {
 }
 
 future<> view_update_generator::drain() {
-    co_await _proxy.local().abort_view_writes();
-    if (!_gate.is_closed()) {
-        co_await _gate.close();
-    }
+    return _proxy.local().abort_view_writes();
 }
 
 future<> view_update_generator::stop() {
     _db.unplug_view_update_generator();
     do_abort();
-    co_await std::exchange(_started, make_ready_future<>());
-    _registration_sem.broken();
+    return std::move(_started).then([this] {
+        _registration_sem.broken();
+    });
 }
 
 bool view_update_generator::should_throttle() const {
