@@ -882,6 +882,60 @@ async def test_migration_multiple_keyspaces(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+async def test_migration_multiple_tables(manager: ManagerClient):
+    """Verify vnodes-to-tablets migration on keyspace with multiple tables.
+
+    The test verifies that all tables get correct tablet maps, that resharding
+    and finalization work for all tables, and that pow2 convergence completes
+    for every table.
+    """
+    num_shards = 3
+    tokens_per_node = 16
+
+    logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
+    cfg = {'num_tokens': tokens_per_node}
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+    logger.info(f"Vnode boundaries ({len(vnode_boundaries)} tokens): {vnode_boundaries}")
+
+    logger.info("Creating keyspace with two vnode tables")
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying tablet map boundaries for both tables")
+        await verify_tablet_map_boundaries(manager, server, ks, 't1', vnode_boundaries)
+        await verify_tablet_map_boundaries(manager, server, ks, 't2', vnode_boundaries)
+
+        logger.info("Marking node for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        logger.info("Restarting the node to trigger resharding")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Finalizing tablets migration")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying that the keyspace schema has tablets enabled")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "keyspace is still using vnodes after migration finalization"
+
+        logger.info("Waiting for pow2 convergence on both tables")
+        await wait_for_pow2_convergence(manager, server, ks, 't1')
+        await wait_for_pow2_convergence(manager, server, ks, 't2')
+
+
+@pytest.mark.asyncio
 async def test_tablet_status_in_migration_api(manager: ManagerClient):
     """"Verify the ?include=tablet_status query parameter in the migration API.
 
