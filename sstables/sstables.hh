@@ -559,7 +559,7 @@ private:
     static_assert(static_cast<unsigned>(component_type::Unknown) < 32,
                   "component_type values must fit in a uint32_t bitmask");
     uint32_t _recognized_components = 0;
-    std::vector<sstring> _unrecognized_components;
+    std::unique_ptr<std::vector<sstring>> _unrecognized_components;
 
     static uint32_t component_mask(component_type c) noexcept {
         return uint32_t(1) << static_cast<unsigned>(c);
