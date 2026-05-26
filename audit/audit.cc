@@ -14,7 +14,9 @@
 #include "cql3/cql_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/batch_statement.hh"
+#include "cql3/statements/strong_consistency/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "seastar/core/on_internal_error.hh"
 #include "storage_helper.hh"
 #include "audit_cf_storage_helper.hh"
 #include "audit_syslog_storage_helper.hh"
@@ -351,15 +353,18 @@ static future<> inspect(const audit_info& audit_info, const service::query_state
 future<> inspect(shared_ptr<cql3::cql_statement> statement, const service::query_state& query_state, const cql3::query_options& options, bool error) {
     const auto audit_info = statement->get_audit_info();
     if (audit_info == nullptr) {
-        return make_ready_future<>();
+        co_return;
     }
     if (audit_info->batch()) {
-        cql3::statements::batch_statement* batch = static_cast<cql3::statements::batch_statement*>(statement.get());
-        return do_for_each(batch->statements().begin(), batch->statements().end(), [&query_state, &options, error] (auto&& m) {
-            return inspect(m.statement, query_state, options, error);
+        auto inner = statement->get_batch_statements();
+        if (!inner) {
+            on_internal_error(logger, "batch statements need to return valid inner statements");
+        }
+        co_await do_for_each(inner->begin(), inner->end(), [&query_state, &options, error] (auto&& m) {
+            return inspect(m, query_state, options, error);
         });
     } else {
-        return inspect(*audit_info, query_state, options, error);
+        co_await inspect(*audit_info, query_state, options, error);
     }
 }
 
