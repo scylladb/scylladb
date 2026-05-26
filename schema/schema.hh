@@ -618,6 +618,9 @@ private:
     };
     raw_schema _raw;
     schema_static_props _static_props;
+    // Populated only for compact storage tables (legacy).
+    // For non-compact tables, left default-constructed (empty) and
+    // v3_all_columns()/all_columns_by_name() delegate to all_columns().
     v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
     std::unique_ptr<::view_info> _view_info;
@@ -1017,8 +1020,25 @@ private:
 
     managed_string get_create_statement(const schema_describe_helper& helper, bool with_internals) const;
 public:
-    const v3_columns& v3() const {
-        return _v3_columns;
+    // Returns the CQL3-view columns: for compact storage tables, this is the
+    // v3-transformed layout; for non-compact tables, returns all_columns().
+    const std::vector<column_definition>& v3_all_columns() const noexcept {
+        if (!_v3_columns.all_columns().empty()) {
+            return _v3_columns.all_columns();
+        }
+        return all_columns();
+    }
+
+    // Returns a name-to-column map for schema diffing. Only needed for DDL operations.
+    // Returns a reference to a pre-built map in both branches: schema::rebuild()
+    // populates _columns_by_name from all_columns() (identical to what this used
+    // to rebuild), and v3_columns keeps its own _columns_by_name for compact
+    // tables. No allocation or copy on the DDL path.
+    const std::unordered_map<bytes, const column_definition*>& all_columns_by_name() const {
+        if (!_v3_columns.columns_by_name().empty()) {
+            return _v3_columns.columns_by_name();
+        }
+        return columns_by_name();
     }
 
     // Make a copy of the schema with reversed clustering order.

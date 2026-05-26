@@ -404,7 +404,9 @@ void schema::rebuild() {
         }
     }
 
-    _v3_columns = v3_columns::from_v2_schema(*this);
+    if (is_compact_table()) {
+        _v3_columns = v3_columns::from_v2_schema(*this);
+    }
     _full_slice = make_shared<query::partition_slice>(partition_slice_builder(*this).build());
     compute_all_columns_in_select_order();
 }
