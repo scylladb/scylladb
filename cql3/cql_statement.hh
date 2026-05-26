@@ -125,6 +125,13 @@ public:
         return std::nullopt;
     }
 
+    // Returns a statement with strong consistency wrappers removed.
+    // Non-strong-consistency statements return self.
+    // The caller must pass a shared_ptr that owns this object as self.
+    virtual shared_ptr<cql_statement> unwrap_strong_consistency_statement(const shared_ptr<cql_statement>& self) const {
+        return self;
+    }
+
     audit::audit_info* get_audit_info() { return _audit_info.get(); }
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
 

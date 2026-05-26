@@ -22,6 +22,12 @@ class modification_statement : public cql_statement_opt_metadata {
 public:
     modification_statement(shared_ptr<base_statement> statement);
 
+    const shared_ptr<base_statement>& inner() const { return _statement; }
+
+    virtual shared_ptr<cql_statement> unwrap_strong_consistency_statement(const shared_ptr<cql_statement>&) const override {
+        return _statement;
+    }
+
     future<shared_ptr<result_message>> execute(query_processor& qp, service::query_state& state,
         const query_options& options, std::optional<service::group0_guard> guard) const override;
 
