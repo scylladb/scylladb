@@ -666,7 +666,7 @@ private:
     // The mutate semaphore is used to serialize operations like rewrite_statistics
     // with linking or moving the sstable between directories.
     mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
-    std::optional<sstring> _cloned_to_sstable_filename;
+    std::unique_ptr<sstring> _cloned_to_sstable_filename;
     // Used only for writing sstable.
     scylla_metadata::components_digests _components_digests;
     uint32_t _toc_digest{};
