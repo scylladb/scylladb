@@ -21,10 +21,10 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "utils/rjson.hh"
-#include <ranges>
 #include <algorithm>
 #include <string>
 #include <string_view>
+
 
 namespace alternator {
 
@@ -292,4 +292,103 @@ future<> scan_table(
     }
 }
 
+future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.export_table_to_point_in_time++;
+
+    // Required parameters
+    auto table_arn = get_non_empty_string_attribute(request, "TableArn");
+    auto s3_bucket = get_non_empty_string_attribute(request, "S3Bucket");
+
+    // Validate that the table exists
+    auto parts = parse_arn(table_arn, "TableArn", "table", "");
+    schema_ptr schema;
+    try {
+        schema = _proxy.data_dictionary().find_schema(parts.keyspace_name, parts.table_name);
+    } catch (const data_dictionary::no_such_column_family&) {
+        co_return api_error::table_not_found(
+                fmt::format("Table not found: {}", table_arn));
+    }
+
+    // Optional parameters
+    auto s3_prefix = get_non_empty_string_attribute(request, "S3Prefix", "");
+    auto export_format = get_non_empty_string_attribute(request, "ExportFormat", "DYNAMODB_JSON");
+    if (export_format != "DYNAMODB_JSON") {
+        co_return api_error::validation(
+                fmt::format("ExportFormat attribute: must be DYNAMODB_JSON, not `{}`", export_format));
+    }
+
+    auto export_type = get_non_empty_string_attribute(request, "ExportType", "FULL_EXPORT");
+    if (export_type != "FULL_EXPORT") {
+        co_return api_error::validation(
+                fmt::format("ExportType attribute: must be FULL_EXPORT, not `{}`", export_type));
+    }
+
+    // IncrementalExportSpecification - not supported
+    const rjson::value* incremental_v = rjson::find(request, "IncrementalExportSpecification");
+    if (incremental_v) {
+        co_return api_error::validation("IncrementalExportSpecification attribute is not supported");
+    }
+
+    // ExportTime - only "now" (or close to now) is supported
+    // If not specified, use current time. If specified, must be within 5 minutes of now.
+    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    int64_t export_time = now;
+    const rjson::value* export_time_v = rjson::find(request, "ExportTime");
+    if (export_time_v) {
+        if (!export_time_v->IsNumber()) {
+            co_return api_error::validation(fmt::format("Expected number attribute ExportTime, got {}.", export_time_v->GetType()));
+        }
+        export_time = static_cast<int64_t>(export_time_v->GetDouble());
+        auto diff = export_time > now ? export_time - now : now - export_time;
+        if (diff > 300) {
+            co_return api_error::invalid_export_time(fmt::format("ExportTime must be within 5 minutes of current time. "
+                                "ExportTime: {}, current time: {}", export_time, now));
+        }
+    }
+
+    // ClientToken - for idempotency
+    auto client_token = get_non_empty_string_attribute(request, "ClientToken", "");
+
+    // S3BucketOwner - accepted but not used
+    auto s3_bucket_owner = get_non_empty_string_attribute(request, "S3BucketOwner", "");
+
+    // S3SseAlgorithm and S3SseKmsKeyId - accepted but not used
+    auto s3_sse_algorithm = get_non_empty_string_attribute(request, "S3SseAlgorithm", "");
+    if (!s3_sse_algorithm.empty() && s3_sse_algorithm != "AES256" && s3_sse_algorithm != "KMS") {
+        co_return api_error::validation(
+                fmt::format("S3SseAlgorithm parameter must be either AES256 or KMS, not `{}`.", s3_sse_algorithm));
+    }
+
+    auto s3_sse_kms_key_id = get_non_empty_string_attribute(request, "S3SseKmsKeyId", "");
+    
+    // Build the ExportDescription response
+    // The actual export functionality is not implemented yet - this just returns
+    // an IN_PROGRESS status to indicate the export has been accepted.
+    rjson::value export_desc = rjson::empty_object();
+    rjson::add(export_desc, "ClientToken", rjson::from_string(client_token));
+    rjson::add(export_desc, "ExportArn",
+            rjson::from_string(fmt::format("arn:scylla:dynamodb:::table/{}/export/export-placeholder",
+                    parts.table_name)));
+    rjson::add(export_desc, "ExportFormat", rjson::from_string(export_format));
+    rjson::add(export_desc, "ExportStatus", "IN_PROGRESS");
+    rjson::add(export_desc, "ExportTime", rjson::value(export_time));
+    rjson::add(export_desc, "ExportType", rjson::from_string(export_type));
+    rjson::add(export_desc, "S3Bucket", rjson::from_string(s3_bucket));
+    rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
+    rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
+
+    if (!s3_bucket_owner.empty()) {
+        rjson::add(export_desc, "S3BucketOwner", rjson::from_string(s3_bucket_owner));
+    }
+    if (!s3_sse_algorithm.empty()) {
+        rjson::add(export_desc, "S3SseAlgorithm", rjson::from_string(s3_sse_algorithm));
+    }
+    if (!s3_sse_kms_key_id.empty()) {
+        rjson::add(export_desc, "S3SseKmsKeyId", rjson::from_string(s3_sse_kms_key_id));
+    }
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    co_return rjson::print(std::move(response));
+}
 } // namespace alternator
