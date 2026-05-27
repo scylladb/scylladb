@@ -8,13 +8,19 @@
 
 #include "alternator/export.hh"
 #include <seastar/core/coroutine.hh>
+#include "alternator/error.hh"
+#include "alternator/executor.hh"
+#include "alternator/executor_util.hh"
+#include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <limits>
 #include <string>
 #include <string_view>
 
 namespace alternator {
-
 // Interfaces for `sink` / `source` pipelines.
 // The `sink` pipeline consists of 3 stages:
 //   - formatter (see `export_pipeline_interface` interface in header) - serializes rjson::value as-is to simple binary format (JSON lines, Ion, CSV are required by Amazon specs),
@@ -208,4 +214,119 @@ std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_m
     return std::make_unique<in_memory_source>(storage, std::move(decompressor));
 }
 
+future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.export_table_to_point_in_time++;
+
+    // Required parameter
+    auto table_arn = get_non_empty_string_attribute(request, "TableArn");
+
+    // Validate that the table exists
+    arn_parts parts;
+    try {
+        parts = parse_arn(table_arn, "TableArn", "table", "");
+    }
+    catch (api_error& e) {
+        if (e._type == "AccessDeniedException")
+            // Unfortunately AWS returns ValidationException here, so we convert error type, leaving message as is.
+            e._type = "ValidationException";
+        co_return std::move(e);
+    }
+    maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "ExportTableToPointInTime", request);
+    try {
+        auto schema = _proxy.data_dictionary().find_schema(parts.keyspace_name, parts.table_name);
+        get_stats_from_schema(_proxy, *schema)->api_operations.export_table_to_point_in_time++;
+    } catch (const data_dictionary::no_such_column_family&) {
+        co_return api_error::table_not_found(
+                fmt::format("TableArn: Invalid table ARN `{}` - not found", table_arn));
+    }
+    if (!parts.keyspace_name.starts_with(executor::KEYSPACE_NAME_PREFIX)) {
+        co_return api_error::table_not_found(
+                fmt::format("TableArn: Invalid table ARN `{}` - not found", table_arn));
+    }
+
+    // Required parameter
+    auto s3_bucket = get_non_empty_string_attribute(request, "S3Bucket");
+
+    // Optional parameters
+    auto s3_prefix = get_non_empty_string_attribute(request, "S3Prefix", "");
+
+    auto export_format = get_non_empty_string_attribute(request, "ExportFormat", "DYNAMODB_JSON");
+    if (export_format != "DYNAMODB_JSON") {
+        co_return api_error::validation(
+                fmt::format("ExportFormat attribute: must be DYNAMODB_JSON, not `{}`", export_format));
+    }
+
+    auto export_type = get_non_empty_string_attribute(request, "ExportType", "FULL_EXPORT");
+    if (export_type != "FULL_EXPORT") {
+        co_return api_error::validation(
+                fmt::format("ExportType attribute: must be FULL_EXPORT, not `{}`", export_type));
+    }
+
+    constexpr std::array unsupported_parameters{
+            "IncrementalExportSpecification",
+            "S3BucketOwner",
+            "S3SseAlgorithm",
+            "S3SseKmsKeyId",
+    };
+    for (auto name : unsupported_parameters) {
+        if (rjson::find(request, name)) {
+            co_return api_error::validation(fmt::format("{} attribute is not supported", name));
+        }
+    }
+
+    // ExportTime - only "now" (or close to now) is supported
+    // If not specified, use current time. If specified, must be within 5 minutes of now.
+    auto now = (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    auto export_time = now;
+    const rjson::value* export_time_v = rjson::find(request, "ExportTime");
+    if (export_time_v) {
+        if (!export_time_v->IsNumber()) {
+            co_return api_error::validation("Expected a number attribute ExportTime");
+        }
+        if (std::isnan(export_time_v->GetDouble()) || std::isinf(export_time_v->GetDouble()) || export_time_v->GetDouble() < 0) {
+            co_return api_error::invalid_export_time("ExportTime number is out of range of valid values for this field");
+        }
+        // We round to seconds, as ExportTime is expected to be in seconds.
+        export_time = export_time_v->GetDouble();
+        auto diff = export_time > now ? export_time - now : now - export_time;
+        if (diff > 300) {
+            co_return api_error::invalid_export_time(fmt::format("ExportTime must be within 5 minutes of current time. "
+                                "ExportTime: {}, current time: {}", export_time, now));
+        }
+    }
+
+    auto client_token = get_non_empty_string_attribute(request, "ClientToken", "");
+
+    // Build the ExportDescription response
+    // The actual export functionality is not implemented yet - this just returns
+    // a FAILED status to indicate the export has been accepted, but immediately failed.
+    rjson::value export_desc = rjson::empty_object();
+
+    // FIXME: Currently, when export is called without a client token, we use
+    // the fixed name "<empty>". This is wrong - we should return a uniquely
+    // generated client token, like AWS does, not a fixed one.
+    rjson::add(export_desc, "ClientToken", client_token.empty() ? rjson::from_string("<empty>") : rjson::from_string(client_token));
+
+    // FIXME: We create fake arn here, the content up to `/export/` will be likely the same in future,
+    // the last part (after `/export/`) will change - we need to encode a unique identifier of some sort there to
+    // recognise the export in future (we don't have it yet so we don't do it now).
+    rjson::add(export_desc, "ExportArn",
+            rjson::from_string(fmt::format("arn:aws:dynamodb:us-east-1:000000000000:table/{}@{}/export/export-placeholder",
+                    parts.keyspace_name, parts.table_name)));
+    rjson::add(export_desc, "ExportFormat", rjson::from_string(export_format));
+    rjson::add(export_desc, "ExportStatus", "FAILED");
+    rjson::add(export_desc, "FailureCode", "NotImplemented");
+    rjson::add(export_desc, "FailureMessage", "Not yet implemented - this is a placeholder response for testing the export API.");
+    rjson::add(export_desc, "ExportTime", rjson::value((std::int64_t)std::floor(export_time)));
+    rjson::add(export_desc, "ExportType", rjson::from_string(export_type));
+    rjson::add(export_desc, "S3Bucket", rjson::from_string(s3_bucket));
+    if (!s3_prefix.empty()) {
+        rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
+    }
+    rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    co_return rjson::print(std::move(response));
+}
 } // namespace alternator

@@ -23,7 +23,7 @@ import decimal
 from botocore.exceptions import ClientError
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import is_aws, new_test_table
+from test.alternator.util import is_aws, new_test_table, create_test_table, random_string
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -122,6 +122,24 @@ def new_s3_bucket(s3_client, bucket_name=None):
                     time.sleep(2)
             else:
                 assert False, f"Failed to delete S3 bucket {bucket_name} within the timeout of 1 minute"
+
+
+# This creates an empty table with string partition key and no sort key. We do
+# not use the shared test_table_s fixture because exports may take longer for a
+# table with data written by other tests.
+@pytest.fixture(scope='module')
+def test_table_s_for_export_only(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ])
+    try:
+        enable_pitr(table)
+    except Exception:
+        table.delete()
+        raise
+    yield table
+    table.delete()
+
 
 # Helper: enable PITR on a table (required for ExportTableToPointInTime on
 # DynamoDB). Returns the client used.
@@ -680,7 +698,7 @@ def test_export_client_token_some_value_changed(dynamodb, test_table_s, param_va
         client1.export_table_to_point_in_time(
             TableArn=table_arn1,
             ClientToken=token,
-            **kwargs
+            **{ k: v for k, v in kwargs.items() if v is not None }
         )
         with pytest.raises(ClientError, match='ExportConflictException.*Duplicate request detected'):
             kwargs = {
@@ -690,7 +708,7 @@ def test_export_client_token_some_value_changed(dynamodb, test_table_s, param_va
             client1.export_table_to_point_in_time(
                 TableArn=table_arn1,
                 ClientToken=token,
-                **kwargs
+                **{ k: v for k, v in kwargs.items() if v is not None }
             )
 
 
@@ -702,33 +720,30 @@ def test_export_client_token_some_value_changed(dynamodb, test_table_s, param_va
 # value - value that should be set to the field. If None, the field will be not set at all.
 # Both <exception name> and <error text> are must appear in the error message, first <exception name>, then (after possibly some text) <error text>.
 # We can't add ExportArn field testing here - boto3 raises strange exception (looks like a bug in boto3).
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
 @pytest.mark.parametrize('exception_field_error_and_value', [
-    ('ValidationException', 'ExportType', 'exportType', 'QWERTY'),
-    ('ValidationException', 'ExportType', 'exportType', ''),
-    ('ValidationException', 'ClientToken', 'clientToken', ''),
-    ('ValidationException', 'ExportFormat', 'exportFormat', ''),
-    ('ValidationException', 'ExportFormat', 'exportFormat', 'QWERTY'),
-    ('InvalidExportTimeException', 'ExportTime', 'Export Time', -1),
-    ('ValidationException', 'S3Prefix', 's3Prefix', ''),
-    ('ValidationException', 'S3Prefix', 's3Prefix', '\t'),
-    ('ValidationException', 'S3Bucket', 's3Bucket', ''),
-    ('ValidationException', 'S3Bucket', 's3Bucket', None),
-    ('ValidationException', 'S3Bucket', 's3Bucket', '\t'),
-    ('ValidationException', 'TableArn', 'TableArn', None),
-    ('ValidationException', 'TableArn', 'TableArn', ''),
-    ('ValidationException', 'TableArn', 'tableArn', '\t'),
-    ('ValidationException', 'TableArn', 'tableArn', 'QWERTY'),
-    ('ValidationException', 'S3BucketOwner', 's3BucketOwner', ''),
-    ('ValidationException', 'S3BucketOwner', 's3BucketOwner', 'QWERTY'),
-    ('ValidationException', 'S3SseAlgorithm', 's3SseAlgorithm', ''),
-    ('ValidationException', 'S3SseAlgorithm', 's3SseAlgorithm', 'QWERTY'),
+    ('ValidationException', 'ExportType', '[eE]xportType', 'QWERTY'),
+    ('ValidationException', 'ExportType', '[eE]xportType', ''),
+    ('ValidationException', 'ClientToken', '[cC]lientToken', ''),
+    ('ValidationException', 'ExportFormat', '[eE]xportFormat', ''),
+    ('ValidationException', 'ExportFormat', '[eE]xportFormat', 'QWERTY'),
+    ('InvalidExportTimeException', 'ExportTime', 'Export ?Time', -1),
+    ('ValidationException', 'S3Prefix', '[sS]3Prefix', ''),
+    ('ValidationException', 'S3Bucket', '[sS]3Bucket', ''),
+    ('ValidationException', 'S3Bucket', '[sS]3Bucket', None),
+    ('ValidationException', 'TableArn', '[tT]ableArn', None),
+    ('ValidationException', 'TableArn', '[tT]ableArn', ''),
+    ('ValidationException', 'TableArn', '[tT]ableArn', '\t'),
+    ('ValidationException', 'TableArn', '[tT]ableArn', 'QWERTY'),
+    ('ValidationException', 'S3BucketOwner', '[sS]3BucketOwner', ''),
+    ('ValidationException', 'S3BucketOwner', '[sS]3BucketOwner', ''),
+    ('ValidationException', 'S3SseAlgorithm', '[sS]3SseAlgorithm', ''),
+    ('ValidationException', 'S3SseAlgorithm', '[sS]3SseAlgorithm', 'QWERTY'),
 ])
 def test_export_setting_fields_to_weird_values_or_skipping_fail(dynamodb, test_table_s, exception_field_error_and_value):
     client = enable_pitr(test_table_s)
     table_arn = get_table_arn(test_table_s)
     exception, field, error, value = exception_field_error_and_value
-    with pytest.raises(ClientError, match=f'{exception}.*{error}'):
+    with pytest.raises(ClientError, match=f'{exception}.*({error})'):
         kw = {
             'TableArn': table_arn,
             'S3Bucket': unique_bucket_name()
@@ -1223,3 +1238,141 @@ def test_list_exports_summary_fields(dynamodb, test_table_s):
                 break
         else:
             pytest.fail(f"Export {export_arn} not found in ListExports for table {table_arn}")
+# Test that ExportTableToPointInTime accepts valid parameters.
+# for scylla test we don't want to pass real S3 bucket (as we don't yet have a minio infrastructure to supply one for scylla and we want to
+# avoid creating real S3 buckets if possible) - thus we're making this test `scylla_only`.
+# In future it will be updated to use a minio bucket and `scylla_only` marker will be removed.
+def test_export_table_basic(test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    client_token = random_string(20)
+
+    response = client.export_table_to_point_in_time(
+        TableArn=table_arn,
+        S3Bucket='my-test-bucket',
+        S3Prefix='exports/test',
+        ExportFormat='DYNAMODB_JSON',
+        ClientToken=client_token,
+    )
+
+    assert 'ExportDescription' in response
+    export_desc = response['ExportDescription']
+    assert export_desc['ExportStatus'] == 'FAILED'
+    assert export_desc['S3Bucket'] == 'my-test-bucket'
+    assert export_desc['S3Prefix'] == 'exports/test'
+    assert export_desc['ExportFormat'] == 'DYNAMODB_JSON'
+    assert export_desc['ClientToken'] == client_token
+    assert export_desc['TableArn'] == table_arn
+    assert export_desc['ExportArn'].startswith(f"arn:aws:dynamodb:")
+
+
+# Test that non-DYNAMODB_JSON format (ION) is rejected.
+def test_export_table_unsupported_format_ion(dynamodb, test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+
+    with pytest.raises(ClientError, match='ValidationException.*[eE]xportFormat'):
+        client.export_table_to_point_in_time(
+            TableArn=table_arn,
+            S3Bucket='my-bucket',
+            ExportFormat='ION',
+        )
+
+
+# Test that call to UpdateContinuousBackups is rejected.
+def test_update_continuous_backups_rejected(test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+
+    with pytest.raises(ClientError, match='UnknownOperationException.*UpdateContinuousBackups'):
+        client.update_continuous_backups(
+            TableName=test_table_s_for_export_only.name,
+            PointInTimeRecoverySpecification={'PointInTimeRecoveryEnabled': True}
+        )
+
+
+# Test that incremental export is rejected.
+def test_export_table_unsupported_incremental(dynamodb, test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+
+    with pytest.raises(ClientError, match='ValidationException.*[eE]xportType'):
+        client.export_table_to_point_in_time(
+            TableArn=table_arn,
+            S3Bucket='my-bucket',
+            ExportType='INCREMENTAL_EXPORT',
+        )
+
+
+# Test that IncrementalExportSpecification is rejected.
+def test_export_table_unsupported_incremental_spec(dynamodb, test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+
+    with pytest.raises(ClientError, match='ValidationException.*[iI]ncrementalExportSpecification'):
+        client.export_table_to_point_in_time(
+            TableArn=table_arn,
+            S3Bucket='my-bucket',
+            IncrementalExportSpecification={
+                'ExportFromTime': int(time.time()) - 3600,
+                'ExportToTime': int(time.time()),
+                'ExportViewType': 'NEW_IMAGE',
+            },
+        )
+
+
+@pytest.mark.parametrize('unsupported_parameter, value', [
+    ('S3BucketOwner', '123456789012'),
+    ('S3SseAlgorithm', 'AES256'),
+    ('S3SseKmsKeyId', 'test-key-id'),
+])
+def test_export_table_unsupported_s3_options(test_table_s_for_export_only, scylla_only, unsupported_parameter, value):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+
+    with pytest.raises(ClientError, match=f'ValidationException.*{unsupported_parameter}'):
+        client.export_table_to_point_in_time(
+            TableArn=table_arn,
+            S3Bucket='my-bucket',
+            **{unsupported_parameter: value},
+        )
+
+
+# Test that ExportTime close to now is accepted.
+# This is a separate test for scylla only, as DynamoDB itself will reject ExportTime close to now.
+# For performance reasons in test we don't want to follow the suit with it.
+def test_export_table_export_time_now(test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+
+    response = client.export_table_to_point_in_time(
+        TableArn=table_arn,
+        S3Bucket='my-bucket',
+        ExportTime=int(time.time()),
+    )
+    assert response['ExportDescription']['ExportStatus'] == 'FAILED'
+
+
+# Test that ExportTime in the past (more than 5 minutes) is rejected.
+def test_export_table_invalid_export_time_before_now(test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+
+    with pytest.raises(ClientError, match='InvalidExportTimeException.*Export ?Time'):
+        client.export_table_to_point_in_time(
+            TableArn=table_arn,
+            S3Bucket='my-bucket',
+            ExportTime=int(time.time()) - 60 * 5 - 1,
+        )
+
+# Test that ExportTime in the future (more than 5 minutes) is rejected.
+# We add additional time (1 minute) to avoid a race (where enough time will pass before the request is processed).
+def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+
+    with pytest.raises(ClientError, match='InvalidExportTimeException.*Export ?Time'):
+        client.export_table_to_point_in_time(
+            TableArn=table_arn,
+            S3Bucket='my-bucket',
+            ExportTime=int(time.time()) + 60 * 5 + 60,
+        )

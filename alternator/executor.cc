@@ -948,7 +948,7 @@ arn_parts parse_arn(std::string_view arn, std::string_view arn_field_name, std::
     // otherwise we require that postfix starts with expected_postfix and we return it
 
     if (!arn.starts_with("arn:")) {
-        throw api_error::access_denied(fmt::format("{}: Invalid {} ARN `{}`  - missing `arn:` prefix", arn_field_name, type_name, arn));
+        throw api_error::access_denied(fmt::format("{}: Invalid {} ARN `{}` - missing `arn:` prefix", arn_field_name, type_name, arn));
     }
 
     // skip to the resource part
