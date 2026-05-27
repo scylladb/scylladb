@@ -1408,7 +1408,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             spcfg.write_mv_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get();
             spcfg.hints_write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get();
             spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get();
-            static db::view::node_update_backlog node_backlog(smp::count, 10ms, cfg->view_flow_control_delay_limit_in_ms);
+            static db::view::node_update_backlog node_backlog(this_smp_shard_count(), 10ms, cfg->view_flow_control_delay_limit_in_ms);
 
             static sharded<updateable_timeout_config> timeout_cfg;
             timeout_cfg.start(std::ref(*cfg)).get();
@@ -2116,7 +2116,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     db.invoke_on_all(&replica::database::flush_all_memtables).get();
                     supervisor::notify("replaying commit log - removing old commitlog segments");
 
-                    auto chunks = paths | std::views::chunk(size_t(std::ceil(double(paths.size())/smp::count)));
+                    auto chunks = paths | std::views::chunk(size_t(std::ceil(double(paths.size())/this_smp_shard_count())));
                     db.invoke_on_all([&chunks](auto& db) {
                         if (this_shard_id() < chunks.size()) {
                             auto chunk = chunks[this_shard_id()];

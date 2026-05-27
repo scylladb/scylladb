@@ -18,7 +18,7 @@ using namespace std::literals::chrono_literals;
 
 static schema_ptr make_schema()
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s1", bytes_type, column_kind::static_column)
@@ -32,7 +32,7 @@ static schema_ptr make_schema()
 
 static schema_ptr make_alternative_schema()
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s0", bytes_type, column_kind::static_column)
@@ -48,7 +48,7 @@ static schema_ptr make_alternative_schema()
 
 static schema_ptr make_schema_disjoint_with_others()
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s8", bytes_type, column_kind::static_column)

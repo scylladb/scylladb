@@ -355,7 +355,7 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
 
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
     return test_env::do_with_async([] (test_env& env) {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", int32_type, column_kind::clustering_key)
                     .with_column("r1", int32_type)
@@ -476,7 +476,7 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
 
 static schema_ptr tombstone_overlap_schema() {
     static thread_local auto s = [] {
-        schema_builder builder("try1", "tab", generate_legacy_id("try1", "tab"));
+        schema_builder builder(this_smp_shard_count(), "try1", "tab", generate_legacy_id("try1", "tab"));
         builder.with_column("pk", utf8_type, column_kind::partition_key);
         builder.with_column("ck1", utf8_type, column_kind::clustering_key);
         builder.with_column("ck2", utf8_type, column_kind::clustering_key);
@@ -616,7 +616,7 @@ SEASTAR_TEST_CASE(range_tombstone_reading) {
 //        ["aaa:bbb:!","aaa:!",1459438519943668,"t",1459438519]]}
 static schema_ptr tombstone_overlap_schema2() {
     static thread_local auto s = [] {
-        schema_builder builder("try1", "tab2", generate_legacy_id("try1", "tab2"));
+        schema_builder builder(this_smp_shard_count(), "try1", "tab2", generate_legacy_id("try1", "tab2"));
         builder.with_column("pk", utf8_type, column_kind::partition_key);
         builder.with_column("ck1", utf8_type, column_kind::clustering_key);
         builder.with_column("ck2", utf8_type, column_kind::clustering_key);
@@ -686,7 +686,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
 // Reproducer for #4783
 static schema_ptr buffer_overflow_schema() {
     static thread_local auto s = [] {
-        schema_builder builder("test_ks", "test_tab", generate_legacy_id("test_ks", "test_tab"));
+        schema_builder builder(this_smp_shard_count(), "test_ks", "test_tab", generate_legacy_id("test_ks", "test_tab"));
         builder.with_column("pk", int32_type, column_kind::partition_key);
         builder.with_column("ck1", int32_type, column_kind::clustering_key);
         builder.with_column("ck2", int32_type, column_kind::clustering_key);
@@ -736,7 +736,7 @@ SEASTAR_TEST_CASE(buffer_overflow) {
 SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        schema_builder builder("ks", "cf");
+        schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
         builder.with_column("v", int32_type);
@@ -761,7 +761,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
 SEASTAR_TEST_CASE(test_has_partition_key) {
     return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
-            schema_builder builder("ks", "cf");
+            schema_builder builder(this_smp_shard_count(), "ks", "cf");
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c", int32_type, column_kind::clustering_key);
             builder.with_column("v", int32_type);
@@ -795,7 +795,7 @@ static std::unique_ptr<abstract_index_reader> get_index_reader(shared_sstable ss
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
     return test_env::do_with_async([] (test_env& env) {
-        schema_builder builder("ks", "cf");
+        schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
         builder.with_column("c2", int32_type, column_kind::clustering_key);
@@ -837,7 +837,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_with_auto_scaling) {
     return test_env::do_with_async([] (test_env& env) {
-        schema_builder builder("ks", "cf");
+        schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
         builder.with_column("c2", int32_type, column_kind::clustering_key);
@@ -873,7 +873,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_with_auto_scaling) {
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        schema_builder builder("ks", "cf");
+        schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
         builder.with_column("c2", int32_type, column_kind::clustering_key);
@@ -926,7 +926,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        schema_builder builder("ks", "cf");
+        schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
         builder.with_column("v", int32_type);
@@ -978,7 +978,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
         int id = 0;
         for (auto& compact : { schema_builder::compact_storage::no, schema_builder::compact_storage::yes }) {
             const auto generation = id++;
-            schema_builder builder("ks", format("cf{:d}", generation));
+            schema_builder builder(this_smp_shard_count(), "ks", format("cf{:d}", generation));
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c1", bytes_type, column_kind::clustering_key);
             builder.with_column("v", int32_type);
@@ -1018,7 +1018,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
 SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound_dense_schemas) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        schema_builder builder("ks", "cf");
+        schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
         builder.with_column("v", int32_type);
@@ -1052,7 +1052,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
 SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_key) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        schema_builder builder("ks", "cf");
+        schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
@@ -1155,7 +1155,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
 SEASTAR_TEST_CASE(test_key_count_estimation) {
     return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
-            auto s = schema_builder("ks", "cf")
+            auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("v", int32_type)
                 .build();
@@ -1398,7 +1398,7 @@ SEASTAR_THREAD_TEST_CASE(test_merging_encoding_stats) {
 // Reproducer for #4206
 SEASTAR_TEST_CASE(test_counter_header_size) {
   return test_env::do_with_async([] (test_env& env) {
-    auto s = schema_builder("ks", "counter_test")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "counter_test")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("c1", counter_type)
@@ -1435,7 +1435,7 @@ SEASTAR_TEST_CASE(test_counter_header_size) {
 SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
     return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
-            auto s = schema_builder("ks", "test")
+            auto s = schema_builder(this_smp_shard_count(), "ks", "test")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("v1", int32_type)
                 .with_column("v2", int32_type)
@@ -1491,7 +1491,7 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
     // after_all_prefixed. This leads to incorrect order of mutations.
     return test_env::do_with_async([] (test_env& env) {
         for ([[maybe_unused]] const auto version : writable_sstable_versions) {
-            schema_ptr s = schema_builder("ks", "cf")
+            schema_ptr s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck1", bytes_type, column_kind::clustering_key)
                 .with_column("ck2", bytes_type, column_kind::clustering_key)

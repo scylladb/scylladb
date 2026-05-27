@@ -115,8 +115,8 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
 
         std::vector<size_t> keys_per_shard;
         std::vector<dht::partition_range_vector> pranges_per_shard;
-        keys_per_shard.resize(smp::count);
-        pranges_per_shard.resize(smp::count);
+        keys_per_shard.resize(this_smp_shard_count());
+        pranges_per_shard.resize(this_smp_shard_count());
         for (uint32_t i = 1; i <= 1000; ++i) {
             auto pkey = partition_key::from_single_value(*s, to_bytes(fmt::format("key{}", i)));
             mutation m(s, pkey);
@@ -204,7 +204,7 @@ SEASTAR_TEST_CASE(test_truncate_saves_replay_position) {
     auto cfg = make_shared<db::config>();
     cfg->auto_snapshot.set(false);
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        BOOST_REQUIRE_GT(smp::count, 1);
+        BOOST_REQUIRE_GT(this_smp_shard_count(), 1);
         const sstring ks_name = "ks";
         const sstring cf_name = "cf";
         e.execute_cql(fmt::format("CREATE TABLE {}.{} (k TEXT PRIMARY KEY, v INT);", ks_name, cf_name)).get();
@@ -216,7 +216,7 @@ SEASTAR_TEST_CASE(test_truncate_saves_replay_position) {
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
         BOOST_REQUIRE(rows);
         auto row_count = rows->rs().result_set().size();
-        BOOST_REQUIRE_EQUAL(row_count, smp::count);
+        BOOST_REQUIRE_EQUAL(row_count, this_smp_shard_count());
     }, cfg);
 }
 
@@ -230,9 +230,9 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
             auto uuid = s->id();
             std::vector<size_t> keys_per_shard;
             std::vector<dht::partition_range_vector> pranges_per_shard;
-            keys_per_shard.resize(smp::count);
-            pranges_per_shard.resize(smp::count);
-            for (uint32_t i = 1; i <= 3 * smp::count; ++i) {
+            keys_per_shard.resize(this_smp_shard_count());
+            pranges_per_shard.resize(this_smp_shard_count());
+            for (uint32_t i = 1; i <= 3 * this_smp_shard_count(); ++i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
                 mutation m(s, pkey);
                 m.partition().apply(tombstone(api::timestamp_type(1), gc_clock::now()));
@@ -240,7 +240,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
                 auto shard = table.shard_for_reads(m.token());
                 pranges_per_shard[shard].emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
             }
-            for (uint32_t i = 3 * smp::count; i <= 8 * smp::count; ++i) {
+            for (uint32_t i = 3 * this_smp_shard_count(); i <= 8 * this_smp_shard_count(); ++i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
                 mutation m(s, pkey);
                 m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), 1);
@@ -1469,10 +1469,10 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
             auto& cf = db.find_column_family("ks", "cf");
             return cf.flush();
         });
-        auto shard = tests::random::get_int<unsigned>(0, smp::count);
+        auto shard = tests::random::get_int<unsigned>(0, this_smp_shard_count());
         auto found = false;
-        for (unsigned i = 0; i < smp::count && !found; i++) {
-            found = co_await db.invoke_on((shard + i) % smp::count, [] (replica::database& db) -> future<bool> {
+        for (unsigned i = 0; i < this_smp_shard_count() && !found; i++) {
+            found = co_await db.invoke_on((shard + i) % this_smp_shard_count(), [] (replica::database& db) -> future<bool> {
                 auto& cf = db.find_column_family("ks", "cf");
                 bool found = false;
                 co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
@@ -1519,10 +1519,10 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         };
 
         // move a random sstable to quarantine
-        auto shard = tests::random::get_int<unsigned>(0, smp::count);
+        auto shard = tests::random::get_int<unsigned>(0, this_smp_shard_count());
         auto found = false;
-        for (unsigned i = 0; i < smp::count; i++) {
-            co_await db.invoke_on((shard + i) % smp::count, [&] (replica::database& db) -> future<> {
+        for (unsigned i = 0; i < this_smp_shard_count(); i++) {
+            co_await db.invoke_on((shard + i) % this_smp_shard_count(), [&] (replica::database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
                 co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
                     auto sstables = co_await in_strategy_sstables(ts);
@@ -1744,28 +1744,28 @@ SEASTAR_TEST_CASE(test_drop_quarantined_sstables) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
-    auto table_gc_mode_timeout = schema_builder("test", "table_gc_mode_timeout")
+    auto table_gc_mode_timeout = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_timeout")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "timeout"} }))
             .set_gc_grace_seconds(10)
             .build();
-    auto table_gc_mode_disabled = schema_builder("test", "table_gc_mode_disabled")
+    auto table_gc_mode_disabled = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_disabled")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "disabled"} }))
             .build();
-    auto table_gc_mode_immediate = schema_builder("test", "table_gc_mode_immediate")
+    auto table_gc_mode_immediate = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_immediate")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "immediate"} }))
             .build();
-    auto table_gc_mode_repair1 = schema_builder("test", "table_gc_mode_repair1")
+    auto table_gc_mode_repair1 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair1")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
             .build();
-    auto table_gc_mode_repair2 = schema_builder("test", "table_gc_mode_repair2")
+    auto table_gc_mode_repair2 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair2")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "288"} }))
             .build();
-    auto table_gc_mode_repair3 = schema_builder("test", "table_gc_mode_repair3")
+    auto table_gc_mode_repair3 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair3")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "388"} }))
             .build();
@@ -1775,7 +1775,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
             builder.set_is_group0_table();
         }
     });
-    auto table_gc_mode_group0 = schema_builder("test", "table_gc_mode_group0")
+    auto table_gc_mode_group0 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_group0")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .build();
 
@@ -1836,12 +1836,12 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
-    auto table_gc_mode_repair1 = schema_builder("test", "table_gc_mode_repair1")
+    auto table_gc_mode_repair1 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair1")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
             .build();
 
-    auto table_gc_mode_repair2 = schema_builder("test", "table_gc_mode_repair2")
+    auto table_gc_mode_repair2 = schema_builder(this_smp_shard_count(), "test", "table_gc_mode_repair2")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
             .build();
@@ -2052,7 +2052,7 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     shared_tombstone_gc_state shared_state;
 
     for (auto gc_mode : {tombstone_gc_mode::timeout, tombstone_gc_mode::disabled, tombstone_gc_mode::immediate, tombstone_gc_mode::repair}) {
-        auto schema = schema_builder("ks", "tbl")
+        auto schema = schema_builder(this_smp_shard_count(), "ks", "tbl")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_tombstone_gc_options(tombstone_gc_options({{"mode", fmt::to_string(gc_mode)}}))
             .build();
@@ -2332,7 +2332,7 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
             // Take all semaphore resources and add an active permit
             // Ensures that all new subsequent reads will be queued.
             std::vector<foreign_ptr<std::unique_ptr<reader_permit>>> dummy_permits;
-            for (shard_id shard = 0; shard < smp::count; ++shard) {
+            for (shard_id shard = 0; shard < this_smp_shard_count(); ++shard) {
                 dummy_permits.emplace_back();
             }
             e.db().invoke_on_all([&] (replica::database& db) -> future<> {

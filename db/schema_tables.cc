@@ -207,7 +207,7 @@ namespace v3 {
 
 schema_ptr keyspaces() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -233,7 +233,7 @@ schema_ptr keyspaces() {
 
 schema_ptr scylla_keyspaces() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, SCYLLA_KEYSPACES), NAME, SCYLLA_KEYSPACES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, SCYLLA_KEYSPACES), NAME, SCYLLA_KEYSPACES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -259,7 +259,7 @@ schema_ptr scylla_keyspaces() {
 
 schema_ptr tables() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, TABLES), NAME, TABLES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, TABLES), NAME, TABLES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -309,7 +309,7 @@ schema_ptr scylla_tables(schema_features features) {
     schema_ptr& s = schemas[has_in_memory];
     if (!s) {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
-        auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
+        auto sb = schema_builder(this_smp_shard_count(), NAME, SCYLLA_TABLES, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("version", uuid_type);
@@ -360,7 +360,7 @@ schema_ptr scylla_tables(schema_features features) {
 // VIEW" would list them - while it should only list real, selected, columns.
 
 static schema_ptr columns_schema(const char* columns_table_name) {
-    schema_builder builder(generate_legacy_id(NAME, columns_table_name), NAME, columns_table_name,
+    schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, columns_table_name), NAME, columns_table_name,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -423,7 +423,7 @@ const std::unordered_set<table_id>& schema_tables_holding_schema_mutations() {
 // is defined in column_computation.hh and system_schema docs.
 //
 static schema_ptr computed_columns_schema(const char* columns_table_name) {
-    schema_builder builder(generate_legacy_id(NAME, columns_table_name), NAME, columns_table_name,
+    schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, columns_table_name), NAME, columns_table_name,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -447,7 +447,7 @@ schema_ptr computed_columns() {
 
 schema_ptr dropped_columns() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, DROPPED_COLUMNS), NAME, DROPPED_COLUMNS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, DROPPED_COLUMNS), NAME, DROPPED_COLUMNS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -471,7 +471,7 @@ schema_ptr dropped_columns() {
 
 schema_ptr triggers() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, TRIGGERS), NAME, TRIGGERS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, TRIGGERS), NAME, TRIGGERS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -494,7 +494,7 @@ schema_ptr triggers() {
 
 schema_ptr views() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, VIEWS), NAME, VIEWS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, VIEWS), NAME, VIEWS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -540,7 +540,7 @@ schema_ptr views() {
 
 schema_ptr indexes() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, INDEXES), NAME, INDEXES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, INDEXES), NAME, INDEXES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -564,7 +564,7 @@ schema_ptr indexes() {
 
 schema_ptr types() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, TYPES), NAME, TYPES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, TYPES), NAME, TYPES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -588,7 +588,7 @@ schema_ptr types() {
 
 schema_ptr functions() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, FUNCTIONS), NAME, FUNCTIONS,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, FUNCTIONS), NAME, FUNCTIONS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -615,7 +615,7 @@ schema_ptr functions() {
 
 schema_ptr aggregates() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, AGGREGATES), NAME, AGGREGATES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, AGGREGATES), NAME, AGGREGATES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -642,7 +642,7 @@ schema_ptr aggregates() {
 
 schema_ptr scylla_aggregates() {
     static thread_local auto schema = [] {
-        schema_builder builder(generate_legacy_id(NAME, SCYLLA_AGGREGATES), NAME, SCYLLA_AGGREGATES,
+        schema_builder builder(this_smp_shard_count(), generate_legacy_id(NAME, SCYLLA_AGGREGATES), NAME, SCYLLA_AGGREGATES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -669,7 +669,7 @@ schema_ptr scylla_aggregates() {
 
 schema_ptr scylla_table_schema_history() {
     static thread_local auto s = [] {
-        schema_builder builder(db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY, generate_legacy_id(db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY));
+        schema_builder builder(this_smp_shard_count(), db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY, generate_legacy_id(db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY));
         builder.with_column("cf_id", uuid_type, column_kind::partition_key);
         builder.with_column("schema_version", uuid_type, column_kind::clustering_key);
         builder.with_column("column_name", utf8_type, column_kind::clustering_key);
@@ -2209,7 +2209,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     auto ks_name = table_row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = table_row.get_nonnull<sstring>("table_name");
     auto id = table_id(table_row.get_nonnull<utils::UUID>("id"));
-    schema_builder builder{ks_name, cf_name, id};
+    schema_builder builder{this_smp_shard_count(), ks_name, cf_name, id};
 
     auto cf = cf_type::standard;
     auto is_dense = false;
@@ -2289,7 +2289,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
 
     if (auto partitioner = sm.partitioner()) {
         builder.with_partitioner(*partitioner);
-        builder.with_sharder(smp::count, ctxt.murmur3_partitioner_ignore_msb_bits());
+        builder.with_sharder(this_smp_shard_count(), ctxt.murmur3_partitioner_ignore_msb_bits());
     }
 
     return builder.build();
@@ -2485,7 +2485,7 @@ static schema_builder prepare_view_schema_builder_from_mutations(const schema_ct
     auto cf_name = row.get_nonnull<sstring>("view_name");
     auto id = table_id(row.get_nonnull<utils::UUID>("id"));
 
-    schema_builder builder{ks_name, cf_name, id};
+    schema_builder builder{this_smp_shard_count(), ks_name, cf_name, id};
     prepare_builder_from_table_row(ctxt, builder, row);
 
     if (sm.scylla_tables()) {

@@ -567,7 +567,7 @@ private:
             create_directories(cfg->logstor_directory().c_str());
             create_directories(cfg->hints_directory().c_str());
             create_directories(cfg->view_hints_directory().c_str());
-            for (unsigned i = 0; i < smp::count; ++i) {
+            for (unsigned i = 0; i < this_smp_shard_count(); ++i) {
                 create_directories((cfg->hints_directory() + "/" + std::to_string(i)).c_str());
                 create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
             }
@@ -741,7 +741,7 @@ private:
                 .hints_directory_initializer = db::hints::directory_initializer::make_dummy(),
             };
             spcfg.available_memory = memory::stats().total_memory();
-            db::view::node_update_backlog b(smp::count, 10ms);
+            db::view::node_update_backlog b(this_smp_shard_count(), 10ms);
 
             _timeout_config.start(std::ref(*cfg)).get();
             auto stop_timeout_config = defer_verbose_shutdown("updateable timeout config", [this] { _timeout_config.stop().get(); });
@@ -811,7 +811,7 @@ private:
                 topo.add_or_update_endpoint(hostid,
                                             std::nullopt,
                                             locator::node::state::normal,
-                                            smp::count);
+                                            this_smp_shard_count());
                 return make_ready_future<>();
             }).get();
 

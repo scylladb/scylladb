@@ -35,7 +35,7 @@
 using namespace std::literals::chrono_literals;
 
 static schema_ptr make_schema() {
-    return schema_builder("ks", "cf")
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("ck", bytes_type, column_kind::clustering_key)
         .with_column("s1", bytes_type, column_kind::static_column)
@@ -402,7 +402,7 @@ SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
 
 SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type, column_kind::regular_column)
             .set_gc_grace_seconds(0)

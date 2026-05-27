@@ -148,10 +148,10 @@ using start_hint_manager = seastar::bool_class<class start_hint_manager_tag>;
 using loosen_constraints = seastar::bool_class<class loosen_constraints_tag>;
 
 struct token_metadata_change {
-    std::vector<locator::mutable_token_metadata_ptr> pending_token_metadata_ptr{smp::count};
-    std::vector<std::unordered_map<sstring, locator::static_effective_replication_map_ptr>> pending_effective_replication_maps{smp::count};
-    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms{smp::count};
-    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_view_erms{smp::count};
+    std::vector<locator::mutable_token_metadata_ptr> pending_token_metadata_ptr{this_smp_shard_count()};
+    std::vector<std::unordered_map<sstring, locator::static_effective_replication_map_ptr>> pending_effective_replication_maps{this_smp_shard_count()};
+    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms{this_smp_shard_count()};
+    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_view_erms{this_smp_shard_count()};
     std::unordered_set<session_id> open_sessions;
 
     future<> destroy();

@@ -69,11 +69,11 @@ static std::unique_ptr<compaction::strategy_control> make_strategy_control_for_t
 
 SEASTAR_TEST_CASE(incremental_compaction_test) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
-        auto builder = schema_builder("tests", "incremental_compaction_test")
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "incremental_compaction_test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type)
                 .with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner")
-                .with_sharder(smp::count, 0);
+                .with_sharder(this_smp_shard_count(), 0);
         auto s = builder.build();
 
         auto tmp = make_lw_shared<tmpdir>();
@@ -197,7 +197,7 @@ SEASTAR_TEST_CASE(incremental_compaction_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
-    auto builder = schema_builder("tests", "incremental_compaction_test")
+    auto builder = schema_builder(this_smp_shard_count(), "tests", "incremental_compaction_test")
         .with_column("id", utf8_type, column_kind::partition_key)
         .with_column("value", int32_type);
     auto s = builder.build();
@@ -296,7 +296,7 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
 SEASTAR_TEST_CASE(basic_garbage_collection_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto tmp = tmpdir();
-        auto s = schema_builder("ks", "cf")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("c1", utf8_type, column_kind::clustering_key)
                 .with_column("r1", utf8_type)
@@ -407,7 +407,7 @@ SEASTAR_TEST_CASE(ics_reshape_test) {
     static constexpr unsigned disjoint_sstable_count = 256;
 
     return test_env::do_with_async([] (test_env& env) {
-        auto builder = schema_builder("tests", "ics_reshape_test")
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "ics_reshape_test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("cl", ::timestamp_type, column_kind::clustering_key)
                 .with_column("value", int32_type);
@@ -500,7 +500,7 @@ SEASTAR_TEST_CASE(ics_reshape_test) {
 SEASTAR_TEST_CASE(gc_tombstone_with_grace_seconds_test) {
     return test_env::do_with_async([](test_env &env) {
         auto gc_grace_seconds = 5;
-        auto schema = schema_builder("tests", "gc_tombstone_with_grace_seconds_test")
+        auto schema = schema_builder(this_smp_shard_count(), "tests", "gc_tombstone_with_grace_seconds_test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", byte_type)
                 .set_gc_grace_seconds(gc_grace_seconds).build();
@@ -535,7 +535,7 @@ SEASTAR_TEST_CASE(gc_sstable_incremental_release_test) {
 
         scoped_logger_level compaction_log_level("compaction", seastar::log_level::debug);
 
-        auto schema = schema_builder("ks", "gc_incremental_release_test")
+        auto schema = schema_builder(this_smp_shard_count(), "ks", "gc_incremental_release_test")
                               .with_column("pk", utf8_type, column_kind::partition_key)
                               .with_column("data", utf8_type)
                               .with_tombstone_gc_options(tombstone_gc_options{tombstone_gc_mode::immediate})
@@ -619,7 +619,7 @@ SEASTAR_TEST_CASE(gc_sstable_no_premature_release_with_overlapping_inputs_test) 
     return test_env::do_with_async([](test_env& env) {
         scoped_logger_level compaction_log_level("compaction", seastar::log_level::debug);
 
-        auto schema = schema_builder("ks", "gc_no_premature_release_test")
+        auto schema = schema_builder(this_smp_shard_count(), "ks", "gc_no_premature_release_test")
                 .with_column("pk", utf8_type, column_kind::partition_key)
                 .with_column("data", utf8_type)
                 .with_tombstone_gc_options(tombstone_gc_options{tombstone_gc_mode::immediate})

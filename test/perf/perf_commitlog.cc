@@ -51,7 +51,7 @@ static void write_json_result(std::string result_file, const test_config& cfg, c
 
     Json::Value params;
     params["concurrency"] = cfg.concurrency;
-    params["cpus"] = smp::count;
+    params["cpus"] = this_smp_shard_count();
     params["duration"] = cfg.duration_in_seconds;
 
     params["min-data-size"] = cfg.min_data_size;
@@ -59,7 +59,7 @@ static void write_json_result(std::string result_file, const test_config& cfg, c
     params["min-flush-delay-in-ms"] = cfg.min_flush_delay_in_ms;
     params["max-flush-delay-in-ms"] = cfg.max_flush_delay_in_ms;
 
-    params["concurrency,cpus,duration"] = fmt::format("{},{},{}", cfg.concurrency, smp::count, cfg.duration_in_seconds);
+    params["concurrency,cpus,duration"] = fmt::format("{},{},{}", cfg.concurrency, this_smp_shard_count(), cfg.duration_in_seconds);
     results["parameters"] = std::move(params);
 
     Json::Value stats;

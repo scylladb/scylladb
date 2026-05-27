@@ -163,13 +163,13 @@ SEASTAR_TEST_CASE(test_hint_sync_point_faithful_reserialization) {
     spoint.regular_per_shard_rps[1][addr2] = db::replay_position();
     spoint.mv_per_shard_rps[0][addr2] = db::replay_position();
 
-    // If the sync point contains information about less shards than smp::count,
+    // If the sync point contains information about less shards than this_smp_shard_count(),
     // the missing shards are filled with zero. Do it here manually so that
     // we can compare spoint with decoded_spoint.
-    const unsigned adjusted_count = std::max(encoded_shard_count, smp::count);
+    const unsigned adjusted_count = std::max(encoded_shard_count, this_smp_shard_count());
     spoint.regular_per_shard_rps.resize(adjusted_count);
     spoint.mv_per_shard_rps.resize(adjusted_count);
-    for (unsigned s = encoded_shard_count; s < smp::count; s++) {
+    for (unsigned s = encoded_shard_count; s < this_smp_shard_count(); s++) {
         spoint.regular_per_shard_rps[s][addr1] = db::replay_position();
         spoint.regular_per_shard_rps[s][addr2] = db::replay_position();
         spoint.mv_per_shard_rps[s][addr1] = db::replay_position();
@@ -218,13 +218,13 @@ static future<> test_decode_v1_or_v2(encode_version v)
     spoint.regular_per_shard_rps[1][addr2] = db::replay_position();
     spoint.mv_per_shard_rps[0][addr2] = db::replay_position();
 
-    // If the sync point contains information about less shards than smp::count,
+    // If the sync point contains information about less shards than this_smp_shard_count(),
     // the missing shards are filled with zero. Do it here manually so that
     // we can compare spoint with decoded_spoint.
-    const unsigned adjusted_count = std::max(encoded_shard_count, smp::count);
+    const unsigned adjusted_count = std::max(encoded_shard_count, this_smp_shard_count());
     spoint.regular_per_shard_rps.resize(adjusted_count);
     spoint.mv_per_shard_rps.resize(adjusted_count);
-    for (unsigned s = encoded_shard_count; s < smp::count; s++) {
+    for (unsigned s = encoded_shard_count; s < this_smp_shard_count(); s++) {
         spoint.regular_per_shard_rps[s][addr1] = db::replay_position();
         spoint.regular_per_shard_rps[s][addr2] = db::replay_position();
         spoint.mv_per_shard_rps[s][addr1] = db::replay_position();

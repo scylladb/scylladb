@@ -254,8 +254,8 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_address_map_replication) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 
@@ -353,8 +353,8 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_replication) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_address_map_replication_efficiency) {
-        if (smp::count < 2) {
-            std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        if (this_smp_shard_count() < 2) {
+            std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
             return;
         }
 
@@ -397,8 +397,8 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_replication_efficiency) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_address_map_expiry_change_keeps_addr_mapping) {
-        if (smp::count < 2) {
-            std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        if (this_smp_shard_count() < 2) {
+            std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
             return;
         }
 

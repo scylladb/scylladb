@@ -46,7 +46,7 @@ future<semaphore_units<named_semaphore::exception_factory>> resource_manager::ge
     // require each hint to reserve at least 1/(max concurrency) of the shard budget
     const size_t per_node_concurrency_limit = _max_hints_send_queue_length();
     const size_t per_shard_concurrency_limit = (per_node_concurrency_limit > 0)
-            ? div_ceil(per_node_concurrency_limit, smp::count)
+            ? div_ceil(per_node_concurrency_limit, this_smp_shard_count())
             : default_per_shard_concurrency_limit;
     const size_t min_send_hint_budget = _max_send_in_flight_memory / per_shard_concurrency_limit;
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
@@ -285,7 +285,7 @@ future<> resource_manager::prepare_per_device_limits(manager& shard_manager) {
             // Since we possibly deferred, we need to recheck the _per_device_limits_map.
             if (inserted) {
                 // By default, give each group of managers 10% of the available disk space. Give each shard an equal share of the available space.
-                it->second.max_shard_disk_space_size = std::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
+                it->second.max_shard_disk_space_size = std::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * this_smp_shard_count());
                 // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
                 // Then, reserve 90% of all space instead of 10% above.
                 if (is_mountpoint) {

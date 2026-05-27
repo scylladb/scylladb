@@ -463,7 +463,7 @@ class global_static_effective_replication_map {
     std::vector<foreign_ptr<static_erm_ptr>> _erms;
 
 public:
-    global_static_effective_replication_map() : _erms(smp::count) {}
+    global_static_effective_replication_map() : _erms(this_smp_shard_count()) {}
     global_static_effective_replication_map(global_static_effective_replication_map&&) = default;
     global_static_effective_replication_map& operator=(global_static_effective_replication_map&&) = default;
 

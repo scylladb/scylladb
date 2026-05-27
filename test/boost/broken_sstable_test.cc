@@ -51,14 +51,14 @@ static future<> broken_sst(sstring dir, sstables::generation_type::int_t generat
 static future<> broken_sst(sstring dir, sstables::generation_type::int_t generation, sstring msg, std::optional<sstring> sst_name = std::nullopt) {
     // Using an empty schema for this function, which is only about loading
     // a malformed component and checking that it fails.
-    auto s = schema_builder("ks", "cf", {}, utf8_type).build();
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf", {}, utf8_type).build();
     return broken_sst(dir, generation, s, msg, sst_name);
 }
 
 SEASTAR_TEST_CASE(test_empty_index) {
   return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
     sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
-    auto s = schema_builder("test_ks", "test_table")
+    auto s = schema_builder(this_smp_shard_count(), "test_ks", "test_table")
                  .with_column("pk", int32_type, column_kind::partition_key)
                  .with_column("ck", int32_type, column_kind::clustering_key)
                  .with_column("val", int32_type)
@@ -71,7 +71,7 @@ SEASTAR_TEST_CASE(test_empty_index) {
 }
 
 SEASTAR_TEST_CASE(missing_column_in_schema) {
-    schema_ptr s = schema_builder("test_ks", "test_table")
+    schema_ptr s = schema_builder(this_smp_shard_count(), "test_ks", "test_table")
                        .with_column("key1", utf8_type, column_kind::partition_key)
                        .with_column("key2", utf8_type, column_kind::clustering_key)
                        .with_column("key3", utf8_type, column_kind::clustering_key)
@@ -83,7 +83,7 @@ SEASTAR_TEST_CASE(missing_column_in_schema) {
 }
 
 SEASTAR_TEST_CASE(incompatible_serialized_type) {
-    schema_ptr s = schema_builder("test_ks", "test_table")
+    schema_ptr s = schema_builder(this_smp_shard_count(), "test_ks", "test_table")
                        .with_column("key1", utf8_type, column_kind::partition_key)
                        .with_column("key2", utf8_type, column_kind::clustering_key)
                        .with_column("key3", utf8_type, column_kind::clustering_key)
@@ -98,7 +98,7 @@ SEASTAR_TEST_CASE(incompatible_serialized_type) {
 }
 
 SEASTAR_TEST_CASE(invalid_boundary) {
-    schema_ptr s = schema_builder("test_ks", "test_t")
+    schema_ptr s = schema_builder(this_smp_shard_count(), "test_ks", "test_t")
                        .with_column("p", int32_type, column_kind::partition_key)
                        .with_column("a", int32_type, column_kind::clustering_key)
                        .with_column("b", int32_type, column_kind::clustering_key)
@@ -112,7 +112,7 @@ SEASTAR_TEST_CASE(invalid_boundary) {
 }
 
 SEASTAR_TEST_CASE(mismatched_timestamp) {
-    schema_ptr s = schema_builder("test_ks", "test_table")
+    schema_ptr s = schema_builder(this_smp_shard_count(), "test_ks", "test_table")
                        .with_column("key1", utf8_type, column_kind::partition_key)
                        .with_column("key2", utf8_type, column_kind::clustering_key)
                        .with_column("key3", utf8_type, column_kind::clustering_key)
@@ -127,7 +127,7 @@ SEASTAR_TEST_CASE(mismatched_timestamp) {
 }
 
 SEASTAR_TEST_CASE(broken_open_tombstone) {
-    schema_ptr s = schema_builder("test_ks", "test_table")
+    schema_ptr s = schema_builder(this_smp_shard_count(), "test_ks", "test_table")
                        .with_column("key1", utf8_type, column_kind::partition_key)
                        .with_column("key2", utf8_type, column_kind::clustering_key)
                        .with_column("key3", utf8_type, column_kind::clustering_key)
@@ -143,7 +143,7 @@ SEASTAR_TEST_CASE(broken_open_tombstone) {
 }
 
 SEASTAR_TEST_CASE(broken_close_tombstone) {
-    schema_ptr s = schema_builder("test_ks", "test_table")
+    schema_ptr s = schema_builder(this_smp_shard_count(), "test_ks", "test_table")
                        .with_column("key1", utf8_type, column_kind::partition_key)
                        .with_column("key2", utf8_type, column_kind::clustering_key)
                        .with_column("key3", utf8_type, column_kind::clustering_key)
@@ -158,7 +158,7 @@ SEASTAR_TEST_CASE(broken_close_tombstone) {
 
 SEASTAR_TEST_CASE(broken_start_composite) {
     schema_ptr s =
-        schema_builder("test_ks", "test_table")
+        schema_builder(this_smp_shard_count(), "test_ks", "test_table")
             .with_column("test_key", utf8_type, column_kind::partition_key)
             .with_column("test_val", utf8_type, column_kind::clustering_key)
             .build(schema_builder::compact_storage::no);
@@ -168,7 +168,7 @@ SEASTAR_TEST_CASE(broken_start_composite) {
 
 SEASTAR_TEST_CASE(broken_end_composite) {
     schema_ptr s =
-        schema_builder("test_ks", "test_table")
+        schema_builder(this_smp_shard_count(), "test_ks", "test_table")
             .with_column("test_key", utf8_type, column_kind::partition_key)
             .with_column("test_val", utf8_type, column_kind::clustering_key)
             .build(schema_builder::compact_storage::no);
@@ -178,7 +178,7 @@ SEASTAR_TEST_CASE(broken_end_composite) {
 
 SEASTAR_TEST_CASE(static_mismatch) {
     schema_ptr s =
-        schema_builder("test_foo_bar_zed_baz_ks", "test_foo_bar_zed_baz_table")
+        schema_builder(this_smp_shard_count(), "test_foo_bar_zed_baz_ks", "test_foo_bar_zed_baz_table")
             .with_column("test_foo_bar_zed_baz_key", utf8_type, column_kind::partition_key)
             .with_column("test_foo_bar_zed_baz_val", utf8_type, column_kind::clustering_key)
             .with_column("test_foo_bar_zed_baz_static", utf8_type, column_kind::regular_column)
@@ -190,7 +190,7 @@ SEASTAR_TEST_CASE(static_mismatch) {
 
 SEASTAR_TEST_CASE(static_with_clustering) {
     schema_ptr s =
-        schema_builder("test_foo_bar_zed_baz_ks", "test_foo_bar_zed_baz_table")
+        schema_builder(this_smp_shard_count(), "test_foo_bar_zed_baz_ks", "test_foo_bar_zed_baz_table")
             .with_column("test_foo_bar_zed_baz_key", utf8_type, column_kind::partition_key)
             .with_column("test_foo_bar_zed_baz_val", utf8_type, column_kind::clustering_key)
             .with_column("test_foo_bar_zed_baz_static", utf8_type, column_kind::static_column)

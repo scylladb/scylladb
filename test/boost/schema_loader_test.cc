@@ -423,7 +423,7 @@ SEASTAR_TEST_CASE(test_load_schema_from_sstable_interesting_schema) {
     const auto udt_type = user_type_impl::get_instance(ks, "udt", {"f1", "f2"}, {int32_type, frozen_string_list}, true);
     const auto frozen_udt_type = user_type_impl::get_instance(ks, "frozen_udt", {"f1", "f2"}, {int32_type, frozen_string_list}, false);
 
-    auto schema = schema_builder(ks, "interesting_table")
+    auto schema = schema_builder(this_smp_shard_count(), ks, "interesting_table")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
         .with_column("list", string_list, column_kind::regular_column)

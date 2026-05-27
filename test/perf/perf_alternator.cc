@@ -459,7 +459,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         params["remote_host"] = c.remote_host;
         params["flush"] = c.flush;
         params["scan_total_segments"] = c.scan_total_segments;
-        params["cpus"] = smp::count;
+        params["cpus"] = this_smp_shard_count();
 
         perf::write_json_result(c.json_result_file, agg, params, c.workload);
     }

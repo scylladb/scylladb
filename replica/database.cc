@@ -1016,7 +1016,7 @@ void database::update_keyspace(std::unique_ptr<keyspace_change> change) {
 }
 
 future<database::keyspace_change_per_shard> database::prepare_update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm, const locator::pending_token_metadata& pending_token_metadata) {
-    keyspace_change_per_shard changes(smp::count);
+    keyspace_change_per_shard changes(this_smp_shard_count());
     co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
         auto& ks = db.find_keyspace(ksm.name());
         auto new_ksm = ::make_lw_shared<keyspace_metadata>(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option(), ksm.durable_writes(),
@@ -1279,9 +1279,9 @@ void database::remove(table& cf) noexcept {
 }
 
 global_table_ptr::global_table_ptr() {
-    _p.resize(smp::count);
-    _views.resize(smp::count);
-    _base.resize(smp::count);
+    _p.resize(this_smp_shard_count());
+    _views.resize(this_smp_shard_count());
+    _base.resize(this_smp_shard_count());
 }
 
 void global_table_ptr::assign(database& db, table_id uuid) {
@@ -1707,7 +1707,7 @@ void database::insert_keyspace(std::unique_ptr<keyspace> ks) {
 }
 
 future<database::created_keyspace_per_shard> database::prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata, const locator::pending_token_metadata& pending_token_metadata) {
-    created_keyspace_per_shard created(smp::count);
+    created_keyspace_per_shard created(this_smp_shard_count());
     co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
         auto ksm = keyspace_metadata::new_keyspace(ks_metadata);
         auto ks = co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), pending_token_metadata.local(), system_keyspace::no);
@@ -3047,9 +3047,9 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot ? "with auto-" : "without ");
 
     std::vector<foreign_ptr<std::unique_ptr<table_truncate_state>>> table_states;
-    table_states.resize(smp::count);
+    table_states.resize(this_smp_shard_count());
 
-    co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&] (unsigned shard) -> future<> {
+    co_await coroutine::parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [&] (unsigned shard) -> future<> {
         table_states[shard] = co_await smp::submit_to(shard, [&] () -> future<foreign_ptr<std::unique_ptr<table_truncate_state>>> {
             auto& cf = *table_shards;
             auto& views = table_shards.views();
@@ -3905,7 +3905,7 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
         // After the `exclusive_scan` later, this will say which range of chunks
         // (in the global "list" of chunks) belongs to which shard.
         // (Shard X owns range `global_offset[X] .. global_offset[X + 1]`).
-        std::vector<uint64_t> global_offset(smp::count + 1);
+        std::vector<uint64_t> global_offset(this_smp_shard_count() + 1);
 
         // Watch out: static lambda. Don't add captures to it.
         static auto size_in_chunks = [] (const sstables::shared_sstable& sst, uint64_t chunk_size) {

@@ -1686,7 +1686,7 @@ future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr ss
     //
     // This will help avoid conflicts when querying sstables of system-tables
     // and allows cql_test_env to work with a simple config (no EAR setup).
-    auto builder = schema_builder(keyspace_name, sstable_schema->cf_name());
+    auto builder = schema_builder(this_smp_shard_count(), keyspace_name, sstable_schema->cf_name());
     for (const auto& col_kind : {column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column}) {
         for (const auto& col : sstable_schema->columns(col_kind)) {
             builder.with_column(col.name(), col.type, col_kind, col.view_virtual());
@@ -1966,7 +1966,7 @@ void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        // sst was loaded with the smp::count as its shard_count but that's not
+        // sst was loaded with the this_smp_shard_count() as its shard_count but that's not
         // necessarily identical to the "shards" specified in the command line.
         // reload the sst with the specified shard_count and ignore_msb_bits
         auto schema = schema_builder(sst->get_schema()).with_sharder(
@@ -2091,7 +2091,7 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
         throw std::invalid_argument("cannot provide both -q|--query and --query-file");
     }
 
-    if (smp::count > 1) {
+    if (this_smp_shard_count() > 1) {
         // Assuming smp==1 allows simplifying the code below.
         throw std::runtime_error("query operation cannot run with --smp > 1");
     }

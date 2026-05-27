@@ -563,7 +563,7 @@ future<> announce_dict_to_shards(seastar::sharded<walltime_compressor_tracker>& 
     arc_logger.debug("Announcing new dictionary: ts={}, origin={}", shared_dict.id.timestamp, shared_dict.id.origin_node);
     auto dict = make_lw_shared(std::move(shared_dict));
     auto foreign_ptrs = std::vector<foreign_ptr<decltype(dict)>>();
-    for (size_t i = 0; i < smp::count; ++i) {
+    for (size_t i = 0; i < this_smp_shard_count(); ++i) {
         foreign_ptrs.push_back(make_foreign(dict));
     }
     co_await sharded_tracker.invoke_on_all([&foreign_ptrs] (auto& tracker) {

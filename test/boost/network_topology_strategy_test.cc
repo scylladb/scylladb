@@ -490,7 +490,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         auto tmptr = stm.get();
         const auto& topo = tmptr->get_topology();
 
-        auto s = schema_builder("ks", "tb")
+        auto s = schema_builder(this_smp_shard_count(), "ks", "tb")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("v", utf8_type)
             .build();
@@ -585,7 +585,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     auto tmptr = stm.get();
     const auto& topo = tmptr->get_topology();
 
-    auto s = schema_builder("ks", "tb")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "tb")
         .with_column("pk", utf8_type, column_kind::partition_key)
         .with_column("v", utf8_type)
         .build();
@@ -1433,12 +1433,12 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
         }
     }).get();
 
-    auto base_schema = schema_builder("ks", "base")
+    auto base_schema = schema_builder(this_smp_shard_count(), "ks", "base")
         .with_column("k", utf8_type, column_kind::partition_key)
         .with_column("v", utf8_type)
         .build();
 
-    auto view_schema = schema_builder("ks", "view")
+    auto view_schema = schema_builder(this_smp_shard_count(), "ks", "view")
         .with_column("v", utf8_type, column_kind::partition_key)
         .with_column("k", utf8_type)
         .build();

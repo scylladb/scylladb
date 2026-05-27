@@ -226,7 +226,7 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
         const data_dictionary::database& db) const
 {
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
-    schema_builder builder{schema->ks_name(), secondary_index::index_table_name(im.name())};
+    schema_builder builder{this_smp_shard_count(), schema->ks_name(), secondary_index::index_table_name(im.name())};
     auto target_info = secondary_index::target_parser::parse(schema, im);
     const auto* index_target = im.local() ? target_info.ck_columns.front() : target_info.pk_columns.front();
     auto target_type = target_info.type;

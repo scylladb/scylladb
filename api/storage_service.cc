@@ -449,7 +449,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
 
         // No need to add the keyspace, since all we want is to avoid always sending this to the same
         // CPU. Even then I am being overzealous here. This is not something that happens all the time.
-        auto coordinator = std::hash<sstring>()(cf) % smp::count;
+        auto coordinator = std::hash<sstring>()(cf) % this_smp_shard_count();
         return sst_loader.invoke_on(coordinator,
                 [ks = std::move(ks), cf = std::move(cf),
                 load_and_stream, primary_replica_only, skip_cleanup, skip_reshape, scope] (sstables_loader& loader) {

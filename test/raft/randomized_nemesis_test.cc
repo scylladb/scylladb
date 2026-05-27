@@ -2133,11 +2133,11 @@ struct wait_for_leader {
 };
 
 future<> ping_shards() {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         return seastar::yield();
     }
 
-    return parallel_for_each(std::views::iota(0u, smp::count), [] (shard_id s) {
+    return parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [] (shard_id s) {
         return smp::submit_to(s, [](){});
     });
 }

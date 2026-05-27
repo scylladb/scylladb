@@ -221,7 +221,7 @@ SEASTAR_THREAD_TEST_CASE(test_dispose_gently_vector_of_unique_ptrs) {
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr) {
     int cleared_gently = 0;
     auto make_foreign_ptr = [&cleared_gently] () {
-        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+        return smp::submit_to((this_shard_id() + 1) % this_smp_shard_count(), [&cleared_gently] {
             auto p = std::make_unique<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
                 BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
                 cleared_gently++;
@@ -246,7 +246,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr) {
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr_const_payload) {
     int cleared_gently = 0;
     auto make_foreign_ptr = [&cleared_gently] () {
-        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+        return smp::submit_to((this_shard_id() + 1) % this_smp_shard_count(), [&cleared_gently] {
             auto p = std::make_unique<const clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
                 BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
                 cleared_gently++;
@@ -271,7 +271,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr_const_payload) {
 SEASTAR_THREAD_TEST_CASE(test_dispose_gently_foreign_unique_ptr) {
     int cleared_gently = 0;
     auto make_foreign_ptr = [&cleared_gently] () {
-        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+        return smp::submit_to((this_shard_id() + 1) % this_smp_shard_count(), [&cleared_gently] {
             auto p = std::make_unique<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
                 BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
                 cleared_gently++;
@@ -290,7 +290,7 @@ SEASTAR_THREAD_TEST_CASE(test_dispose_gently_foreign_unique_ptr) {
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr) {
     int cleared_gently = 0;
     auto make_foreign_ptr = [&cleared_gently] () {
-        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+        return smp::submit_to((this_shard_id() + 1) % this_smp_shard_count(), [&cleared_gently] {
             auto p = make_lw_shared<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
                 BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
                 cleared_gently++;
@@ -333,7 +333,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr) {
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr_const_payload) {
     int cleared_gently = 0;
     auto make_foreign_ptr = [&cleared_gently] () {
-        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+        return smp::submit_to((this_shard_id() + 1) % this_smp_shard_count(), [&cleared_gently] {
             auto p = make_lw_shared<const clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
                 BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
                 cleared_gently++;
@@ -376,7 +376,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr_const_payload) {
 SEASTAR_THREAD_TEST_CASE(test_dispose_gently_foreign_shared_ptr) {
     int cleared_gently = 0;
     auto make_foreign_ptr = [&cleared_gently] () {
-        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+        return smp::submit_to((this_shard_id() + 1) % this_smp_shard_count(), [&cleared_gently] {
             auto p = make_lw_shared<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
                 BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
                 cleared_gently++;

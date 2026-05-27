@@ -59,8 +59,8 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
         auto test_random_streams = [&e] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
             for (auto i = 0; i < 3; i++) {
                 auto muts = gen(partition_nr);
-                std::vector<size_t> shards_before(smp::count, 0);
-                std::vector<size_t> shards_after(smp::count, 0);
+                std::vector<size_t> shards_before(this_smp_shard_count(), 0);
+                std::vector<size_t> shards_after(this_smp_shard_count(), 0);
                 schema_ptr s = gen.schema();
 
                 for (auto& m : muts) {

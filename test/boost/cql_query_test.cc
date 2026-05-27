@@ -643,7 +643,7 @@ SEASTAR_TEST_CASE(test_select_statement) {
    return do_with_cql_env([] (cql_test_env& e) {
         return e.create_table([](std::string_view ks_name) {
             // CQL: create table cf (p1 varchar, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2));
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", int32_type, column_kind::clustering_key)
                     .with_column("c2", int32_type, column_kind::clustering_key)
@@ -735,7 +735,7 @@ SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
         };
 
         return e.create_table([](std::string_view ks_name) {
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
                     .with_column("KEY", bytes_type, column_kind::partition_key)
                     .with_column("C0", bytes_type)
                     .with_column("C1", bytes_type)
@@ -760,7 +760,7 @@ SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
 SEASTAR_TEST_CASE(test_range_queries) {
    return do_with_cql_env([] (cql_test_env& e) {
         return e.create_table([](std::string_view ks_name) {
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
                     .with_column("k", bytes_type, column_kind::partition_key)
                     .with_column("c0", bytes_type, column_kind::clustering_key)
                     .with_column("c1", bytes_type, column_kind::clustering_key)
@@ -857,7 +857,7 @@ SEASTAR_TEST_CASE(test_range_queries) {
 SEASTAR_TEST_CASE(test_ordering_of_composites_with_variable_length_components) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.create_table([](std::string_view ks) {
-            return *schema_builder(ks, "cf")
+            return *schema_builder(this_smp_shard_count(), ks, "cf")
                     .with_column("k", bytes_type, column_kind::partition_key)
                     // We need more than one clustering column so that the single-element tuple format optimisation doesn't kick in
                     .with_column("c0", bytes_type, column_kind::clustering_key)
@@ -1205,7 +1205,7 @@ SEASTAR_TEST_CASE(test_deletion_scenarios) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.create_table([](std::string_view ks) {
             // CQL: create table cf (k bytes, c bytes, v bytes, primary key (k, c));
-            return *schema_builder(ks, "cf")
+            return *schema_builder(this_smp_shard_count(), ks, "cf")
                     .with_column("k", bytes_type, column_kind::partition_key)
                     .with_column("c", bytes_type, column_kind::clustering_key)
                     .with_column("v", bytes_type)
@@ -1355,7 +1355,7 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
         auto my_map_type = make_my_map_type();
         return e.create_table([make_my_map_type] (std::string_view ks_name) {
             // CQL: create table cf (p1 varchar primary key, map1 map<int, int>);
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("map1", make_my_map_type())
                     .build();
@@ -1442,7 +1442,7 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
         auto my_set_type = make_my_set_type();
         return e.create_table([make_my_set_type](std::string_view ks_name) {
             // CQL: create table cf (p1 varchar primary key, set1 set<int>);
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("set1", make_my_set_type())
                     .build();
@@ -1680,7 +1680,7 @@ SEASTAR_TEST_CASE(test_tuples) {
             // this runs on all cores, so create a local tt for each core:
             auto tt = make_tt();
             // CQL: "create table cf (id int primary key, t tuple<int, bigint, text>);
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
                     .with_column("id", int32_type, column_kind::partition_key)
                     .with_column("t", tt)
                     .build();
@@ -1714,7 +1714,7 @@ SEASTAR_TEST_CASE(test_vectors) {
             // this runs on all cores, so create a local vt for each core:
             auto vt = make_vt();
             // CQL: "create table cf (id int primary key, v vector<int, 3>);
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
                     .with_column("id", int32_type, column_kind::partition_key)
                     .with_column("v", vt)
                     .build();
@@ -2027,7 +2027,7 @@ SEASTAR_TEST_CASE(test_ttl) {
         auto make_my_list_type = [] { return list_type_impl::get_instance(utf8_type, true); };
         auto my_list_type = make_my_list_type();
         return e.create_table([make_my_list_type] (std::string_view ks_name) {
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("r1", utf8_type)
                     .with_column("r2", utf8_type)
@@ -3809,7 +3809,7 @@ SEASTAR_TEST_CASE(test_cache_bypass) {
         auto with_cache = run_and_examine_cache_read_stats_change(e, "t", [] (cql_test_env& e) {
             e.execute_cql("SELECT * FROM t").get();
         });
-        BOOST_REQUIRE(with_cache >= smp::count);  // scan may make multiple passes per shard
+        BOOST_REQUIRE(with_cache >= this_smp_shard_count());  // scan may make multiple passes per shard
         auto without_cache = run_and_examine_cache_read_stats_change(e, "t", [] (cql_test_env& e) {
             e.execute_cql("SELECT * FROM t BYPASS CACHE").get();
         });
@@ -4137,7 +4137,7 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
         auto schema = e.local_db().find_schema("ks", "t");
 
         // Create a CQL-illegal view with two regular base columns in the view key
-        schema_builder view_builder("ks", "tv");
+        schema_builder view_builder(this_smp_shard_count(), "ks", "tv");
         view_builder.with_column(to_bytes("v1"), int32_type, column_kind::partition_key)
                 .with_column(to_bytes("v2"), int32_type, column_kind::clustering_key)
                 .with_column(to_bytes("p"), int32_type, column_kind::clustering_key)
@@ -5986,7 +5986,7 @@ bool has_tablet_routing(::shared_ptr<cql_transport::messages::result_message> re
 }
 
 SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_insert) {
-    BOOST_ASSERT(smp::count == 2);
+    BOOST_ASSERT(this_smp_shard_count() == 2);
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } and tablets = {'initial': 8};").get();
         e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
@@ -6073,7 +6073,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
         auto pk2 = partition_key::from_singular(*sptr, int32_t(2));
 
         unsigned local_shard2 = sptr->table().shard_for_reads(dht::get_token(*sptr, pk2.view()));
-        unsigned foreign_shard = (local_shard2 + 1) % smp::count;
+        unsigned foreign_shard = (local_shard2 + 1) % this_smp_shard_count();
 
         smp::submit_to(foreign_shard, [&] { 
             return seastar::async([&] {
@@ -6099,7 +6099,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
         auto pk = partition_key::from_singular(*sptr, int32_t(1));
 
         unsigned local_shard = sptr->table().shard_for_reads(dht::get_token(*sptr, pk.view()));
-        unsigned foreign_shard = (local_shard + 1) % smp::count;
+        unsigned foreign_shard = (local_shard + 1) % this_smp_shard_count();
 
         smp::submit_to(local_shard, [&] { 
             return seastar::async([&] {
@@ -6135,7 +6135,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
 // (not the tablet shard). This way local_client_state() belongs to the current
 // shard, and move_to_other_shard() is called on the owning shard.
 SEASTAR_TEST_CASE(test_tablet_routing_info_after_cas_shard_bounce) {
-    BOOST_REQUIRE_GT(smp::count, 1u);
+    BOOST_REQUIRE_GT(this_smp_shard_count(), 1u);
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create keyspace ks_tablet with replication = "
             "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
@@ -6143,12 +6143,12 @@ SEASTAR_TEST_CASE(test_tablet_routing_info_after_cas_shard_bounce) {
 
         // Create dummy tables until the next table's single tablet lands on
         // a shard other than ours. Each dummy table occupies one shard in the
-        // load balancer, so after at most smp::count dummies shard 0 (or
+        // load balancer, so after at most this_smp_shard_count() dummies shard 0 (or
         // whichever shard we're on) is no longer the least loaded.
         schema_ptr schema;
         unsigned tablet_shard;
         for (unsigned i = 0; ; ++i) {
-            BOOST_REQUIRE_MESSAGE(i <= smp::count, "Could not place tablet on a foreign shard");
+            BOOST_REQUIRE_MESSAGE(i <= this_smp_shard_count(), "Could not place tablet on a foreign shard");
             auto tbl = format("tbl_{}", i);
             e.execute_cql(format("create table ks_tablet.{} (pk int PRIMARY KEY, v int);", tbl)).get();
             schema = e.local_db().find_schema("ks_tablet", tbl);

@@ -47,7 +47,7 @@ static
 future<table_id> add_table(cql_test_env& e) {
     auto id = table_id(utils::UUID_gen::get_time_UUID());
     co_await e.create_table([id] (std::string_view ks_name) {
-        return *schema_builder(ks_name, id.to_sstring(), id)
+        return *schema_builder(this_smp_shard_count(), ks_name, id.to_sstring(), id)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("r1", int32_type)
                 .build();

@@ -785,7 +785,7 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
 future<reshape_config> make_reshape_config(const sstables::storage& storage, reshape_mode mode) {
     co_return reshape_config{
         .mode = mode,
-        .free_storage_space = co_await storage.free_space() / smp::count,
+        .free_storage_space = co_await storage.free_space() / this_smp_shard_count(),
     };
 }
 

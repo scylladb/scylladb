@@ -70,7 +70,7 @@ void directories::set::add(std::vector<sstring> paths) {
 void directories::set::add_sharded(sstring p) {
     fs::path path(p);
 
-    for (unsigned i = 0; i < smp::count; i++) {
+    for (unsigned i = 0; i < this_smp_shard_count(); i++) {
         add(path / seastar::to_sstring(i).c_str());
     }
 }

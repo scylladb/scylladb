@@ -573,7 +573,7 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption2){
 SEASTAR_TEST_CASE(test_commitlog_chunk_corruption3){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    cfg.commitlog_total_space_in_mb = 2 * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false;
 
     return cl_test(cfg, [](commitlog& log) -> future<> {
@@ -633,7 +633,7 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption3){
 SEASTAR_TEST_CASE(test_commitlog_replay_single_large_mutation){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 4;
-    cfg.commitlog_total_space_in_mb = 2 * cfg.commitlog_segment_size_in_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * cfg.commitlog_segment_size_in_mb * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false;
 
     return cl_test(cfg, [](commitlog& log) -> future<> {
@@ -696,7 +696,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_single_large_mutation){
 SEASTAR_TEST_CASE(test_commitlog_replay_large_mutations){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 14;
-    cfg.commitlog_total_space_in_mb = 2 * cfg.commitlog_segment_size_in_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * cfg.commitlog_segment_size_in_mb * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false;
 
     return cl_test(cfg, [](commitlog& log) -> future<> {
@@ -1115,7 +1115,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
 SEASTAR_TEST_CASE(test_commitlog_entry_offsets) {
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    cfg.commitlog_total_space_in_mb = 2 * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false;
 
     return cl_test(cfg, [](commitlog& log) -> future<> {
@@ -1157,7 +1157,7 @@ SEASTAR_TEST_CASE(test_commitlog_entry_offsets) {
 SEASTAR_TEST_CASE(test_commitlog_max_segment_size) {
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    cfg.commitlog_total_space_in_mb = 2 * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false;
 
     return cl_test(cfg, [max_size = cfg.commitlog_segment_size_in_mb](commitlog& log) -> future<> {
@@ -1236,7 +1236,7 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_in_recycle) {
     constexpr auto max_size_mb = 2;
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     // ensure total size per shard is not multiple of segment size.
-    cfg.commitlog_total_space_in_mb = 5 * smp::count;
+    cfg.commitlog_total_space_in_mb = 5 * this_smp_shard_count();
     cfg.commitlog_sync_period_in_ms = 10;
     cfg.allow_going_over_size_limit = false;
     cfg.use_o_dsync = true; // make sure we pre-allocate.
@@ -1311,7 +1311,7 @@ SEASTAR_TEST_CASE(test_commitlog_shutdown_during_wait) {
     constexpr auto max_size_mb = 2;
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     // ensure total size per shard is not multiple of segment size.
-    cfg.commitlog_total_space_in_mb = 5 * smp::count;
+    cfg.commitlog_total_space_in_mb = 5 * this_smp_shard_count();
     cfg.commitlog_sync_period_in_ms = 10;
     cfg.allow_going_over_size_limit = false;
     cfg.use_o_dsync = true; // make sure we pre-allocate.
@@ -1378,7 +1378,7 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
     constexpr auto max_size_mb = 1;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * this_smp_shard_count();
     cfg.commitlog_sync_period_in_ms = 10;
     cfg.allow_going_over_size_limit = false;
     cfg.use_o_dsync = true; // make sure we pre-allocate.
@@ -1427,7 +1427,7 @@ static future<> do_test_exception_in_allocate_ex(bool do_file_delete) {
     constexpr auto max_size_mb = 1;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * this_smp_shard_count();
     cfg.commitlog_sync_period_in_ms = 10;
     cfg.allow_going_over_size_limit = false; // #9348 - now can enforce size limit always
     cfg.use_o_dsync = true; // make sure we pre-allocate.
@@ -1573,7 +1573,7 @@ SEASTAR_TEST_CASE(test_delete_recycled_segment_removes_size) {
     constexpr auto max_size_mb = 1;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false; // #9348 - now can enforce size limit always
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
@@ -1610,7 +1610,7 @@ SEASTAR_TEST_CASE(test_delete_recycled_segment_removes_size) {
 
     auto max_file_size_bytes = (max_size_mb * 1024 * 1024);
     // we might be one segment over disk threshold. 
-    auto max_shard_size_bytes = max_file_size_bytes + (cfg.commitlog_total_space_in_mb * 1024 * 1024) / smp::count;
+    auto max_shard_size_bytes = max_file_size_bytes + (cfg.commitlog_total_space_in_mb * 1024 * 1024) / this_smp_shard_count();
 
     // Add a bunch of fake segments (pretending replayed). The total footprint will be much 
     // more than above limit.
@@ -1648,7 +1648,7 @@ SEASTAR_TEST_CASE(test_wait_for_delete) {
     constexpr auto max_size_mb = 1;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 8 * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 8 * max_size_mb * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false; // #9348 - now can enforce size limit always
     cfg.use_o_dsync = true; // make sure we pre-allocate.
 
@@ -1723,7 +1723,7 @@ SEASTAR_TEST_CASE(test_commitlog_max_data_lifetime) {
     constexpr auto max_size_mb = 1;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * this_smp_shard_count();
     cfg.commitlog_sync_period_in_ms = 10;
     cfg.commitlog_data_max_lifetime_in_seconds = 2;
     cfg.allow_going_over_size_limit = false;
@@ -1777,7 +1777,7 @@ SEASTAR_TEST_CASE(test_commitlog_update_max_data_lifetime) {
     constexpr auto max_size_mb = 1;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * this_smp_shard_count();
     cfg.commitlog_sync_period_in_ms = 10;
     cfg.commitlog_data_max_lifetime_in_seconds = std::nullopt;
     cfg.allow_going_over_size_limit = false;
@@ -1840,7 +1840,7 @@ static future<> do_test_oversized_entry(size_t max_size_mb) {
     commitlog::config cfg;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 8 * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 8 * max_size_mb * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false;
     cfg.allow_fragmented_entries = true;
     cfg.use_o_dsync = false; 
@@ -1938,7 +1938,7 @@ static future<> test_oversized(size_t n_entries, size_t max_size_mb, std::functi
     commitlog::config cfg;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 8 * n_entries * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 8 * n_entries * max_size_mb * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false;
     cfg.allow_fragmented_entries = true;
     cfg.use_o_dsync = false; 
@@ -2185,7 +2185,7 @@ SEASTAR_TEST_CASE(test_commitlog_handle_replayed_segments) {
     // easily exceed the CI timeout of 15 minutes (SCYLLADB-1496).
     constexpr uint64_t max_size_mb = 128;
 
-    cfg.commitlog_total_space_in_mb = max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = max_size_mb * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false;
     cfg.commitlog_sync_period_in_ms = 1;
 
@@ -2239,7 +2239,7 @@ SEASTAR_TEST_CASE(test_commitlog_release_large_mutation_segments) {
     constexpr uint64_t max_size_mb = 8;
 
     cfg.commitlog_segment_size_in_mb = max_size_mb;
-    cfg.commitlog_total_space_in_mb = 8 * 4 * max_size_mb * smp::count;
+    cfg.commitlog_total_space_in_mb = 8 * 4 * max_size_mb * this_smp_shard_count();
     cfg.allow_going_over_size_limit = false;
     cfg.allow_fragmented_entries = true;
     cfg.use_o_dsync = false; 

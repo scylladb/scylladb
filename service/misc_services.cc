@@ -119,7 +119,7 @@ void cache_hitrate_calculator::recalculate_timer() {
         } else {
             d = f.get();
         }
-        p->run_on((this_shard_id() + 1) % smp::count, d);
+        p->run_on((this_shard_id() + 1) % this_smp_shard_count(), d);
     });
 }
 

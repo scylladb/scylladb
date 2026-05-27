@@ -70,7 +70,7 @@ inline sstring get_test_dir(const sstring& name, const schema_ptr s)
 
 inline schema_ptr composite_schema() {
     static thread_local auto s = [] {
-        schema_builder builder("tests", "composite");
+        schema_builder builder(this_smp_shard_count(), "tests", "composite");
         // partition key
         builder.with_column("name", bytes_type, column_kind::partition_key);
         builder.with_column("col1", bytes_type, column_kind::partition_key);
@@ -83,7 +83,7 @@ inline schema_ptr composite_schema() {
 inline schema_ptr set_schema() {
     static thread_local auto s = [] {
         auto my_set_type = set_type_impl::get_instance(bytes_type, false);
-        schema_builder builder("tests", "set_pk");
+        schema_builder builder(this_smp_shard_count(), "tests", "set_pk");
         builder.with_column("ss", my_set_type, column_kind::partition_key);
         builder.with_column("ns", utf8_type);
         builder.set_comment("Table with a set as pkeys");
@@ -95,7 +95,7 @@ inline schema_ptr set_schema() {
 inline schema_ptr map_schema() {
     static thread_local auto s = [] {
         auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, false);
-        schema_builder builder("tests", "map_pk");
+        schema_builder builder(this_smp_shard_count(), "tests", "map_pk");
         // partition key
         builder.with_column("ss", my_map_type, column_kind::partition_key);
         builder.with_column("ns", utf8_type);
@@ -108,7 +108,7 @@ inline schema_ptr map_schema() {
 inline schema_ptr list_schema() {
     static thread_local auto s = [] {
         auto my_list_type = list_type_impl::get_instance(bytes_type, false);
-        schema_builder builder("tests", "list_pk");
+        schema_builder builder(this_smp_shard_count(), "tests", "list_pk");
         // partition key
         builder.with_column("ss", my_list_type, column_kind::partition_key);
         builder.with_column("ns", utf8_type);
@@ -120,7 +120,7 @@ inline schema_ptr list_schema() {
 
 inline schema_ptr uncompressed_schema(int32_t min_index_interval = 0) {
     auto uncompressed = [=] {
-        schema_builder builder("ks", "uncompressed", generate_legacy_id("ks", "uncompressed"));
+        schema_builder builder(this_smp_shard_count(), "ks", "uncompressed", generate_legacy_id("ks", "uncompressed"));
         // partition key
         builder.with_column("name", utf8_type, column_kind::partition_key);
         builder.with_column("col1", utf8_type);
@@ -147,7 +147,7 @@ inline schema_ptr complex_schema() {
         auto my_fset_type = set_type_impl::get_instance(bytes_type, false);
         auto my_set_static_type = set_type_impl::get_instance(bytes_type, true);
 
-        schema_builder builder("tests", "complex_schema", {}, bytes_type);
+        schema_builder builder(this_smp_shard_count(), "tests", "complex_schema", {}, bytes_type);
         builder.with_column("key", bytes_type, column_kind::partition_key);
         builder.with_column("clust1", bytes_type, column_kind::clustering_key);
         builder.with_column("clust2", bytes_type, column_kind::clustering_key);
@@ -166,7 +166,7 @@ inline schema_ptr complex_schema() {
 
 inline schema_ptr columns_schema() {
     static thread_local auto columns = [] {
-        schema_builder builder("name", "columns", generate_legacy_id("name", "columns"));
+        schema_builder builder(this_smp_shard_count(), "name", "columns", generate_legacy_id("name", "columns"));
         builder.with_column("keyspace_name", utf8_type, column_kind::partition_key);
         builder.with_column("columnfamily_name", utf8_type, column_kind::clustering_key);
         builder.with_column("column_name", utf8_type, column_kind::clustering_key);
@@ -184,7 +184,7 @@ inline schema_ptr columns_schema() {
 
 inline schema_ptr compact_simple_dense_schema() {
     static thread_local auto s = [] {
-        schema_builder builder("tests", "compact_simple_dense");
+        schema_builder builder(this_smp_shard_count(), "tests", "compact_simple_dense");
         builder.with_column("ks", bytes_type, column_kind::partition_key);
         builder.with_column("cl1", bytes_type, column_kind::clustering_key);
         builder.with_column("cl2", bytes_type);
@@ -196,7 +196,7 @@ inline schema_ptr compact_simple_dense_schema() {
 
 inline schema_ptr compact_dense_schema() {
     static thread_local auto s = [] {
-        schema_builder builder("tests", "compact_simple_dense");
+        schema_builder builder(this_smp_shard_count(), "tests", "compact_simple_dense");
         builder.with_column("ks", bytes_type, column_kind::partition_key);
         builder.with_column("cl1", bytes_type, column_kind::clustering_key);
         builder.with_column("cl2", bytes_type, column_kind::clustering_key);
@@ -209,7 +209,7 @@ inline schema_ptr compact_dense_schema() {
 
 inline schema_ptr compact_sparse_schema() {
     static thread_local auto s = [] {
-        schema_builder builder("tests", "compact_sparse");
+        schema_builder builder(this_smp_shard_count(), "tests", "compact_sparse");
         builder.with_column("ks", bytes_type, column_kind::partition_key);
         builder.with_column("cl1", bytes_type);
         builder.with_column("cl2", bytes_type);
@@ -225,7 +225,7 @@ inline schema_ptr compact_sparse_schema() {
 //    sure we are testing the exact some one we have in our test dir.
 inline schema_ptr peers_schema() {
     static thread_local auto peers = [] {
-        schema_builder builder("system", "peers", generate_legacy_id("system", "peers"));
+        schema_builder builder(this_smp_shard_count(), "system", "peers", generate_legacy_id("system", "peers"));
         builder.with_column("peer", inet_addr_type, column_kind::partition_key);
         builder.with_column("data_center", utf8_type);
         builder.with_column("host_id", uuid_type);

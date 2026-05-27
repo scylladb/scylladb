@@ -77,7 +77,7 @@ static shard_id get_dst_shard_id(uint32_t src_cpu_id, const rpc::optional<shard_
     if (dst_cpu_id_opt && *dst_cpu_id_opt != repair_unspecified_shard) {
         dst_cpu_id = *dst_cpu_id_opt;
     } else {
-        dst_cpu_id = src_cpu_id % smp::count;
+        dst_cpu_id = src_cpu_id % this_smp_shard_count();
     }
     return dst_cpu_id;
 }
@@ -3731,7 +3731,7 @@ repair_service::~repair_service() {
 }
 
 static shard_id repair_id_to_shard(tasks::task_id& repair_id) {
-    return shard_id(repair_id.uuid().get_most_significant_bits()) % smp::count;
+    return shard_id(repair_id.uuid().get_most_significant_bits()) % this_smp_shard_count();
 }
 
 future<std::optional<gc_clock::time_point>>
@@ -3744,7 +3744,7 @@ repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht:
         }
         auto finished_shards = ++(rh.finished_ranges[table_id][range]);
         // Tablet repair runs only on one shard
-        if (finished_shards == smp::count || is_tablet) {
+        if (finished_shards == this_smp_shard_count() || is_tablet) {
             // All shards have finished repair the range. Send an rpc to ask peers to update system.repair_history table
             rlogger.debug("repair[{}]: Finished range {} for table {} on all shards, updating system.repair_history table, finished_shards={}",
                     repair_id, range, table_id, finished_shards);
@@ -3768,7 +3768,7 @@ future<> repair_service::cleanup_history(tasks::task_id repair_id) {
 future<> repair_service::load_history() {
   try {
     co_await get_db().local().get_tables_metadata().parallel_for_each_table(coroutine::lambda([&] (table_id table_uuid, lw_shared_ptr<replica::table> table) -> future<> {
-        auto shard = utils::uuid_xor_to_uint32(table_uuid.uuid()) % smp::count;
+        auto shard = utils::uuid_xor_to_uint32(table_uuid.uuid()) % this_smp_shard_count();
         if (shard != this_shard_id()) {
             co_return;
         }

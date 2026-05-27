@@ -56,7 +56,7 @@ public:
     explicit test_reader_lifecycle_policy(reader_factory_function reader_factory, std::unique_ptr<semaphore_factory> semaphore_factory_object = std::make_unique<semaphore_factory>())
         : _reader_factory_function(std::move(reader_factory))
         , _semaphore_factory(std::move(semaphore_factory_object))
-        , _contexts(smp::count) {
+        , _contexts(this_smp_shard_count()) {
     }
     virtual mutation_reader create_reader(
             schema_ptr schema,

@@ -18,7 +18,7 @@ static row_locker::stats row_locker_stats;
 
 static schema_ptr make_schema()
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s", bytes_type, column_kind::static_column)
@@ -164,7 +164,7 @@ SEASTAR_TEST_CASE(test_nonblock_many) {
 
 static schema_ptr make_alternative_schema()
 {
-    return schema_builder("ks", "cf")
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("s0", bytes_type, column_kind::static_column)

@@ -183,7 +183,7 @@ void validate_handler(type_variant type, std::vector<bytes> values, const bpo::v
 }
 
 schema_ptr build_dummy_partition_key_schema(const compound_type<allow_prefixes::no>& type) {
-    schema_builder builder("ks", "dummy");
+    schema_builder builder(this_smp_shard_count(), "ks", "dummy");
     unsigned i = 0;
     for (const auto& t : type.types()) {
         const auto col_name = format("pk{}", i);

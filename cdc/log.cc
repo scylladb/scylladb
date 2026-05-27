@@ -719,7 +719,7 @@ static void add_columns_to_cdc_log(schema_builder& b, const schema& s,
 static schema_ptr create_log_schema(const schema& s, const replica::database& db,
         const keyspace_metadata& ksm, api::timestamp_type timestamp, std::optional<table_id> uuid, schema_ptr old)
 {
-    schema_builder b(s.ks_name(), log_name(s.cf_name()));
+    schema_builder b(this_smp_shard_count(), s.ks_name(), log_name(s.cf_name()));
 
     b.with_partitioner(cdc::cdc_partitioner::classname);
 

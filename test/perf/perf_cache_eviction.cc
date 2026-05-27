@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
         ;
 
     return app.run(argc, argv, [&app] {
-        if (smp::count != 1) {
+        if (this_smp_shard_count() != 1) {
             throw std::runtime_error("This test has to be run with --smp=1");
         }
 

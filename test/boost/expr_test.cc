@@ -430,7 +430,7 @@ BOOST_AUTO_TEST_CASE(evaluate_constant_int) {
 // The schema corresponds to a table created by:
 // CREATE TABLE test_ks.test_cf (pk int, ck int, r int, s int static, primary key (pk, ck));
 static schema_ptr make_simple_test_schema() {
-    return schema_builder("test_ks", "test_cf")
+    return schema_builder(1, "test_ks", "test_cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("r", int32_type, column_kind::regular_column)
@@ -442,7 +442,7 @@ static schema_ptr make_simple_test_schema() {
 // The schema corresponds to a table created by:
 // CREATE TABLE test_ks.test_cf (pk1 int, pk2 int, pk3 int, ck int, r int, s int static, primary key (pk, ck));
 static schema_ptr make_three_pk_schema() {
-    return schema_builder("test_ks", "test_cf")
+    return schema_builder(1, "test_ks", "test_cf")
         .with_column("pk1", int32_type, column_kind::partition_key)
         .with_column("pk2", int32_type, column_kind::partition_key)
         .with_column("pk3", int32_type, column_kind::partition_key)
@@ -506,7 +506,7 @@ BOOST_AUTO_TEST_CASE(evaluate_static_column) {
 
 BOOST_AUTO_TEST_CASE(evaluate_column_value_does_not_perfrom_validation) {
     schema_ptr test_schema =
-        schema_builder("test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
+        schema_builder(1, "test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
 
     raw_value invalid_int_value = make_bool_raw(true);
 
@@ -558,7 +558,7 @@ BOOST_AUTO_TEST_CASE(evaluate_two_bind_variables) {
 
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_performs_validation) {
     schema_ptr test_schema =
-        schema_builder("test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
+        schema_builder(1, "test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
 
     raw_value invalid_int_value = make_bool_raw(true);
 
@@ -804,7 +804,7 @@ BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_with_empty) {
 // Evaluates value[subscript_value]
 static raw_value evaluate_subscripted(constant value, constant subscript_value) {
     // For now it's only possible to subscript columns, not values, so this is tested.
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("v", value.type, column_kind::regular_column)
                                   .build();
@@ -970,7 +970,7 @@ enum expected_invalid_or_valid { expected_valid, expected_invalid };
 // Checks that trying to evaluate a bind variable with this value succeeds or fails.
 // This is used to test bind variable validation.
 static void check_bind_variable_evaluate(constant check_value, expected_invalid_or_valid expected_validity) {
-    schema_ptr test_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr test_schema = schema_builder(1, "test_ks", "test_cf")
                                  .with_column("pk", int32_type, column_kind::partition_key)
                                  .with_column("r", check_value.type, column_kind::regular_column)
                                  .build();
@@ -1285,7 +1285,7 @@ BOOST_AUTO_TEST_CASE(prepare_column_value) {
 
 BOOST_AUTO_TEST_CASE(prepare_subscript_list) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("r", list_type_impl::get_instance(boolean_type, true), column_kind::regular_column)
             .build();
@@ -1306,7 +1306,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_list) {
 
 BOOST_AUTO_TEST_CASE(prepare_subscript_map) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("r", map_type_impl::get_instance(boolean_type, utf8_type, true), column_kind::regular_column)
             .build();
@@ -1326,7 +1326,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_map) {
 
 BOOST_AUTO_TEST_CASE(prepare_subscript_set) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("r", set_type_impl::get_instance(boolean_type, true), column_kind::regular_column)
             .build();
@@ -1342,7 +1342,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_set) {
 
 BOOST_AUTO_TEST_CASE(prepare_subscript_list_checks_type) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("r", list_type_impl::get_instance(boolean_type, true), column_kind::regular_column)
             .build();
@@ -1358,7 +1358,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_list_checks_type) {
 
 BOOST_AUTO_TEST_CASE(prepare_subscript_map_checks_type) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("r", map_type_impl::get_instance(boolean_type, utf8_type, true), column_kind::regular_column)
             .build();
@@ -1373,7 +1373,7 @@ BOOST_AUTO_TEST_CASE(prepare_subscript_map_checks_type) {
 }
 
 BOOST_AUTO_TEST_CASE(prepare_token) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("p1", int32_type, column_kind::partition_key)
                                   .with_column("p2", int32_type, column_kind::partition_key)
                                   .with_column("p3", int32_type, column_kind::partition_key)
@@ -1398,7 +1398,7 @@ BOOST_AUTO_TEST_CASE(prepare_token) {
 }
 
 BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("p1", int32_type, column_kind::partition_key)
                                   .with_column("p2", int32_type, column_kind::partition_key)
                                   .with_column("p3", int32_type, column_kind::partition_key)
@@ -1741,7 +1741,7 @@ BOOST_AUTO_TEST_CASE(prepare_tuple_constructor) {
 }
 
 BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_of_columns) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("c1", int32_type, column_kind::clustering_key)
                                   .with_column("c2", utf8_type, column_kind::clustering_key)
@@ -2949,7 +2949,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_not_in) {
 // Tests `<int_value> IN (123, ?, 789)` where the bind variable has value 456
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in_list_with_bind_variable) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
+        schema_builder(1, "test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
 
     expression in_list = collection_constructor{
         .style = collection_constructor::style_type::list_or_vector,
@@ -2972,7 +2972,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in_list_with_bind_variable) {
 // Tests `<int_value> IN (123, ?, 789)` where the bind variable has value 456
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_not_in_list_with_bind_variable) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
+        schema_builder(1, "test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
 
     expression in_list = collection_constructor{
         .style = collection_constructor::style_type::list_or_vector,
@@ -3526,7 +3526,7 @@ BOOST_AUTO_TEST_CASE(evaluate_column_mutation_attribute) {
 
 // Build a schema with a non-frozen map column, suitable for testing WRITETIME(m[k]) and TTL(m[k]).
 static schema_ptr make_map_test_schema() {
-    return schema_builder("test_ks", "test_cf")
+    return schema_builder(1, "test_ks", "test_cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("m", map_type_impl::get_instance(int32_type, int32_type, /*is_multi_cell=*/true), column_kind::regular_column)
@@ -3764,7 +3764,7 @@ BOOST_AUTO_TEST_CASE(prepare_conjunction_and_of_ints_is_invalid) {
 // Prepare a conjunction with many elements:
 // 'true AND true AND b1 AND (false AND b2)'
 BOOST_AUTO_TEST_CASE(prepare_conjunction_many_elements) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("b1", boolean_type, column_kind::regular_column)
                                   .with_column("b2", boolean_type, column_kind::regular_column)
@@ -4021,7 +4021,7 @@ std::array<comparison_order, 2> get_possible_comparison_orders() {
 // The same goes for reversed_type.
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("float_col", float_type, column_kind::regular_column)
             .with_column("reversed_float_col", reversed_type_impl::get_instance(float_type))
@@ -4121,7 +4121,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte) {
 // Test operations =, !=, <, <=, >, >= with a LHS column that has reversed type.
 // The prepared RHS should also have inherit the reversed type.
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte_reversed_type) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("reversed_float_col", reversed_type_impl::get_instance(float_type),
                                                column_kind::regular_column)
@@ -4153,7 +4153,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte_reversed_type)
 // Test operations =, !=, <, <=, >, >= with a multi-column LHS.
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte_multi_column) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("c1", float_type, column_kind::clustering_key)
             .with_column("c2", int32_type, column_kind::clustering_key)
@@ -4206,7 +4206,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte_multi_column) 
 
 // `float_col IN ()`
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_empty_list) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("float_col", float_type, column_kind::regular_column)
                                   .build();
@@ -4230,7 +4230,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_empty_list) {
 
 // `float_col IN (1, 2.3)`
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_2_dot_3) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("float_col", float_type, column_kind::regular_column)
                                   .build();
@@ -4258,7 +4258,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_2_dot_3) {
 
 // `float_col IN (1, 2, 3, 4)`
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_2_3_4) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("float_col", float_type, column_kind::regular_column)
                                   .build();
@@ -4293,7 +4293,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_2_3_4) {
 // reverse_float_col IN ()
 BOOST_AUTO_TEST_CASE(prepare_binary_operato_reverse_float_col_in_empty_list) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("reverse_float_col", reversed_type_impl::get_instance(float_type), column_kind::regular_column)
             .build();
@@ -4319,7 +4319,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operato_reverse_float_col_in_empty_list) {
 // `reverse_float_col IN (1.2, 2.3)`
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_dot_2_2_dot_3) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("reverse_float_col", reversed_type_impl::get_instance(float_type), column_kind::regular_column)
             .build();
@@ -4348,7 +4348,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_dot_2_2_dot_3) {
 
 // `(float_col, int_col, text_col, reverse_double_col) IN ()`
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_empty_list) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("float_col", float_type, column_kind::clustering_key)
                                   .with_column("int_col", int32_type, column_kind::clustering_key)
@@ -4399,7 +4399,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_empty_list) {
 
 // `(float_col, int_col, text_col, reverse_double_col) IN ((1.2, 3, 'four', 8.9), (5, 6, 'seven', 10.11))`
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_values) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("float_col", float_type, column_kind::clustering_key)
                                   .with_column("int_col", int32_type, column_kind::clustering_key)
@@ -4468,7 +4468,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_values) {
 
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_contains) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("float_list", list_type_impl::get_instance(float_type, true), column_kind::regular_column)
             .with_column("frozen_float_list", list_type_impl::get_instance(float_type, false),
@@ -4516,7 +4516,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_contains) {
 
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_contains_key) {
     schema_ptr table_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("double_float_map", map_type_impl::get_instance(double_type, float_type, true),
                          column_kind::regular_column)
@@ -4555,7 +4555,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_contains_key) {
 }
 
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_like) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("text_col", utf8_type, column_kind::regular_column)
                                   .with_column("ascii_col", ascii_type, column_kind::regular_column)
@@ -4585,7 +4585,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_like) {
 }
 
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_is_not_null) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("float_col", float_type, column_kind::regular_column)
                                   .build();
@@ -4609,7 +4609,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_is_not_null) {
 // `float_col = NULL`, `float_col < NULL`, ...
 // The RHS should be prepared as a NULL constant with float type.
 BOOST_AUTO_TEST_CASE(prepare_binary_operator_with_null_rhs) {
-    schema_ptr table_schema = schema_builder("test_ks", "test_cf")
+    schema_ptr table_schema = schema_builder(1, "test_ks", "test_cf")
                                   .with_column("pk", int32_type, column_kind::partition_key)
                                   .with_column("float_col", float_type, column_kind::regular_column)
                                   .build();
@@ -5135,7 +5135,7 @@ BOOST_AUTO_TEST_CASE(evaluate_add_reversed_type) {
     // Schema with a DESC clustering key: equivalent to
     // CREATE TABLE test_ks.test_cf (pk int, ck int, PRIMARY KEY (pk, ck)) WITH CLUSTERING ORDER BY (ck DESC);
     schema_ptr test_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
             .build();
@@ -5287,7 +5287,7 @@ BOOST_AUTO_TEST_CASE(evaluate_sub_printer) {
 // Arithmetic SUB on a column with a reversed type (DESC clustering key) must work correctly.
 BOOST_AUTO_TEST_CASE(evaluate_sub_reversed_type) {
     schema_ptr test_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
             .build();
@@ -5408,7 +5408,7 @@ BOOST_AUTO_TEST_CASE(evaluate_neg_reversed_type) {
     // Schema with a DESC clustering key: equivalent to
     // CREATE TABLE test_ks.test_cf (pk int, ck int, PRIMARY KEY (pk, ck)) WITH CLUSTERING ORDER BY (ck DESC);
     schema_ptr test_schema =
-        schema_builder("test_ks", "test_cf")
+        schema_builder(1, "test_ks", "test_cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
             .build();

@@ -353,11 +353,11 @@ SEASTAR_TEST_CASE(test_group0_tables_use_schema_commitlog) {
             }
         });
 
-        auto test_group0_tables_use_schema_commitlog1 = schema_builder("test", "test_group0_tables_use_schema_commitlog1")
+        auto test_group0_tables_use_schema_commitlog1 = schema_builder(this_smp_shard_count(), "test", "test_group0_tables_use_schema_commitlog1")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .build();
 
-        auto test_group0_tables_use_schema_commitlog2 = schema_builder("test", "test_group0_tables_use_schema_commitlog2")
+        auto test_group0_tables_use_schema_commitlog2 = schema_builder(this_smp_shard_count(), "test", "test_group0_tables_use_schema_commitlog2")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .build();
 

@@ -993,7 +993,7 @@ default_sstable_compressor_factory::default_sstable_compressor_factory(config cf
     : _cfg(std::move(cfg))
     , _holder(std::make_unique<dictionary_holder>(_cfg))
 {
-    for (shard_id i = 0; i < smp::count; ++i) {
+    for (shard_id i = 0; i < this_smp_shard_count(); ++i) {
         auto numa_id = _cfg.numa_config[i];
         _numa_groups.resize(std::max<size_t>(_numa_groups.size(), numa_id + 1));
         _numa_groups[numa_id].push_back(i);

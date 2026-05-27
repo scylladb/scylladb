@@ -382,8 +382,8 @@ future<> utils::config_file::read_from_file(const sstring& filename, error_handl
 
 future<> utils::config_file::broadcast_to_all_shards() {
     return async([this] {
-        if (_per_shard_values.size() != smp::count) {
-            _per_shard_values.resize(smp::count);
+        if (_per_shard_values.size() != this_smp_shard_count()) {
+            _per_shard_values.resize(this_smp_shard_count());
             smp::invoke_on_all([this] {
                 auto cpu = this_shard_id();
                 if (cpu != 0) {

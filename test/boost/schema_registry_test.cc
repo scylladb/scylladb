@@ -36,7 +36,7 @@ static bytes random_column_name() {
 }
 
 static schema_ptr random_schema() {
-    return schema_builder("ks", "cf")
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
            .with_column("pk", bytes_type, column_kind::partition_key)
            .with_column(random_column_name(), bytes_type)
            .build();
@@ -58,7 +58,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_with_non_nantive_type) {
     dummy_init dummy;
     auto my_list_type = list_type_impl::get_instance(utf8_type, true);
 
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
            .with_column("pk", bytes_type, column_kind::partition_key)
            .with_column("val", my_list_type)
            .build();
@@ -70,11 +70,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_with_non_nantive_type) {
 
 SEASTAR_THREAD_TEST_CASE(test_load_with_cdc_schema) {
     dummy_init dummy;
-    auto s_cdc = schema_builder("ks", "cdc_cf")
+    auto s_cdc = schema_builder(this_smp_shard_count(), "ks", "cdc_cf")
            .with_column("pk", bytes_type, column_kind::partition_key)
            .with_column("val", bytes_type)
            .build();
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
            .with_column("pk", bytes_type, column_kind::partition_key)
            .with_column("val", bytes_type)
            .with_cdc_schema(s_cdc)
@@ -89,11 +89,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_with_cdc_schema) {
 
 SEASTAR_THREAD_TEST_CASE(test_learn_schema_with_cdc) {
     dummy_init dummy;
-    auto s_cdc = schema_builder("ks", "cdc_cf")
+    auto s_cdc = schema_builder(this_smp_shard_count(), "ks", "cdc_cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("val", bytes_type)
         .build();
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("val", bytes_type)
         .with_cdc_schema(s_cdc)
@@ -107,11 +107,11 @@ SEASTAR_THREAD_TEST_CASE(test_learn_schema_with_cdc) {
 
 SEASTAR_THREAD_TEST_CASE(test_learn_loaded_schema_with_cdc) {
     dummy_init dummy;
-    auto s_cdc = schema_builder("ks", "cdc_cf")
+    auto s_cdc = schema_builder(this_smp_shard_count(), "ks", "cdc_cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("val", bytes_type)
         .build();
-    auto s = schema_builder("ks", "cf")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("val", bytes_type)
         .with_cdc_schema(s_cdc)
@@ -155,7 +155,7 @@ SEASTAR_TEST_CASE(test_async_loading) {
 
 SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
     do_with_cql_env_thread([] (cql_test_env& e) {
-        auto s0 = schema_builder("ks", "cf")
+        auto s0 = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("v1", bytes_type)
                 .build();
@@ -209,7 +209,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
         });
         BOOST_REQUIRE(learned_s2->maybe_table() == s0->maybe_table());
 
-        if (smp::count > 1) {
+        if (this_smp_shard_count() > 1) {
             smp::submit_to(1, [&e, gs = global_schema_ptr(learned_s2)] {
                 schema_ptr s0 = e.local_db().find_column_family("ks", "cf").schema();
                 BOOST_REQUIRE(gs.get()->maybe_table());
@@ -262,7 +262,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
 
 SEASTAR_THREAD_TEST_CASE(test_schema_is_recovered_after_dying) {
     dummy_init dummy;
-    auto base_schema = schema_builder("ks", "cf")
+    auto base_schema = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("v", int32_type)
         .build();
@@ -275,12 +275,12 @@ SEASTAR_THREAD_TEST_CASE(test_schema_is_recovered_after_dying) {
 
 SEASTAR_THREAD_TEST_CASE(test_view_info_is_recovered_after_dying) {
     dummy_init dummy;
-    auto base_schema = schema_builder("ks", "cf")
+    auto base_schema = schema_builder(this_smp_shard_count(), "ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("v", int32_type)
         .build();
-    schema_builder view_builder("ks", "cf_view");
-    auto view_schema = schema_builder("ks", "cf_view")
+    schema_builder view_builder(this_smp_shard_count(), "ks", "cf_view");
+    auto view_schema = schema_builder(this_smp_shard_count(), "ks", "cf_view")
             .with_column("v", int32_type, column_kind::partition_key)
             .with_column("pk", int32_type)
             .with_view_info(base_schema, false, "pk IS NOT NULL AND v IS NOT NULL")
@@ -295,7 +295,7 @@ SEASTAR_THREAD_TEST_CASE(test_merge_schema_with_large_collection_of_mutations) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         utils::chunked_vector<mutation> mutations;
         for (auto i : std::views::iota(0, 1000)) {
-            auto s0 = schema_builder("ks", fmt::format("cf_{}", i))
+            auto s0 = schema_builder(this_smp_shard_count(), "ks", fmt::format("cf_{}", i))
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("v1", bytes_type)
                     .build();

@@ -24,7 +24,7 @@ int main(int argc, char* argv[]) {
         ("column-count", bpo::value<size_t>()->default_value(1), "column count");
     return app.run_deprecated(argc, argv, [&] {
         size_t column_count = app.configuration()["column-count"].as<size_t>();
-        auto builder = schema_builder("ks", "cf")
+        auto builder = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("p1", utf8_type, column_kind::partition_key)
             .with_column("c1", int32_type, column_kind::clustering_key);
 

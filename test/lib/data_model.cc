@@ -250,7 +250,7 @@ void table_description::alter_column_type(std::vector<column>& columns, const ss
 }
 
 schema_ptr table_description::build_schema() const {
-    auto sb = schema_builder("ks", "cf");
+    auto sb = schema_builder(this_smp_shard_count(), "ks", "cf");
     for (auto&& [ name, type ] : _partition_key) {
         sb.with_column(utf8_type->decompose(name), type, column_kind::partition_key);
     }

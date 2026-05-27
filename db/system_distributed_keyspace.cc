@@ -46,7 +46,7 @@ thread_local data_type cdc_streams_set_type = set_type_impl::get_instance(bytes_
 schema_ptr view_build_status() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::VIEW_BUILD_STATUS, std::make_optional(id))
                 .with_column("keyspace_name", utf8_type, column_kind::partition_key)
                 .with_column("view_name", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)
@@ -62,7 +62,7 @@ schema_ptr view_build_status() {
 schema_ptr cdc_desc() {
     thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC_V2);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC_V2, {id})
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC_V2, {id})
                 /* The timestamp of this CDC generation. */
                 .with_column("time", timestamp_type, column_kind::partition_key)
                 /* For convenience, the list of stream IDs in this generation is split into token ranges
@@ -81,7 +81,7 @@ schema_ptr cdc_desc() {
 schema_ptr cdc_timestamps() {
     thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TIMESTAMPS);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TIMESTAMPS, {id})
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TIMESTAMPS, {id})
                 /* This is a single-partition table. The partition key is always "timestamps". */
                 .with_column("key", utf8_type, column_kind::partition_key)
                 /* The timestamp of this CDC generation. */
@@ -99,7 +99,7 @@ static const sstring CDC_TIMESTAMPS_KEY = "timestamps";
 schema_ptr snapshot_sstables() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES, std::make_optional(id))
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES, std::make_optional(id))
                 // Name of the snapshot
                 .with_column("snapshot_name", utf8_type, column_kind::partition_key)
                 // Keyspace where the snapshot was taken

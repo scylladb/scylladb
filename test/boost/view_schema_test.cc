@@ -2603,7 +2603,7 @@ SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
     // This test was originally written assuming we have (at least) two
     // shards and the test doesn't run on shard 1...
     BOOST_ASSERT(this_shard_id() != 1);
-    BOOST_ASSERT(smp::count >= 2);
+    BOOST_ASSERT(this_smp_shard_count() >= 2);
 
     // First, check that a db::view::node_update_backlog object doesn't
     // recalculate the backlog if the interval hasn't yet passed (we use

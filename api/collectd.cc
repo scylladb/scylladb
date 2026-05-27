@@ -60,8 +60,8 @@ void set_collectd(http_context& ctx, routes& r) {
 
 
         return do_with(std::vector<cd::collectd_value>(), [id] (auto& vec) {
-            vec.resize(smp::count);
-            return parallel_for_each(std::views::iota(0u, smp::count), [&vec, id] (auto cpu) {
+            vec.resize(this_smp_shard_count());
+            return parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [&vec, id] (auto cpu) {
                 return smp::submit_to(cpu, [id = *id] {
                     return scollectd::get_collectd_value(id);
                 }).then([&vec, cpu] (auto res) {

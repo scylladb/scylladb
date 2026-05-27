@@ -413,10 +413,10 @@ const column_mapping& schema::get_column_mapping() const {
     return _column_mapping;
 }
 
-schema::raw_schema::raw_schema(table_id id)
+schema::raw_schema::raw_schema(table_id id, unsigned shard_count)
     : _id(id)
     , _partitioner(::get_partitioner(default_partitioner_name))
-    , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
+    , _sharder(::get_sharder(shard_count, default_partitioner_ignore_msb))
 { }
 
 schema::schema(private_tag, const raw_schema& raw, const schema_static_props& props, schema_ptr cdc_schema, std::optional<std::variant<schema_ptr, db::view::base_dependent_view_info>> base)
@@ -1348,9 +1348,9 @@ schema_builder& schema_builder::with_sharder(const dht::static_sharder& sharder)
 }
 
 
-schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
+schema_builder::schema_builder(unsigned shard_count, std::string_view ks_name, std::string_view cf_name,
         std::optional<table_id> id, data_type rct)
-        : _raw(id ? *id : table_id(utils::UUID_gen::get_time_UUID()))
+        : _raw(id ? *id : table_id(utils::UUID_gen::get_time_UUID()), shard_count)
 {
     // Various schema-creation commands (creating tables, indexes, etc.)
     // usually place limits on which characters are allowed in keyspace or
@@ -1404,6 +1404,7 @@ schema_builder::schema_builder(const schema::raw_schema& raw)
 }
 
 schema_builder::schema_builder(
+        unsigned shard_count,
         std::optional<table_id> id,
         std::string_view ks_name,
         std::string_view cf_name,
@@ -1413,7 +1414,7 @@ schema_builder::schema_builder(
         std::vector<schema::column> static_columns,
         data_type regular_column_name_type,
         sstring comment)
-    : schema_builder(ks_name, cf_name, std::move(id), std::move(regular_column_name_type)) {
+    : schema_builder(shard_count, ks_name, cf_name, std::move(id), std::move(regular_column_name_type)) {
     for (auto&& column : partition_key) {
         with_column(std::move(column.name), std::move(column.type), column_kind::partition_key);
     }

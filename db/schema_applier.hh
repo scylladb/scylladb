@@ -99,7 +99,7 @@ class in_progress_types_storage {
     // wrapped in foreign_ptr so they can be destroyed on the right shard
     std::vector<foreign_ptr<shared_ptr<in_progress_types_storage_per_shard>>> shards;
 public:
-    in_progress_types_storage() : shards(smp::count) {}
+    in_progress_types_storage() : shards(this_smp_shard_count()) {}
     future<> init(sharded<replica::database>& sharded_db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types);
     in_progress_types_storage_per_shard& local();
 };
@@ -132,7 +132,7 @@ struct schema_diff_per_shard {
 
 
 class pending_token_metadata {
-    std::vector<locator::mutable_token_metadata_ptr> shards{smp::count};
+    std::vector<locator::mutable_token_metadata_ptr> shards{this_smp_shard_count()};
 public:
     future<> assign(locator::mutable_token_metadata_ptr new_token_metadata);
     locator::mutable_token_metadata_ptr& local();

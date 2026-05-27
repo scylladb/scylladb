@@ -763,7 +763,7 @@ static void workload_main(const raw_cql_test_config& cfg, sharded<abort_source>*
         params["connection_per_request"] = cfg.connection_per_request;
         params["use_prepared"] = cfg.use_prepared;
         params["create_non_superuser"] = cfg.create_non_superuser;
-        params["cpus"] = smp::count;
+        params["cpus"] = this_smp_shard_count();
 
         perf::write_json_result(cfg.json_result_file, agg, params, cfg.workload);
     }

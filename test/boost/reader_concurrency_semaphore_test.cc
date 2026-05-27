@@ -597,7 +597,7 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
     const auto nr_tables = tests::random::get_int<unsigned>(2, 4);
     std::vector<schema_ptr> schemas;
     for (unsigned i = 0; i < nr_tables; ++i) {
-        schemas.emplace_back(schema_builder("ks", fmt::format("tbl{}", i))
+        schemas.emplace_back(schema_builder(this_smp_shard_count(), "ks", fmt::format("tbl{}", i))
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("v", int32_type, column_kind::regular_column).build());
     }

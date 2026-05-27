@@ -41,10 +41,11 @@ private:
     schema_builder(const schema::raw_schema&);
     static std::vector<schema_initializer>& schema_initializers();
 public:
-    schema_builder(std::string_view ks_name, std::string_view cf_name,
+    schema_builder(unsigned shard_count, std::string_view ks_name, std::string_view cf_name,
             std::optional<table_id> = { },
             data_type regular_column_name_type = utf8_type);
     schema_builder(
+            unsigned shard_count,
             std::optional<table_id> id,
             std::string_view ks_name,
             std::string_view cf_name,

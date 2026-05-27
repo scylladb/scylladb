@@ -119,7 +119,7 @@ future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "", std::map<
         if (!test_ks_name.empty()) {
             ks_name = test_ks_name;
         }
-        auto builder = schema_builder(ks_name, id.to_sstring(), id)
+        auto builder = schema_builder(this_smp_shard_count(), ks_name, id.to_sstring(), id)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("r1", int32_type);
         if (!tablet_options.empty()) {
@@ -693,13 +693,13 @@ SEASTAR_THREAD_TEST_CASE(test_invalid_colocated_tables) {
         auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
         auto ksm = e.local_db().find_keyspace(ks_name).metadata();
 
-        const auto t = schema_builder("ks", "t")
+        const auto t = schema_builder(this_smp_shard_count(), "ks", "t")
             .with_column("pk", int32_type, column_kind::partition_key)
             .build();
-        const auto t_paxos = schema_builder("ks", "t$paxos")
+        const auto t_paxos = schema_builder(this_smp_shard_count(), "ks", "t$paxos")
             .with_column("pk", int32_type, column_kind::partition_key)
             .build();
-        const auto t_paxos_paxos = schema_builder("ks", "t$paxos$paxos")
+        const auto t_paxos_paxos = schema_builder(this_smp_shard_count(), "ks", "t$paxos$paxos")
             .with_column("pk", int32_type, column_kind::partition_key)
             .build();
 
@@ -5509,12 +5509,12 @@ SEASTAR_THREAD_TEST_CASE(test_get_split_token_is_compatible_with_old_behavior) {
 
 SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
     auto cfg = tablet_cql_test_config();
-    cfg.initial_tablets = std::bit_floor(smp::count);
+    cfg.initial_tablets = std::bit_floor(this_smp_shard_count());
     do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql(
                 "CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
 
-        for (unsigned i = 0; i < smp::count * 20; i++) {
+        for (unsigned i = 0; i < this_smp_shard_count() * 20; i++) {
             e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0)", i)).get();
         }
 
@@ -6232,7 +6232,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     auto tablet_aware_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tablet_aware_ptr);
 
-    auto s = schema_builder("ks", "tb")
+    auto s = schema_builder(this_smp_shard_count(), "ks", "tb")
         .with_column("pk", utf8_type, column_kind::partition_key)
         .with_column("v", utf8_type)
         .build();
@@ -6561,7 +6561,7 @@ SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_default_rf_up
 
 SEASTAR_TEST_CASE(test_tablet_count_metric) {
     auto cfg = tablet_cql_test_config();
-    for (unsigned n = 1; n <= smp::count; n *= 2) {
+    for (unsigned n = 1; n <= this_smp_shard_count(); n *= 2) {
         cfg.initial_tablets = n;
     }
     return do_with_cql_env_thread([cfg] (cql_test_env& e) {

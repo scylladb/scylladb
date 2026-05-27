@@ -39,7 +39,7 @@ SEASTAR_TEST_CASE(test_functions) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.create_table([](std::string_view ks_name) {
             // CQL: create table cf (p1 varchar primary key, u uuid, tu timeuuid);
-            return *schema_builder(ks_name, "cf")
+            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", int32_type, column_kind::clustering_key)
                     .with_column("tu", timeuuid_type)
@@ -146,7 +146,7 @@ public:
     {
         const auto cf_name = table_name();
         _e.create_table([column_type, cf_name] (std::string_view ks_name) {
-            return *schema_builder(ks_name, cf_name)
+            return *schema_builder(this_smp_shard_count(), ks_name, cf_name)
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck", int32_type, column_kind::clustering_key)
                     .with_column("value", column_type)

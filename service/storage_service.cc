@@ -1410,7 +1410,7 @@ future<> storage_service::initialize_done_topology_upgrade_state() {
 
 future<> storage_service::update_topology_with_local_metadata(raft::server& raft_server) {
     // TODO: include more metadata here
-    auto local_shard_count = smp::count;
+    auto local_shard_count = this_smp_shard_count();
     auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
     auto local_release_version = version::release();
     auto local_supported_features = _feature_service.supported_feature_set() | std::ranges::to<std::set<sstring>>();
@@ -1593,7 +1593,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         app_states.emplace(gms::application_state::STATUS, versioned_value::normal(my_tokens));
     }
     app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(_snitch.local()->get_name()));
-    app_states.emplace(gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count));
+    app_states.emplace(gms::application_state::SHARD_COUNT, versioned_value::shard_count(this_smp_shard_count()));
     app_states.emplace(gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()));
 
     for (auto&& s : _snitch.local()->get_app_states()) {
@@ -1628,7 +1628,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
             .release_version = version::release(),
             .num_tokens = _db.local().get_config().join_ring() ? _db.local().get_config().num_tokens() : 0,
             .tokens_string = _db.local().get_config().join_ring() ? _db.local().get_config().initial_token() : sstring(),
-            .shard_count = smp::count,
+            .shard_count = this_smp_shard_count(),
             .ignore_msb =  _db.local().get_config().murmur3_partitioner_ignore_msb_bits(),
             .supported_features = _feature_service.supported_feature_set() | std::ranges::to<std::vector<sstring>>(),
             .request_id = request_id,
@@ -2148,7 +2148,7 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
         // and clone to all shards;
         //
         // TODO: at the moment create on shard 0 first
-        // but in the future we may want to use hash() % smp::count
+        // but in the future we may want to use hash() % this_smp_shard_count()
         // to evenly distribute the load.
         auto replications = schema_getter.get_keyspaces_replication();
         for (const auto& [ks_name, rs] : replications) {
@@ -5757,7 +5757,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     struct alignas(64) aligned_tablet_size {
         uint64_t size = 0;
     };
-    std::vector<aligned_tablet_size> tablet_sizes_per_shard(smp::count);
+    std::vector<aligned_tablet_size> tablet_sizes_per_shard(this_smp_shard_count());
 
     // Each node combines a per-table load map from all of its shards and returns it to the coordinator.
     // So if there are 1k nodes, there will be 1k RPCs in total.
@@ -6743,7 +6743,7 @@ future<> storage_service::start_maintenance_mode() {
     set_mode(mode::MAINTENANCE);
 
     return mutate_token_metadata([this] (mutable_token_metadata_ptr token_metadata) -> future<> {
-        token_metadata->update_topology(my_host_id(), _snitch.local()->get_location(), locator::node::state::normal, smp::count);
+        token_metadata->update_topology(my_host_id(), _snitch.local()->get_location(), locator::node::state::normal, this_smp_shard_count());
         return token_metadata->update_normal_tokens({ dht::token{} }, my_host_id());
     }, acquire_merge_lock::yes);
 }

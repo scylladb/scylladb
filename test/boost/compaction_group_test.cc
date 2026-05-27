@@ -135,7 +135,7 @@ public:
 
 SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
     return test_env::do_with_async([] (test_env& env) {
-        auto builder = schema_builder("tests", "compaction_group_splitting")
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "compaction_group_splitting")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("cl", int32_type, column_kind::clustering_key)
                 .with_column("value", int32_type);
@@ -212,7 +212,7 @@ static mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, reader_p
 
 SEASTAR_TEST_CASE(compactions_dont_cross_group_boundary_test) {
     return test_env::do_with_async([] (test_env& env) {
-        auto builder = schema_builder("tests", "compactions_dont_cross_group_boundary")
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "compactions_dont_cross_group_boundary")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("cl", int32_type, column_kind::clustering_key)
                 .with_column("value", int32_type);

@@ -130,7 +130,7 @@ private:
     std::vector<shared_sstable> _sst;
 
     schema_ptr create_schema(compaction::compaction_strategy_type type) {
-        schema_builder builder("ks", "perf-test", generate_legacy_id("ks", "perf-test"));
+        schema_builder builder(this_smp_shard_count(), "ks", "perf-test", generate_legacy_id("ks", "perf-test"));
         builder.with_column("name", utf8_type, column_kind::partition_key);
         for (unsigned i = 0; i < _cfg.num_columns; ++i) {
             builder.with_column(to_bytes(format("column{:04d}", i)), utf8_type);

@@ -86,7 +86,7 @@ public:
     static future<> init_system_keyspace(sharded<db::system_keyspace>&, sharded<locator::effective_replication_map_factory>&, sharded<replica::database>&);
     static future<> init_non_system_keyspaces(sharded<replica::database>& db, sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks);
 
-    // Scan sstables under upload directory. Return a vector with smp::count entries.
+    // Scan sstables under upload directory. Return a vector with this_smp_shard_count() entries.
     // Each entry with index of idx should be accessed on shard idx only.
     // Each entry contains a vector of sstables for this shard.
     // The table UUID is returned too.

@@ -195,7 +195,7 @@ static bool has_more_pages(::shared_ptr<cql_transport::messages::result_message>
 SEASTAR_TEST_CASE(scan_enormous_table_test) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.create_table([](std::string_view ks_name) {
-            return *schema_builder(ks_name, "enormous_table")
+            return *schema_builder(this_smp_shard_count(), ks_name, "enormous_table")
                     .with_column("pk", long_type, column_kind::partition_key)
                     .with_column("ck", long_type, column_kind::clustering_key)
                     .set_comment("a very big table (4.5 billion entries, one partition)")
@@ -227,7 +227,7 @@ SEASTAR_TEST_CASE(scan_enormous_table_test) {
 SEASTAR_TEST_CASE(count_enormous_table_test) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.create_table([](std::string_view ks_name) {
-            return *schema_builder(ks_name, "enormous_table")
+            return *schema_builder(this_smp_shard_count(), ks_name, "enormous_table")
                     .with_column("pk", long_type, column_kind::partition_key)
                     .with_column("ck", long_type, column_kind::clustering_key)
                     .set_comment("a very big table (4.5 billion entries, one partition)")

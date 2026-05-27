@@ -51,7 +51,7 @@ protected:
     unsigned _shard_count;
     unsigned _sharding_ignore_msb_bits;
 public:
-    sharder(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
+    sharder(unsigned shard_count = this_smp_shard_count(), unsigned sharding_ignore_msb_bits = 0);
     virtual ~sharder() = default;
 
     /**
@@ -99,7 +99,7 @@ public:
      *
      * If the `spans` parameter is greater than zero, the result is the same as if the function
      * is called `spans` times, each time applied to its return value, but efficiently. This allows
-     * selecting ranges that include multiple round trips around the 0..smp::count-1 shard span:
+     * selecting ranges that include multiple round trips around the 0..this_smp_shard_count()-1 shard span:
      *
      *     token_for_next_shard(t, shard, spans) == token_for_next_shard(token_for_next_shard(t, shard, 1), spans - 1)
      *
@@ -139,7 +139,7 @@ public:
 class static_sharder : public sharder {
     std::vector<uint64_t> _shard_start;
 public:
-    static_sharder(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
+    static_sharder(unsigned shard_count = this_smp_shard_count(), unsigned sharding_ignore_msb_bits = 0);
 
     virtual unsigned shard_of(const token& t) const;
     virtual std::optional<shard_and_token> next_shard(const token& t) const;

@@ -49,7 +49,7 @@ public:
 
 schema_ptr test_table_schema() {
     static thread_local auto s = [] {
-        schema_builder builder("ks", "cf", generate_legacy_id("ks", "cf"), bytes_type);
+        schema_builder builder(this_smp_shard_count(), "ks", "cf", generate_legacy_id("ks", "cf"), bytes_type);
         builder.with_column("p", bytes_type, column_kind::partition_key);
         builder.with_column("c", int32_type);
         return builder.build(schema_builder::compact_storage::no);
@@ -74,7 +74,7 @@ make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factor
 /// Arguments passed to the function are passed to table::make_sstable
 template <typename... Args>
 sstables::shared_sstable
-make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, unsigned num_shards = smp::count) {
+make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, unsigned num_shards = this_smp_shard_count()) {
     // Unlike the previous helper, we'll assume we're in a thread here. It's less flexible
     // but the users are usually in a thread, and rewrite_toc_without_component requires
     // a thread. We could fix that, but deferring that for now.
@@ -328,7 +328,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
         rename_file(test(sst2).filename(sstables::component_type::TOC).native(), test(sst2).filename(sstables::component_type::TemporaryTOC).native()).get();
 
         std::vector<bool> gen1_seen;
-        gen1_seen.resize(smp::count);
+        gen1_seen.resize(this_smp_shard_count());
         with_sstable_directory(env, [&] (sharded<sstables::sstable_directory>& sstdir) {
             distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
             sstdir.invoke_on_all([&] (sstables::sstable_directory& sstdir) {
@@ -389,7 +389,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
         sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
-        for (shard_id i = 0; i < smp::count; ++i) {
+        for (shard_id i = 0; i < this_smp_shard_count(); ++i) {
             env.invoke_on(i, [&sharded_gen] (sstables::test_env& env) {
                 auto generation = std::invoke(sharded_gen.local());
                 // this is why it is annoying for the internal functions in the test infrastructure to
@@ -402,7 +402,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
 
         with_sstable_directory(env, [] (sharded<sstables::sstable_directory>& sstdir) {
             distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
-            verify_that_all_sstables_are_local(sstdir, smp::count).get();
+            verify_that_all_sstables_are_local(sstdir, this_smp_shard_count()).get();
         });
     }).get();
 }
@@ -415,10 +415,10 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
         sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
-        for (shard_id i = 0; i < smp::count; ++i) {
+        for (shard_id i = 0; i < this_smp_shard_count(); ++i) {
             env.invoke_on(i, [&sharded_gen] (sstables::test_env& env) -> future<> {
                 // intentionally generate the generation on a different shard
-                auto generation = co_await sharded_gen.invoke_on((this_shard_id() + 1) % smp::count, [] (auto& gen) {
+                auto generation = co_await sharded_gen.invoke_on((this_shard_id() + 1) % this_smp_shard_count(), [] (auto& gen) {
                     return gen();
                 });
                 // this is why it is annoying for the internal functions in the test infrastructure to
@@ -431,13 +431,13 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
 
         with_sstable_directory(env, [] (sharded<sstables::sstable_directory>& sstdir) {
             distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
-            verify_that_all_sstables_are_local(sstdir, smp::count).get();
+            verify_that_all_sstables_are_local(sstdir, this_smp_shard_count()).get();
         });
     }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_directory_foreign_sstable_should_not_load_locally) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         fmt::print("Skipping sstable_directory_shared_sstables_reshard_correctly, smp == 1\n");
         return;
     }
@@ -447,10 +447,10 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_foreign_sstable_should_not_load_local
                 return sstables_stats::get_shard_stats().open_for_reading;
             }, 0, [] (auto res, auto gen) {return res + gen;}).get();
         };
-        for (shard_id i = 0; i < smp::count; ++i) {
+        for (shard_id i = 0; i < this_smp_shard_count(); ++i) {
             env.invoke_on(i, [] (sstables::test_env& env) -> future<> {
                 co_return co_await seastar::async([&env] {
-                    make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), generation_type((this_shard_id() + 1) % smp::count)));
+                    make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), generation_type((this_shard_id() + 1) % this_smp_shard_count())));
                 });
             }).get();
         }
@@ -461,7 +461,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_foreign_sstable_should_not_load_local
         });
 
         // verify that all the sstables were loaded only once
-        BOOST_REQUIRE_EQUAL(sstables_opened_for_reading(), sstables_open_before_process + smp::count);
+        BOOST_REQUIRE_EQUAL(sstables_opened_for_reading(), sstables_open_before_process + this_smp_shard_count());
     }).get();
 }
 
@@ -543,7 +543,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
 }
 
 SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         fmt::print("Skipping sstable_directory_shared_sstables_reshard_correctly, smp == 1\n");
         return make_ready_future<>();
     }
@@ -557,14 +557,14 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
             return cf.disable_auto_compaction();
         }).get();
 
-        unsigned num_sstables = 10 * smp::count;
+        unsigned num_sstables = 10 * this_smp_shard_count();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
+            auto generation = sharded_gen.invoke_on(nr % this_smp_shard_count(), [] (auto& gen) {
                 return gen();
             }).get();
             make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
@@ -586,14 +586,14 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
             return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
         };
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
-        verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
+        verify_that_all_sstables_are_local(sstdir, this_smp_shard_count() * this_smp_shard_count()).get();
       });
     });
 }
 
 // Regression test for #14618 - resharding with non-empty owned_ranges_ptr.
 SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned_ranges) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         fmt::print("Skipping sstable_directory_shared_sstables_reshard_correctly, smp == 1\n");
         return make_ready_future<>();
     }
@@ -607,14 +607,14 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
             return cf.disable_auto_compaction();
         }).get();
 
-        unsigned num_sstables = 10 * smp::count;
+        unsigned num_sstables = 10 * this_smp_shard_count();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
+            auto generation = sharded_gen.invoke_on(nr % this_smp_shard_count(), [] (auto& gen) {
                 return gen();
             }).get();
             make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
@@ -638,13 +638,13 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
         const auto& erm = e.db().local().find_keyspace("ks").get_static_effective_replication_map();
         auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(e.db().local().get_keyspace_local_ranges(erm).get());
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable), std::move(owned_ranges_ptr)).get();
-        verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
+        verify_that_all_sstables_are_local(sstdir, this_smp_shard_count() * this_smp_shard_count()).get();
       });
     });
 }
 
 SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_even_if_files_are_not_well_distributed) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         fmt::print("Skipping sstable_directory_shared_sstables_reshard_correctly, smp == 1\n");
         return make_ready_future<>();
     }
@@ -658,7 +658,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
             return cf.disable_auto_compaction();
         }).get();
 
-        unsigned num_sstables = 10 * smp::count;
+        unsigned num_sstables = 10 * this_smp_shard_count();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         sharded_gen.start().get();
@@ -688,13 +688,13 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
             return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
         };
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
-        verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
+        verify_that_all_sstables_are_local(sstdir, this_smp_shard_count() * this_smp_shard_count()).get();
       });
     });
 }
 
 SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshold) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         fmt::print("Skipping sstable_directory_shared_sstables_reshard_correctly, smp == 1\n");
         return make_ready_future<>();
     }
@@ -708,14 +708,14 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
             return cf.disable_auto_compaction();
         }).get();
 
-        unsigned num_sstables = (cf.schema()->max_compaction_threshold() + 1) * smp::count;
+        unsigned num_sstables = (cf.schema()->max_compaction_threshold() + 1) * this_smp_shard_count();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
+            auto generation = sharded_gen.invoke_on(nr % this_smp_shard_count(), [] (auto& gen) {
                 return gen();
             }).get();
             make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
@@ -737,7 +737,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
             return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
         };
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
-        verify_that_all_sstables_are_local(sstdir, 2 * smp::count * smp::count).get();
+        verify_that_all_sstables_are_local(sstdir, 2 * this_smp_shard_count() * this_smp_shard_count()).get();
       });
     });
 }
@@ -925,17 +925,17 @@ SEASTAR_TEST_CASE(sstable_directory_test_reshard_vnodes) {
             return cf.disable_auto_compaction();
         }).get();
 
-        unsigned num_sstables = 10 * smp::count;
+        unsigned num_sstables = 10 * this_smp_shard_count();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
+            auto generation = sharded_gen.invoke_on(nr % this_smp_shard_count(), [] (auto& gen) {
                 return gen();
             }).get();
-            make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation, smp::count);
+            make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation, this_smp_shard_count());
         }
 
         with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::upload, [&] (sharded<sstables::sstable_directory>& sstdir) {

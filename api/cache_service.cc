@@ -197,7 +197,7 @@ void set_cache_service(http_context& ctx, sharded<replica::database>& db, routes
     });
 
     cs::get_row_capacity.set(r, [] (std::unique_ptr<http::request> req) {
-        return seastar::map_reduce(smp::all_cpus(), [] (int cpu) {
+        return seastar::map_reduce(this_smp_all_shards(), [] (int cpu) {
             return make_ready_future<uint64_t>(memory::stats().total_memory());
         }, uint64_t(0), std::plus<uint64_t>()).then([](const int64_t& res) {
             return make_ready_future<json::json_return_type>(res);

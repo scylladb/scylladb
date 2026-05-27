@@ -350,14 +350,14 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
  
         for (auto& d : descs) {
             replay_position p = d;
-            map[p.shard_id() % smp::count].push_back(std::move(d));
+            map[p.shard_id() % this_smp_shard_count()].push_back(std::move(d));
         }
     }
 
     co_await _impl->start();
     std::exception_ptr e;
     try {
-        auto totals = co_await map_reduce(smp::all_cpus(), [&](unsigned id) -> future<impl::stats> {
+        auto totals = co_await map_reduce(this_smp_all_shards(), [&](unsigned id) -> future<impl::stats> {
             co_return co_await smp::submit_to(id, [&] () -> future<impl::stats> {
                 impl::stats total;
                 std::unordered_map<unsigned, commitlog::replay_state> states;

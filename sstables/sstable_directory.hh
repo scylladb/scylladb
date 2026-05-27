@@ -260,7 +260,7 @@ public:
 
     // scans a directory containing SSTables. Every generation that is believed to belong to this
     // shard is processed, the ones that are not are skipped. Potential pertinence is decided as
-    // generation % smp::count.
+    // generation % this_smp_shard_count().
     //
     // Once this method return, every SSTable that this shard processed can be in one of 3 states:
     //  - unshared, local: not a shared SSTable, and indeed belongs to this shard.

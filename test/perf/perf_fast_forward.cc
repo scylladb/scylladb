@@ -2085,7 +2085,7 @@ int scylla_fast_forward_main(int argc, char** argv) {
                     table_config cfg{name, n_rows, value_size, compressor};
                     populate(enabled_datasets, env, cfg, flush_threshold);
                 } else {
-                    if (smp::count != 1) {
+                    if (this_smp_shard_count() != 1) {
                         throw std::runtime_error("The test must be run with one shard");
                     }
 

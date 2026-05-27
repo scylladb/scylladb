@@ -589,7 +589,7 @@ private:
     // More complex fields are derived from these inside rebuild().
     // Contains only fields which can be safely default-copied.
     struct raw_schema {
-        raw_schema(table_id id);
+        raw_schema(table_id id, unsigned shard_count);
         table_id _id;
         sstring _ks_name;
         sstring _cf_name;

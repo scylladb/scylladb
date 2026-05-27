@@ -64,7 +64,7 @@ void set_error_injection(http_context& ctx, routes& r) {
     hf::read_injection.set(r, [](std::unique_ptr<request> req) -> future<json::json_return_type> {
         const sstring injection = req->get_path_param("injection");
 
-        std::vector<error_injection_json::error_injection_info> error_injection_infos(smp::count, error_injection_json::error_injection_info{});
+        std::vector<error_injection_json::error_injection_info> error_injection_infos(this_smp_shard_count(), error_injection_json::error_injection_info{});
 
         co_await smp::invoke_on_all([&] {
             auto& info = error_injection_infos[this_shard_id()];

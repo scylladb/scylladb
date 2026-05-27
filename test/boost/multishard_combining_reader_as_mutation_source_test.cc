@@ -111,8 +111,8 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
 
 // Best run with SMP >= 2
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 
@@ -123,8 +123,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_evict_paused) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 
@@ -138,8 +138,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_evict_paused) {
 // run_mutation_source_tests execution is split
 
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 
@@ -150,8 +150,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_reverse) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 

@@ -1403,7 +1403,32 @@ gdb.printing.register_pretty_printer(gdb.current_objfile(), build_pretty_printer
 
 
 def cpus():
-    return int(gdb.parse_and_eval('::seastar::smp::count'))
+    # Read shard count from the thread-local smp instance pointer.
+    # _this_smp is set on all reactor threads; try the current thread first,
+    # then iterate all threads to find a reactor thread.
+    try:
+        smp = gdb.parse_and_eval("'seastar::smp::_this_smp'")
+        if int(smp) != 0:
+            return int(smp['_shard_count'])
+    except gdb.error:
+        pass
+    # Current thread is not a reactor thread. Search all threads.
+    saved_thread = gdb.selected_thread()
+    try:
+        for t in gdb.selected_inferior().threads():
+            t.switch()
+            try:
+                smp = gdb.parse_and_eval("'seastar::smp::_this_smp'")
+                if int(smp) != 0:
+                    return int(smp['_shard_count'])
+            except gdb.error:
+                continue
+    finally:
+        if saved_thread:
+            saved_thread.switch()
+    # Last resort: try the deprecated global (may be stripped in release builds).
+    # also works as for older versions.
+    return int(gdb.parse_and_eval("'seastar::smp::count'"))
 
 
 def current_shard():

@@ -91,7 +91,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
         future<> upload_component(sstring name);
     };
     sharded<worker> _sharded_worker;
-    std::vector<utils::upload_progress> _progress_per_shard{smp::count};
+    std::vector<utils::upload_progress> _progress_per_shard{this_smp_shard_count()};
 
     future<> do_backup();
     future<> process_snapshot_dir();

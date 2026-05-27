@@ -168,7 +168,7 @@ future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_
         auto gate_holder = bm._gate.hold();
         auto sem_units = co_await get_units(bm._sem, 1);
 
-        auto dest = bm._cpu++ % smp::count;
+        auto dest = bm._cpu++ % this_smp_shard_count();
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         auto last_replay = gc_clock::now();
         all_batches_replayed all_replayed = all_batches_replayed::yes;

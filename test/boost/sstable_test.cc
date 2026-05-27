@@ -58,7 +58,7 @@ SEASTAR_TEST_CASE(uncompressed_data) {
 }
 
 static auto make_schema_for_compressed_sstable() {
-    return schema_builder("ks", "cf").with_column("pk", utf8_type, column_kind::partition_key).build();
+    return schema_builder(this_smp_shard_count(), "ks", "cf").with_column("pk", utf8_type, column_kind::partition_key).build();
 }
 
 SEASTAR_TEST_CASE(compressed_data) {
@@ -453,7 +453,7 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
 
 static schema_ptr large_partition_schema() {
     static thread_local auto s = [] {
-        schema_builder builder("try1", "data", generate_legacy_id("try1", "data"));
+        schema_builder builder(this_smp_shard_count(), "try1", "data", generate_legacy_id("try1", "data"));
         builder.with_column("t1", utf8_type, column_kind::partition_key);
         builder.with_column("t2", utf8_type, column_kind::clustering_key);
         builder.with_column("t3", utf8_type);
@@ -768,7 +768,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
 // should correctly compare empty keys. The fact we did this incorrectly was
 // noticed while fixing #9375, and a separate issue on it is #10178.
 BOOST_AUTO_TEST_CASE(test_empty_key_view_comparison) {
-    auto s_ptr = schema_builder("", "")
+    auto s_ptr = schema_builder(1, "", "")
             .with_column("p", bytes_type, column_kind::partition_key)
             .build();
     const schema& s = *s_ptr;
