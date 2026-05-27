@@ -465,6 +465,7 @@ public:
     future<> stop() {
         _stopping = true;
         main_loop_wake();
+        _adjust_shares_timer.cancel();
         return std::move(_done);
     }
 };
