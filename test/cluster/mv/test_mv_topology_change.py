@@ -19,7 +19,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_view
-from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas
+from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas, pin_the_only_tablet
 
 
 logger = logging.getLogger(__name__)
@@ -513,3 +513,41 @@ async def test_mv_write_during_node_join(manager: ManagerClient):
             if len(rows) == 1 and rows[0].cnt == N:
                 return True
         await wait_for(all_rows_found, time.time() + 60)
+
+# In this test we stop the server shortly after starting generating a view update.
+# The view update is delayed, so the cleanup code processed after the update executes
+# while we're already shutting down. This code should not reference any objects destroyed
+# earlier in the shutdown sequence. The test passes if the server doesn't crash during shutdown.
+# Reproduces issue SCYLLADB-2301
+@pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
+async def test_no_crash_on_shutdown_with_pending_remote_view_update(manager: ManagerClient) -> None:
+    node_count = 2
+    servers = await manager.servers_add(node_count, config={'tablets_mode_for_new_keyspaces': 'enabled'})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        # await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}}")
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, PRIMARY KEY (key, c))")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL PRIMARY KEY (c, key)")
+
+        await wait_for_view(cql, 'mv', node_count)
+
+        # Pin base and view on different servers to ensure remote view updates
+        await pin_the_only_tablet(manager, ks, "tab", servers[0])
+        await pin_the_only_tablet(manager, ks, "mv", servers[1])
+
+        # delay_before_remote_view_update delays remote view updates by 500ms.
+        # This ensures the update is still in-flight when we stop the server.
+        await manager.api.enable_injection(servers[0].ip_addr, "delay_before_remote_view_update", one_shot=False)
+
+        # Insert a row — this triggers a fire-and-forget remote view update
+        # that will be delayed 500ms by the injection.
+        await cql.run_async(f"INSERT INTO {ks}.tab (key, c) VALUES (1, 1)")
+
+        # Stop the server immediately. The remote view update is still pending
+        # (held by the 500ms injection sleep). During shutdown, VUG is destroyed
+        # while the detached continuation still references it.
+        # Without the fix, this crashes with exit code -11 (SIGSEGV).
+        await manager.server_stop_gracefully(servers[0].server_id)
+        # Start the server again for clean test shutdown
+        await manager.server_start(servers[0].server_id)

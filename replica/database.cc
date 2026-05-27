@@ -2841,7 +2841,10 @@ future<> database::stop() {
     for (auto& [sg, sem] : _view_update_concurrency_semaphores) {
         co_await sem.wait(max_concurrent_local_view_updates);
     }
-    co_await _view_update_memory_sem.wait(max_memory_pending_view_updates());
+    if (_view_update_memory_sem.current() != max_memory_pending_view_updates()) {
+        dblog.error("View update memory semaphore is not fully replenished while shutting down database. "
+                    "The shutdown may fail when the view updates try accessing objects that have already been destroyed");
+    }
     if (_commitlog) {
         co_await _commitlog->release();
     }

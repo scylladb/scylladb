@@ -290,7 +290,8 @@ void view_update_generator::do_abort() noexcept {
 }
 
 future<> view_update_generator::drain() {
-    return _proxy.local().abort_view_writes();
+    co_await _proxy.local().abort_view_writes();
+    co_await _gate.close();
 }
 
 future<> view_update_generator::stop() {

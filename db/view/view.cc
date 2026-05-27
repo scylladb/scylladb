@@ -2102,9 +2102,10 @@ future<> view_update_generator::mutate_MV(
             // to database::max_concurrent_local_view_updates. Local view updates are cpu-bound, so the cpu won't idle even
             // if the concurrency is low and executing too many view updates concurrently can unnecessarily increase latency and memory usage.
             auto count_units = co_await seastar::get_units(_db.get_view_update_concurrency_sem(), 1);
+            auto gate_holder = _gate.hold();
             local_view_update = _proxy.local().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            count_units = std::move(count_units), memory_units, this] (future<>&& f) mutable {
+                            count_units = std::move(count_units), memory_units, h = std::move(gate_holder), this] (future<>&& f) mutable {
                 --stats.writes;
                 memory_units = nullptr;
                 _proxy.local().update_view_update_backlog();
@@ -2140,9 +2141,10 @@ future<> view_update_generator::mutate_MV(
             stats.view_updates_pushed_remote += updates_pushed_remote;
             cf_stats.total_view_updates_pushed_remote += updates_pushed_remote;
             schema_ptr s = mut.s;
+            auto gate_holder = _gate.hold();
             future<> remote_view_update = apply_to_remote_endpoints(_proxy.local(), std::move(view_ermp), *target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                 [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
-                 memory_units, apply_update_synchronously, this] (future<>&& f) mutable {
+                 memory_units, apply_update_synchronously, h = std::move(gate_holder), this] (future<>&& f) mutable {
                 memory_units = nullptr;
                 _proxy.local().update_view_update_backlog();
                 if (f.failed()) {
