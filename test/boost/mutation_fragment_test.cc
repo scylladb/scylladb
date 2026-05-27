@@ -29,6 +29,9 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/fragment_scatterer.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/random_schema.hh"
+#include "test/lib/random_utils.hh"
+#include "dht/i_partitioner.hh"
 
 #include "readers/from_mutations_v2.hh"
 
@@ -702,5 +705,85 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_validation_leve
 
         // OOO token
         BOOST_REQUIRE(validation_level < vl::token || !validator(dk0));
+    }
+}
+
+// Verify that mutation_fragment_stream_validator uses ring (legacy raw-byte) order
+// for same-token partition keys, not the type-aware partition_key::tri_compare order.
+//
+// Two keys that share a token must be ordered by their raw serialized bytes
+// (legacy_tri_compare), which is what SSTables use on disk.  Using the
+// type-aware comparator instead would yield false-positive "out-of-order"
+// errors for key types (e.g. timeuuid) whose semantic order differs from the
+// raw-byte order.
+//
+// We use the "token trick": we fabricate decorated_key objects that share one
+// fixed token but carry distinct partition keys.  The validator does not
+// verify that the token is the true murmur3 hash of the key, so this lets us
+// test the same-token ordering path with arbitrary schemas and key values.
+SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_ring_order_same_token) {
+    testing::scoped_no_abort_on_internal_error _;
+
+    // A fixed token shared by every test key.  Any kind::key value works; we
+    // just need all decorated_keys to have the same token so the validator
+    // exercises the same-token ordering branch (line that calls
+    // legacy_tri_compare in mutation_fragment_stream_validator.cc).
+    const dht::token shared_token{int64_t{42}};
+
+    const size_t num_keys = 32;
+
+    auto spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 3),  // 1–3 pk columns
+            std::uniform_int_distribution<size_t>(0, 0),  // no ck columns needed
+            std::uniform_int_distribution<size_t>(1, 1),  // 1 regular column
+            std::uniform_int_distribution<size_t>(0, 0)); // no static columns
+
+    tests::random_schema rschema(tests::random::get_int<uint32_t>(), *spec);
+    const schema& s = *rschema.schema();
+
+    // Generate random partition keys and wrap them as decorated_keys that
+    // all share shared_token.
+    std::vector<dht::decorated_key> dkeys;
+    dkeys.reserve(num_keys);
+    for (size_t i = 0; i < num_keys; ++i) {
+        auto raw = rschema.make_pkey(static_cast<uint32_t>(i));
+        dkeys.push_back(dht::decorated_key{shared_token,
+                partition_key::from_exploded(s, raw)});
+    }
+
+    // Sort by legacy_tri_compare — the ring order within a token.
+    std::sort(dkeys.begin(), dkeys.end(),
+            [&s](const dht::decorated_key& a, const dht::decorated_key& b) {
+                return a.key().legacy_tri_compare(s, b.key()) < 0;
+            });
+
+    // Remove byte-identical keys (can happen with some type+value combinations).
+    dkeys.erase(std::unique(dkeys.begin(), dkeys.end(),
+            [&s](const dht::decorated_key& a, const dht::decorated_key& b) {
+                return a.key().legacy_tri_compare(s, b.key()) == 0;
+            }), dkeys.end());
+
+    BOOST_REQUIRE_GT(dkeys.size(), 2);
+
+    // 1. The validator must accept all keys fed in correct ring order.
+    {
+        mutation_fragment_stream_validator validator(s);
+        for (const auto& dk : dkeys) {
+            auto res = validator(dk);
+            BOOST_REQUIRE_MESSAGE(res, fmt::format("validator wrongly rejected key {} in correct ring order", dk.key().with_schema(s)));
+        }
+    }
+
+    // 2. For every adjacent pair (dkeys[i] < dkeys[i+1] in ring order),
+    //    feeding dkeys[i+1] first and then dkeys[i] must be rejected.
+    for (size_t i = 0; i + 1 < dkeys.size(); ++i) {
+        mutation_fragment_stream_validator validator(s);
+        // Feed the later key first (valid so far).
+        BOOST_REQUIRE(validator(dkeys[i + 1]));
+        // Now feed the earlier key — out of ring order, must be rejected.
+        auto res = validator(dkeys[i]);
+        BOOST_REQUIRE_MESSAGE(!res,
+                fmt::format("validator accepted out-of-ring-order key {} after {}", dkeys[i].key().with_schema(s), dkeys[i + 1].key().with_schema(s)));
     }
 }
