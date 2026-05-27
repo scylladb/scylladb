@@ -17,6 +17,7 @@
 #include "cql3/functions/user_aggregate.hh"
 #include "cql3/functions/uuid_fcts.hh"
 #include "cql3/functions/vector_similarity_fcts.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "as_json_function.hh"
 #include "cql3/prepare_context.hh"
@@ -109,6 +110,8 @@ functions::init() noexcept {
     declare(error_injection::make_enable_injection_function());
     declare(error_injection::make_disable_injection_function());
     declare(error_injection::make_enabled_injections_function());
+
+    declare(make_bm25_function());
 
     // also needed for smp:
 #if 0

@@ -51,6 +51,7 @@ target_sources(cql3
     statements/strong_consistency/modification_statement.cc
     statements/strong_consistency/statement_helpers.cc
     functions/vector_similarity_fcts.cc
+    functions/scoring_fcts.cc
     statements/cf_prop_defs.cc
     statements/cf_statement.cc
     statements/authentication_statement.cc
