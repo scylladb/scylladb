@@ -78,13 +78,13 @@ Use the Confluent CLI to restart Connect.
 
    .. code-block:: none
   
-      confluent local stop && confluent local start
+      confluent local services stop && confluent local services start
 
    The output will be similar to:
 
    .. code-block:: none
 
-       confluent local stop && confluent local start
+       confluent local services stop && confluent local services start
        Starting zookeeper
        zookeeper is [UP]
        Starting Kafka
