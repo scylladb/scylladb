@@ -697,7 +697,7 @@ public:
             std::move(on_header), std::move(on_record));
     }
 
-    future<> for_each_record(const std::vector<log_segment_id>& segments,
+    future<> for_each_record(auto&& segments,
                             std::function<want_data(log_location, const log_record_header&)> on_header,
                             std::function<future<>(log_location, log_record)> on_record)
     {
@@ -1495,7 +1495,13 @@ future<> compaction_manager_impl::compact_segments(logstor_group& cg, std::vecto
 
     auto& index = cg.logstor_index();
 
-    co_await _sm.for_each_record(segments,
+    auto nonempty_segments = segments
+            | std::views::filter([this] (log_segment_id seg_id) {
+                auto& desc = _sm.get_segment_descriptor(seg_id);
+                return desc.net_data_size(_sm.get_segment_size()) > 0;
+            });
+
+    co_await _sm.for_each_record(nonempty_segments,
         [&index, &cb] (log_location read_location, const log_record_header& record_header) -> want_data {
             if (!index.is_record_alive(record_header.key, read_location)) {
                 cb.stats.records_skipped++;
@@ -1595,7 +1601,13 @@ future<> compaction_manager_impl::split_compaction(replica::table& t, logstor_gr
 
         std::array<compaction_buffer, 2> bufs{compaction_buffer{_sm, src}, compaction_buffer{_sm, src}};
 
-        co_await _sm.for_each_record(batch,
+        auto nonempty_segments = batch
+                | std::views::filter([this] (log_segment_id seg_id) {
+                    auto& desc = _sm.get_segment_descriptor(seg_id);
+                    return desc.net_data_size(_sm.get_segment_size()) > 0;
+                });
+
+        co_await _sm.for_each_record(nonempty_segments,
             [&index] (log_location read_location, const log_record_header& record_header) -> want_data {
                 if (!index.is_record_alive(record_header.key, read_location)) {
                     return want_data::no;
