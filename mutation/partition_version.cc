@@ -35,15 +35,14 @@ static void remove_or_mark_as_unique_owner(partition_version* current, mutation_
 
 partition_version::partition_version(partition_version&& pv) noexcept
     : anchorless_list_base_hook(std::move(static_cast<anchorless_list_base_hook&>(pv)))
-    , _backref(pv._backref)
+    , _backref_tagged(pv._backref_tagged)
     , _schema(std::move(pv._schema))
-    , _is_being_upgraded(pv._is_being_upgraded)
     , _partition(std::move(pv._partition))
 {
-    if (_backref) {
-        _backref->set_version(this);
+    if (auto* ref = get_backref()) {
+        ref->set_version(this);
     }
-    pv._backref = nullptr;
+    pv._backref_tagged = 0;
 }
 
 partition_version& partition_version::operator=(partition_version&& pv) noexcept
@@ -57,8 +56,8 @@ partition_version& partition_version::operator=(partition_version&& pv) noexcept
 
 partition_version::~partition_version()
 {
-    if (_backref) {
-        _backref->set_version(nullptr);
+    if (auto* ref = get_backref()) {
+        ref->set_version(nullptr);
     }
     with_allocator(standard_allocator(), [&] {
         // Destroying the schema_ptr can cause a destruction of the schema,
@@ -217,7 +216,7 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
         //
         // See the documentation in partition_version.hh for additional info about upgrades.
         partition_version* current = &*v;
-        while (current->next() && !current->next()->is_referenced() && !current->next()->_is_being_upgraded) {
+        while (current->next() && !current->next()->is_referenced() && !current->next()->is_being_upgraded()) {
             current = current->next();
             _version = partition_version_ref(*current);
             _version_merging_state.reset();
@@ -229,7 +228,7 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
             if (!_version_merging_state) {
                 _version_merging_state = apply_resume();
             }
-            if (prev->prev() && prev->prev()->_is_being_upgraded) [[unlikely]] {
+            if (prev->prev() && prev->prev()->is_being_upgraded()) [[unlikely]] {
                 // Give up.
                 //
                 // While `prev->prev()` is being upgraded into `prev`,
@@ -240,7 +239,7 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
                 // `prev`'s snapshot will slide to `current` and pick up where we left.
                 return stop_iteration::yes;
             }
-            if (!prev->_is_being_upgraded && prev->get_schema()->version() != current->get_schema()->version()) {
+            if (!prev->is_being_upgraded() && prev->get_schema()->version() != current->get_schema()->version()) {
                 // The versions we are attempting to merge have different schemas.
                 // In this scenario the older version has to be upgraded before
                 // being merged with the newer one.
@@ -262,7 +261,7 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
                 current = &append_version(*current, *prev->get_schema(), _tracker);
                 _version = partition_version_ref(*current);
                 prev = current->prev();
-                prev->_is_being_upgraded = true;
+                prev->set_being_upgraded(true);
             }
             const auto do_stop_iteration = current->partition().apply_monotonically(*current->get_schema(),
                 *prev->get_schema(), std::move(prev->partition()), _tracker, local_app_stats, default_preemption_check(), *_version_merging_state,
@@ -274,7 +273,7 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
             // If do_stop_iteration is yes, we have to remove the previous version.
             // It now appears as fully continuous because it is empty.
             _version_merging_state.reset();
-            prev->_is_being_upgraded = false;
+            prev->set_being_upgraded(false);
             if (prev->is_referenced()) {
                 _version.release();
                 prev->back_reference() = partition_version_ref(*current, prev->back_reference().is_unique_owner());
@@ -297,7 +296,7 @@ stop_iteration partition_snapshot::slide_to_oldest() noexcept {
         _entry = nullptr;
     }
     partition_version* current = &*v;
-    while (current->next() && !current->next()->is_referenced() && !current->next()->_is_being_upgraded) {
+    while (current->next() && !current->next()->is_referenced() && !current->next()->is_being_upgraded()) {
         current = current->next();
         _version = partition_version_ref(*current);
     }
@@ -683,7 +682,7 @@ partition_snapshot_ptr partition_entry::read(logalloc::region& r,
             // they must attach to the non-current version.
             partition_version* second = _version->next();
             SCYLLA_ASSERT(second && second->is_referenced());
-            auto snp = partition_snapshot::container_of(second->_backref).shared_from_this();
+            auto snp = partition_snapshot::container_of(second->get_backref()).shared_from_this();
             SCYLLA_ASSERT(phase == snp->_phase);
             return snp;
         } else { // phase > _snapshot->_phase

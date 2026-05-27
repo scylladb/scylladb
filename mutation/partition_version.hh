@@ -191,10 +191,35 @@ class static_row;
 class partition_version_ref;
 
 class partition_version : public anchorless_list_base_hook<partition_version> {
-    partition_version_ref* _backref = nullptr;
+    // Tagged pointer: bit 0 stores _is_being_upgraded flag.
+    // partition_version_ref is always at least 8-byte aligned, so low bits are free.
+    static constexpr uintptr_t is_being_upgraded_bit = 1;
+    static constexpr uintptr_t pointer_mask = ~is_being_upgraded_bit;
+    uintptr_t _backref_tagged = 0;
+
+    partition_version_ref* get_backref() const noexcept {
+        return reinterpret_cast<partition_version_ref*>(_backref_tagged & pointer_mask);
+    }
+    void set_backref(partition_version_ref* p) noexcept {
+        // The tag lives in bit 0, which relies on partition_version_ref being at
+        // least 2-byte aligned. Guard against the pointer ever using that bit.
+        SCYLLA_ASSERT((reinterpret_cast<uintptr_t>(p) & is_being_upgraded_bit) == 0);
+        _backref_tagged = reinterpret_cast<uintptr_t>(p) | (_backref_tagged & is_being_upgraded_bit);
+    }
+
     schema_ptr _schema;
-    bool _is_being_upgraded = false;
     mutation_partition_v2 _partition;
+
+    bool is_being_upgraded() const noexcept {
+        return _backref_tagged & is_being_upgraded_bit;
+    }
+    void set_being_upgraded(bool v) noexcept {
+        if (v) {
+            _backref_tagged |= is_being_upgraded_bit;
+        } else {
+            _backref_tagged &= pointer_mask;
+        }
+    }
 
     friend class partition_version_ref;
     friend class partition_entry;
@@ -227,10 +252,10 @@ public:
     mutation_partition_v2& partition() { return _partition; }
     const mutation_partition_v2& partition() const { return _partition; }
 
-    bool is_referenced() const { return _backref; }
-    // Returns true iff this version is directly referenced from a partition_entry (is its newset version).
+    bool is_referenced() const { return get_backref(); }
+    // Returns true iff this version is directly referenced from a partition_entry (is its newest version).
     bool is_referenced_from_entry() const;
-    partition_version_ref& back_reference() const { return *_backref; }
+    partition_version_ref& back_reference() const { return *get_backref(); }
 
     size_t size_in_allocator(allocation_strategy& allocator) const;
 
@@ -264,19 +289,19 @@ public:
         : _tagged(reinterpret_cast<uintptr_t>(&pv) | (unique_owner ? unique_owner_bit : 0))
     {
         SCYLLA_ASSERT((reinterpret_cast<uintptr_t>(&pv) & unique_owner_bit) == 0);
-        SCYLLA_ASSERT(!pv._backref);
-        pv._backref = this;
+        SCYLLA_ASSERT(!pv.get_backref());
+        pv.set_backref(this);
     }
     ~partition_version_ref() {
         if (auto* v = get_version()) {
-            v->_backref = nullptr;
+            v->set_backref(nullptr);
         }
     }
     partition_version_ref(partition_version_ref&& other) noexcept
         : _tagged(other._tagged)
     {
         if (auto* v = get_version()) {
-            v->_backref = this;
+            v->set_backref(this);
         }
         other._tagged = 0;
     }
@@ -316,15 +341,27 @@ public:
 
     void release() {
         if (auto* v = get_version()) {
-            v->_backref = nullptr;
+            v->set_backref(nullptr);
         }
         _tagged = 0;
     }
 };
 
+// The tagged pointers above stash a flag in bit 0 of a pointer, which is only
+// sound while the pointee is at least 2-byte aligned. The run-time SCYLLA_ASSERTs
+// in the setters can pass by chance (a given address may happen to be even), so
+// enforce the alignment invariant at compile time too. This guards against e.g.
+// __attribute__((packed)) (used on some LSA-allocated types to kill alignment)
+// ever being applied to these types.
+static_assert(alignof(partition_version) > 1,
+        "partition_version_ref tags bit 0 of a partition_version*; partition_version must be at least 2-byte aligned");
+static_assert(alignof(partition_version_ref) > 1,
+        "partition_version tags bit 0 of its _backref (partition_version_ref*); partition_version_ref must be at least 2-byte aligned");
+
 inline
 bool partition_version::is_referenced_from_entry() const {
-    return !prev() && _backref && !_backref->is_unique_owner();
+    auto* backref = get_backref();
+    return !prev() && backref && !backref->is_unique_owner();
 }
 
 class partition_entry;
@@ -419,7 +456,7 @@ public:
     // Returns a reference to the partition_snapshot which is attached to given non-latest partition version.
     // Assumes !v.is_referenced_from_entry() && v.is_referenced().
     static const partition_snapshot& referer_of(const partition_version& v) {
-        return container_of(v._backref);
+        return container_of(v.get_backref());
     }
 
     // If possible, merges the version pointed to by this snapshot with
