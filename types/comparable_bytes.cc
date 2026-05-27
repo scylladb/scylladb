@@ -1417,3 +1417,18 @@ comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixe
 }
 template comparable_bytes comparable_bytes_from_compound<allow_prefixes::yes>(const compound_type<allow_prefixes::yes>&, managed_bytes_view, std::byte);
 template comparable_bytes comparable_bytes_from_compound<allow_prefixes::no>(const compound_type<allow_prefixes::no>&, managed_bytes_view, std::byte);
+
+comparable_bytes comparable_bytes_from_legacy_partition_key(const compound_type<allow_prefixes::no>& t, managed_bytes_view v, std::byte terminator) {
+    bytes_ostream out;
+
+    constexpr std::byte col_separator = std::byte(0x40);
+    out.write(bytespan_to_bytesview(object_representation(col_separator)));
+
+    auto legacy_form = to_legacy(t, v);
+    auto legacy_form_view = managed_bytes_view(legacy_form);
+    to_comparable_bytes(*bytes_type, legacy_form_view, out);
+
+    out.write(bytespan_to_bytesview(object_representation(terminator)));
+
+    return std::move(out).to_managed_bytes();
+}

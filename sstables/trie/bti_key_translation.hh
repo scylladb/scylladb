@@ -59,7 +59,6 @@ class lazy_comparable_bytes_from_ring_position {
     // Starts as `partition_key`, potentially is converted to `comparable_bytes`
     // later if it turns out that the token isn't enough.
     std::variant<partition_key, comparable_bytes> _pk;
-    [[maybe_unused]]
     sstable_version_types _format_version;
 private:
     void init_first_fragment(dht::token);
@@ -102,7 +101,11 @@ public:
             if (!_remaining) {
                 if (auto raw_pk = std::get_if<partition_key>(&_owner._pk)) {
                     // The lazy BTI translation happens here.
-                    _owner._pk = comparable_bytes_from_compound(*_owner._s.partition_key_type(), raw_pk->representation(), bound_weight_to_terminator(_owner._weight));
+                    if (uses_legacy_dk_order(_owner._format_version)) {
+                        _owner._pk = comparable_bytes_from_legacy_partition_key(*_owner._s.partition_key_type(), raw_pk->representation(), bound_weight_to_terminator(_owner._weight));
+                    } else {
+                        _owner._pk = comparable_bytes_from_compound(*_owner._s.partition_key_type(), raw_pk->representation(), bound_weight_to_terminator(_owner._weight));
+                    }
                     _owner._size = std::get<comparable_bytes>(_owner._pk).size() + _owner._token_buf.size();
                 }
                 auto& cb = std::get<comparable_bytes>(_owner._pk);
