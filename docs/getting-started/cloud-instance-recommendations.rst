@@ -20,8 +20,7 @@ You can run your ScyllaDB workloads on AWS, GCE, and Azure using a ScyllaDB imag
 Amazon Web Services (AWS)
 -----------------------------
 
-The recommended instance types are :ref:`i3en <system-requirements-i3en-instances>`,
-:ref:`i4i <system-requirements-i4i-instances>`, :ref:`i7i <system-requirements-i7i-instances>`,
+The recommended instance types are :ref:`i7i <system-requirements-i7i-instances>`,
 :ref:`i7ie <system-requirements-i7ie-instances>`, :ref:`i8g<system-requirements-i8g-instances>`,
 and :ref:`i8ge <system-requirements-i8ge-instances>`.
 
@@ -30,76 +29,6 @@ and :ref:`i8ge <system-requirements-i8ge-instances>`.
   Some of the ScyllaDB configuration features rely on querying instance metadata. 
   Disabling access to instance metadata will impact using Ec2 Snitches and tuning performance.
   See `AWS - Configure the instance metadata options <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-options.html>`_ for more information.
-
-.. _system-requirements-i3en-instances:
-
-i3en instances
-^^^^^^^^^^^^^^
-i3en instances have up to 4x the networking bandwidth of i3 instances, enabling up to 100 Gbps of sustained network bandwidth. 
-
-===========================  ===========  ============  =====================
-Model	                     vCPU         Mem (GB)      Storage (NVMe SSD)
-===========================  ===========  ============  =====================
-i3en.large	             2	          16	        1 x 1,250 GB
----------------------------  -----------  ------------  ---------------------
-i3en.xlarge	             4	          32	        1 x 2,500 GB
----------------------------  -----------  ------------  ---------------------
-i3en.2xlarge	             8	          64	        2 x 2,500 GB
----------------------------  -----------  ------------  ---------------------
-i3en.3xlarge	             12	          96            1 x 7,500 GB
----------------------------  -----------  ------------  ---------------------
-i3en.6xlarge	             24	          192           2 x 7,500 GB
----------------------------  -----------  ------------  ---------------------
-i3en.12xlarge	             48	          384	        4 x 7,500 GB
----------------------------  -----------  ------------  ---------------------
-i3en.24xlarge	             96	          768	        8 x 7,500 GB
-===========================  ===========  ============  =====================
-
-All i3en instances have the following specs:
-
-* 3.1 GHz all-core turbo Intel® Xeon® Scalable (Skylake) processors
-* Intel AVX†, Intel AVX2†, Intel AVX-512†, Intel Turbo 
-* EBS Optimized
-* Enhanced Networking
-
-See `Amazon EC2 I3en Instances <https://aws.amazon.com/ec2/instance-types/i3en/>`_ for details. 
-
-
-.. _system-requirements-i4i-instances:
-
-i4i instances
-^^^^^^^^^^^^^^
-===========================  ===========  ============  =====================
-Model	                     vCPU         Mem (GB)      Storage (NVMe SSD)
-===========================  ===========  ============  =====================
-i4i.large	  	             2	          16	        1 x 468 GB
----------------------------  -----------  ------------  ---------------------
-i4i.xlarge	             4	          32	        1 x 937 GB
----------------------------  -----------  ------------  ---------------------
-i4i.2xlarge	 	             8	          64	        1 x 1,875 GB
----------------------------  -----------  ------------  ---------------------
-i4i.4xlarge	             16	          128           1 x 3,750 GB
----------------------------  -----------  ------------  ---------------------
-i4i.8xlarge	             32	          256           2 x 3,750 GB
----------------------------  -----------  ------------  ---------------------
-i4i.16xlarge	             64	          512	        4 x 3,750 GB
----------------------------  -----------  ------------  ---------------------
-i4i.32xlarge	             128	        1,024	      8 x 3,750 GB
----------------------------  -----------  ------------  ---------------------
-i4i.metal	             128	         1,024	      8 x 3,750 GB
-===========================  ===========  ============  =====================
-
-All i4i instances have the following specs:
-
-* 3.5 GHz all-core turbo Intel® Xeon® Scalable (Ice Lake) processors
-* 40 Gbps bandwidth to EBS in the largest size and up to 10 Gbps in the four smallest sizes (twice that of i3 instances. Up to 75 Gbps networking bandwidth (three times more than I3 instances).
-* AWS Nitro SSD storage
-
-
-See  `Amazon EC2 I4i Instances <https://aws.amazon.com/ec2/instance-types/i4i/>`_ for specification details. 
-
-See `ScyllaDB on the New AWS EC2 I4i Instances: Twice the Throughput & Lower Latency <https://www.scylladb.com/2022/05/09/scylladb-on-the-new-aws-ec2-i4i-instances-twice-the-throughput-lower-latency/>`_ to 
-learn more about using ScyllaDB with i4i instances.
 
 .. _system-requirements-i7i-instances:
 
