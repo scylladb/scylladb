@@ -82,7 +82,7 @@ def test_multi_vector_orderings_not_allowed(cql, test_keyspace):
         execute(cql, table, f"CREATE CUSTOM INDEX ON %s(val2) USING '{custom_index}'")
 
         assert_invalid_message(
-            cql, table, "Cannot specify more than one ANN ordering",
+            cql, table, "Cannot specify more than one",
             "SELECT * FROM %s ORDER BY val1 ANN OF [2.5, 3.5, 4.5], val2 ANN OF [2.1, 3.2, 4.0] LIMIT 2"
         )
 
@@ -99,7 +99,7 @@ def test_vector_ordering_is_not_allowed_with_clustering_ordering(cql, test_keysp
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX c_index ON %s (val) USING '{custom_index}'")
 
-        assert_invalid_message(cql, table, "ANN ordering does not support any other ordering",
+        assert_invalid_message(cql, table, "ordering does not support any other ordering",
                                "SELECT * FROM %s ORDER BY val ann of [2.5, 3.5, 4.5], ck ASC LIMIT 2")
 
 def test_vector_ordering_is_not_allowed_without_index(cql, test_keyspace):
