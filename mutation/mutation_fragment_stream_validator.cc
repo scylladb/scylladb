@@ -60,8 +60,7 @@ mutation_fragment_stream_validator::validate(dht::token t, const partition_key* 
     if (_prev_partition_key.token() > t) {
         return ooo_key_result(_schema, t, pkey, _prev_partition_key);
     }
-    partition_key::tri_compare cmp(_schema);
-    if (_prev_partition_key.token() == t && pkey && cmp(_prev_partition_key.key(), *pkey) >= 0) {
+    if (_prev_partition_key.token() == t && pkey && _prev_partition_key.key().legacy_tri_compare(_schema, *pkey) >= 0) {
         return ooo_key_result(_schema, t, pkey, _prev_partition_key);
     }
     _prev_partition_key._token = t;
