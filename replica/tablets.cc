@@ -1014,7 +1014,7 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
 
     try {
         for (const auto& [_, table_hint] : hint.tables) {
-            if (table_hint.full_read || table_hint.tokens.empty()) {
+            if (table_hint.full_read || table_hint.tokens.empty() || !tm.has_tablet_map(table_hint.table_id)) {
                 co_await do_update_tablet_metadata_partition(qp, tm, table_hint, builder);
             } else {
                 co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (tablet_map& tmap) -> future<> {
