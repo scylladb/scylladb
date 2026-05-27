@@ -409,7 +409,12 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                     auto srv = raft_server(state, state.gate->hold());
                     auto res = srv.begin_mutate(aoe.abort_source());
                     if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
-                        co_await std::move(w->future);
+                        auto f = co_await coroutine::as_future(std::move(w->future));
+                        if (f.failed()) {
+                            logger.warn("update(): waiting for leader timed out for tablet {}, "
+                                "group id {}: {}", tablet, id, f.get_exception());
+                            break;
+                        }
                     } else {
                         break;
                     }
