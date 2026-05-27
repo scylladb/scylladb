@@ -59,6 +59,8 @@
 #include "db/view/view_builder.hh"
 #include "replica/mutation_dump.hh"
 #include "test/boost/database_test.hh"
+#include "test/lib/random_schema.hh"
+#include "dht/i_partitioner.hh"
 
 using namespace std::chrono_literals;
 using namespace sstables;
@@ -2434,6 +2436,31 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
             execute_test("queued reads", true);
         }
     }, cfg);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_full_position_cmp_ring_order) {
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+    auto s = random_schema.schema();
+
+    testlog.info("Random schema:\n{}", random_schema.cql());
+
+    const auto pkeys = random_schema.make_pkeys(100) | std::views::transform([&] (auto&& pkey) {
+        return partition_key::from_exploded(*s, pkey);
+    }) | std::ranges::to<std::vector<partition_key>>();
+
+    const auto is_sorted_by_full_position = std::ranges::is_sorted(pkeys, [&s] (const partition_key& a, const partition_key& b) {
+        auto fa = full_position(a, position_in_partition::for_partition_start());
+        auto fb = full_position(b, position_in_partition::for_partition_start());
+        return full_position::cmp(*s, fa, fb) < 0;
+    });
+
+    BOOST_REQUIRE(is_sorted_by_full_position);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
