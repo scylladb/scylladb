@@ -254,6 +254,35 @@ is_null_constant(const expression& e) {
 }
 
 static std::optional<std::vector<predicate>>
+try_make_scoring_function_predicate(const function_call& fc, const binary_operator& oper) {
+    if (!is_scoring_function_call(fc)) {
+        return std::nullopt;
+    }
+    if (fc.args.empty()) {
+        throw exceptions::invalid_request_exception("Scoring function requires at least one argument");
+    }
+    const auto* col = as_if<column_value>(&fc.args[0]);
+    if (!col) {
+        return std::nullopt;
+    }
+    auto solve = [oper] (const query_options& options) {
+        managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
+        if (!val) {
+            return empty_value_set;
+        }
+        return value_set(value_list{*val});
+    };
+    return std::vector<predicate>{predicate{
+        .solve_for = std::move(solve),
+        .filter = oper,
+        .on = on_column{col->col},
+        .is_singleton = false,
+        .order = oper.order,
+        .op = oper.op,
+    }};
+}
+
+static std::optional<std::vector<predicate>>
 try_make_token_predicate(const function_call& fc, const binary_operator& oper, const schema* table_schema_opt) {
     if (!table_schema_opt || !is_partition_token_for_schema(fc, *table_schema_opt)) {
         return std::nullopt;
@@ -509,6 +538,9 @@ to_predicates(
                             });
                         },
                         [&] (const function_call& fun_call) -> std::vector<predicate> {
+                            if (auto preds = try_make_scoring_function_predicate(fun_call, oper)) {
+                                return std::move(*preds);
+                            }
                             if (auto preds = try_make_token_predicate(fun_call, oper, table_schema_opt)) {
                                 return std::move(*preds);
                             }
@@ -678,6 +710,9 @@ is_predicate_supported_by(const predicate& pred, const secondary_index::index& i
     }
     return std::visit(overloaded_functor{
         [&] (const on_column& oc) -> ret_t {
+            if (expr::has_bm25_function(pred.filter)) {
+                return idx.supports_bm25_expression(*oc.column);
+            }
             if (pred.is_subscript) {
                 return idx.supports_subscript_expression(*oc.column, *pred.op);
             }
@@ -1096,6 +1131,7 @@ statement_restrictions::statement_restrictions(private_tag,
     _ck_is_all_eq = ck_is_all_eq;
     _pk_is_all_eq = pk_is_all_eq;
     _pk_has_slice_or_needs_filtering = pk_has_slice_or_needs_filtering;
+    bool has_queriable_fulltext_index = false;
     if (_check_indexes) {
         auto cf = db.find_column_family(schema);
         auto& sim = cf.get_index_manager();
@@ -1113,6 +1149,16 @@ statement_restrictions::statement_restrictions(private_tag,
                 && index_supports_some_column(sc_pk_pred_vectors, sim, allow_local)
                 && !type.is_delete();
         _has_queriable_regular_index = index_supports_some_column(sc_nonpk_pred_vectors, sim, allow_local)
+                && !type.is_delete();
+        single_column_predicate_vectors sc_nonpk_match_pred_vectors;
+        for (const auto& [col, preds] : sc_nonpk_pred_vectors) {
+            for (const auto& pred : preds) {
+                if (expr::has_bm25_function(pred.filter)) {
+                    sc_nonpk_match_pred_vectors[col].push_back(pred);
+                }
+            }
+        }
+        has_queriable_fulltext_index = index_supports_some_column(sc_nonpk_match_pred_vectors, sim, allow_local)
                 && !type.is_delete();
     } else {
         _has_queriable_ck_index = false;
@@ -1167,6 +1213,10 @@ statement_restrictions::statement_restrictions(private_tag,
     }
 
     if (!is_empty_restriction(_nonprimary_key_restrictions)) {
+        if (has_bm25_restriction() && !has_queriable_fulltext_index) {
+            throw exceptions::invalid_request_exception(
+                "No fulltext index found for full-text search query");
+        }
         if (_has_queriable_regular_index && _partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering && !type.is_delete() && !type.is_update()) {
@@ -1288,6 +1338,13 @@ statement_restrictions::clustering_key_restrictions_has_only_eq() const {
 bool
 statement_restrictions::has_token_restrictions() const {
     return std::holds_alternative<token_range_restrictions>(_partition_range_restrictions);
+}
+
+bool
+statement_restrictions::has_bm25_restriction() const {
+    return expr::has_bm25_function(_nonprimary_key_restrictions)
+        || expr::has_bm25_function(_clustering_columns_restrictions)
+        || expr::has_bm25_function(_partition_key_restrictions);
 }
 
 bool
