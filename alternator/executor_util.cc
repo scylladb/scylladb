@@ -37,8 +37,6 @@ std::optional<int> get_int_attribute(const rjson::value& value, std::string_view
     return attribute_value->GetInt();
 }
 
-// Returns the string attribute, or `default_return` if the attribute is missing and `default_return` is supplied.
-// Throws an error if the attribute is missing and `default_return` is not supplied, or if the attribute exists but is not a string.
 std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, std::optional<std::string_view> default_return) {
     const rjson::value* attribute_value = rjson::find(value, attribute_name);
     if (!attribute_value) {
@@ -54,9 +52,6 @@ std::string get_string_attribute(const rjson::value& value, std::string_view att
     return rjson::to_string(*attribute_value);
 }
 
-// Returns the string attribute, or `default_return` if the attribute is missing and `default_return` is supplied.
-// Throws an error if the attribute is missing and `default_return` is not supplied, or if the attribute exists but is an empty string or an attribute is not a string.
-// Note: `default_return` is allowed to be an empty string and it will be returned in case the attribute is missing.
 std::string get_non_empty_string_attribute(const rjson::value& value, std::string_view attribute_name, std::optional<std::string_view> default_return) {
     const rjson::value* attribute_value = rjson::find(value, attribute_name);
     if (!attribute_value) {
