@@ -708,29 +708,35 @@ async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topo
 
         await sstables_storage.save(manager, servers, snap_name, prefix, ks, 'test', logger)
 
-    for scope, pro, restored_min_tablet_count in itertools.product(scopes, pros, restored_min_tablet_counts):
-        if scope == 'node' and pro == True:
-            continue
-        # We can support rack-aware restore with rack lists, if we restore the rack-list per dc as it was at backup time.
-        # Otherwise, with numeric replication_factor we'd pick arbitrary subset of the racks when the keyspace
-        # is initially created and an arbitrary subset or the rack at restore time.
-        if scope == 'rack' and topology.rf != topology.racks:
-            logger.info(f'Skipping scope={scope} test since rf={topology.rf} != racks={topology.racks} and it cannot be supported with numeric replication_factor')
-            continue
-
-        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+    # Reuse keyspace and group by tablet_count to avoid DDL overhead
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        for restored_min_tablet_count in restored_min_tablet_counts:
             await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {restored_min_tablet_count}}};")
 
-            log_marks = await mark_all_logs(manager, servers)
+            for scope, pro in itertools.product(scopes, pros):
+                if scope == 'node' and pro == True:
+                    continue
+                # We can support rack-aware restore with rack lists, if we restore the rack-list per dc as it was at backup time.
+                # Otherwise, with numeric replication_factor we'd pick arbitrary subset of the racks when the keyspace
+                # is initially created and an arbitrary subset or the rack at restore time.
+                if scope == 'rack' and topology.rf != topology.racks:
+                    logger.info(f'Skipping scope={scope} test since rf={topology.rf} != racks={topology.racks} and it cannot be supported with numeric replication_factor')
+                    continue
 
-            logger.info(f'Loading {servers=} with {sstables=} scope={scope}')
-            sstables_per_server = distribute_sstables(sstables, servers, topology, scope)
-            await sstables_storage.restore(manager, sstables_per_server, prefix, ks, 'test', scope, pro, logger)
-            if pro:
-                await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', 'all', timeout=600)
-            await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
-            if restored_min_tablet_count == original_min_tablet_count:
-                await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
+                log_marks = await mark_all_logs(manager, servers)
+
+                logger.info(f'Loading {servers=} with {sstables=} scope={scope}')
+                sstables_per_server = distribute_sstables(sstables, servers, topology, scope)
+                await sstables_storage.restore(manager, sstables_per_server, prefix, ks, 'test', scope, pro, logger)
+                if pro:
+                    await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', 'all', timeout=600)
+                await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+                if restored_min_tablet_count == original_min_tablet_count:
+                    await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
+
+                await cql.run_async(f"TRUNCATE {ks}.test")
+
+            await cql.run_async(f"DROP TABLE {ks}.test")
 
 
 @pytest.mark.parametrize("topology", [
