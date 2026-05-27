@@ -211,13 +211,10 @@ select_statement::select_statement(schema_ptr schema,
     : cql_statement(select_timeout(*restrictions))
     , _schema(schema)
     , _query_schema(is_reversed ? schema->get_reversed() : schema)
-    , _bound_terms(bound_terms)
     , _parameters(std::move(parameters))
     , _selection(std::move(selection))
     , _restrictions(std::move(restrictions))
-    , _restrictions_need_filtering(_restrictions->need_filtering())
     , _group_by_cell_indices(group_by_cell_indices)
-    , _is_reversed(is_reversed)
     , _limit_unset_guard(limit)
     , _limit(std::move(limit))
     , _per_partition_limit_unset_guard(per_partition_limit)
@@ -226,6 +223,9 @@ select_statement::select_statement(schema_ptr schema,
     , _stats(stats)
     , _ks_sel(::is_internal_keyspace(schema->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
     , _attrs(std::move(attrs))
+    , _bound_terms(bound_terms)
+    , _restrictions_need_filtering(_restrictions->need_filtering())
+    , _is_reversed(is_reversed)
 {
     _opts = _selection->get_query_options();
     _opts.set_if<query::partition_slice::option::bypass_cache>(_parameters->bypass_cache());
