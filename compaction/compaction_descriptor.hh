@@ -177,12 +177,8 @@ struct compaction_descriptor {
     // This is a snapshot of the table's sstable set, used only for the purpose of expiring tombstones.
     // If this sstable set cannot be provided, expiration will be disabled to prevent data from being resurrected.
     std::optional<sstables::sstable_set> all_sstables_snapshot;
-    // Level of sstable(s) created by compaction procedure.
-    int level;
     // Threshold size for sstable(s) to be created.
     uint64_t max_sstable_bytes;
-    // Can split large partitions at clustering boundary.
-    bool can_split_large_partition = false;
     // Run identifier of output sstables.
     sstables::run_id run_identifier;
     // The options passed down to the compaction code.
@@ -196,9 +192,13 @@ struct compaction_descriptor {
     compaction_sstable_creator_fn creator;
     compaction_sstable_replacer_fn replacer;
 
+    // Group small fields together to eliminate padding.
+    // Level of sstable(s) created by compaction procedure.
+    int level;
     // Denotes if this compaction task is comprised solely of completely expired SSTables
     has_only_fully_expired has_only_fully_expired = has_only_fully_expired::no;
-
+    // Can split large partitions at clustering boundary.
+    bool can_split_large_partition = false;
     // If set to true, gc will check only the compacting sstables to collect tombstones.
     // If set to false, gc will check the memtables, commit log and other uncompacting
     // sstables to decide if a tombstone can be collected. Note that these checks are
@@ -221,20 +221,20 @@ struct compaction_descriptor {
                                    compaction_type_options options = compaction_type_options::make_regular(),
                                    compaction::owned_ranges_ptr owned_ranges_ = {})
         : sstables(std::move(sstables))
-        , level(level)
         , max_sstable_bytes(max_sstable_bytes)
         , run_identifier(run_identifier)
         , options(options)
         , owned_ranges(std::move(owned_ranges_))
+        , level(level)
     {}
 
     explicit compaction_descriptor(::compaction::has_only_fully_expired has_only_fully_expired,
                                    std::vector<sstables::shared_sstable> sstables)
         : sstables(std::move(sstables))
-        , level(default_level)
         , max_sstable_bytes(default_max_sstable_bytes)
         , run_identifier(sstables::run_id::create_random_id())
         , options(compaction_type_options::make_regular())
+        , level(default_level)
         , has_only_fully_expired(has_only_fully_expired)
     {}
 
