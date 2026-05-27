@@ -3747,6 +3747,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             cached_rows_file,
             _partitions_db_footer.value().trie_root_position,
             data_size(),
+            _version,
             _schema,
             std::move(permit),
             std::move(trace_state)
