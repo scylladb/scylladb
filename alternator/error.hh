@@ -41,6 +41,9 @@ public:
     { }
 
     // Factory functions for some common types of DynamoDB API errors
+    static api_error invalid_export_time(std::string msg) {
+        return api_error("InvalidExportTimeException", std::move(msg));
+    }
     static api_error validation(std::string msg) {
         return api_error("ValidationException", std::move(msg));
     }
