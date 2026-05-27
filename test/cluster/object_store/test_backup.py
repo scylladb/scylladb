@@ -471,7 +471,7 @@ async def create_cluster(topology, manager, logger, object_storage=None):
         objconf = object_storage.create_endpoint_conf()
         cfg['object_storage_endpoints'] = objconf
 
-    cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug:api=info' ]
+    cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:http=debug:api=info' ]
     servers = []
     host_ids = {}
 
