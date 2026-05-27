@@ -436,7 +436,7 @@ auto coordinator::query(schema_ptr schema,
                             ::format("query(): table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
                                 schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.tablet_info.replicas));
                     }
-                    co_return need_redirect{*target};
+                    co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
                 }
                 if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
                     co_await std::move(wait_for_leader->future);
@@ -444,16 +444,14 @@ auto coordinator::query(schema_ptr schema,
                 }
                 break;
             }
-        }
-        // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
 
-        if (rtype == read_type::linearizable) {
             co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
                 utils::wait_for_message(5min));
 
             co_await op.raft_server.server().read_barrier(&aoe.abort_source());
         }
 
+        // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
         auto [result, cache_temp] = co_await _db.query(schema, cmd,
             query::result_options::only_result(), ranges, trace_state, timeout);
 
