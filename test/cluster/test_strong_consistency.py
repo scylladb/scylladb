@@ -944,7 +944,6 @@ async def test_timed_out_queries(manager: ManagerClient):
                 await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (11, 13) USING TIMEOUT 100ms")
 
 
-@pytest.mark.xfail(reason="SCYLLADB-2080: write gets stuck waiting for quorum; fix not yet applied")
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_queries_while_dropping_table(manager: ManagerClient):
     """Verify that in-flight reads and writes are promptly aborted when

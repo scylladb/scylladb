@@ -339,14 +339,7 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 co_return std::monostate{};
             } catch (...) {
                 auto ex = std::current_exception();
-                if (try_catch<raft::stopped_error>(ex)) {
-                    // Holding raft_server.holder guarantees that the raft::server is not
-                    // aborted until the holder is released.
-
-                    on_internal_error(logger,
-                        format("mutate(): add_entry, unexpected exception {}, table {}.{}, tablet {}, term {}",
-                            ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term));
-                } else if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
+                if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
                     logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, tablet {}, term {}",
                         ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
 
@@ -379,10 +372,16 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
         // * timed_out_error: Can be thrown by the abort_on_expiry.
         // * condition_variable_timed_out: Can be thrown by begin_mutate.
+        // * raft::stopped_error: The raft server was aborted (e.g. table being dropped).
         //
         // We handle them collectively here.
         if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
-                || try_catch<seastar::timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)) {
+                || try_catch<seastar::timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
+                || try_catch<raft::stopped_error>(ex)) {
+            if (!_db.column_family_exists(schema->id())) {
+                co_return coroutine::return_exception(
+                    replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
+            }
             logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}",
                 ex, schema->ks_name(), schema->cf_name(), token);
             ++_stats.write_errors_timeout;
@@ -468,10 +467,16 @@ auto coordinator::query(schema_ptr schema,
         // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
         // * timed_out_error: Can be thrown by the abort_on_expiry.
         // * seastar::condition_variable_timed_out: Can be thrown by begin_read's wait_for_leader.
+        // * raft::stopped_error: The raft server was aborted (e.g. table being dropped).
         //
         // We handle them collectively here.
         if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
-                || try_catch<timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)) {
+                || try_catch<timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
+                || try_catch<raft::stopped_error>(ex)) {
+            if (!_db.column_family_exists(schema->id())) {
+                co_return coroutine::return_exception(
+                    replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
+            }
             logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_timeout;
