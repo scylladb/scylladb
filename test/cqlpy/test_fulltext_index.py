@@ -12,8 +12,8 @@
 
 import pytest
 import re
-from .util import new_test_table, new_test_keyspace, unique_name
-from cassandra.protocol import InvalidRequest
+from .util import new_test_table, new_test_keyspace, new_function, unique_name
+from cassandra.protocol import InvalidRequest, SyntaxException
 
 # Fulltext search is not allowed in tables using vnodes, so all tests in this file need tablets
 @pytest.fixture(scope="function", autouse=True)
@@ -382,3 +382,247 @@ def test_fulltext_index_if_not_exists_cross_column(cql, test_keyspace):
         rows = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf}'"))
         assert len(rows) == 1
         assert rows[0].index_name == idx
+
+
+###############################################################################
+# Tests for BM25() scoring function
+#
+# A valid Full-Text Search query requires BOTH clauses simultaneously:
+#   WHERE BM25(col, 'term') > 0   -- expresses the filtering intent
+#   ORDER BY BM25(col, 'term')    -- expresses the relevance-sort intent
+# Neither clause is accepted without the other.
+#
+# These tests validate the CQL grammar additions for the BM25() scoring
+# function used with fulltext indexes. They cover parsing, validation of
+# column types, restriction requirements (LIMIT, fulltext_index), and error
+# handling.
+###############################################################################
+
+
+# A module-scoped table with a fulltext index on a text column, shared by the many BM25
+# validation tests below that only need a valid fulltext-indexed table and don't modify it.
+# This avoids creating a brand-new table for every validation test.
+@pytest.fixture(scope="module")
+def fulltext_table(cql, test_keyspace):
+    table = test_keyspace + "." + unique_name()
+    cql.execute(f"CREATE TABLE {table} (p int primary key, content text)")
+    cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+    yield table
+    cql.execute(f"DROP TABLE {table}")
+
+
+def test_bm25_basic_parsing(cql, fulltext_table):
+    """BM25 should be accepted when WHERE and ORDER BY are both present with a fulltext_index, a text column, and a LIMIT.
+
+    Full-text search execution is not implemented yet, so we use prepare() instead of execute().
+    Preparation runs the full parsing and validation path, which is what this test cares about, without attempting execution.
+    """
+    cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_without_comparison(cql, fulltext_table):
+    """WHERE BM25 without a comparison operator should be rejected."""
+    with pytest.raises(SyntaxException):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_requires_limit(cql, fulltext_table):
+    """A SELECT with BM25 but no LIMIT must be rejected."""
+    with pytest.raises(InvalidRequest, match="require a LIMIT"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello')")
+
+
+def test_bm25_requires_fulltext_index(cql, test_keyspace):
+    """A SELECT with BM25 on a column without a fulltext_index must be rejected."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="No fulltext index found"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_regular_index_not_sufficient(cql, test_keyspace):
+    """A regular secondary index (non-fulltext) should not satisfy the BM25 requirement."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(content)")
+        with pytest.raises(InvalidRequest, match="No fulltext index found"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_on_supported_text_types(cql, test_keyspace):
+    """BM25 should be accepted on text, varchar, and ascii columns when a fulltext_index exists."""
+    for column_type in ["text", "varchar", "ascii"]:
+        schema = f'p int primary key, content {column_type}'
+        with new_test_table(cql, test_keyspace, schema) as table:
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+            cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_with_bind_markers(cql, fulltext_table):
+    """BM25 should accept a bind marker (?) as the query string argument."""
+    stmt = cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT 1")
+    with pytest.raises(InvalidRequest, match="not implemented"):
+        cql.execute(stmt, ['hello', 'hello'])
+
+
+def test_bm25_column_name_parses_as_identifier(cql, test_keyspace):
+    """BM25 should remain usable as a regular identifier name."""
+    schema = 'p int primary key, bm25 text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(bm25) USING 'fulltext_index'")
+        cql.prepare(f"SELECT * FROM {table} WHERE BM25(bm25, 'hello') > 0 ORDER BY BM25(bm25, 'hello') LIMIT 1")
+
+
+def test_bm25_only_gt_allowed(cql, fulltext_table):
+    """BM25 restrictions should reject all operators other than >."""
+    for operator in ["=", "<", "<=", "!=", ">="]:
+        with pytest.raises(InvalidRequest, match=fr'Unsupported "{operator}" relation'):
+            cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') {operator} 0 LIMIT 1")
+
+
+def test_bm25_like_operator_rejected(cql, fulltext_table):
+    """LIKE operator is rejected by type resolution (BM25 returns float, not string)."""
+    with pytest.raises(InvalidRequest, match="LIKE is allowed only on string types"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') LIKE 'x' LIMIT 1")
+
+
+def test_bm25_with_and_restriction(cql, fulltext_table):
+    """BM25 can be combined with other restrictions as conjunctions."""
+    cql.prepare(f"SELECT * FROM {fulltext_table} WHERE p = 1 AND BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_on_nonexistent_column_fails(cql, fulltext_table):
+    """BM25 on a column that doesn't exist should be rejected."""
+    with pytest.raises(InvalidRequest, match="Unrecognized name nonexistent"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(nonexistent, 'hello') > 0 ORDER BY BM25(nonexistent, 'hello') LIMIT 1")
+
+
+def test_bm25_where_only_rejected(cql, fulltext_table):
+    """WHERE BM25 without an ORDER BY BM25 clause must be rejected."""
+    with pytest.raises(InvalidRequest, match="require an ORDER BY BM25"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 1")
+
+
+def test_bm25_order_by_only_rejected(cql, fulltext_table):
+    """ORDER BY BM25 without a WHERE BM25() > 0 clause must be rejected."""
+    with pytest.raises(InvalidRequest, match="require a WHERE BM25"):
+        cql.execute(f"SELECT * FROM {fulltext_table} ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_order_by_ann_then_bm25_rejected(cql, test_keyspace):
+    """Mixing ANN OF and BM25 orderings in a single query must be rejected."""
+    schema = 'p int primary key, content text, vec vector<float, 2>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(vec) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match="does not support any other ordering"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY vec ANN OF [1.0, 2.0], BM25(content, 'hello') LIMIT 1")
+
+
+def test_order_by_bm25_then_ann_rejected(cql, test_keyspace):
+    """Mixing BM25 and ANN OF orderings in a single query must be rejected."""
+    schema = 'p int primary key, content text, vec vector<float, 2>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(vec) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match="Cannot specify more than one similarity ordering"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello'), vec ANN OF [1.0, 2.0] LIMIT 1")
+
+
+def test_order_by_bm25_then_column_rejected(cql, fulltext_table):
+    """ORDER BY BM25 followed by a regular column ordering must be rejected."""
+    with pytest.raises(InvalidRequest, match="does not support any other ordering"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello'), p LIMIT 1")
+
+
+def test_order_by_two_bm25_rejected(cql, fulltext_table):
+    """Specifying two BM25 orderings in a single query must be rejected."""
+    with pytest.raises(InvalidRequest, match="does not support any other ordering"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello'), BM25(content, 'world') LIMIT 1")
+
+
+def test_bm25_in_select_clause_rejected(cql, fulltext_table):
+    """BM25() is not allowed in the SELECT clause."""
+    with pytest.raises(InvalidRequest, match="not supported in the SELECT clause"):
+        cql.execute(f"SELECT BM25(content, 'hello') FROM {fulltext_table}")
+
+
+def test_bm25_on_partition_key_rejected(cql, test_keyspace):
+    """Creating a fulltext index on a partition key column must be rejected."""
+    schema = 'p text primary key'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="Cannot create secondary index on partition key column"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(p) USING 'fulltext_index'")
+
+
+def test_bm25_on_clustering_key_with_fulltext_index(cql, test_keyspace):
+    """A fulltext index on a text clustering key column can be queried with BM25()."""
+    schema = 'p int, c text, primary key (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(c) USING 'fulltext_index'")
+        cql.prepare(f"SELECT * FROM {table} WHERE BM25(c, 'hello') > 0 ORDER BY BM25(c, 'hello') LIMIT 1")
+
+
+def test_non_scoring_function_in_order_by_rejected(cql, fulltext_table):
+    """A non-scoring function call in ORDER BY clause must be rejected."""
+    with pytest.raises(InvalidRequest, match="Only BM25 scoring function"):
+        cql.execute(f"SELECT * FROM {fulltext_table} ORDER BY now() LIMIT 1")
+
+
+def test_non_scoring_function_in_where_rejected(cql, fulltext_table):
+    """A non-scoring function call in WHERE clause must be rejected."""
+    with pytest.raises(InvalidRequest, match="scoring functions"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE tounixtimestamp(now()) > 0 LIMIT 1")
+
+
+def test_bm25_nonzero_threshold_rejected(cql, fulltext_table):
+    """BM25 comparison with a non-zero threshold value must be rejected."""
+    with pytest.raises(InvalidRequest, match="must be the literal 0"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 5 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_keyspace_qualified(cql, fulltext_table):
+    """Keyspace-qualified BM25 should work."""
+    cql.prepare(f"SELECT * FROM {fulltext_table} WHERE system.bm25(content, 'hello') > 0 ORDER BY system.bm25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_different_columns_rejected(cql, test_keyspace):
+    """WHERE BM25 and ORDER BY BM25 on different columns (different indexes) must be rejected."""
+    schema = 'p int primary key, col1 text, col2 text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="same column"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'world') LIMIT 1")
+
+
+def test_bm25_literal_as_first_arg_rejected(cql, fulltext_table):
+    """BM25 with a string literal as the first argument must be rejected with a clear error."""
+    with pytest.raises(InvalidRequest, match="First argument to a scoring function must be a column"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25('x', 'term') > 0 ORDER BY BM25(content, 'term') LIMIT 1")
+
+
+def test_bm25_where_with_extra_regular_index_uses_correct_fulltext_index(cql, test_keyspace):
+    """When WHERE has both a BM25 restriction and a regular indexed predicate, the BM25 fulltext index must be selected."""
+    schema = 'p int primary key, content text, tag text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        cql.execute(f"CREATE INDEX ON {table}(tag)")
+        # The presence of a regular secondary index on 'tag' must not displace the fulltext index.
+        cql.prepare(f"SELECT * FROM {table} WHERE tag = 'x' AND BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+# Test that a UDF named "bm25" (same name as the system BM25 scoring operator)
+# can be defined and invoked in qualified form (ks.bm25(...)).
+# Since BM25 is not a reserved keyword, defining a same-named UDF makes unqualified
+# BM25() ambiguous - the system operator must then be addressed as system.bm25().
+def test_udf_named_bm25_coexists_with_system_bm25(cql, test_keyspace, fulltext_table):
+    func_body = "(v text, term text) CALLED ON NULL INPUT RETURNS double LANGUAGE lua AS 'return 1.0'"
+    with new_function(cql, test_keyspace, func_body, name="bm25", args="text, text"):
+        # The user-defined bm25 must be callable in qualified form in SELECT
+        cql.execute(f"SELECT {test_keyspace}.bm25(content, 'hello') FROM {fulltext_table}")
+        # Unqualified BM25 is ambiguous when both system.bm25 and ks.bm25 exist
+        with pytest.raises(InvalidRequest, match="Ambiguous call to function bm25"):
+            cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+        # The system BM25 operator is reachable via system. qualification
+        cql.prepare(f"SELECT * FROM {fulltext_table} WHERE system.bm25(content, 'hello') > 0 ORDER BY system.bm25(content, 'hello') LIMIT 10")
