@@ -41,7 +41,7 @@ partition_version::partition_version(partition_version&& pv) noexcept
     , _partition(std::move(pv._partition))
 {
     if (_backref) {
-        _backref->_version = this;
+        _backref->set_version(this);
     }
     pv._backref = nullptr;
 }
@@ -58,7 +58,7 @@ partition_version& partition_version::operator=(partition_version&& pv) noexcept
 partition_version::~partition_version()
 {
     if (_backref) {
-        _backref->_version = nullptr;
+        _backref->set_version(nullptr);
     }
     with_allocator(standard_allocator(), [&] {
         // Destroying the schema_ptr can cause a destruction of the schema,

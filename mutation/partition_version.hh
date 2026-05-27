@@ -241,32 +241,44 @@ using partition_version_range = anchorless_list_base_hook<partition_version>::ra
 using partition_version_reversed_range = anchorless_list_base_hook<partition_version>::reversed_range;
 
 class partition_version_ref {
-    partition_version* _version = nullptr;
-    bool _unique_owner = false;
+    // Tagged pointer: bit 0 stores _unique_owner flag.
+    // partition_version is always at least 8-byte aligned, so low bits are free.
+    static constexpr uintptr_t unique_owner_bit = 1;
+    static constexpr uintptr_t pointer_mask = ~unique_owner_bit;
+    uintptr_t _tagged = 0;
+
+    partition_version* get_version() const noexcept {
+        return reinterpret_cast<partition_version*>(_tagged & pointer_mask);
+    }
+    void set_version(partition_version* v) noexcept {
+        // The tag lives in bit 0, which relies on partition_version being at
+        // least 2-byte aligned. Guard against the pointer ever using that bit.
+        SCYLLA_ASSERT((reinterpret_cast<uintptr_t>(v) & unique_owner_bit) == 0);
+        _tagged = reinterpret_cast<uintptr_t>(v) | (_tagged & unique_owner_bit);
+    }
 
     friend class partition_version;
 public:
     partition_version_ref() = default;
     explicit partition_version_ref(partition_version& pv, bool unique_owner = false) noexcept
-        : _version(&pv)
-        , _unique_owner(unique_owner)
+        : _tagged(reinterpret_cast<uintptr_t>(&pv) | (unique_owner ? unique_owner_bit : 0))
     {
-        SCYLLA_ASSERT(!_version->_backref);
-        _version->_backref = this;
+        SCYLLA_ASSERT((reinterpret_cast<uintptr_t>(&pv) & unique_owner_bit) == 0);
+        SCYLLA_ASSERT(!pv._backref);
+        pv._backref = this;
     }
     ~partition_version_ref() {
-        if (_version) {
-            _version->_backref = nullptr;
+        if (auto* v = get_version()) {
+            v->_backref = nullptr;
         }
     }
     partition_version_ref(partition_version_ref&& other) noexcept
-        : _version(other._version)
-        , _unique_owner(other._unique_owner)
+        : _tagged(other._tagged)
     {
-        if (_version) {
-            _version->_backref = this;
+        if (auto* v = get_version()) {
+            v->_backref = this;
         }
-        other._version = nullptr;
+        other._tagged = 0;
     }
     partition_version_ref& operator=(partition_version_ref&& other) noexcept {
         if (this != &other) {
@@ -276,33 +288,37 @@ public:
         return *this;
     }
 
-    explicit operator bool() const { return _version; }
+    explicit operator bool() const { return get_version(); }
 
     partition_version& operator*() {
-        SCYLLA_ASSERT(_version);
-        return *_version;
+        auto* v = get_version();
+        SCYLLA_ASSERT(v);
+        return *v;
     }
     const partition_version& operator*() const {
-        SCYLLA_ASSERT(_version);
-        return *_version;
+        auto* v = get_version();
+        SCYLLA_ASSERT(v);
+        return *v;
     }
     partition_version* operator->() {
-        SCYLLA_ASSERT(_version);
-        return _version;
+        auto* v = get_version();
+        SCYLLA_ASSERT(v);
+        return v;
     }
     const partition_version* operator->() const {
-        SCYLLA_ASSERT(_version);
-        return _version;
+        auto* v = get_version();
+        SCYLLA_ASSERT(v);
+        return v;
     }
 
-    bool is_unique_owner() const { return _unique_owner; }
-    void mark_as_unique_owner() { _unique_owner = true; }
+    bool is_unique_owner() const { return _tagged & unique_owner_bit; }
+    void mark_as_unique_owner() { _tagged |= unique_owner_bit; }
 
     void release() {
-        if (_version) {
-            _version->_backref = nullptr;
+        if (auto* v = get_version()) {
+            v->_backref = nullptr;
         }
-        _version = nullptr;
+        _tagged = 0;
     }
 };
 
