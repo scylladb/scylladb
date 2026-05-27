@@ -253,6 +253,52 @@ is_null_constant(const expression& e) {
     return false;
 }
 
+static std::optional<std::vector<predicate>>
+try_make_token_predicate(const function_call& fc, const binary_operator& oper, const schema* table_schema_opt) {
+    if (!table_schema_opt || !is_partition_token_for_schema(fc, *table_schema_opt)) {
+        return std::nullopt;
+    }
+    if (!(oper.op == oper_t::EQ || is_slice(oper.op))) {
+        return std::nullopt;
+    }
+    auto solve = [oper] (const query_options& options) -> value_set {
+        auto val = evaluate(oper.rhs, options).to_managed_bytes_opt();
+        if (!val) {
+            return empty_value_set; // All NULL comparisons fail; no token values match.
+        }
+        if (oper.op == oper_t::EQ) {
+            return value_list{*val};
+        } else if (oper.op == oper_t::GT) {
+            return interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), exclusive));
+        } else if (oper.op == oper_t::GTE) {
+            return interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), inclusive));
+        }
+        static const managed_bytes MININT = managed_bytes(serialized(std::numeric_limits<int64_t>::min())),
+        MAXINT = managed_bytes(serialized(std::numeric_limits<int64_t>::max()));
+        // Undocumented feature: when the user types `token(...) < MININT`, we interpret
+        // that as MAXINT for some reason.
+        const auto adjusted_val = (*val == MININT) ? MAXINT : *val;
+        if (oper.op == oper_t::LT) {
+            return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), exclusive));
+        } else if (oper.op == oper_t::LTE) {
+            return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), inclusive));
+        }
+        throw std::logic_error(format("get_token_interval unexpected operator {}", oper.op));
+    };
+    return std::vector<predicate>{predicate{
+        .solve_for = std::move(solve),
+        .filter = oper,
+        .on = on_partition_key_token{table_schema_opt},
+        .is_singleton = (oper.op == oper_t::EQ),
+        .equality = (oper.op == oper_t::EQ),
+        .is_slice = expr::is_slice(oper.op),
+        .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
+        .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
+        .order = oper.order,
+        .op = oper.op,
+    }};
+}
+
 /// Given an expression, decompose it into a set of predicates, on individual columns,
 /// the table's tokens, or multiple columns. A predicate may know how to solve for
 /// the set of all column values that would satisfy the expression, treated a a boolean
@@ -462,50 +508,11 @@ to_predicates(
                                 .op = oper.op,
                             });
                         },
-                        [&] (const function_call& token_fun_call) -> std::vector<predicate> {
-                            if (!is_partition_token_for_schema(token_fun_call, *table_schema_opt)) {
-                                return cannot_solve(oper);
+                        [&] (const function_call& fun_call) -> std::vector<predicate> {
+                            if (auto preds = try_make_token_predicate(fun_call, oper, table_schema_opt)) {
+                                return std::move(*preds);
                             }
-
-                            if (!(oper.op == oper_t::EQ || is_slice(oper.op))) {
-                                return cannot_solve(oper);
-                            }
-                            auto solve = [oper] (const query_options& options) -> value_set {
-                                auto val = evaluate(oper.rhs, options).to_managed_bytes_opt();
-                                if (!val) {
-                                    return empty_value_set; // All NULL comparisons fail; no token values match.
-                                }
-                                if (oper.op == oper_t::EQ) {
-                                    return value_list{*val};
-                                } else if (oper.op == oper_t::GT) {
-                                    return interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), exclusive));
-                                } else if (oper.op == oper_t::GTE) {
-                                    return interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), inclusive));
-                                }
-                                static const managed_bytes MININT = managed_bytes(serialized(std::numeric_limits<int64_t>::min())),
-                                MAXINT = managed_bytes(serialized(std::numeric_limits<int64_t>::max()));
-                                // Undocumented feature: when the user types `token(...) < MININT`, we interpret
-                                // that as MAXINT for some reason.
-                                const auto adjusted_val = (*val == MININT) ? MAXINT : *val;
-                                if (oper.op == oper_t::LT) {
-                                    return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), exclusive));
-                                } else if (oper.op == oper_t::LTE) {
-                                    return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), inclusive));
-                                }
-                                throw std::logic_error(format("get_token_interval unexpected operator {}", oper.op));
-                            };
-                            return to_vector(predicate{
-                                .solve_for = std::move(solve),
-                                .filter = oper,
-                                .on = on_partition_key_token{table_schema_opt},
-                                .is_singleton = (oper.op == oper_t::EQ),
-                                .equality = (oper.op == oper_t::EQ),
-                                .is_slice = expr::is_slice(oper.op),
-                                .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
-                                .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
-                                .order = oper.order,
-                                .op = oper.op,
-                            });
+                            return cannot_solve(oper);
                         },
                         [&] (const binary_operator&) -> std::vector<predicate> {
                             return cannot_solve(oper);
