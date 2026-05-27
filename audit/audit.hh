@@ -16,6 +16,7 @@
 #include "audit/audit_rule.hh"
 #include "audit/preprocessed_audit_rules.hh"
 #include <seastar/core/sharded.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/util/log.hh>
 
 #include "enum_set.hh"
@@ -139,6 +140,7 @@ private:
 
     std::unique_ptr<storage_helper> _storage_helper_ptr;
     bool _storage_running = false;
+    seastar::named_gate _pending_writes;
     std::unique_ptr<audit_schema_listener> _schema_listener;
     service::migration_notifier& _migration_notifier;
 

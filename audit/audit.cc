@@ -203,6 +203,7 @@ audit::audit(locator::shared_token_metadata& token_metadata,
     , _audited_categories(std::move(audited_categories))
     , _audit_sinks(audit_sinks)
     , _preprocessed_rules(std::move(audit_rules))
+    , _pending_writes("audit::pending_writes")
     , _schema_listener(std::make_unique<audit_schema_listener>(_preprocessed_rules))
     , _migration_notifier(mm.get_notifier())
     , _cfg(cfg)
@@ -274,9 +275,13 @@ future<> audit::stop_storage() {
     if (!audit_instance().local_is_initialized()) {
         return make_ready_future<>();
     }
-    return audit_instance().invoke_on_all([] (audit& local_audit) {
+    return audit_instance().invoke_on_all([] (audit& local_audit) -> future<> {
+        // Close the gate first so in-flight writes are drained and any write
+        // entering afterwards is rejected by try_with_gate, then clear the flag
+        // and stop the helper.
+        co_await local_audit._pending_writes.close();
         local_audit._storage_running = false;
-        return local_audit._storage_helper_ptr->stop();
+        co_await local_audit._storage_helper_ptr->stop();
     });
 }
 
@@ -311,7 +316,9 @@ future<> audit::write_to_storage(audit_sink_set sinks,
                                  std::optional<db::consistency_level> cl,
                                  const sstring& username,
                                  bool error) {
-    return _storage_helper_ptr->write(sinks, &audit_info, node_ip, client_ip, cl, username, error);
+    return try_with_gate(_pending_writes, [this, sinks, &audit_info, node_ip, client_ip, cl, &username, error] {
+        return _storage_helper_ptr->write(sinks, &audit_info, node_ip, client_ip, cl, username, error);
+    });
 }
 
 future<> audit::write_login_to_storage(audit_sink_set sinks,
@@ -319,7 +326,9 @@ future<> audit::write_login_to_storage(audit_sink_set sinks,
                                        socket_address node_ip,
                                        socket_address client_ip,
                                        bool error) {
-    return _storage_helper_ptr->write_login(sinks, username, node_ip, client_ip, error);
+    return try_with_gate(_pending_writes, [this, sinks, &username, node_ip, client_ip, error] {
+        return _storage_helper_ptr->write_login(sinks, username, node_ip, client_ip, error);
+    });
 }
 
 future<> audit::log(const audit_info& audit_info, const service::client_state& client_state, std::optional<db::consistency_level> cl, bool error) {
