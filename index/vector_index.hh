@@ -31,7 +31,7 @@ public:
             const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs,
         const data_dictionary::database& db) const override;
     static bool has_index(const schema& s) { return has_index_impl<vector_index>(s); }
-    static bool has_vector_index_on_column(const schema& s, const sstring& target_name);
+    static bool is_local(const sstring& target_string);
     static bool is_vector_index_on_column(const index_metadata& im, const sstring& target_name);
     static void check_cdc_options(const schema& s) {
         check_cdc_options_impl<vector_index>(s);

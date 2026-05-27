@@ -496,6 +496,15 @@ def test_two_same_name_indexes_on_different_tables_with_if_not_exists(cql, test_
             assert rows1[0].index_name == 'ann_index'
             assert len(rows2) == 0
 
+def test_two_same_name_indexes_on_different_tables(cql, test_keyspace, skip_on_scylla_vnodes):
+    schema = "p int primary key, v vector<float, 3>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        schema = "p int primary key, v vector<float, 3>"
+        with new_test_table(cql, test_keyspace, schema) as table2:
+            cql.execute(f"CREATE CUSTOM INDEX ann_index ON {table}(v) USING 'sai'")
+            with pytest.raises(InvalidRequest, match="already exists"):
+                cql.execute(f"CREATE CUSTOM INDEX ann_index ON {table2}(v) USING 'sai'")
+
 
 def test_two_same_name_indexes_on_different_columns_with_if_not_exists(cql, test_keyspace, skip_on_scylla_vnodes):
     schema = "p int primary key, v vector<float, 3>, v2 vector<float, 3>"
@@ -510,6 +519,58 @@ def test_two_same_name_indexes_on_different_columns_with_if_not_exists(cql, test
         rows = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf}'"))
         assert len(rows) == 1
         assert rows[0].index_name == 'ann_index'
+
+
+def test_global_and_local_vector_indexes_on_same_column(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p1 int, p2 int, v vector<float, 3>, PRIMARY KEY ((p1, p2))'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Create global index first, then local — should not raise.
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'sai'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v) USING 'sai'")
+
+def test_local_and_global_vector_indexes_on_same_column(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p1 int, p2 int, v vector<float, 3>, PRIMARY KEY ((p1, p2))'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Create local index first, then global — should not raise.
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v) USING 'sai'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'sai'")
+
+# Even with both local and global indexes, creating a second index of the
+# same locality on the same column should still be rejected as duplicate.
+def test_duplicate_global_vector_index_rejected(cql, test_keyspace, skip_on_scylla_vnodes):
+    schema = 'p1 int, p2 int, v vector<float, 3>, PRIMARY KEY ((p1, p2))'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'sai'")
+        with pytest.raises(InvalidRequest, match="duplicate"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'sai'")
+
+def test_duplicate_local_vector_index_rejected(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p1 int, p2 int, v vector<float, 3>, PRIMARY KEY ((p1, p2))'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v) USING 'sai'")
+        with pytest.raises(InvalidRequest, match="duplicate"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v) USING 'sai'")
+
+def test_duplicate_local_vector_index_if_not_exists(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p1 int, p2 int, v vector<float, 3>, PRIMARY KEY ((p1, p2))'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v) USING 'sai'")
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ON {table}((p1, p2), v) USING 'sai'")
+        # Verify that only one index exists — the IF NOT EXISTS should not create a duplicate.
+        ks, cf = table.split(".")
+        indexes = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name = '{ks}' AND table_name = '{cf}'"))
+        assert len(indexes) == 1
+
+# IF NOT EXISTS with a different locality than the existing index should
+# create the second index, not silently skip it.
+def test_global_then_local_vector_index_if_not_exists(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p1 int, p2 int, v vector<float, 3>, PRIMARY KEY ((p1, p2))'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'sai'")
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ON {table}((p1, p2), v) USING 'sai'")
+        # Verify both indexes exist.
+        indexes = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table.split('.')[1]}'"))
+        assert len(indexes) == 2
 
 
 ###############################################################################
