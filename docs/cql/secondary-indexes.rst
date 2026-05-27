@@ -307,10 +307,27 @@ The ``similarity_function`` option is supported by both Cassandra SAI and Scylla
 
 .. note::
 
-   SAI class names are only supported on **vector columns**. Using an SAI class name on a
-   non-vector column (e.g., ``text`` or ``int``) will result in an error. General SAI
-   indexing of non-vector columns is not supported by ScyllaDB; use a
+   SAI class names are supported on **vector columns** and on **ENTRIES of non-frozen map
+   columns** (the CassIO metadata-map pattern).
+
+   * For vector columns, the index is rewritten to a native ``vector_index``.
+   * For ``ENTRIES(map_column)``, the SAI class is stripped and a standard secondary index
+     is created instead. A CQL warning is emitted noting possible behavioral differences
+     with Cassandra SAI metadata filtering. This rewrite requires the
+     ``enable_cassio_compatibility`` configuration option to be set to ``true``.
+
+   Using an SAI class name on any other non-vector column (e.g., ``text`` or ``int``) will
+   result in an error. General SAI indexing is not supported by ScyllaDB; use a
    :doc:`secondary index </cql/secondary-indexes>` instead.
+
+   Example of the metadata-map rewrite::
+
+      -- CassIO issues this during schema setup:
+      CREATE CUSTOM INDEX ON my_table (ENTRIES(metadata_s))
+      USING 'org.apache.cassandra.index.sai.StorageAttachedIndex';
+
+      -- ScyllaDB creates the equivalent of:
+      CREATE INDEX ON my_table (ENTRIES(metadata_s));
 
 .. _drop-index-statement:
 
