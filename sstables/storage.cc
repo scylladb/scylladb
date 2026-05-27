@@ -254,7 +254,7 @@ future<> filesystem_storage::touch_temp_dir(const sstable& sst) {
         co_return;
     }
     auto tmp = _dir.path() / fmt::format("{}{}", sst._generation, tempdir_extension);
-    sstlog.debug("Touching temp_dir={}", tmp);
+    sstlog.trace("Touching temp_dir={}", tmp);
     co_await sst.sstable_touch_directory_io_check(tmp);
     _temp_dir = std::move(tmp);
 }
@@ -263,7 +263,7 @@ future<> filesystem_storage::remove_temp_dir() {
     if (!_temp_dir) {
         co_return;
     }
-    sstlog.debug("Removing temp_dir={}", _temp_dir);
+    sstlog.trace("Removing temp_dir={}", _temp_dir);
     try {
         co_await remove_file(_temp_dir->native());
     } catch (...) {

@@ -1085,7 +1085,7 @@ thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> dow
 future<> sstable::do_read_simple(component_type type,
                                  noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component) {
     auto component_name = filename(type);
-    sstlog.debug("Reading {} file {}", sstable_version_constants::get_component_map(_version).at(type), component_name);
+    sstlog.trace("Reading {} file {}", sstable_version_constants::get_component_map(_version).at(type), component_name);
     try {
         file fi = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
         uint64_t size = co_await fi.size();
@@ -1179,7 +1179,7 @@ void sstable::do_write_simple(file_writer& writer,
 void sstable::do_write_simple(component_type type,
         noncopyable_function<void (version_types version, file_writer& writer)> write_component, unsigned buffer_size) {
     auto file_path = filename(type);
-    sstlog.debug("Writing {} file {}", sstable_version_constants::get_component_map(_version).at(type), file_path);
+    sstlog.trace("Writing {} file {}", sstable_version_constants::get_component_map(_version).at(type), file_path);
 
     file_output_stream_options options;
     options.buffer_size = buffer_size;
@@ -1197,7 +1197,7 @@ void sstable::write_simple(const T& component) {
 uint32_t sstable::do_write_simple_with_digest(component_type type,
         noncopyable_function<void (version_types version, file_writer& writer)> write_component, unsigned buffer_size) {
     auto file_path = filename(type);
-    sstlog.debug("Writing {} file {}", sstable_version_constants::get_component_map(_version).at(type), file_path);
+    sstlog.trace("Writing {} file {}", sstable_version_constants::get_component_map(_version).at(type), file_path);
 
     file_output_stream_options options;
     options.buffer_size = buffer_size;
