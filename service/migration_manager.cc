@@ -219,7 +219,7 @@ bool migration_manager::have_schema_agreement() {
             match = false;
             return stop_iteration::yes;
         }
-        auto remote_version = table_schema_version(utils::UUID{schema->value()});
+        auto remote_version = table_schema_version(utils::UUID{schema->value().linearize()});
         if (our_version != remote_version) {
             mlogger.log(log_level::info, rate_limit, "Schema mismatch for {} ({} != {}).",
                         endpoint, our_version, remote_version);

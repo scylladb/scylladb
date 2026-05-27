@@ -574,8 +574,8 @@ public:
     bool is_cql_ready(const locator::host_id& endpoint) const;
     void force_newer_generation();
 public:
-    std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;
-    std::string_view get_gossip_status(const locator::host_id& endpoint) const noexcept;
+    sstring get_gossip_status(const endpoint_state& ep_state) const noexcept;
+    sstring get_gossip_status(const locator::host_id& endpoint) const noexcept;
 private:
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;

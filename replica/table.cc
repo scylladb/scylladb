@@ -4916,13 +4916,14 @@ table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, locator
             float f = -1.0f; // missing state means old node
             if (state) {
                 const auto me = format("{}.{}", _schema->ks_name(), _schema->cf_name());
-                const auto& value = state->value();
-                const auto i = value.find(me);
-                if (i != sstring::npos) {
-                    f = strtof(&value[i + me.size() + 1], nullptr);
-                } else {
-                    f = 0.0f; // empty state means that node has rebooted
-                }
+                f = state->value().with_linearized([&] (std::string_view value) -> float {
+                    const auto i = value.find(me);
+                    if (i != std::string_view::npos) {
+                        return strtof(value.data() + i + me.size() + 1, nullptr);
+                    } else {
+                        return 0.0f; // empty state means that node has rebooted
+                    }
+                });
                 set_hit_rate(addr, cache_temperature(f));
                 return cache_hit_rate{cache_temperature(f), lowres_clock::now()};
             }

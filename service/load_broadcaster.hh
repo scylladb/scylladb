@@ -39,7 +39,7 @@ public:
 
     virtual future<> on_change(gms::inet_address endpoint, locator::host_id id, const gms::application_state_map& states, gms::permit_id pid) override {
         return on_application_state_change(endpoint, id, states, gms::application_state::LOAD, pid, [this] (gms::inet_address endpoint, locator::host_id id, const gms::versioned_value& value, gms::permit_id) {
-            _load_info[id] = std::stod(value.value());
+            _load_info[id] = value.value().with_linearized([] (std::string_view sv) { return std::stod(std::string(sv)); });
             return make_ready_future<>();
         });
     }
@@ -47,7 +47,7 @@ public:
     virtual future<> on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id pid) override {
         auto* local_value = ep_state->get_application_state_ptr(gms::application_state::LOAD);
         if (local_value) {
-            _load_info[id] = std::stod(local_value->value());
+            _load_info[id] = local_value->value().with_linearized([] (std::string_view sv) { return std::stod(std::string(sv)); });
         }
         return make_ready_future();
     }

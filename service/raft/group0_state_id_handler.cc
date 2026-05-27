@@ -52,7 +52,7 @@ void group0_state_id_handler::refresh() {
             return std::nullopt;
         }
 
-        return utils::UUID{state_id_ptr->value()};
+        return utils::UUID{state_id_ptr->value().linearize()};
     }) | std::ranges::views::filter([](const auto& state_id) {
         return state_id.has_value();
     }) | std::ranges::views::transform([](const auto& state_id) {

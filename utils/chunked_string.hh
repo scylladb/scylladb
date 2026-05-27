@@ -279,3 +279,23 @@ inline chunked_string& chunked_string::operator=(chunked_string_view o) {
 managed_bytes from_hex(utils::chunked_string_view view);
 
 } // namespace utils
+
+template <> struct fmt::formatter<utils::chunked_string> : fmt::formatter<std::string_view> {
+    auto format(const utils::chunked_string& s, fmt::format_context& ctx) const {
+        auto out = ctx.out();
+        for (bytes_view frag : fragment_range(managed_bytes_view(s.data()))) {
+            out = fmt::format_to(out, "{}", utils::to_string_view(frag));
+        }
+        return out;
+    }
+};
+
+template <> struct fmt::formatter<utils::chunked_string_view> : fmt::formatter<std::string_view> {
+    auto format(utils::chunked_string_view s, fmt::format_context& ctx) const {
+        auto out = ctx.out();
+        for (bytes_view frag : fragment_range(s.data())) {
+            out = fmt::format_to(out, "{}", utils::to_string_view(frag));
+        }
+        return out;
+    }
+};

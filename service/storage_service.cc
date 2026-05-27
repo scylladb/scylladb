@@ -1817,7 +1817,7 @@ future<> storage_service::on_change(gms::inet_address endpoint, locator::host_id
             co_await notify_cql_change(endpoint, host_id, ep_state->is_cql_ready());
         }
         if (auto it = states.find(application_state::INTERNAL_IP); it != states.end()) {
-            co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value()), host_id);
+            co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value().linearize()), host_id);
         }
     }
 }
@@ -1880,9 +1880,9 @@ std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for
             std::string_view name)
     {
         try {
-            field = T(value.value());
+            field = T(value.value().linearize());
         } catch (...) {
-            on_internal_error(slogger, fmt::format("failed to parse {} {} for {}: {}", name, value.value(),
+            on_internal_error(slogger, fmt::format("failed to parse {} {} for {}: {}", name, value.value().linearize(),
                 endpoint, std::current_exception()));
         }
     };
@@ -1913,8 +1913,8 @@ std::optional<locator::endpoint_dc_rack> storage_service::get_dc_rack_for(const 
         return std::nullopt;
     }
     return locator::endpoint_dc_rack{
-        .dc = dc->value(),
-        .rack = rack->value(),
+        .dc = dc->value().linearize(),
+        .rack = rack->value().linearize(),
     };
 }
 

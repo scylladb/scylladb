@@ -1500,7 +1500,7 @@ std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(locato
                     reqd_endpoint_state.emplace(eps.get_heart_beat_state(), eps.get_ip());
                 }
                 auto& key = entry.first;
-                logger.trace("Adding state of {}, {}: {}" , for_endpoint, key, value.value());
+                logger.trace("Adding state of {}, {}: {}" , for_endpoint, key, value.value().linearize());
                 reqd_endpoint_state->add_application_state(key, value);
             }
         }
@@ -1511,7 +1511,7 @@ std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(locato
 sstring gossiper::get_rpc_address(const locator::host_id& endpoint) const {
     auto* v = get_application_state_ptr(endpoint, gms::application_state::RPC_ADDRESS);
     if (v) {
-        return v->value();
+        return v->value().linearize();
     }
     return fmt::to_string(endpoint);
 }
@@ -2275,7 +2275,7 @@ sstring gossiper::get_application_state_value(locator::host_id endpoint, applica
     if (!v) {
         return {};
     }
-    return v->value();
+    return v->value().linearize();
 }
 
 /**
@@ -2299,24 +2299,25 @@ void gossiper::force_newer_generation() {
     eps.get_heart_beat_state().force_newer_generation_unsafe();
 }
 
-static std::string_view do_get_gossip_status(const gms::versioned_value* app_state) noexcept {
+static sstring do_get_gossip_status(const gms::versioned_value* app_state) noexcept {
     if (!app_state) {
-        return gms::versioned_value::STATUS_UNKNOWN;
+        return sstring(gms::versioned_value::STATUS_UNKNOWN);
     }
-    const std::string_view value = app_state->value();
-    const auto pos = value.find(',');
-    if (value.empty() || !pos) {
-        return gms::versioned_value::STATUS_UNKNOWN;
-    }
-    // npos allowed (full value)
-    return value.substr(0, pos);
+    return app_state->value().with_linearized([] (std::string_view value) -> sstring {
+        const auto pos = value.find(',');
+        if (value.empty() || !pos) {
+            return sstring(gms::versioned_value::STATUS_UNKNOWN);
+        }
+        // npos allowed (full value)
+        return sstring(value.substr(0, pos));
+    });
 }
 
-std::string_view gossiper::get_gossip_status(const endpoint_state& ep_state) const noexcept {
+sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const noexcept {
     return do_get_gossip_status(ep_state.get_application_state_ptr(application_state::STATUS));
 }
 
-std::string_view gossiper::get_gossip_status(const locator::host_id& endpoint) const noexcept {
+sstring gossiper::get_gossip_status(const locator::host_id& endpoint) const noexcept {
     return do_get_gossip_status(get_application_state_ptr(endpoint, application_state::STATUS));
 }
 
@@ -2345,7 +2346,7 @@ void gossiper::check_snitch_name_matches(sstring local_snitch_name) const {
             continue;
         }
 
-        if (remote_snitch_name->value() != local_snitch_name) {
+        if (remote_snitch_name->value() != std::string_view(local_snitch_name)) {
             throw std::runtime_error(format("Snitch check failed. This node cannot join the cluster because it uses {} and not {}", local_snitch_name, remote_snitch_name->value()));
         }
     }
@@ -2370,7 +2371,7 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
         if (app_state == application_state::TOKENS) {
             continue;
         }
-        fmt::print(ss, "  {}:{}:{}\n", app_state, versioned_val.version(), versioned_val.value());
+        fmt::print(ss, "  {}:{}:{}\n", app_state, versioned_val.version(), versioned_val.value().linearize());
     }
     const auto& app_state_map = state.get_application_state_map();
     if (app_state_map.contains(application_state::TOKENS)) {

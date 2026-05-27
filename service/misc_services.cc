@@ -20,7 +20,7 @@
 #include "replica/database.hh"
 #include "locator/abstract_replication_strategy.hh"
 
-#include <cstdlib>
+#include <charconv>
 
 namespace service {
 
@@ -274,34 +274,35 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, locat
             return make_ready_future<>();
         }
 
-        size_t current;
-        size_t max;
-        api::timestamp_type ticks;
-        const char* start_bound = value.value().data();
-        char* end_bound;
-        for (auto* ptr : {&current, &max}) {
-            errno = 0;
-            *ptr = std::strtoull(start_bound, &end_bound, 10);
-            if (errno == ERANGE) {
+        return value.value().with_linearized([&] (std::string_view sv) {
+            size_t current;
+            size_t max;
+            api::timestamp_type ticks;
+            const char* first = sv.data();
+            const char* last = sv.data() + sv.size();
+
+            for (auto* ptr : {&current, &max}) {
+                auto [p, ec] = std::from_chars(first, last, *ptr);
+                if (ec != std::errc{} || p == last) {
+                    return make_ready_future();
+                }
+                first = p + 1; // skip delimiter
+            }
+            if (max == 0) {
                 return make_ready_future();
             }
-            start_bound = end_bound + 1;
-        }
-        if (max == 0) {
-            return make_ready_future();
-        }
-        errno = 0;
-        ticks = std::strtoll(start_bound, &end_bound, 10);
-        if (ticks == 0 || errno == ERANGE || end_bound != value.value().data() + value.value().size()) {
-            return make_ready_future();
-        }
-        auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};
-        return _sp.invoke_on_all([id, backlog] (service::storage_proxy& sp) {
-            auto[it, inserted] = sp._view_update_backlogs.try_emplace(id, backlog);
-            if (!inserted && it->second.ts < backlog.ts) {
+            auto [p, ec] = std::from_chars(first, last, ticks);
+            if (ticks == 0 || ec != std::errc{} || p != last) {
+                return make_ready_future();
+            }
+            auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};
+            return _sp.invoke_on_all([id, backlog] (service::storage_proxy& sp) {
+                auto[it, inserted] = sp._view_update_backlogs.try_emplace(id, backlog);
+                if (!inserted && it->second.ts < backlog.ts) {
                 it->second = backlog;
             }
             return make_ready_future();
+        });
         });
     });
 }
