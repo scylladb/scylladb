@@ -43,6 +43,7 @@ sstable_version_types version_from_string(std::string_view s);
 sstable_format_types format_from_string(std::string_view s);
 
 bool has_summary_and_index(sstable_version_types v);
+bool uses_legacy_dk_order(sstable_version_types v);
 
 extern const std::unordered_map<sstable_version_types, seastar::sstring, seastar::enum_hash<sstable_version_types>> version_string;
 extern const std::unordered_map<sstable_format_types, seastar::sstring, seastar::enum_hash<sstable_format_types>> format_string;

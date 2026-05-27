@@ -106,7 +106,6 @@ class lazy_comparable_bytes_from_ring_position {
     // Starts as `partition_key`, potentially is converted to `comparable_bytes`
     // later if it turns out that the token isn't enough.
     std::variant<partition_key, comparable_bytes> _pk;
-    [[maybe_unused]]
     sstable_version_types _format_version;
 >>>>>>> 79ba0049b1 (sstables/trie: pass sstable format version to trie index readers and writers)
 private:
@@ -131,7 +130,49 @@ public:
             , _frag(std::as_writable_bytes(std::span(_owner._frags[_i])))
         {}
         std::span<std::byte>&& operator*() {
+<<<<<<< HEAD
             return std::move(_frag);
+||||||| parent of 88c5fa2de9 (sstables/trie: in `mt` sstables, use legacy partition key ordering)
+            return std::move(_current);
+        }
+        iterator& operator++() {
+            if (!_remaining) {
+                if (auto raw_pk = std::get_if<partition_key>(&_owner._pk)) {
+                    // The lazy BTI translation happens here.
+                    _owner._pk = comparable_bytes_from_compound(*_owner._s.partition_key_type(), raw_pk->representation(), bound_weight_to_terminator(_owner._weight));
+                    _owner._size = std::get<comparable_bytes>(_owner._pk).size() + _owner._token_buf.size();
+                }
+                auto& cb = std::get<comparable_bytes>(_owner._pk);
+                _remaining = managed_bytes_mutable_view(cb.as_managed_bytes_mutable_view()).prefix(_owner._size - _owner._token_buf.size());
+            }
+            _current = std::as_writable_bytes(std::span(_remaining->current_fragment()));
+            if (!_remaining->empty()) {
+                _remaining->remove_current();
+            }
+            return *this;
+=======
+            return std::move(_current);
+        }
+        iterator& operator++() {
+            if (!_remaining) {
+                if (auto raw_pk = std::get_if<partition_key>(&_owner._pk)) {
+                    // The lazy BTI translation happens here.
+                    if (uses_legacy_dk_order(_owner._format_version)) {
+                        _owner._pk = comparable_bytes_from_legacy_partition_key(*_owner._s.partition_key_type(), raw_pk->representation(), bound_weight_to_terminator(_owner._weight));
+                    } else {
+                        _owner._pk = comparable_bytes_from_compound(*_owner._s.partition_key_type(), raw_pk->representation(), bound_weight_to_terminator(_owner._weight));
+                    }
+                    _owner._size = std::get<comparable_bytes>(_owner._pk).size() + _owner._token_buf.size();
+                }
+                auto& cb = std::get<comparable_bytes>(_owner._pk);
+                _remaining = managed_bytes_mutable_view(cb.as_managed_bytes_mutable_view()).prefix(_owner._size - _owner._token_buf.size());
+            }
+            _current = std::as_writable_bytes(std::span(_remaining->current_fragment()));
+            if (!_remaining->empty()) {
+                _remaining->remove_current();
+            }
+            return *this;
+>>>>>>> 88c5fa2de9 (sstables/trie: in `mt` sstables, use legacy partition key ordering)
         }
         iterator& operator++();
         void operator++(int) {

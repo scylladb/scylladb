@@ -2682,6 +2682,19 @@ bool has_summary_and_index(sstable_version_types v) {
     return v != sstable_version_types::ms && v != sstable_version_types::mt;
 }
 
+bool uses_legacy_dk_order(sstable_version_types v) {
+    // Decorated keys in sstables and memtables are ordered by a bytewise comparison
+    // of their "legacy form".
+    // Due to a design mistake, `ms` was the one format with index encoding designed
+    // for the other (column-wise, wrong) ordering.
+    // All `ms` files which were ever actually produced are compatible with the legacy
+    // ordering anyway, because some asserts in the writer would prevent the creation
+    // of an sstable which doesn't match that ordering.
+    // Nevertheless, index readers have to know when they are dealing with `ms`, because
+    // it uses a specific encoding of partition keys in the index.
+    return v != sstable_version_types::ms;
+}
+
 component_type sstable::component_from_sstring(version_types v, const sstring &s) {
     try {
         return reverse_map(s, sstable_version_constants::get_component_map(v));
