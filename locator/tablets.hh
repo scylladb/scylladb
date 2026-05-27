@@ -1025,6 +1025,9 @@ struct tablet_metadata_change_hint {
     struct table_hint {
         table_id table_id;
         std::vector<token> tokens;
+        // When true, the entire partition must be read regardless of tokens.
+        // Once set, subsequent mutations for the same table must not re-add tokens.
+        bool full_read = false;
 
         bool operator==(const table_hint&) const = default;
     };
