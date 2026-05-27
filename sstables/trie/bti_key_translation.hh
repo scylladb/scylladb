@@ -59,11 +59,13 @@ class lazy_comparable_bytes_from_ring_position {
     // Starts as `partition_key`, potentially is converted to `comparable_bytes`
     // later if it turns out that the token isn't enough.
     std::variant<partition_key, comparable_bytes> _pk;
+    [[maybe_unused]]
+    sstable_version_types _format_version;
 private:
     void init_first_fragment(dht::token);
 public:
-    lazy_comparable_bytes_from_ring_position(const schema& s, dht::ring_position_view);
-    lazy_comparable_bytes_from_ring_position(const schema& s, dht::decorated_key);
+    lazy_comparable_bytes_from_ring_position(sstable_version_types, const schema& s, dht::ring_position_view);
+    lazy_comparable_bytes_from_ring_position(sstable_version_types, const schema& s, dht::decorated_key);
     lazy_comparable_bytes_from_ring_position(lazy_comparable_bytes_from_ring_position&&) noexcept = delete;
     lazy_comparable_bytes_from_ring_position& operator=(lazy_comparable_bytes_from_ring_position&&) noexcept = delete;
     struct iterator {

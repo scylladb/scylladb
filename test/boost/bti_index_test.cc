@@ -954,7 +954,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto close_partitions_db = defer([&] { partitions_db_writer.close(); });
         auto close_rows_db = defer([&] { rows_db_writer.close(); });
 
-        auto partition_index_writer = sstables::trie::bti_partition_index_writer(partitions_db_writer);
+        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer);
         auto row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
 
         std::optional<partition_index_entry> last_partition_entry;
@@ -998,7 +998,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 },
             }, entry);
         }
-        std::move(partition_index_writer).finish(sst_ver, sstables::key::from_bytes({}), sstables::key::from_bytes({}));
+        std::move(partition_index_writer).finish(sstables::key::from_bytes({}), sstables::key::from_bytes({}));
     }
 
     // Step 3: create the reader (or, more precisely, a factory of readers) over the index files.
@@ -1030,6 +1030,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 rows_db_cached,
                 partitions_db_root_pos,
                 std::get<eof_index_entry>(dataset.entries.back()).data_file_offset,
+                sst_ver,
                 the_schema,
                 semaphore.make_permit(),
                 trace_state
