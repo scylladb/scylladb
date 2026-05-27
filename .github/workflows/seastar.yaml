@@ -5,7 +5,8 @@ on:
     # 5AM everyday
     - cron: '0 5 * * *'
 
-permissions: {}
+permissions: 
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
