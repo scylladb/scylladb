@@ -154,19 +154,17 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
     };
 
     auto finally = defer([this] noexcept {
-        _gstate = std::string(); // free memory, do not trust clear() to do that for string
         _rates.clear();
     });
 
     _rates = co_await _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<table_id, stat>(), sum_stats_per_cf);
     _diff = 0;
-    _gstate.reserve(_slen); // assume length did not change from previous iteration
-    _slen = 0;
 
     // set calculated rates on all shards
     auto cpuid = this_shard_id();
-    co_await _db.invoke_on_all([this, cpuid] (replica::database& db) {
-        return do_for_each(_rates, [this, cpuid, &db] (auto&& r) mutable {
+    std::vector<std::string> parts;
+    co_await _db.invoke_on_all([this, cpuid, &parts] (replica::database& db) {
+        return do_for_each(_rates, [this, cpuid, &db, &parts] (auto&& r) mutable {
             auto cf_opt = db.get_tables_metadata().get_table_if_exists(r.first);
             if (!cf_opt) { // a table may be added before map/reduce completes and this code runs
                 return;
@@ -180,13 +178,23 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
             if (this_shard_id() == cpuid) {
                 // calculate max difference between old rate and new one for all cfs
                 _diff = std::max(_diff, std::abs(float(cf->get_global_cache_hit_rate()) - rate));
-                _gstate += format("{}.{}:{:0.6f};", cf->schema()->ks_name(), cf->schema()->cf_name(), rate);
+                parts.push_back(format("{}.{}:{:0.6f};", cf->schema()->ks_name(), cf->schema()->cf_name(), rate));
             }
             cf->set_global_cache_hit_rate(cache_temperature(rate));
         });
     });
 
-    _slen = _gstate.size();
+    // Build gstate as a chunked_string from accumulated parts
+    size_t total_size = 0;
+    for (auto& p : parts) {
+        total_size += p.size();
+    }
+    utils::chunked_string gstate(utils::chunked_string::initialized_later{}, total_size);
+    auto view = gstate.mutable_view();
+    for (auto& p : parts) {
+        write_fragmented(view, std::string_view(p));
+    }
+
     using namespace std::chrono_literals;
     auto now = lowres_clock::now();
     // Publish CACHE_HITRATES in case:
@@ -212,9 +220,9 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         llogger.debug("Send CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
         ++_published_nr;
         _published_time = now;
-        co_await container().invoke_on(0, [&gstate = _gstate] (cache_hitrate_calculator& self) {
+        co_await container().invoke_on(0, [gstate = std::move(gstate)] (cache_hitrate_calculator& self) mutable {
             return self._gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES,
-                    gms::versioned_value::cache_hitrates(gstate));
+                    gms::versioned_value::cache_hitrates(std::move(gstate)));
         });
     } else {
         llogger.debug("Skip CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
