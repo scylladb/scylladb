@@ -520,7 +520,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     }
 
     register_handler(this, messaging_verb::CLIENT_ID, [this] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size, rpc::optional<utils::UUID> host_id,
-                    rpc::optional<std::optional<utils::UUID>> dst_host_id, rpc::optional<gms::generation_type> generation) {
+                    rpc::optional<std::optional<utils::UUID>> dst_host_id, rpc::optional<gms::generation_type> generation) -> future<rpc::no_wait_type> {
         if (dst_host_id && *dst_host_id && **dst_host_id != _cfg.id.uuid()) {
             ci.server.abort_connection(ci.conn_id);
         }
@@ -528,10 +528,9 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
             auto peer_host_id = locator::host_id(*host_id);
             if (is_host_banned(peer_host_id)) {
                 ci.server.abort_connection(ci.conn_id);
-                return ser::join_node_rpc_verbs::send_notify_banned(this, msg_addr{broadcast_address}, raft::server_id{*host_id}).then_wrapped([] (future<> f) {
-                    f.ignore_ready_future();
-                    return rpc::no_wait;
-                });
+                auto f = co_await coroutine::as_future(ser::join_node_rpc_verbs::send_notify_banned(this, msg_addr{broadcast_address}, raft::server_id{*host_id}));
+                f.ignore_ready_future();
+                co_return rpc::no_wait;
             }
             ci.attach_auxiliary("host_id", peer_host_id);
             ci.attach_auxiliary("baddr", broadcast_address);
@@ -541,12 +540,29 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
                 .server = ci.server,
                 .conn_id = ci.conn_id,
             });
-            return container().invoke_on(0, [peer_host_id,  broadcast_address, generation = generation.value_or(gms::generation_type{})] (messaging_service &ms) {
+            // Detect IP changes and evict stale cached RPC connections.
+            // We rely on address_map's generation check to determine whether
+            // the announced address is newer or stale:
+            // - If the map accepts the update (generation >= stored), evict
+            //   connections to the old IP so subsequent RPCs go to the new one.
+            // - If the map rejects the update (generation < stored), this
+            //   CLIENT_ID is from a stale connection; evict it instead.
+            const auto old_ip = _address_map.find(peer_host_id);
+            const bool ip_changed = old_ip && *old_ip != broadcast_address;
+            const auto current_ip = co_await container().invoke_on(0, [peer_host_id, broadcast_address, generation = generation.value_or(gms::generation_type{})] (messaging_service &ms) {
                 ms._address_map.add_or_update_entry(peer_host_id, broadcast_address, generation);
-                return rpc::no_wait;
+                return ms._address_map.find(peer_host_id).value_or(gms::inet_address{});
             });
+            if (ip_changed) {
+                // If the map rejected our update, the stale one is broadcast_address, not old_ip.
+                const auto evict_ip = (current_ip == broadcast_address) ? *old_ip : broadcast_address;
+                mlogger.info("CLIENT_ID: host {} evicting stale RPC connections to {}", peer_host_id, evict_ip);
+                co_await container().invoke_on_all([peer_host_id, evict_ip] (messaging_service &ms) {
+                    ms.remove_rpc_client(msg_addr{evict_ip, 0}, peer_host_id);
+                });
+            }
         }
-        return make_ready_future<rpc::no_wait_type>(rpc::no_wait);
+        co_return rpc::no_wait;
     });
 
     init_local_preferred_ip_cache(_cfg.preferred_ips);
