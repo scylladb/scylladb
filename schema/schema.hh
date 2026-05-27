@@ -232,11 +232,8 @@ public:
     };
 private:
     bytes _name;
-    api::timestamp_type _dropped_at;
-    bool _is_atomic;
-    bool _is_counter;
-    column_view_virtual _is_view_virtual;
     column_computation_ptr _computation;
+    api::timestamp_type _dropped_at;
 
     struct thrift_bits {
         thrift_bits()
@@ -246,7 +243,12 @@ private:
         // more...?
     };
 
+    // Group small fields together to minimize padding.
     thrift_bits _thrift_bits;
+    bool _is_atomic;
+    bool _is_counter;
+    column_view_virtual _is_view_virtual;
+
     friend class schema;
 public:
     column_definition(bytes name, data_type type, column_kind kind,
