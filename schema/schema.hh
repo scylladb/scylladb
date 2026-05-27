@@ -231,11 +231,8 @@ public:
     };
 private:
     bytes _name;
-    api::timestamp_type _dropped_at;
-    bool _is_atomic;
-    bool _is_counter;
-    column_view_virtual _is_view_virtual;
     column_computation_ptr _computation;
+    api::timestamp_type _dropped_at;
 
     struct thrift_bits {
         thrift_bits()
@@ -245,7 +242,12 @@ private:
         // more...?
     };
 
+    // Group small fields together to minimize padding.
     thrift_bits _thrift_bits;
+    bool _is_atomic;
+    bool _is_counter;
+    column_view_virtual _is_view_virtual;
+
     friend class schema;
 public:
     column_definition(bytes name, data_type type, column_kind kind,
@@ -273,11 +275,12 @@ public:
     // unique_ptr, and as such cannot rely on default copying.
     column_definition(const column_definition& other)
             : _name(other._name)
+            , _computation(other.get_computation_ptr())
             , _dropped_at(other._dropped_at)
+            , _thrift_bits(other._thrift_bits)
             , _is_atomic(other._is_atomic)
             , _is_counter(other._is_counter)
             , _is_view_virtual(other._is_view_virtual)
-            , _computation(other.get_computation_ptr())
             , type(other.type)
             , id(other.id)
             , ordinal_id(other.ordinal_id)

@@ -793,11 +793,11 @@ sstring index_metadata::get_default_index_name(const sstring& cf_name,
 
 column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_computation_ptr computation, api::timestamp_type dropped_at)
         : _name(std::move(name))
+        , _computation(std::move(computation))
         , _dropped_at(dropped_at)
         , _is_atomic(type->is_atomic())
         , _is_counter(type->is_counter())
         , _is_view_virtual(is_view_virtual)
-        , _computation(std::move(computation))
         , type(std::move(type))
         , id(component_index)
         , kind(kind)
