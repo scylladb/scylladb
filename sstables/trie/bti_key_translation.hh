@@ -76,15 +76,45 @@ class lazy_comparable_bytes_from_ring_position {
     int _weight;
     utils::small_vector<bytes, 1> _frags;
     const schema& _s;
+<<<<<<< HEAD
     std::optional<std::generator<const_bytes>> _gen;
     std::optional<decltype(_gen->begin())> _gen_it;
     bool _finished = false;
+||||||| parent of 79ba0049b1 (sstables/trie: pass sstable format version to trie index readers and writers)
+    std::array<std::byte, 9> _token_buf;
+    bound_weight _weight;
+    // Length of this BTI encoding, in bytes.
+    // Used to implement `trim()`.
+    //
+    // Starts at something meaningless but greater than `_token_buf.size()`,
+    // is set to the full encoding size when `_pk` is converted to `comparable_bytes`,
+    // might be later reduced by trim().
+    unsigned _size = -1;
+    // Starts as `partition_key`, potentially is converted to `comparable_bytes`
+    // later if it turns out that the token isn't enough.
+    std::variant<partition_key, comparable_bytes> _pk;
+=======
+    std::array<std::byte, 9> _token_buf;
+    bound_weight _weight;
+    // Length of this BTI encoding, in bytes.
+    // Used to implement `trim()`.
+    //
+    // Starts at something meaningless but greater than `_token_buf.size()`,
+    // is set to the full encoding size when `_pk` is converted to `comparable_bytes`,
+    // might be later reduced by trim().
+    unsigned _size = -1;
+    // Starts as `partition_key`, potentially is converted to `comparable_bytes`
+    // later if it turns out that the token isn't enough.
+    std::variant<partition_key, comparable_bytes> _pk;
+    [[maybe_unused]]
+    sstable_version_types _format_version;
+>>>>>>> 79ba0049b1 (sstables/trie: pass sstable format version to trie index readers and writers)
 private:
     void init_first_fragment();
 
 public:
-    lazy_comparable_bytes_from_ring_position(const schema& s, dht::ring_position_view);
-    lazy_comparable_bytes_from_ring_position(const schema& s, dht::decorated_key);
+    lazy_comparable_bytes_from_ring_position(sstable_version_types, const schema& s, dht::ring_position_view);
+    lazy_comparable_bytes_from_ring_position(sstable_version_types, const schema& s, dht::decorated_key);
     lazy_comparable_bytes_from_ring_position(lazy_comparable_bytes_from_ring_position&&) noexcept = delete;
     lazy_comparable_bytes_from_ring_position& operator=(lazy_comparable_bytes_from_ring_position&&) noexcept = delete;
     void advance();
