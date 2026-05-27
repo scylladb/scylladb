@@ -255,6 +255,16 @@ def test_rbac_getitem(dynamodb, cql, test_table_s):
                         assert item == authorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True)['Item'])
             unauthorized(lambda: tab.get_item(Key={'p': p}, ConsistentRead=True))
 
+def test_rbac_export_table_to_point_in_time(dynamodb, cql, test_table_s):
+    table_arn = dynamodb.meta.client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            unauthorized(lambda: d.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket'))
+            with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                authorized(lambda: d.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket'))
+            unauthorized(lambda: d.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket'))
+
 # Test PutItem's support of permissions.
 # PutItem, and other data-modifying operations (DeleteItem, UpdateItem, etc.)
 # usually only write, and require the "MODIFY" permission to do that.
