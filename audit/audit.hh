@@ -156,6 +156,18 @@ private:
     bool rules_may_log(statement_category cat, std::string_view keyspace, std::string_view table) const;
     audit_sink_set sinks_for(const audit_info& audit_info, std::string_view role) const;
     audit_sink_set sinks_for_login(const sstring& username) const;
+    future<> write_to_storage(audit_sink_set sinks,
+                              const audit_info& audit_info,
+                              socket_address node_ip,
+                              socket_address client_ip,
+                              std::optional<db::consistency_level> cl,
+                              const sstring& username,
+                              bool error);
+    future<> write_login_to_storage(audit_sink_set sinks,
+                                    const sstring& username,
+                                    socket_address node_ip,
+                                    socket_address client_ip,
+                                    bool error);
     future<> rebuild_rules();
 public:
     static seastar::sharded<audit>& audit_instance() {

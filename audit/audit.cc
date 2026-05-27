@@ -304,6 +304,24 @@ future<> audit::shutdown() {
     co_await _rules_rebuild_action.join();
 }
 
+future<> audit::write_to_storage(audit_sink_set sinks,
+                                 const audit_info& audit_info,
+                                 socket_address node_ip,
+                                 socket_address client_ip,
+                                 std::optional<db::consistency_level> cl,
+                                 const sstring& username,
+                                 bool error) {
+    return _storage_helper_ptr->write(sinks, &audit_info, node_ip, client_ip, cl, username, error);
+}
+
+future<> audit::write_login_to_storage(audit_sink_set sinks,
+                                       const sstring& username,
+                                       socket_address node_ip,
+                                       socket_address client_ip,
+                                       bool error) {
+    return _storage_helper_ptr->write_login(sinks, username, node_ip, client_ip, error);
+}
+
 future<> audit::log(const audit_info& audit_info, const service::client_state& client_state, std::optional<db::consistency_level> cl, bool error) {
     std::string_view role;
     if (!_preprocessed_rules.rules().empty() && client_state.user() && client_state.user()->name) {
@@ -329,7 +347,7 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
             node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
             audit_info.query(), client_ip, audit_info.table(), username);
     }
-    return _storage_helper_ptr->write(sinks, &audit_info, node_ip, client_ip, cl, username, error)
+    return write_to_storage(sinks, audit_info, node_ip, client_ip, cl, username, error)
         .handle_exception([audit_info, node_ip, client_ip, cl, username, error] (auto ep) {
             logger.error("Unexpected exception when writing log with: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {} exception {}",
                 node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
@@ -382,7 +400,7 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
         logger.debug("Login log written: node_ip {}, client_ip {}, username {}, error {}",
             node_ip, client_ip, username, error ? "true" : "false");
     }
-    return _storage_helper_ptr->write_login(sinks, username, node_ip, client_ip, error)
+    return write_login_to_storage(sinks, username, node_ip, client_ip, error)
         .handle_exception([username, node_ip, client_ip, error] (auto ep) {
             logger.error("Unexpected exception when writing login log with: node_ip {} client_ip {} username {} error {} exception {}",
                 node_ip, client_ip, username, error, ep);
