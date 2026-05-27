@@ -59,11 +59,12 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_ord
         .build();
     using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
     std::unique_ptr<encoding> prev;
+    auto sst_ver = sstables::sstable_version_types::ms;
     for (const auto& rpv : generate_rpvs(*s)) {
         if (!prev) {
-            prev = std::make_unique<encoding>(*s, rpv);
+            prev = std::make_unique<encoding>(sst_ver, *s, rpv);
         } else {
-            auto curr = std::make_unique<encoding>(*s, rpv);
+            auto curr = std::make_unique<encoding>(sst_ver, *s, rpv);
             auto prev_bytes = linearize(prev->begin());
             auto curr_bytes = linearize(curr->begin());
             testlog.debug("prev_bytes={}, curr_bytes={}", fmt_hex(prev_bytes), fmt_hex(curr_bytes));
@@ -72,8 +73,8 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_ord
         }
     }
     auto prev_bytes = linearize(prev->begin());
-    SCYLLA_ASSERT(prev_bytes <= linearize(encoding(*s, dht::ring_position_view(dht::maximum_token(), nullptr, -1)).begin()));
-    SCYLLA_ASSERT(prev_bytes <= linearize(encoding(*s, dht::ring_position_view::max()).begin()));
+    SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view(dht::maximum_token(), nullptr, -1)).begin()));
+    SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view::max()).begin()));
 }
 
 // Tests lazy_comparable_bytes_from_ring_position::trim().
@@ -99,14 +100,15 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_trim) {
         partition_key::from_deeply_exploded(*s, components);
     });
     using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
+    auto sst_ver = sstables::sstable_version_types::ms;
     const auto dk = dht::decorated_key(dht::token::from_int64(42), std::move(pk));
-    const auto encoded = linearize(encoding(*s, dk).begin());
+    const auto encoded = linearize(encoding(sst_ver, *s, dk).begin());
 
     constexpr auto modification_byte = std::byte('z');
     for (size_t view_position = 0; view_position <= encoded.size(); ++view_position)
     for (size_t trim_position = 0; trim_position <= view_position; ++trim_position)
     for (size_t modification_position = 0; modification_position <= trim_position; ++modification_position) {
-        auto enc = encoding(*s, std::move(dk));
+        auto enc = encoding(sst_ver, *s, std::move(dk));
         {
             size_t n_seen = 0;
             auto it = enc.begin();

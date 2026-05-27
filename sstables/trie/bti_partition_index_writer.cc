@@ -42,19 +42,19 @@ namespace sstables::trie {
 class bti_partition_index_writer_impl {
     void write_last_key(size_t needed_prefix);
 public:
-    bti_partition_index_writer_impl(bti_node_sink&);
+    bti_partition_index_writer_impl(sstable_version_types, bti_node_sink&);
     bti_partition_index_writer_impl(bti_partition_index_writer_impl&&) = delete;
     // If the partition has a intra-partition index in Rows.db,
     // `file_pos` is the bit-negated position of the relevant entry in Rows.db.
     // Otherwise, `file_pos` is the position of the partition in Data.db.
     void add(const schema&, dht::decorated_key, const utils::hashed_key&, int64_t pos_payload);
     std::optional<bti_partitions_db_footer> finish(
-        sstable_version_types ver,
         const sstables::key& first_key,
         const sstables::key& last_key);
 private:
     // The lower trie-writing layer, oblivious to the semantics of the partition index.
     trie_writer<bti_node_sink> _wr;
+    sstable_version_types _sst_ver;
     // Counter of added keys.
     size_t _added_keys = 0;
 
@@ -91,9 +91,10 @@ private:
     uint8_t _last_hash_bits;
 };
 
-bti_partition_index_writer_impl::bti_partition_index_writer_impl(bti_node_sink& out)
-    : _wr(out) {
-}
+bti_partition_index_writer_impl::bti_partition_index_writer_impl(sstable_version_types sst_ver, bti_node_sink& out)
+    : _wr(out)
+    , _sst_ver(sst_ver)
+{}
 
 void bti_partition_index_writer_impl::write_last_key(size_t needed_prefix) {
     std::array<std::byte, 9> payload_bytes;
@@ -161,7 +162,7 @@ void bti_partition_index_writer_impl::write_last_key(size_t needed_prefix) {
 void bti_partition_index_writer_impl::add(const schema& s, dht::decorated_key dk, const utils::hashed_key& murmur_hash, int64_t pos_payload) {
     uint8_t hash_bits = static_cast<uint8_t>(murmur_hash.hash()[1]);
     expensive_log("partition_index_writer_impl::add: this={} key={}, pos_payload={}", fmt::ptr(this), dk, pos_payload);
-    (*_tmp_key).emplace(s, dk);
+    (*_tmp_key).emplace(_sst_ver, s, dk);
     if (_added_keys > 0) {
         // First position where the new key differs from the last key.
         size_t mismatch = lcb_mismatch((**_tmp_key).begin(), (**_last_key).begin()).first;
@@ -182,7 +183,6 @@ void bti_partition_index_writer_impl::add(const schema& s, dht::decorated_key dk
 }
 
 std::optional<bti_partitions_db_footer> bti_partition_index_writer_impl::finish(
-    sstable_version_types ver,
     const sstables::key& first_key,
     const sstables::key& last_key
 ) {
@@ -196,11 +196,11 @@ std::optional<bti_partitions_db_footer> bti_partition_index_writer_impl::finish(
     auto root = _wr.finish().value;
     auto& fw = _wr.sink().file_writer();
     auto keys_pos = fw.offset();
-    write(ver, fw, disk_string_view<uint16_t>(bytes_view(first_key)));
-    write(ver, fw, disk_string_view<uint16_t>(bytes_view(last_key)));
-    write(ver, fw, static_cast<uint64_t>(keys_pos));
-    write(ver, fw, static_cast<uint64_t>(_added_keys));
-    write(ver, fw, static_cast<uint64_t>(root));
+    write(_sst_ver, fw, disk_string_view<uint16_t>(bytes_view(first_key)));
+    write(_sst_ver, fw, disk_string_view<uint16_t>(bytes_view(last_key)));
+    write(_sst_ver, fw, static_cast<uint64_t>(keys_pos));
+    write(_sst_ver, fw, static_cast<uint64_t>(_added_keys));
+    write(_sst_ver, fw, static_cast<uint64_t>(root));
     return bti_partitions_db_footer{
         .first_key = first_key,
         .last_key = last_key,
@@ -213,9 +213,9 @@ struct bti_partition_index_writer::impl
     : bti_node_sink
     , bti_partition_index_writer_impl
 {
-    impl(sstables::file_writer& fw)
+    impl(sstable_version_types sst_ver, sstables::file_writer& fw)
         : bti_node_sink(fw, BTI_PAGE_SIZE)
-        , bti_partition_index_writer_impl(static_cast<bti_node_sink&>(*this))
+        , bti_partition_index_writer_impl(sst_ver, static_cast<bti_node_sink&>(*this))
     {}
     impl(impl&&) = delete;
 };
@@ -224,18 +224,17 @@ bti_partition_index_writer::bti_partition_index_writer() noexcept = default;
 
 bti_partition_index_writer::~bti_partition_index_writer() noexcept = default;
 
-bti_partition_index_writer::bti_partition_index_writer(sstables::file_writer& fw)
-    : _impl(std::make_unique<impl>(fw))
+bti_partition_index_writer::bti_partition_index_writer(sstable_version_types sst_ver, sstables::file_writer& fw)
+    : _impl(std::make_unique<impl>(sst_ver, fw))
 {}
 void bti_partition_index_writer::add(const schema& s, dht::decorated_key dk, const utils::hashed_key& murmur_hash, int64_t data_or_rowsdb_file_pos) {
     _impl->add(s, std::move(dk), murmur_hash, data_or_rowsdb_file_pos);
 }
 std::optional<bti_partitions_db_footer> bti_partition_index_writer::finish(
-    sstable_version_types ver,
     const sstables::key& first_key,
     const sstables::key& last_key
 ) && {
-    return _impl->finish(ver, first_key, last_key);
+    return _impl->finish(first_key, last_key);
 }
 bti_partition_index_writer::bti_partition_index_writer(bti_partition_index_writer&&) noexcept = default;
 bti_partition_index_writer& bti_partition_index_writer::operator=(bti_partition_index_writer&&) noexcept = default;
