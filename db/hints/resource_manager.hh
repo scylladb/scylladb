@@ -114,7 +114,7 @@ private:
     /// \param maybe_ep_key endpoint ID corresponding to the scanned directory
     /// \return future that resolves when scanning is complete
     future<> scan_one_ep_dir(fs::path path, manager& shard_manager,
-            std::optional<std::variant<locator::host_id, gms::inet_address>> maybe_ep_key);
+            std::optional<locator::host_id> maybe_ep_key);
 };
 
 class resource_manager {
