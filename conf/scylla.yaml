@@ -398,18 +398,18 @@ commitlog_total_space_in_mb: -1
 # column_index_size_in_kb: 64
 
 # sstable format version for newly written sstables.
-# Currently allowed values are `me` and `ms`.
+# Currently allowed values are `me` and `mt`.
 # If not specified in the config, this defaults to `me`.
 #
-# The difference between `me` and `ms` are the data structures used
+# The difference between `me` and `mt` are the data structures used
 # in the primary index.
-# In short, `ms` needs more CPU during sstable writes,
+# In short, `mt` needs more CPU during sstable writes,
 # but should behave better during reads,
 # although it might behave worse for very long clustering keys.
 #
-# `ms` sstable format works even better with `column_index_size_in_kb` set to 1,
+# `mt` sstable format works even better with `column_index_size_in_kb` set to 1,
 # so keep those two settings in sync (either both set, or both unset).
-sstable_format: ms
+sstable_format: mt
 column_index_size_in_kb: 1
 
 # Auto-scaling of the promoted index prevents running out of memory
