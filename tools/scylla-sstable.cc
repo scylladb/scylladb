@@ -1557,6 +1557,21 @@ public:
     }
 };
 
+void write_scylla_metadata_component(schema_ptr schema, const sstables::shared_sstable& sst, json_writer& writer) {
+    writer.StartObject();
+    auto m = sst->get_scylla_metadata();
+    if (m) {
+        for (const auto& [k, v] : m->data.data) {
+            std::visit(scylla_metadata_visitor(writer, schema), v);
+        }
+        if (m->digest.has_value()) {
+            writer.Key("digest");
+            writer.Uint(m->digest.value());
+        }
+    }
+    writer.EndObject();
+}
+
 void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
@@ -1567,20 +1582,7 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     writer.StartStream();
     for (auto& sst : sstables) {
         writer.Key(fmt::to_string(sst->get_filename()));
-        writer.StartObject();
-        auto m = sst->get_scylla_metadata();
-        if (!m) {
-            writer.EndObject();
-            continue;
-        }
-        for (const auto& [k, v] : m->data.data) {
-            std::visit(scylla_metadata_visitor(writer, schema), v);
-        }
-        if (m->digest.has_value()) {
-            writer.Key("digest");
-            writer.Uint(m->digest.value());
-        }
-        writer.EndObject();
+        write_scylla_metadata_component(schema, sst, writer);
     }
     writer.EndStream();
 }
