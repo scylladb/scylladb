@@ -17,8 +17,6 @@
 #include "replica/logstor/write_buffer.hh"
 #include <seastar/testing/thread_test_case.hh>
 
-#include "idl/logstor.dist.hh"
-#include "idl/logstor.dist.impl.hh"
 #include "replica/logstor/segment_io.hh"
 #include "dht/i_partitioner.hh"
 #include "schema/schema_builder.hh"
