@@ -1283,12 +1283,7 @@ void dump_serialization_header(json_writer& writer, sstables::sstable_version_ty
     });
 }
 
-void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
-    if (sstables.empty()) {
-        throw std::invalid_argument("no sstables specified on the command line");
-    }
-
+void write_statistics_component(const sstables::shared_sstable& sst, json_writer& writer) {
     auto to_string = [] (sstables::metadata_type t) {
         switch (t) {
             case sstables::metadata_type::Validation: return "validation";
@@ -1299,42 +1294,51 @@ void dump_statistics_operation(schema_ptr schema, reader_permit permit, const st
         std::abort();
     };
 
+    auto& statistics = sst->get_statistics();
+
+    writer.StartObject();
+
+    writer.Key("offsets");
+    writer.StartObject();
+    for (const auto& [k, v] : statistics.offsets.elements) {
+        writer.Key(to_string(k));
+        writer.Uint(v);
+    }
+    writer.EndObject();
+
+    const auto version = sst->get_version();
+    for (const auto& [type, _] : statistics.offsets.elements) {
+        const auto& metadata_ptr = statistics.contents.at(type);
+        switch (type) {
+            case sstables::metadata_type::Validation:
+                dump_validation_metadata(writer, version, *dynamic_cast<const sstables::validation_metadata*>(metadata_ptr.get()));
+                break;
+            case sstables::metadata_type::Compaction:
+                dump_compaction_metadata(writer, version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
+                break;
+            case sstables::metadata_type::Stats:
+                dump_stats_metadata(writer, version, *dynamic_cast<const sstables::stats_metadata*>(metadata_ptr.get()));
+                break;
+            case sstables::metadata_type::Serialization:
+                dump_serialization_header(writer, version, *dynamic_cast<const sstables::serialization_header*>(metadata_ptr.get()));
+                break;
+        }
+    }
+
+    writer.EndObject();
+}
+
+void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        auto& statistics = sst->get_statistics();
-
         writer.Key(fmt::to_string(sst->get_filename()));
-        writer.StartObject();
-
-        writer.Key("offsets");
-        writer.StartObject();
-        for (const auto& [k, v] : statistics.offsets.elements) {
-            writer.Key(to_string(k));
-            writer.Uint(v);
-        }
-        writer.EndObject();
-
-        const auto version = sst->get_version();
-        for (const auto& [type, _] : statistics.offsets.elements) {
-            const auto& metadata_ptr = statistics.contents.at(type);
-            switch (type) {
-                case sstables::metadata_type::Validation:
-                    dump_validation_metadata(writer, version, *dynamic_cast<const sstables::validation_metadata*>(metadata_ptr.get()));
-                    break;
-                case sstables::metadata_type::Compaction:
-                    dump_compaction_metadata(writer, version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
-                    break;
-                case sstables::metadata_type::Stats:
-                    dump_stats_metadata(writer, version, *dynamic_cast<const sstables::stats_metadata*>(metadata_ptr.get()));
-                    break;
-                case sstables::metadata_type::Serialization:
-                    dump_serialization_header(writer, version, *dynamic_cast<const sstables::serialization_header*>(metadata_ptr.get()));
-                    break;
-            }
-        }
-
-        writer.EndObject();
+        write_statistics_component(sst, writer);
     }
     writer.EndStream();
 }
