@@ -9,7 +9,7 @@ import logging
 import os
 import json
 
-from test.cqlpy import nodetool
+from test.pylib import nodetool
 from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.test_backup import create_cluster, topo
 from test.cluster.util import new_test_keyspace, new_test_table, unique_name
@@ -61,7 +61,7 @@ async def prepare_write_workload(cql, table_name, flush=True, n: int = None):
                                     )
 
     if flush:
-        nodetool.flush(cql, table_name)
+        await nodetool.flush(cql, table_name)
 
 async def test_snapshot_on_all_nodes(manager: ManagerClient):
     """

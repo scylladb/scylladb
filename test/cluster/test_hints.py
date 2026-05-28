@@ -19,7 +19,7 @@ from test.pylib.tablets import get_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, wait_for
 
-from test.cqlpy import nodetool
+from test.pylib import nodetool
 from test.cluster.util import get_topology_coordinator, find_server_by_host_id, keyspace_has_tablets, new_test_keyspace, new_test_table
 
 
@@ -352,7 +352,7 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
 
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", False, {})
-    nodetool.excludenode(cql, host_id2)
+    await nodetool.excludenode(cql, host_id2)
     await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s1.rack, s3.rack]}}}")
 
     await manager.remove_node(s1.server_id, s2.server_id)

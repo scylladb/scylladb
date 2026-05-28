@@ -12,7 +12,7 @@ from typing import List, Union
 import pytest
 from cassandra.policies import WhiteListRoundRobinPolicy
 
-from test.cqlpy import nodetool
+from test.pylib import nodetool
 from cassandra import ConsistencyLevel, Unavailable
 from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import InvalidRequest, ConfigurationException
@@ -83,21 +83,21 @@ async def test_putget_2dc_with_rf(
         query_batch % ";".join(kvs), consistency_level=ConsistencyLevel.QUORUM
     )
     conn.execute(query)
-    nodetool.flush_keyspace(conn, ks)
+    await nodetool.flush_keyspace(conn, ks)
     # overwrite each second value
     kvs = [update_query % (i * 4, i * 2) for i in range(50)]
     query = SimpleStatement(
         query_batch % "; ".join(kvs), consistency_level=ConsistencyLevel.QUORUM
     )
     conn.execute(query)
-    nodetool.flush_keyspace(conn, ks)
+    await nodetool.flush_keyspace(conn, ks)
     # overwrite each fifth value
     kvs = [update_query % (i * 20, i * 5) for i in range(20)]
     query = SimpleStatement(
         query_batch % "; ".join(kvs), consistency_level=ConsistencyLevel.QUORUM
     )
     conn.execute(query)
-    nodetool.flush_keyspace(conn, ks)
+    await nodetool.flush_keyspace(conn, ks)
 
     logger.info("Check written data is correct")
     query = SimpleStatement(f"SELECT * FROM {cf} WHERE key='k0'", consistency_level=ConsistencyLevel.QUORUM)
@@ -148,7 +148,7 @@ async def test_read_or_write_to_dc_with_rf_0_fails(request: pytest.FixtureReques
         dc1_connection.execute(SimpleStatement(
                 f"INSERT INTO {ks}.{table_name} ({columns[0].name}, {columns[1].name}) VALUES ('k{i}', 'value{i}')", consistency_level=cl))
 
-        nodetool.flush(dc1_connection, f"{ks}.{table_name}")
+        await nodetool.flush(dc1_connection, f"{ks}.{table_name}")
 
         select_query = SimpleStatement(f"SELECT * FROM {ks}.{table_name} WHERE {columns[0].name} = 'k{i}'", consistency_level=cl)
         # asserting SELECT's results may seem excessive, but it could happen that it'd fail and return nothing and not throw,
