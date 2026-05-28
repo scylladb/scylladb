@@ -990,6 +990,58 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
     writer.EndStream();
 }
 
+void write_summary_component(schema_ptr schema, const sstables::shared_sstable& sst, json_writer& writer) {
+    auto& summary = sst->get_summary();
+
+    writer.StartObject();
+
+    writer.Key("header");
+    writer.StartObject();
+    writer.Key("min_index_interval");
+    writer.Uint64(summary.header.min_index_interval);
+    writer.Key("size");
+    writer.Uint64(summary.header.size);
+    writer.Key("memory_size");
+    writer.Uint64(summary.header.memory_size);
+    writer.Key("sampling_level");
+    writer.Uint64(summary.header.sampling_level);
+    writer.Key("size_at_full_sampling");
+    writer.Uint64(summary.header.size_at_full_sampling);
+    writer.EndObject();
+
+    writer.Key("positions");
+    writer.StartArray();
+    for (const auto& pos : summary.positions) {
+        writer.Uint64(pos);
+    }
+    writer.EndArray();
+
+    writer.Key("entries");
+    writer.StartArray();
+    for (const auto& e : summary.entries) {
+        writer.StartObject();
+
+        auto pkey = e.get_key().to_partition_key(*schema);
+        writer.Key("key");
+        writer.DataKey(*schema, pkey, e.get_token());
+        writer.Key("position");
+        writer.Uint64(e.position);
+
+        writer.EndObject();
+    }
+    writer.EndArray();
+
+    auto first_key = dht::decorate_key(*schema, sstables::key_view(summary.first_key.value).to_partition_key(*schema));
+    writer.Key("first_key");
+    writer.DataKey(*schema, first_key);
+
+    auto last_key = dht::decorate_key(*schema, sstables::key_view(summary.last_key.value).to_partition_key(*schema));
+    writer.Key("last_key");
+    writer.DataKey(*schema, last_key);
+
+    writer.EndObject();
+}
+
 void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
@@ -998,58 +1050,9 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
 
     json_writer writer;
     writer.StartStream();
-
     for (auto& sst : sstables) {
-        auto& summary = sst->get_summary();
-
         writer.Key(fmt::to_string(sst->get_filename()));
-        writer.StartObject();
-
-        writer.Key("header");
-        writer.StartObject();
-        writer.Key("min_index_interval");
-        writer.Uint64(summary.header.min_index_interval);
-        writer.Key("size");
-        writer.Uint64(summary.header.size);
-        writer.Key("memory_size");
-        writer.Uint64(summary.header.memory_size);
-        writer.Key("sampling_level");
-        writer.Uint64(summary.header.sampling_level);
-        writer.Key("size_at_full_sampling");
-        writer.Uint64(summary.header.size_at_full_sampling);
-        writer.EndObject();
-
-        writer.Key("positions");
-        writer.StartArray();
-        for (const auto& pos : summary.positions) {
-            writer.Uint64(pos);
-        }
-        writer.EndArray();
-
-        writer.Key("entries");
-        writer.StartArray();
-        for (const auto& e : summary.entries) {
-            writer.StartObject();
-
-            auto pkey = e.get_key().to_partition_key(*schema);
-            writer.Key("key");
-            writer.DataKey(*schema, pkey, e.get_token());
-            writer.Key("position");
-            writer.Uint64(e.position);
-
-            writer.EndObject();
-        }
-        writer.EndArray();
-
-        auto first_key = dht::decorate_key(*schema, sstables::key_view(summary.first_key.value).to_partition_key(*schema));
-        writer.Key("first_key");
-        writer.DataKey(*schema, first_key);
-
-        auto last_key = dht::decorate_key(*schema, sstables::key_view(summary.last_key.value).to_partition_key(*schema));
-        writer.Key("last_key");
-        writer.DataKey(*schema, last_key);
-
-        writer.EndObject();
+        write_summary_component(schema, sst, writer);
     }
     writer.EndStream();
 }
