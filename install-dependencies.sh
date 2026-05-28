@@ -44,7 +44,6 @@ debian_base_packages=(
     python3-pytest
     python3-pytest-asyncio
     python3-pytest-timeout
-    python3-pytest-sugar
     python3-pexpect
     libsnappy-dev
     libjsoncpp-dev
@@ -387,7 +386,10 @@ if $PRINT_PIP_SYMLINK; then
 fi
 
 if ! $FUTURE; then
-    fedora_packages+=(toxiproxy)
+    fedora_packages+=(
+        toxiproxy
+        python3-pytest-sugar
+    )
 fi
 
 umask 0022
