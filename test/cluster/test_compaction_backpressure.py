@@ -8,7 +8,6 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.rest_client import inject_error_one_shot, inject_error
 from test.cluster.util import new_test_keyspace, new_test_table
-from test.cqlpy import nodetool
 
 import pytest
 import asyncio

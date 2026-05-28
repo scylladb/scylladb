@@ -20,7 +20,7 @@ from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
 
-from test.cqlpy import nodetool
+from test.pylib import nodetool
 
 from test.pylib.encryption_provider import KeyProviderFactory, KeyProvider, make_key_provider_factory, KMSKeyProviderFactory, LocalFileSystemKeyProviderFactory
 from test.cluster.util import new_test_keyspace, new_test_table
@@ -134,7 +134,7 @@ async def prepare_write_workload(cql: CassandraSession, table_name, flush=True, 
                                     )
 
     if flush:
-        nodetool.flush(cql, table_name)
+        await nodetool.flush(cql, table_name)
 
     return keys
 
@@ -316,7 +316,7 @@ async def validate_sstables_encryption(manager: ManagerClient, server: ServerInf
     """Verify sstables for table encrypted or not"""
     keyspace, column_family  = table_name.split(".")
     scylla_path = await manager.server_get_exe(server.server_id)
-    with nodetool.no_autocompaction_context(manager.cql, table_name):
+    async with nodetool.no_autocompaction_context(manager.cql, table_name):
         scylla_metadata = await get_sstable_metadata(manager, server, keyspace, column_family)
         logger.debug("validate_sstables_encrypted(): scylla_metadata=%s", scylla_metadata)
 
@@ -408,7 +408,7 @@ async def test_per_table_master_key(manager: ManagerClient, tmpdir):
                 keyspace, column_family  = table_name.split(".")
                 await validate_sstables_encryption(manager, servers[0],
                                                    table_name, True)
-                with nodetool.no_autocompaction_context(manager.cql, table_name):
+                async with nodetool.no_autocompaction_context(manager.cql, table_name):
                     scylla_metadata = await get_sstable_metadata(manager, servers[0], 
                                                                  keyspace, column_family)
                     table_key_ids = [metadata.get("extension_attributes", {})["scylla_key_id"]
