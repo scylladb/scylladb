@@ -1587,6 +1587,123 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     writer.EndStream();
 }
 
+// An sstable_consumer that serializes the data component of a single sstable as
+// a JSON array into an already-positioned writer. The caller must write the
+// component key before calling consume_reader(), e.g.:
+//   writer.Key("data");
+//   data_component_consumer consumer(mf_writer);
+//   consume_reader(rd, consumer, sst, partitions, no_skips);
+class data_component_consumer : public sstable_consumer {
+    tools::mutation_fragment_stream_json_writer& _writer;
+public:
+    explicit data_component_consumer(tools::mutation_fragment_stream_json_writer& w) : _writer(w) {}
+
+    future<> consume_stream_start() override { return make_ready_future<>(); }
+    future<stop_iteration> consume_sstable_start(const sstables::sstable* const) override {
+        _writer.writer().StartArray();
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(partition_start&& ps) override {
+        _writer.start_partition(ps);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(static_row&& sr) override {
+        _writer.partition_element(sr);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(clustering_row&& cr) override {
+        _writer.partition_element(cr);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(range_tombstone_change&& rtc) override {
+        _writer.partition_element(rtc);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(partition_end&&) override {
+        _writer.end_partition();
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume_sstable_end() override {
+        _writer.writer().EndArray();
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<> consume_stream_end() override { return make_ready_future<>(); }
+};
+
+static const std::vector<std::string> all_dump_components = {
+    "data", "index", "compression-info", "summary", "statistics", "scylla-metadata"
+};
+
+void dump_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+
+    const bool all_components = vm.count("all-components");
+    std::set<std::string> components_to_dump;
+    if (!all_components) {
+        if (!vm.count("components")) {
+            throw std::invalid_argument("neither --components nor --all-components was specified, don't know which components to dump");
+        }
+        const auto& comps = vm["components"].as<std::vector<sstring>>();
+        for (const auto& c : comps) {
+            const auto cs = std::string(c);
+            if (std::ranges::find(all_dump_components, cs) == all_dump_components.end()) {
+                throw std::invalid_argument(fmt::format("unknown component: {}, valid components are: {}", c, fmt::join(all_dump_components, ", ")));
+            }
+            components_to_dump.insert(cs);
+        }
+    }
+
+    const auto should_dump = [&](const std::string& name) {
+        return all_components || components_to_dump.count(name);
+    };
+
+    const auto no_skips = false;
+    const auto partitions = partition_set(dht::decorated_key::less_comparator(schema));
+
+    // Use a single mutation_fragment_stream_json_writer so we share one json_writer
+    // instance for both the outer structure and the data component serialization.
+    tools::mutation_fragment_stream_json_writer mf_writer(*schema);
+    auto& writer = mf_writer.writer();
+
+    writer.StartStream();
+    for (auto& sst : sstables) {
+        writer.Key(fmt::to_string(sst->get_filename()));
+        writer.StartObject();
+
+        if (should_dump("data")) {
+            writer.Key("data");
+            data_component_consumer consumer(mf_writer);
+            consume_reader(sst->make_full_scan_reader(schema, permit), consumer, sst.get(), partitions, no_skips);
+        }
+        if (should_dump("index")) {
+            writer.Key("index");
+            write_index_component(schema, permit, sst, writer);
+        }
+        if (should_dump("compression-info")) {
+            writer.Key("compression-info");
+            write_compression_info_component(sst, writer);
+        }
+        if (should_dump("summary")) {
+            writer.Key("summary");
+            write_summary_component(schema, sst, writer);
+        }
+        if (should_dump("statistics")) {
+            writer.Key("statistics");
+            write_statistics_component(sst, writer);
+        }
+        if (should_dump("scylla-metadata")) {
+            writer.Key("scylla-metadata");
+            write_scylla_metadata_component(schema, sst, writer);
+        }
+
+        writer.EndObject();
+    }
+    writer.EndStream();
+}
+
 void validate_checksums_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
@@ -2717,7 +2834,30 @@ For more information, see: {}
             {
             }},
             dump_schema_operation},
-/* filter */
+/* dump */
+    {{"dump",
+            "Dump one or more components of sstable(s)",
+fmt::format(R"(
+Dump one or more components of the sstable(s) into a single JSON object per
+sstable. The output format is:
+
+    {{"sstables": {{"/path/to/Data.db": {{"component-name": <component>, ...}}, ...}}}}
+
+The components to dump must be specified via --components (a comma-separated
+list) or --all-components (to dump all supported components). If neither is
+provided, the command exits with an error.
+
+Supported component names: {}
+
+The "data" component uses the same format as dump-data.
+
+For more information, see: {}
+)", fmt::join(all_dump_components, ", "), doc_link("operating-scylla/admin-tools/scylla-sstable#dump")),
+            {
+                    typed_option<std::vector<sstring>>("components", "component(s) to dump, a comma-separated list of component names"),
+                    typed_option<>("all-components", "dump all supported components"),
+            }},
+            dump_operation},
     {{"filter",
             "Filter the sstable(s), including/excluding specified partitions",
 fmt::format(R"(

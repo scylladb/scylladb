@@ -560,6 +560,40 @@ The content is dumped in JSON, using the following schema:
         "dead_rows": Uint64          // dead rows (partition_size records only, 0 otherwise)
     }
 
+.. _scylla-sstable-dump-operation:
+
+dump
+^^^^
+
+Dumps one or more components of the sstable(s) into a single JSON object per
+sstable. Useful when you need to inspect multiple components together without
+running separate commands.
+
+The components to dump are selected via ``--components`` (a comma-separated
+list of component names) or ``--all-components`` (to dump all supported
+components). If neither is provided, the command exits with an error.
+
+Supported component names: ``data``, ``index``, ``compression-info``,
+``summary``, ``statistics``, ``scylla-metadata``.
+
+The content is dumped in JSON, using the following schema:
+
+.. code-block:: none
+    :class: hide-copy-button
+
+    $ROOT := { "$sstable_path": $SSTABLE, ... }
+
+    $SSTABLE := {
+        "data":             <same as dump-data $SSTABLE>,             // optional
+        "index":            <same as dump-index $SSTABLE>,            // optional
+        "compression-info": <same as dump-compression-info $SSTABLE>, // optional
+        "summary":          <same as dump-summary $SSTABLE>,          // optional
+        "statistics":       <same as dump-statistics $SSTABLE>,       // optional
+        "scylla-metadata":  <same as dump-scylla-metadata $SSTABLE>   // optional
+    }
+
+Only the requested components appear as keys in the ``$SSTABLE`` object.
+
 dump-schema
 ^^^^^^^^^^^
 
