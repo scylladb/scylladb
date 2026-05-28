@@ -1966,6 +1966,11 @@ struct ann_ordering_info {
     bool is_rescoring_enabled;
 };
 
+static bool has_full_partition_key_eq_restrictions(const restrictions::statement_restrictions& restrictions) {
+    return !restrictions.has_partition_key_unrestricted_components()
+            && restrictions.partition_key_restrictions_is_all_eq();
+}
+
 static std::optional<ann_ordering_info> get_ann_ordering_info(
         data_dictionary::database db,
         schema_ptr schema,
@@ -2002,9 +2007,19 @@ static std::optional<ann_ordering_info> get_ann_ordering_info(
     auto& sim = cf.get_index_manager();
 
     auto indexes = sim.list_indexes();
-    auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
+    auto is_matching_vector_index = [&prepared_ann_ordering](const auto& ind) {
         return secondary_index::vector_index::is_vector_index_on_column(ind.metadata(), prepared_ann_ordering.first->name_as_text());
+    };
+
+    // Prefer global index when both local and global vector indexes exist on the
+    // same column. A global ANN query without PK restriction must not pick a
+    // local index.
+    auto it = std::find_if(indexes.begin(), indexes.end(), [&is_matching_vector_index](const auto& ind) {
+        return is_matching_vector_index(ind) && !ind.metadata().local();
     });
+    if (it == indexes.end()) {
+        it = std::find_if(indexes.begin(), indexes.end(), is_matching_vector_index);
+    }
 
     if (it == indexes.end()) {
         throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
@@ -2074,6 +2089,12 @@ static select_statement::ordering_comparator_type get_similarity_ordering_compar
         ::shared_ptr<const restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs) {
+
+    if (index.metadata().local() && !has_full_partition_key_eq_restrictions(*restrictions)) {
+        throw exceptions::invalid_request_exception(
+                "Global ANN query is not supported when only a local vector index is available. "
+                "Add WHERE restrictions with EQ on all partition key columns.");
+    }
 
     auto prepared_filter = vector_search::prepare_filter(*restrictions, parameters->allow_filtering());
 

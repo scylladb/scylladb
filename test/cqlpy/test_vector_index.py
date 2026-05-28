@@ -535,6 +535,16 @@ def test_local_and_global_vector_indexes_on_same_column(cql, test_keyspace, scyl
         cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v) USING 'sai'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'sai'")
 
+
+# Validates fix for VECTOR-609: global ANN query should fail when only a local
+# vector index exists.
+def test_global_ann_query_rejected_with_only_local_vector_index(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p1 int, p2 int, v vector<float, 3>, PRIMARY KEY ((p1, p2))'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v) USING 'sai'")
+        with pytest.raises(InvalidRequest, match='Global ANN query is not supported when only a local vector index is available'):
+            cql.execute(f"SELECT * FROM {table} ORDER BY v ANN OF [0.1, 0.2, 0.3] LIMIT 1")
+
 # Even with both local and global indexes, creating a second index of the
 # same locality on the same column should still be rejected as duplicate.
 def test_duplicate_global_vector_index_rejected(cql, test_keyspace, skip_on_scylla_vnodes):
