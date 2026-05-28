@@ -41,7 +41,6 @@ class log_record_writer {
     using ostream = seastar::simple_memory_output_stream;
 
     log_record _record;
-    mutable std::optional<size_t> _header_size;
     mutable std::optional<size_t> _data_size;
 
     void compute_sizes() const;
@@ -51,12 +50,13 @@ public:
         : _record(std::move(record))
     {}
 
-    // Get serialized sizes (computed lazily)
+    static constexpr size_t serialized_header_size() {
+        return ondisk::serialized_log_record_header_size;
+    }
+
+    // log_record_header now has a fixed serialized size.
     size_t header_size() const {
-        if (!_header_size) {
-            compute_sizes();
-        }
-        return *_header_size;
+        return serialized_header_size();
     }
 
     size_t data_size() const {
