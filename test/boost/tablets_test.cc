@@ -6085,7 +6085,7 @@ SEASTAR_THREAD_TEST_CASE(test_intranode_balance_threshold) {
     }, cfg).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
+SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter_for_reads) {
     simple_schema ss;
 
     const auto dks = ss.make_pkeys(4);
@@ -6122,7 +6122,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
         }
     });
 
-    using result = tablet_range_splitter::range_split_result;
+    using result = tablet_range_splitter_for_reads::range_split_result;
     using bound = dht::partition_range::bound;
 
     std::vector<result> included_ranges;
@@ -6146,7 +6146,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
     auto check = [&] (const dht::partition_range_vector& ranges, std::vector<result> expected_result,
             std::source_location sl = std::source_location::current()) {
         testlog.info("check() @ {}:{} ranges={}", sl.file_name(), sl.line(), ranges);
-        locator::tablet_range_splitter range_splitter{ss.schema(), tmap, h1, ranges};
+        locator::tablet_range_splitter_for_reads range_splitter{ss.schema(), tmap, h1, ranges};
         auto it = expected_result.begin();
         while (auto range_opt = range_splitter()) {
             testlog.debug("result: shard={} range={}", range_opt->shard, range_opt->range);

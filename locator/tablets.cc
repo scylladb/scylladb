@@ -1236,26 +1236,24 @@ lw_shared_ptr<load_stats> load_stats::migrate_tablet_size(locator::host_id leavi
     return result;
 }
 
-tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges)
+tablet_range_splitter_for_reads::tablet_range_splitter_for_reads(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges)
     : _schema(std::move(schema))
     , _ranges(ranges)
     , _ranges_it(_ranges.begin())
 {
     // Filter all tablets and save only those that have a replica on the specified host.
     for (auto tid = std::optional(tablets.first_tablet()); tid; tid = tablets.next_tablet(*tid)) {
-        const auto& tablet_info = tablets.get_tablet_info(*tid);
-
-        auto replica_it = std::ranges::find_if(tablet_info.replicas, [&] (auto&& r) { return r.host == host; });
-        if (replica_it == tablet_info.replicas.end()) {
+        auto shard = get_shard_for_reads(tablets, *tid, host);
+        if (!shard) {
             continue;
         }
 
-        _tablet_ranges.emplace_back(range_split_result{replica_it->shard, dht::to_partition_range(tablets.get_token_range(*tid))});
+        _tablet_ranges.emplace_back(range_split_result{*shard, dht::to_partition_range(tablets.get_token_range(*tid))});
     }
     _tablet_ranges_it = _tablet_ranges.begin();
 }
 
-std::optional<tablet_range_splitter::range_split_result> tablet_range_splitter::operator()() {
+std::optional<tablet_range_splitter_for_reads::range_split_result> tablet_range_splitter_for_reads::operator()() {
     if (_ranges_it == _ranges.end() || _tablet_ranges_it == _tablet_ranges.end()) {
         return {};
     }

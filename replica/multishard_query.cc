@@ -818,7 +818,7 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
     auto result_builder = result_builder_factory();
 
     std::vector<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> results;
-    locator::tablet_range_splitter range_splitter{s, tablets, this_node_id, ranges};
+    locator::tablet_range_splitter_for_reads range_splitter{s, tablets, this_node_id, ranges};
     while (auto range_opt = range_splitter()) {
         auto& r = *results.emplace_back(co_await db.invoke_on(range_opt->shard,
                     [&result_builder, gs = global_schema_ptr(s), &query_cmd, &range_opt, gts = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) {

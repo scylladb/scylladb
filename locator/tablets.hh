@@ -1013,12 +1013,17 @@ struct tablet_routing_info {
 /// Return the resulting intersections, in order.
 /// The ranges are generated lazily (one at a time).
 ///
+/// The shard reported for each range is the one that serves reads for the
+/// owning tablet (see get_shard_for_reads()).
+//  This is the view the multishard reader expects: reads
+/// must be routed to the read shard.
+///
 /// Note: the caller is expected to pin tablets, by keeping an
 /// effective-replication-map alive.
-class tablet_range_splitter {
+class tablet_range_splitter_for_reads {
 public:
     struct range_split_result {
-        shard_id shard; // shard where the tablet owning this range lives
+        shard_id shard; // shard that serves reads for the tablet owning this range
         dht::partition_range range;
     };
 
@@ -1030,7 +1035,7 @@ private:
     std::vector<range_split_result>::iterator _tablet_ranges_it;
 
 public:
-    tablet_range_splitter(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges);
+    tablet_range_splitter_for_reads(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges);
     /// Returns nullopt when there are no more ranges.
     std::optional<range_split_result> operator()();
 };
