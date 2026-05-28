@@ -7509,4 +7509,34 @@ future<> storage_proxy::cancel_all_write_response_handlers() {
     }
     co_await std::move(f);
 }
+
+future<> storage_proxy::cancel_nonlocal_write_response_handlers() {
+    // Cancel handlers that have pending remote targets. After
+    // stop_transport(), MUTATION_DONE responses from remote nodes can
+    // no longer arrive, so these handlers are stuck. Handlers whose
+    // only pending targets are local can still complete via
+    // apply_locally and are left alone.
+    gate g;
+    // Collect IDs first to avoid iterator invalidation during cancellation.
+    // No yield here — the loop body is trivial (integer comparison + push_back).
+    std::vector<response_id_type> to_cancel;
+    to_cancel.reserve(_response_handlers.size());
+    for (auto& [id, handler] : _response_handlers) {
+        auto dominated_by_local = std::ranges::all_of(handler->get_targets(), [&] (locator::host_id target) {
+            return is_me(*handler->_effective_replication_map_ptr, target);
+        });
+        if (!dominated_by_local) {
+            to_cancel.push_back(id);
+        }
+    }
+    for (auto id : to_cancel) {
+        auto it = _response_handlers.find(id);
+        if (it != _response_handlers.end()) {
+            it->second->attach_to(g);
+            it->second->timeout_cb();
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_await g.close();
+}
 }
