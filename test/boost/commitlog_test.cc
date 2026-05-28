@@ -2411,4 +2411,51 @@ SEASTAR_TEST_CASE(test_commitlog_replay_segment_order) {
     });
 }
 
+SEASTAR_TEST_CASE(test_group_clears_independently) {
+    constexpr size_t file_size_in_mb = 1;
+
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = file_size_in_mb;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid1 = make_table_id();
+        auto uuid2 = make_table_id();
+
+        auto g1 = log.create_group();
+        auto g2 = log.create_group();
+        rp_set set1, set2;
+
+        size_t size = 64;
+
+        // add allocation to each group
+        for (auto& [uuid, g, set] : { std::tie(uuid1, g1, set1), std::tie(uuid2, g2, set2) }) {
+            auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                dst.fill('1', size);
+            }, g);
+            set.put(std::move(h));
+        }
+
+        // ensure both groups have exactly one dirty segment
+        for (auto g : { g1, g2 }) {
+            co_await log.force_new_active_segment(g);
+            BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(g), 1);
+        }
+
+        // ensure each uuid has a min gc time
+        for (auto uuid : { uuid1, uuid2 }) {
+            BOOST_REQUIRE_LT(log.min_gc_time(uuid), gc_clock::time_point::max());
+        }
+
+        // now clean out one group
+        log.discard_completed_segments(uuid1, set1, g1);
+
+        // g1 should now be clean and not hold any gc clocks
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(g1), 0);
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(uuid1), gc_clock::time_point::max());
+
+        co_await log.remove_group(g1);
+
+        BOOST_CHECK_THROW(co_await log.remove_group(g2), std::logic_error);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
