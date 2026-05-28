@@ -15,6 +15,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "mutation/mutation.hh"
 
 namespace cql3 {
 

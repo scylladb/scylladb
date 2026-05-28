@@ -53,6 +53,7 @@
 #include "db/view/node_view_update_backlog.hh"
 #include "db/view/view_update_generator.hh"
 #include "replica/distributed_loader.hh"
+#include "replica/tablets.hh"
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"

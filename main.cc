@@ -29,6 +29,7 @@
 #include "utils/only_on_shard0.hh"
 #include "supervisor.hh"
 #include "replica/database.hh"
+#include "replica/tablets.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sharded.hh>

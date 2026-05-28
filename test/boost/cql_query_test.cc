@@ -55,6 +55,8 @@
 #include "replica/distributed_loader.hh"
 #include "compaction/compaction_manager.hh"
 #include "gms/feature_service.hh"
+#include "service/query_state.hh"
+#include "service_permit.hh"
 
 
 BOOST_AUTO_TEST_SUITE(cql_query_test)
@@ -6042,6 +6044,91 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
             });
         }).get();
     }, tablet_cql_test_config());
+}
+
+// Regression test for scylladb/scylladb#29874:
+// After an internal CAS shard bounce, TABLETS_ROUTING_V1 payload must still
+// be returned when the client originally routed to the wrong shard.
+//
+// The test simulates what the transport layer does during a CAS shard bounce:
+// 1. The request arrives on shard X (the "foreign" shard, not owning the tablet).
+// 2. The LWT statement detects the wrong shard and returns a bounce to shard Y
+//    (the tablet shard).
+// 3. The transport layer transfers client_state from X to Y via
+//    client_state_for_another_shard, preserving _original_shard = X.
+// 4. The statement re-executes on shard Y. check_locality() compares against
+//    _original_shard (X, wrong) rather than this_shard_id() (Y, correct),
+//    so it returns tablet routing info.
+//
+// We arrange the test so that the test thread's shard is the "foreign" shard
+// (not the tablet shard). This way local_client_state() belongs to the current
+// shard, and move_to_other_shard() is called on the owning shard.
+SEASTAR_TEST_CASE(test_tablet_routing_info_after_cas_shard_bounce) {
+    BOOST_REQUIRE_GT(smp::count, 1u);
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace ks_tablet with replication = "
+            "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+            "and tablets = {'initial': 1};").get();
+
+        // Create dummy tables until the next table's single tablet lands on
+        // a shard other than ours. Each dummy table occupies one shard in the
+        // load balancer, so after at most smp::count dummies shard 0 (or
+        // whichever shard we're on) is no longer the least loaded.
+        schema_ptr schema;
+        unsigned tablet_shard;
+        for (unsigned i = 0; ; ++i) {
+            BOOST_REQUIRE_MESSAGE(i <= smp::count, "Could not place tablet on a foreign shard");
+            auto tbl = format("tbl_{}", i);
+            e.execute_cql(format("create table ks_tablet.{} (pk int PRIMARY KEY, v int);", tbl)).get();
+            schema = e.local_db().find_schema("ks_tablet", tbl);
+            auto pk = partition_key::from_singular(*schema, int32_t(1));
+            tablet_shard = schema->table().shard_for_reads(dht::get_token(*schema, pk.view()));
+            if (tablet_shard != this_shard_id()) {
+                break;
+            }
+        }
+
+        e.execute_cql(format("insert into ks_tablet.{} (pk, v) VALUES (1, 1);", schema->cf_name())).get();
+        const auto lwt_id = e.prepare(format("update ks_tablet.{} set v = ? where pk = ? if v = ?;", schema->cf_name())).get();
+
+        // Execute LWT on this shard (the foreign shard). Expect a bounce.
+        {
+            auto raw_val = [] (int32_t v) { return cql3::raw_value::make_value(int32_type->decompose(v)); };
+            const auto result = e.execute_prepared(lwt_id, {raw_val(2), raw_val(1), raw_val(1)}).get();
+            BOOST_REQUIRE(result->move_to_shard());
+            BOOST_REQUIRE_EQUAL(*result->move_to_shard(), tablet_shard);
+        }
+
+        // Simulate the transport-layer bounce: transfer client_state from
+        // this shard (foreign, owning the client_state) to the tablet shard.
+        // client_state_for_another_shard preserves _original_shard = this shard.
+        const auto gcs = e.local_client_state().move_to_other_shard();
+
+        smp::submit_to(tablet_shard, [&] {
+            return seastar::async([&] {
+                auto cs = gcs.get();
+                auto qs = ::make_shared<service::query_state>(cs, empty_service_permit());
+                const auto prepared = e.local_qp().get_prepared(lwt_id);
+                BOOST_REQUIRE(prepared);
+
+                const auto options = e.local_qp().make_internal_options(prepared, 
+                    {data_value(2), data_value(1), data_value(1)},
+                    db::consistency_level::ONE);
+
+                auto res = e.local_qp().execute_prepared_without_checking_exception_message(
+                    *qs, prepared->statement, options,
+                    std::move(prepared), lwt_id, false).get();
+                res = cql_transport::messages::propagate_exception_as_future(
+                    std::move(res)).get();
+
+                BOOST_REQUIRE(has_tablet_routing(res));
+            });
+        }).get();
+    }, [] {
+        auto cfg = tablet_cql_test_config();
+        cfg.need_remote_proxy = true;
+        return cfg;
+    }());
 }
 
 // check if create statements emit schema change event properly
