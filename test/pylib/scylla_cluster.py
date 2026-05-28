@@ -1167,7 +1167,9 @@ class ScyllaCluster:
             await handle_join_failure()
             raise
         finally:
-            del self.starting[server.server_id]
+            # server_stop() may have already removed the starting server
+            # if it interrupted this add_server() operation.
+            self.starting.pop(server.server_id, None)
 
         if expected_error:
             await handle_join_failure()
@@ -1312,7 +1314,9 @@ class ScyllaCluster:
             self.running.pop(server_id)
             self.stopped[server_id] = server
         else:
-            self.starting.pop(server_id)
+            # Starting servers are removed from self.starting by add_server()
+            # in its cleanup path. This is a fallback if server_stop() wins the race.
+            self.starting.pop(server_id, None)
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
         """Mark server as removed."""
