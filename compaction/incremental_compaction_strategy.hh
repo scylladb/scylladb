@@ -15,8 +15,8 @@ class incremental_backlog_tracker;
 class incremental_compaction_strategy_options {
 public:
     static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = 50L * 1024L * 1024L;
-    static constexpr double DEFAULT_BUCKET_LOW = 0.5;
-    static constexpr double DEFAULT_BUCKET_HIGH = 1.5;
+    static constexpr double DEFAULT_BUCKET_LOW = 0.7071;
+    static constexpr double DEFAULT_BUCKET_HIGH = 1.4142;
 
     static constexpr auto MIN_SSTABLE_SIZE_KEY = "min_sstable_size";
     static constexpr auto BUCKET_LOW_KEY = "bucket_low";
