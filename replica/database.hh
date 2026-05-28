@@ -415,9 +415,31 @@ struct table_stats {
     mutation_application_stats memtable_app_stats;
     utils::timed_rate_moving_average_summary_and_histogram reads{256};
     utils::timed_rate_moving_average_summary_and_histogram writes{256};
-    utils::timed_rate_moving_average_summary_and_histogram cas_prepare{256};
-    utils::timed_rate_moving_average_summary_and_histogram cas_accept{256};
-    utils::timed_rate_moving_average_summary_and_histogram cas_learn{256};
+    // CAS histograms are lazily allocated since most tables never use CAS.
+    // Each instance is ~1.5KB + ~2KB heap; deferring allocation saves
+    // ~10.5KB per non-CAS table per shard.
+    std::unique_ptr<utils::timed_rate_moving_average_summary_and_histogram> cas_prepare;
+    std::unique_ptr<utils::timed_rate_moving_average_summary_and_histogram> cas_accept;
+    std::unique_ptr<utils::timed_rate_moving_average_summary_and_histogram> cas_learn;
+
+    utils::timed_rate_moving_average_summary_and_histogram& get_cas_prepare() {
+        if (!cas_prepare) {
+            cas_prepare = std::make_unique<utils::timed_rate_moving_average_summary_and_histogram>(256);
+        }
+        return *cas_prepare;
+    }
+    utils::timed_rate_moving_average_summary_and_histogram& get_cas_accept() {
+        if (!cas_accept) {
+            cas_accept = std::make_unique<utils::timed_rate_moving_average_summary_and_histogram>(256);
+        }
+        return *cas_accept;
+    }
+    utils::timed_rate_moving_average_summary_and_histogram& get_cas_learn() {
+        if (!cas_learn) {
+            cas_learn = std::make_unique<utils::timed_rate_moving_average_summary_and_histogram>(256);
+        }
+        return *cas_learn;
+    }
     utils::estimated_histogram estimated_sstable_per_read{35};
     utils::timed_rate_moving_average_and_histogram tombstone_scanned;
     utils::timed_rate_moving_average_and_histogram live_scanned;
@@ -495,7 +517,16 @@ private:
     memtable_table_shared_data _memtable_shared_data;
     mutable table_stats _stats;
     mutable db::view::stats _view_stats;
-    mutable row_locker::stats _row_locker_stats;
+    // Row locker stats are lazily allocated since only LWT/CAS operations
+    // use row locking. Saves 2176B per non-CAS table per shard.
+    mutable std::unique_ptr<row_locker::stats> _row_locker_stats;
+
+    row_locker::stats& get_row_locker_stats() const {
+        if (!_row_locker_stats) [[unlikely]] {
+            _row_locker_stats = std::make_unique<row_locker::stats>();
+        }
+        return *_row_locker_stats;
+    }
 
     uint64_t _failed_counter_applies_to_memtable = 0;
 

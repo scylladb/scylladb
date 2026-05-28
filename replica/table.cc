@@ -2145,18 +2145,22 @@ void table::set_metrics() {
         });
 
         // Metrics related to row locking
-        auto add_row_lock_metrics = [this, ks, cf] (row_locker::single_lock_stats& stats, sstring stat_name) {
+        auto add_row_lock_metrics = [this, ks, cf] (row_locker::single_lock_stats row_locker::stats::*member, sstring stat_name) {
             _metrics.add_group("column_family", {
-                ms::make_total_operations(format("row_lock_{}_acquisitions", stat_name), stats.lock_acquisitions, ms::description(format("Row lock acquisitions for {} lock", stat_name)))(cf)(ks).set_skip_when_empty(),
-                ms::make_queue_length(format("row_lock_{}_operations_currently_waiting_for_lock", stat_name), stats.operations_currently_waiting_for_lock, ms::description(format("Operations currently waiting for {} lock", stat_name)))(cf)(ks),
+                ms::make_total_operations(format("row_lock_{}_acquisitions", stat_name),
+                        [this, member] {return _row_locker_stats ? (_row_locker_stats.get()->*member).lock_acquisitions : uint64_t(0);},
+                        ms::description(format("Row lock acquisitions for {} lock", stat_name)))(cf)(ks).set_skip_when_empty(),
+                ms::make_queue_length(format("row_lock_{}_operations_currently_waiting_for_lock", stat_name),
+                        [this, member] {return _row_locker_stats ? (_row_locker_stats.get()->*member).operations_currently_waiting_for_lock : uint64_t(0);},
+                        ms::description(format("Operations currently waiting for {} lock", stat_name)))(cf)(ks),
                 ms::make_histogram(format("row_lock_{}_waiting_time", stat_name), ms::description(format("Histogram representing time that operations spent on waiting for {} lock", stat_name)),
-                        [&stats] {return to_metrics_histogram(stats.estimated_waiting_for_lock);})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
+                        [this, member] {return _row_locker_stats ? to_metrics_histogram((_row_locker_stats.get()->*member).estimated_waiting_for_lock) : seastar::metrics::histogram{};})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
             });
         };
-        add_row_lock_metrics(_row_locker_stats.exclusive_row, "exclusive_row");
-        add_row_lock_metrics(_row_locker_stats.shared_row, "shared_row");
-        add_row_lock_metrics(_row_locker_stats.exclusive_partition, "exclusive_partition");
-        add_row_lock_metrics(_row_locker_stats.shared_partition, "shared_partition");
+        add_row_lock_metrics(&row_locker::stats::exclusive_row, "exclusive_row");
+        add_row_lock_metrics(&row_locker::stats::shared_row, "shared_row");
+        add_row_lock_metrics(&row_locker::stats::exclusive_partition, "exclusive_partition");
+        add_row_lock_metrics(&row_locker::stats::shared_partition, "shared_partition");
 
         // View metrics are created only for base tables, so there's no point in adding them to views (which cannot act as base tables for other views)
         if (!_schema->is_view()) {
@@ -2173,15 +2177,15 @@ void table::set_metrics() {
             _metrics.add_group("column_family", {
                     ms::make_summary("read_latency_summary", ms::description("Read latency summary"), [this] {return to_metrics_summary(_stats.reads.summary());})(cf)(ks).set_skip_when_empty(),
                     ms::make_summary("write_latency_summary", ms::description("Write latency summary"), [this] {return to_metrics_summary(_stats.writes.summary());})(cf)(ks).set_skip_when_empty(),
-                    ms::make_summary("cas_prepare_latency_summary", ms::description("CAS prepare round latency summary"), [this] {return to_metrics_summary(_stats.cas_prepare.summary());})(cf)(ks).set_skip_when_empty(),
-                    ms::make_summary("cas_propose_latency_summary", ms::description("CAS accept round latency summary"), [this] {return to_metrics_summary(_stats.cas_accept.summary());})(cf)(ks).set_skip_when_empty(),
-                    ms::make_summary("cas_commit_latency_summary", ms::description("CAS learn round latency summary"), [this] {return to_metrics_summary(_stats.cas_learn.summary());})(cf)(ks).set_skip_when_empty(),
+                    ms::make_summary("cas_prepare_latency_summary", ms::description("CAS prepare round latency summary"), [this] {return _stats.cas_prepare ? to_metrics_summary(_stats.cas_prepare->summary()) : seastar::metrics::histogram{};})(cf)(ks).set_skip_when_empty(),
+                    ms::make_summary("cas_propose_latency_summary", ms::description("CAS accept round latency summary"), [this] {return _stats.cas_accept ? to_metrics_summary(_stats.cas_accept->summary()) : seastar::metrics::histogram{};})(cf)(ks).set_skip_when_empty(),
+                    ms::make_summary("cas_commit_latency_summary", ms::description("CAS learn round latency summary"), [this] {return _stats.cas_learn ? to_metrics_summary(_stats.cas_learn->summary()) : seastar::metrics::histogram{};})(cf)(ks).set_skip_when_empty(),
 
                     ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(_stats.reads.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                     ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(_stats.writes.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-                    ms::make_histogram("cas_prepare_latency", ms::description("CAS prepare round latency histogram"), [this] {return to_metrics_histogram(_stats.cas_prepare.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-                    ms::make_histogram("cas_propose_latency", ms::description("CAS accept round latency histogram"), [this] {return to_metrics_histogram(_stats.cas_accept.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-                    ms::make_histogram("cas_commit_latency", ms::description("CAS learn round latency histogram"), [this] {return to_metrics_histogram(_stats.cas_learn.histogram());})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    ms::make_histogram("cas_prepare_latency", ms::description("CAS prepare round latency histogram"), [this] {return _stats.cas_prepare ? to_metrics_histogram(_stats.cas_prepare->histogram()) : seastar::metrics::histogram{};})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    ms::make_histogram("cas_propose_latency", ms::description("CAS accept round latency histogram"), [this] {return _stats.cas_accept ? to_metrics_histogram(_stats.cas_accept->histogram()) : seastar::metrics::histogram{};})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    ms::make_histogram("cas_commit_latency", ms::description("CAS learn round latency histogram"), [this] {return _stats.cas_learn ? to_metrics_histogram(_stats.cas_learn->histogram()) : seastar::metrics::histogram{};})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                     ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
             });
         }
@@ -4876,14 +4880,14 @@ table::local_base_lock(
     _row_locker.upgrade(s);
     if (rows.size() == 1 && rows[0].is_singular() && rows[0].start() && !rows[0].start()->value().is_empty(*s)) {
         // A single clustering row is involved.
-        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, _row_locker_stats);
+        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, get_row_locker_stats());
     } else {
         // More than a single clustering row is involved. Most commonly it's
         // the entire partition, so let's lock the entire partition. We could
         // lock less than the entire partition in more elaborate cases where
         // just a few individual rows are involved, or row ranges, but we
         // don't think this will make a practical difference.
-        return _row_locker.lock_pk(pk, true, timeout, _row_locker_stats);
+        return _row_locker.lock_pk(pk, true, timeout, get_row_locker_stats());
     }
 }
 
