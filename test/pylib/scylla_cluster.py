@@ -161,7 +161,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
 
         'alternator_allow_system_table_write': True,
         'alternator_ttl_period_in_seconds': 0.5,
-        'sstable_format': 'ms',
+        'sstable_format': 'mt',
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line
