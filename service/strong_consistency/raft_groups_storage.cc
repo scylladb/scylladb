@@ -324,6 +324,35 @@ future<> raft_groups_storage::update_snapshot_and_truncate_log_tail(const raft::
     ).discard_result();
 }
 
+future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap) {
+    // Guard against repeated replays (e.g., crash after writing but before raft
+    // groups start): only advance the snapshot index, never go backwards.
+    static const auto load_snp_idx_cql = format("SELECT idx FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
+    auto rs = co_await qp.execute_internal(load_snp_idx_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (!rs->empty() && rs->one().has("idx")) {
+        auto existing_idx = raft::index_t(static_cast<uint64_t>(rs->one().get_as<int64_t>("idx")));
+        if (existing_idx >= snap.idx) {
+            co_return;
+        }
+    }
+
+    // Update both tables atomically so a crash between writes cannot leave
+    // an inconsistent snapshot_id reference.
+    static const auto store_snapshot_batch_cql = format(
+        "BEGIN UNLOGGED BATCH"
+        "   INSERT INTO system.{} (shard, group_id, snapshot_id, idx, term) VALUES (?, ?, ?, ?, ?);"
+        "   INSERT INTO system.{} (shard, group_id, snapshot_id) VALUES (?, ?, ?);"
+        "APPLY BATCH",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS, db::system_keyspace::RAFT_GROUPS);
+    co_await qp.execute_internal(
+        store_snapshot_batch_cql,
+        {int16_t(shard), gid.id, snap.id.id, int64_t(snap.idx.value()), int64_t(snap.term.value()),
+         int16_t(shard), gid.id, snap.id.id},
+        cql3::query_processor::cache_internal::yes
+    );
+}
+
 future<> raft_groups_storage::execute_with_linearization_point(std::function<future<>()> f) {
     promise<> task_promise;
     auto pending_fut = std::exchange(_pending_op_fut, task_promise.get_future());

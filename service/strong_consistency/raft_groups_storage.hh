@@ -79,6 +79,11 @@ public:
     // Static version that doesn't require constructing a full raft_groups_storage object.
     // Useful during commitlog replay when only read access to metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Store snapshot idx and term without updating the configuration.
+    // Used to advance the persisted snapshot index so that raft does not
+    // re-apply already applied entries on restart. Only writes if the new
+    // index is higher than the existing one (safe to call on repeated replays).
+    static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
 
 private:
 
