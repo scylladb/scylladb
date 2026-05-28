@@ -5376,6 +5376,125 @@ SEASTAR_THREAD_TEST_CASE(test_drain_node_without_capacity) {
   }).get();
 }
 
+// Verifies that the intranode shard balancer respects the size-based balance threshold
+// and does not issue migrations when the load difference between shards is within the threshold.
+// Without the threshold check, the balancer would keep issuing migrations of small tablets
+// from the slightly-heavier shard until load difference reaches exactly 0, or it can't find
+// a tablet to migrate because all migrations would go against convergence.
+SEASTAR_THREAD_TEST_CASE(test_intranode_balance_threshold) {
+    auto cfg = tablet_cql_test_config();
+    // Set the balance threshold explicitly
+    cfg.db_config->size_based_balance_threshold_percentage.set(1.0);
+    do_with_cql_env_thread([] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+
+        // Single node with 2 shards, RF=1. This isolates intranode balancing.
+        const unsigned shard_count = 2;
+        auto host1 = topo.add_node(node_state::normal, shard_count);
+
+        // Set up capacity for size-based balancing mode.
+        // Each shard has 100GB capacity, so the node has 200GB total.
+        const uint64_t shard_capacity = 100UL * 1024UL * 1024UL * 1024UL;
+        const uint64_t node_capacity = shard_capacity * shard_count;
+        topo.get_shared_load_stats().set_capacity(host1, node_capacity);
+
+        // Create a table with 512 tablets.
+        // Place 257 on shard 0 and 255 on shard 1, all with the same size.
+        // This gives:
+        //   Relative load diff = (257 - 255) / 257 = 0.78% < 1% threshold
+        // But each individual tablet passes the per-tablet convergence check:
+        //   257*S > 255*S + S  =>  257 > 256  =>  true
+        // So without the threshold fix, the balancer issues a migration.
+        // With the fix, it recognizes the node is balanced and stops.
+        const size_t tablet_count = 512;
+        size_t tablets_on_shard0 = 257;
+        size_t tablets_on_shard1 = 255;
+        const uint64_t tablet_size = 100UL * 1024UL * 1024UL; // 100MB each
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, tablet_count);
+        auto table1 = add_table(e, ks_name).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto& load_stats = topo.get_shared_load_stats();
+
+        auto mutate_tmap = [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(tablet_count);
+            auto tid = tmap.first_tablet();
+            for (size_t i = 0; i < tablets_on_shard0; ++i) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set { tablet_replica {host1, 0} }
+                });
+                if (i < tablets_on_shard0 - 1) {
+                    tid = *tmap.next_tablet(tid);
+                }
+            }
+            for (size_t i = 0; i < tablets_on_shard1; ++i) {
+                tid = *tmap.next_tablet(tid);
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set { tablet_replica {host1, 1} }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        };
+
+        mutate_tablets(e, mutate_tmap);
+
+        // Set uniform per-tablet sizes
+        auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+            locator::range_based_tablet_id rb_tid {table1, tmap.get_token_range(tid)};
+            load_stats.set_tablet_size(host1, rb_tid, tablet_size);
+            return make_ready_future<>();
+        }).get();
+        load_stats.set_size(table1, tablet_count * tablet_size);
+
+        // Call the balancer once and verify NO intranode migrations in the plan.
+        auto& talloc = e.get_tablet_allocator().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        auto& sys_ks = e.get_system_keyspace().local();
+
+        {
+            auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks, load_stats.get()).get();
+            for (auto&& mig : plan.migrations()) {
+                BOOST_REQUIRE_MESSAGE(mig.kind != tablet_transition_kind::intranode_migration,
+                    "Unexpected intranode migration when load difference is within threshold");
+            }
+        }
+
+        // Now create a clearly unbalanced scenario: 307 vs 205 tablets.
+        // Relative diff = (307 - 205) / 307 = 33% >> 1% threshold
+        tablets_on_shard0 = 307;
+        tablets_on_shard1 = 205;
+
+        mutate_tablets(e, mutate_tmap);
+
+        // Update tablet sizes for new layout
+        auto& tmap2 = stm.get()->tablets().get_tablet_map(table1);
+        tmap2.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+            locator::range_based_tablet_id rb_tid {table1, tmap2.get_token_range(tid)};
+            load_stats.set_tablet_size(host1, rb_tid, tablet_size);
+            return make_ready_future<>();
+        }).get();
+
+        // Call balancer once - this time intranode migrations SHOULD be emitted.
+        {
+            auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks, load_stats.get()).get();
+            bool saw_intranode_migration = false;
+            for (auto&& mig : plan.migrations()) {
+                if (mig.kind == tablet_transition_kind::intranode_migration) {
+                    saw_intranode_migration = true;
+                    break;
+                }
+            }
+            BOOST_REQUIRE_MESSAGE(saw_intranode_migration,
+                "Expected intranode migration when load difference exceeds threshold");
+        }
+    }, cfg).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
     simple_schema ss;
 

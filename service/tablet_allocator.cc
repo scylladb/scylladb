@@ -2621,7 +2621,16 @@ public:
             // Convergence check
 
             // When in shuffle mode, exit condition is guaranteed by running out of candidates or by load limit.
-            if (!shuffle && src == dst) {
+            auto node_is_balanced = [&] {
+                auto min_load = node_load.shard_load(dst);
+                auto max_load = node_load.shard_load(src);
+                // We can't compute accurate load without disk capacity, so stop balancing this node
+                if (!min_load || !max_load) {
+                    return true;
+                }
+                return is_balanced(*min_load, *max_load);
+            };
+            if (!shuffle && (src == dst || node_is_balanced())) {
                 lblogger.debug("Node {} is balanced", host);
                 break;
             }
