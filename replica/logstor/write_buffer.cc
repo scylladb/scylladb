@@ -17,8 +17,8 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/as_future.hh>
 #include "serializer_impl.hh"
-#include "idl/logstor.dist.hh"
-#include "idl/logstor.dist.impl.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include "utils/crc.hh"
@@ -26,10 +26,6 @@
 namespace replica::logstor {
 
 void log_record_writer::compute_sizes() const {
-    seastar::measuring_output_stream ms_header;
-    ser::serialize(ms_header, _record.header);
-    _header_size = ms_header.size();
-
     seastar::measuring_output_stream ms_data;
     ser::serialize(ms_data, _record.mut);
     _data_size = ms_data.size();
@@ -91,7 +87,6 @@ raw_write_buffer::append_result raw_write_buffer::append(const log_record_writer
 
     size_t record_header_offset = offset_in_buffer();
     auto rh = ondisk::record_header {
-        .header_size = static_cast<uint32_t>(writer.header_size()),
         .data_size = static_cast<uint32_t>(writer.data_size())
     };
     ser::serialize(_stream, rh);
@@ -295,7 +290,7 @@ bool ondisk::validate_header(const ondisk::buffer_header& bh) {
 }
 
 bool ondisk::validate_record_header(const ondisk::record_header& rh) {
-    return rh.header_size != 0;
+    return true;
 }
 
 // buffered_writer
