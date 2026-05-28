@@ -949,6 +949,32 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
     return sstring(ds.value.begin(), ds.value.end());
 }
 
+void write_compression_info_component(const sstables::shared_sstable& sst, json_writer& writer) {
+    const auto& compression = sst->get_compression();
+
+    writer.StartObject();
+    writer.Key("name");
+    writer.String(disk_string_to_string(compression.name));
+    writer.Key("options");
+    writer.StartObject();
+    for (const auto& opt : compression.options.elements) {
+        writer.Key(disk_string_to_string(opt.key));
+        writer.String(disk_string_to_string(opt.value));
+    }
+    writer.EndObject();
+    writer.Key("chunk_len");
+    writer.Uint(compression.uncompressed_chunk_length());
+    writer.Key("data_len");
+    writer.Uint64(compression.data_len);
+    writer.Key("offsets");
+    writer.StartArray();
+    for (const auto& offset : compression.offsets) {
+        writer.Uint64(offset);
+    }
+    writer.EndArray();
+    writer.EndObject();
+}
+
 void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
@@ -957,32 +983,9 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
 
     json_writer writer;
     writer.StartStream();
-
     for (auto& sst : sstables) {
-        const auto& compression = sst->get_compression();
-
         writer.Key(fmt::to_string(sst->get_filename()));
-        writer.StartObject();
-        writer.Key("name");
-        writer.String(disk_string_to_string(compression.name));
-        writer.Key("options");
-        writer.StartObject();
-        for (const auto& opt : compression.options.elements) {
-            writer.Key(disk_string_to_string(opt.key));
-            writer.String(disk_string_to_string(opt.value));
-        }
-        writer.EndObject();
-        writer.Key("chunk_len");
-        writer.Uint(compression.uncompressed_chunk_length());
-        writer.Key("data_len");
-        writer.Uint64(compression.data_len);
-        writer.Key("offsets");
-        writer.StartArray();
-        for (const auto& offset : compression.offsets) {
-            writer.Uint64(offset);
-        }
-        writer.EndArray();
-        writer.EndObject();
+        write_compression_info_component(sst, writer);
     }
     writer.EndStream();
 }
