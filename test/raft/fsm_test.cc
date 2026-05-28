@@ -2398,3 +2398,25 @@ BOOST_AUTO_TEST_CASE(test_state_change_notifications) {
     BOOST_CHECK(output.state_changed);
     BOOST_CHECK(fsm.is_leader());
 }
+
+// Test that ping_leader() sends ping messages immediately (not waiting for
+// the next tick).
+BOOST_AUTO_TEST_CASE(test_ping_leader_sends_immediately) {
+    server_id A_id = id(), B_id = id();
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    auto A = create_follower(A_id, log);
+
+    // A is a follower with no known leader. Calling ping_leader() should
+    // immediately produce append_reply messages without waiting for a tick.
+    A.ping_leader();
+    auto output = A.get_output();
+    BOOST_CHECK_GE(output.messages.size(), 1);
+    // The message should be an append_reply (rejected) sent to B
+    auto& msg = output.messages[0];
+    BOOST_CHECK_EQUAL(msg.first, B_id);
+    BOOST_CHECK(std::holds_alternative<raft::append_reply>(msg.second));
+    auto& reply = std::get<raft::append_reply>(msg.second);
+    BOOST_CHECK(std::holds_alternative<raft::append_reply::rejected>(reply.result));
+}

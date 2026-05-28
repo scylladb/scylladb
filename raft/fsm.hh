@@ -266,6 +266,9 @@ private:
     void become_leader();
 
     void become_candidate(bool is_prevote, bool is_leadership_transfer = false);
+    // Send ping messages (append_reply rejected) to all peers to solicit
+    // a response from the leader. Called from ping_leader() and tick().
+    void send_ping_messages();
 
     // Controls whether the follower has been responsive recently,
     // so it makes sense to send more data to it.
@@ -409,9 +412,12 @@ public:
     }
 
     // Ask to search for a leader if one is not known.
+    // Immediately sends ping messages to all peers and keeps pinging
+    // on subsequent ticks until a leader is found.
     void ping_leader() {
         SCYLLA_ASSERT(!current_leader());
         _ping_leader = true;
+        send_ping_messages();
     }
 
     // Call this function to wait for the total size in bytes of log entries to

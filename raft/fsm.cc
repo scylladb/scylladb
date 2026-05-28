@@ -308,6 +308,25 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     }
 }
 
+void fsm::send_ping_messages() {
+    // We are a follower but a leader is not known. It will not be known
+    // until a communication from a leader which (for an idle leader) may
+    // not happen any time soon since we use external failure detector and
+    // our leader does not send periodic empty append messages. By sending
+    // a special append message reject we solicit a reply from a leader
+    // (or trigger a vote request re-send from a candidate).
+    auto& cfg = get_configuration();
+    // If conf is joint it means a leader will send us a non joint one eventually
+    if (!cfg.is_joint() && cfg.current.contains(_my_id)) {
+        for (auto s : cfg.current) {
+            if (s.can_vote && s.addr.id != _my_id && _failure_detector.is_alive(s.addr.id)) {
+                logger.trace("[{}]: searching for a leader. Pinging {}", _tag, s.addr.id);
+                send_to(s.addr.id, append_reply{_current_term, _commit_idx, append_reply::rejected{index_t{0}, index_t{0}}});
+            }
+        }
+    }
+}
+
 bool fsm::has_output() const {
     logger.trace("fsm::has_output() {} stable index: {} last index: {}",
         _tag, _log.stable_idx(), _log.last_idx());
@@ -612,22 +631,7 @@ void fsm::tick() {
     }
 
     if (is_follower() && !current_leader() && _ping_leader) {
-        // We are a follower but a leader is not known. It will not be known
-        // until a communication from a leader which (for an idle leader) may
-        // not happen any time soon since we use external failure detector and
-        // our leader does not send periodic empty append messages. By sending
-        // a special append message reject we solicit a reply from a leader.
-        // Non leaders will ignore the append reply.
-        auto& cfg = get_configuration();
-        // If conf is joint it means a leader will send us a non joint one eventually
-        if (!cfg.is_joint() && cfg.current.contains(_my_id)) {
-            for (auto s : cfg.current) {
-                if (s.can_vote && s.addr.id != _my_id && _failure_detector.is_alive(s.addr.id)) {
-                    logger.trace("tick[{}]: searching for a leader. Pinging {}", _tag, s.addr.id);
-                    send_to(s.addr.id, append_reply{_current_term, _commit_idx, append_reply::rejected{index_t{0}, index_t{0}}});
-                }
-            }
-        }
+        send_ping_messages();
     }
 }
 
