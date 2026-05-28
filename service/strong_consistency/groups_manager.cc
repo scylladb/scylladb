@@ -184,11 +184,20 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         co_await state.server_control_op.get_future();
         logger.debug("schedule_raft_group_deletion(): group id {}: starting", id);
 
-        co_await g->close();
-        logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
+        // Initiate gate close, then abort the raft server, then wait for the
+        // gate. Gate close alone would block until all holders are released,
+        // but in-flight writes may be stuck in add_entry waiting for quorum
+        // that will never come (other nodes already destroyed their servers).
+        // Aborting the server causes those stuck operations to throw
+        // raft::stopped_error, releasing their holders and unblocking the gate.
+        auto gate_fut = g->close();
+        logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
 
         co_await _raft_gr.abort_server(id);
         logger.debug("schedule_raft_group_deletion(): group id {}: server aborted", id);
+
+        co_await std::move(gate_fut);
+        logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
 
         co_await std::move(state.leader_info_updater);
 
@@ -400,7 +409,12 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                     auto srv = raft_server(state, state.gate->hold());
                     auto res = srv.begin_mutate(aoe.abort_source());
                     if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
-                        co_await std::move(w->future);
+                        auto f = co_await coroutine::as_future(std::move(w->future));
+                        if (f.failed()) {
+                            logger.warn("update(): waiting for leader timed out for tablet {}, "
+                                "group id {}: {}", tablet, id, f.get_exception());
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -429,21 +443,27 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     // lw_shared_ptr<table>, so that the table is dropped but the table object
     // is still alive.
     //
-    // Check that the table still exists in the database to turn the
-    // fatal on_internal_error below into a clean no_such_column_family
-    // exception.
-    //
-    // When the table does exist, we proceed to acquire state.gate->hold().
-    // This prevents schedule_raft_group_deletion (which co_awaits gate::close)
-    // from erasing the group until the DML operation completes.
-    _db.find_column_family(table_id);
+    // Check that the table still exists. The table is removed from the
+    // database (via schema_applier::commit_tables_and_views) BEFORE
+    // groups_manager::update() is called (which triggers gate closure via
+    // schedule_raft_group_deletion). Since there's no scheduling point
+    // between the column_family_exists check and try_hold below, the gate
+    // cannot be closed if the table exists.
+    if (!_db.column_family_exists(table_id)) {
+        return make_exception_future<raft_server>(
+            replica::no_such_column_family(table_id));
+    }
 
     const auto it = _raft_groups.find(group_id);
     if (it == _raft_groups.end()) {
         on_internal_error(logger, format("raft group {} not found", group_id));
     }
     auto& state = it->second;
-    return state.server_control_op.get_future(as).then([&state, h = state.gate->hold()] mutable {
+    auto h = state.gate->try_hold();
+    if (!h) {
+        on_internal_error(logger, format("acquire_server: gate closed for group {} while table {} exists", group_id, table_id));
+    }
+    return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
         return raft_server(state, std::move(h));
     });
 }
