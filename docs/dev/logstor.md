@@ -191,8 +191,8 @@ A serialized form of `write_buffer::segment_header`.
 Each record within the buffer is structured as:
 
 ```
-record_header        (8 bytes)
-log_record_header    (header_size bytes)
+record_header        (4 bytes)
+log_record_header    (52 bytes)
 canonical_mutation   (data_size bytes)
 zero_padding         -- to align to record_alignment (8 bytes)
 ```
@@ -201,15 +201,17 @@ zero_padding         -- to align to record_alignment (8 bytes)
 
 | Offset | Size | Field         | Description |
 |--------|------|---------------|-------------|
-| 0      | 4    | `header_size` | Size in bytes of the serialized `log_record_header` that follows. |
-| 4      | 4    | `data_size`   | Size in bytes of the serialized `canonical_mutation` that follows `log_record_header`. |
+| 0      | 4    | `data_size`   | Size in bytes of the serialized `canonical_mutation` that follows the fixed-size `log_record_header`. |
 
 **Log Record Header** (`log_record_header`):
 
-The `header_size` bytes immediately following the record header are the IDL-serialized form of `log_record_header`, which contains:
-- `key`: the partition key (`primary_index_key`), including a `decorated_key` with a token and partition key bytes.
-- `timestamp`: the timestamp of the record, used to resolve conflicts by keeping the record with the latest timestamp.
-- `table`: UUID of the table this record belongs to.
+A serialized form of `log_record_header`. Total size: 52 bytes.
+
+| Offset | Size | Field       | Description |
+|--------|------|-------------|-------------|
+| 0      | 20   | `key`       | Serialized `primary_index_key`: 20-byte key hash (first 8 bytes = token, last 12 bytes = hash suffix). |
+| 20     | 8    | `timestamp` | `api::timestamp_type` — timestamp used for conflict resolution. |
+| 28     | 16   | `table`     | `table_id` (UUID) — the table this record belongs to. |
 
 **Mutation Data**:
 
