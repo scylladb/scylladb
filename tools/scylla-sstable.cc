@@ -905,6 +905,30 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
     compaction::compact_sstables(std::move(compaction_descriptor), compaction_data, compaction_group_view, progress_monitor).get();
 }
 
+void write_index_component(schema_ptr schema, reader_permit permit, const sstables::shared_sstable& sst, json_writer& writer) {
+    auto idx_reader = sst->make_index_reader(permit);
+    auto close_idx_reader = deferred_close(*idx_reader);
+
+    writer.StartArray();
+    while (!idx_reader->eof()) {
+        idx_reader->read_partition_data().get();
+        auto pos = idx_reader->data_file_positions().start;
+        auto pkey = idx_reader->get_partition_key();
+
+        writer.StartObject();
+        if (pkey) {
+            writer.Key("key");
+            writer.DataKey(*schema, *pkey);
+        }
+        writer.Key("pos");
+        writer.Uint64(pos);
+        writer.EndObject();
+
+        idx_reader->advance_to_next_partition().get();
+    }
+    writer.EndArray();
+}
+
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
@@ -914,29 +938,8 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        auto idx_reader = sst->make_index_reader(permit);
-        auto close_idx_reader = deferred_close(*idx_reader);
-
         writer.Key(fmt::to_string(sst->get_filename()));
-        writer.StartArray();
-
-        while (!idx_reader->eof()) {
-            idx_reader->read_partition_data().get();
-            auto pos = idx_reader->data_file_positions().start;
-            auto pkey = idx_reader->get_partition_key();
-
-            writer.StartObject();
-            if (pkey) {
-                writer.Key("key");
-                writer.DataKey(*schema, *pkey);
-            }
-            writer.Key("pos");
-            writer.Uint64(pos);
-            writer.EndObject();
-
-            idx_reader->advance_to_next_partition().get();
-        }
-        writer.EndArray();
+        write_index_component(schema, permit, sst, writer);
     }
     writer.EndStream();
 }
