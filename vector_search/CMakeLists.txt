@@ -5,7 +5,6 @@ target_sources(vector_search
     dns.cc
     client.cc
     clients.cc
-    filter.cc
     truststore.cc)
 target_link_libraries(vector_search
   PUBLIC

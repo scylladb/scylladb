@@ -16,7 +16,7 @@
 #include "types/types.hh"
 #include "utils/big_decimal.hh"
 #include "utils/rjson.hh"
-#include "vector_search/filter.hh"
+#include "cql3/statements/external_search/filter.hh"
 
 BOOST_AUTO_TEST_SUITE(filter_test)
 
@@ -55,7 +55,7 @@ query_options make_query_options(std::vector<raw_value> values) {
 
 /// Helper to get JSON string from restrictions
 sstring get_restrictions_json(const restrictions::statement_restrictions& restr, bool allow_filtering = false) {
-    return rjson::print(vector_search::prepare_filter(restr, allow_filtering).to_json(query_options({})));
+    return rjson::print(statements::external_search::prepare_filter(restr, allow_filtering).to_json(query_options({})));
 }
 
 } // anonymous namespace
@@ -66,7 +66,7 @@ SEASTAR_TEST_CASE(to_json_empty_restrictions) {
 
         auto schema = e.local_db().find_schema("ks", "t");
         shared_ptr<const restrictions::statement_restrictions> restr = restrictions::make_trivial_statement_restrictions(schema, false);
-        auto json = rjson::print(vector_search::prepare_filter(*restr, false).to_json(query_options({})));
+        auto json = rjson::print(statements::external_search::prepare_filter(*restr, false).to_json(query_options({})));
 
         BOOST_CHECK_EQUAL(json, "{}");
     });
@@ -269,7 +269,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_partition_key) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=?", e);
-        auto filter = vector_search::prepare_filter(*restr, false);
+        auto filter = statements::external_search::prepare_filter(*restr, false);
 
         std::vector<raw_value> bind_values = {raw_value::make_value(int32_type->decompose(42))};
         auto options = make_query_options(std::move(bind_values));
@@ -285,7 +285,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_clustering_key) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=? and ck>?", e);
-        auto filter = vector_search::prepare_filter(*restr, true);
+        auto filter = statements::external_search::prepare_filter(*restr, true);
 
         std::vector<raw_value> bind_values = {
             raw_value::make_value(int32_type->decompose(1)),
@@ -303,7 +303,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_different_values) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=?", e);
-        auto filter = vector_search::prepare_filter(*restr, false);
+        auto filter = statements::external_search::prepare_filter(*restr, false);
 
         std::vector<raw_value> bind_values1 = {raw_value::make_value(int32_type->decompose(100))};
         auto options1 = make_query_options(std::move(bind_values1));
@@ -324,7 +324,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_string_value) {
         cquery_nofail(e, "create table ks.t(pk text, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=?", e);
-        auto filter = vector_search::prepare_filter(*restr, false);
+        auto filter = statements::external_search::prepare_filter(*restr, false);
 
         std::vector<raw_value> bind_values = {raw_value::make_value(utf8_type->decompose("hello_world"))};
         auto options = make_query_options(std::move(bind_values));
@@ -340,7 +340,7 @@ SEASTAR_TEST_CASE(to_json_mixed_literals_and_bind_markers) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck>?", e);
-        auto filter = vector_search::prepare_filter(*restr, true);
+        auto filter = statements::external_search::prepare_filter(*restr, true);
 
         std::vector<raw_value> bind_values = {raw_value::make_value(int32_type->decompose(25))};
         auto options = make_query_options(std::move(bind_values));
@@ -356,7 +356,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_in_list) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck in ?", e);
-        auto filter = vector_search::prepare_filter(*restr, true);
+        auto filter = statements::external_search::prepare_filter(*restr, true);
 
         auto list_type = list_type_impl::get_instance(int32_type, true);
         auto list_val = make_list_value(list_type, {data_value(10), data_value(20), data_value(30)});
@@ -375,7 +375,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_multi_column) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
         auto restr = make_restrictions("pk=1 and (ck1, ck2)>?", e);
-        auto filter = vector_search::prepare_filter(*restr, true);
+        auto filter = statements::external_search::prepare_filter(*restr, true);
 
         auto tuple_type = tuple_type_impl::get_instance({int32_type, int32_type});
         auto tuple_val = make_tuple_value(tuple_type, {data_value(10), data_value(20)});
@@ -394,7 +394,7 @@ SEASTAR_TEST_CASE(to_json_no_bind_markers_uses_cache) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=42", e);
-        auto filter = vector_search::prepare_filter(*restr, false);
+        auto filter = statements::external_search::prepare_filter(*restr, false);
 
         auto options1 = query_options({});
         auto json1 = rjson::print(filter.to_json(options1));
@@ -438,7 +438,7 @@ SEASTAR_TEST_CASE(to_json_nonprimary_key_bind_marker) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, r int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and r=?", e);
-        auto filter = vector_search::prepare_filter(*restr, true);
+        auto filter = statements::external_search::prepare_filter(*restr, true);
 
         std::vector<raw_value> bind_values = {raw_value::make_value(int32_type->decompose(99))};
         auto options = make_query_options(std::move(bind_values));
@@ -469,7 +469,7 @@ SEASTAR_TEST_CASE(to_json_decimal) {
 
         // Same value via bind marker.
         restr = make_restrictions("pk=?", e);
-        auto filter = vector_search::prepare_filter(*restr, false);
+        auto filter = statements::external_search::prepare_filter(*restr, false);
         std::vector<raw_value> bind_values = {
             raw_value::make_value(decimal_type->decompose(big_decimal("98765432109876543210.12345")))};
         auto options = make_query_options(std::move(bind_values));
@@ -486,7 +486,7 @@ SEASTAR_TEST_CASE(to_json_decimal) {
         // "1.230", not be normalized to "1.23". These are different partition
         // keys because the wire format differs.
         restr = make_restrictions("pk=?", e);
-        auto filter2 = vector_search::prepare_filter(*restr, false);
+        auto filter2 = statements::external_search::prepare_filter(*restr, false);
         std::vector<raw_value> bind_values2 = {
             raw_value::make_value(decimal_type->decompose(big_decimal("1.230")))};
         auto options2 = make_query_options(std::move(bind_values2));
@@ -508,7 +508,7 @@ SEASTAR_TEST_CASE(to_json_varint) {
 
         // Same value via bind marker.
         restr = make_restrictions("pk=?", e);
-        auto filter = vector_search::prepare_filter(*restr, false);
+        auto filter = statements::external_search::prepare_filter(*restr, false);
         std::vector<raw_value> bind_values = {
             raw_value::make_value(varint_type->decompose(utils::multiprecision_int("98765432109876543210")))};
         auto options = make_query_options(std::move(bind_values));
