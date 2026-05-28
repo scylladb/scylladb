@@ -15,6 +15,39 @@
 
 namespace locator {
 
+// Returns the shard of the replica for the given host in the replica set,
+// or nullopt if the host is not in the set.
+inline std::optional<shard_id> get_shard(const tablet_replica_set& replicas, host_id host) {
+    for (auto&& r : replicas) {
+        if (r.host == host) {
+            return r.shard;
+        }
+    }
+    return std::nullopt;
+}
+
+// Returns the shard that should serve reads for a given tablet on the given host,
+// taking into account any in-progress tablet transition.
+// Returns nullopt if the host does not own a replica for this tablet.
+inline std::optional<shard_id> get_shard_for_reads(const tablet_map& tmap, tablet_id tid, host_id host) {
+    auto& tinfo = tmap.get_tablet_info(tid);
+    auto* trinfo = tmap.get_tablet_transition_info(tid);
+
+    if (!trinfo) {
+        return get_shard(tinfo.replicas, host);
+    }
+
+    // See "Shard assignment stability" from doc/dev/topology-over-raft.md for explanation of logic.
+    if (trinfo->pending_replica && trinfo->pending_replica->host == host) {
+        if (trinfo->transition == tablet_transition_kind::intranode_migration && trinfo->reads == read_replica_set_selector::previous) {
+            return get_shard(tinfo.replicas, host);
+        }
+        return trinfo->pending_replica->shard;
+    }
+
+    return get_shard(tinfo.replicas, host);
+}
+
 /// Implements sharder object which reflects assignment of tablets of a given table to local shards.
 /// Token ranges which don't have local tablets are reported to belong to shard 0.
 class tablet_sharder : public dht::sharder {
@@ -30,15 +63,6 @@ private:
             _tmap = &_tm.tablets().get_tablet_map(_table);
         }
     }
-
-    std::optional<unsigned> get_shard(const tablet_replica_set& replicas, host_id host) const {
-        for (auto&& r : replicas) {
-            if (r.host == host) {
-                return r.shard;
-            }
-        }
-        return std::nullopt;
-    };
 
     dht::shard_replica_set choose_shard_for_writes(tablet_id tid, host_id host, std::optional<write_replica_set_selector> sel = std::nullopt) const {
         auto* trinfo = _tmap->get_tablet_transition_info(tid);
@@ -80,23 +104,7 @@ private:
 
     std::optional<shard_id> choose_shard_for_reads(tablet_id tid, host_id host) const {
         ensure_tablet_map();
-        auto* trinfo = _tmap->get_tablet_transition_info(tid);
-        auto& tinfo = _tmap->get_tablet_info(tid);
-
-        if (!trinfo) {
-            return get_shard(tinfo.replicas, host);
-        }
-
-        // See "Shard assignment stability" from doc/dev/topology-over-raft.md for explanation of logic.
-
-        if (trinfo->pending_replica && trinfo->pending_replica->host == host) {
-            if (trinfo->transition == tablet_transition_kind::intranode_migration && trinfo->reads == read_replica_set_selector::previous) {
-                return get_shard(tinfo.replicas, host);
-            }
-            return trinfo->pending_replica->shard;
-        }
-
-        return get_shard(tinfo.replicas, host);
+        return get_shard_for_reads(*_tmap, tid, host);
     }
 public:
     tablet_sharder(const token_metadata& tm, table_id table, std::optional<host_id> host = std::nullopt)
@@ -162,7 +170,7 @@ public:
         auto* trinfo = _tmap->get_tablet_transition_info(tid);
         auto& tinfo = _tmap->get_tablet_info(tid);
 
-        auto shard = get_shard(tinfo.replicas, _host).value_or(0);
+        auto shard = locator::get_shard(tinfo.replicas, _host).value_or(0);
 
         if (!trinfo) {
             return {shard};
