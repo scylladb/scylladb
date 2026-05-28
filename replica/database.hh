@@ -516,13 +516,15 @@ private:
     lw_shared_ptr<const storage_options> _storage_opts;
     memtable_table_shared_data _memtable_shared_data;
     mutable table_stats _stats;
-    mutable db::view::stats _view_stats;
+    // View stats are only needed for base tables (not for view tables themselves).
+    // Allocated only for base tables (not views), saving 5688B per view table per shard.
+    mutable std::unique_ptr<db::view::stats> _view_stats;
     // Row locker stats are lazily allocated since only LWT/CAS operations
     // use row locking. Saves 2176B per non-CAS table per shard.
     mutable std::unique_ptr<row_locker::stats> _row_locker_stats;
 
     row_locker::stats& get_row_locker_stats() const {
-        if (!_row_locker_stats) [[unlikely]] {
+        if (!_row_locker_stats) {
             _row_locker_stats = std::make_unique<row_locker::stats>();
         }
         return *_row_locker_stats;
@@ -1221,11 +1223,13 @@ public:
     locator::combined_load_stats table_load_stats() const;
 
     const db::view::stats& get_view_stats() const {
-        return _view_stats;
+        assert(_view_stats && "get_view_stats() called on a view table");
+        return *_view_stats;
     }
 
     db::view::stats& view_stats() const noexcept {
-        return _view_stats;
+        assert(_view_stats && "view_stats() called on a view table");
+        return *_view_stats;
     }
 
     replica::cf_stats* cf_stats() const {

@@ -2144,17 +2144,22 @@ void table::set_metrics() {
                         [this] { return _stats.pending_sstable_deletions; })(cf)(ks)
         });
 
-        // Metrics related to row locking
+        // Metrics related to row locking.
+        // Uses pointer-to-member to avoid duplicating the metric registration
+        // for each of the 4 lock types (exclusive/shared × row/partition).
         auto add_row_lock_metrics = [this, ks, cf] (row_locker::single_lock_stats row_locker::stats::*member, sstring stat_name) {
+            auto get_stats = [this, member] () -> row_locker::single_lock_stats* {
+                return _row_locker_stats ? &(_row_locker_stats.get()->*member) : nullptr;
+            };
             _metrics.add_group("column_family", {
                 ms::make_total_operations(format("row_lock_{}_acquisitions", stat_name),
-                        [this, member] {return _row_locker_stats ? (_row_locker_stats.get()->*member).lock_acquisitions : uint64_t(0);},
+                        [get_stats] { auto s = get_stats(); return s ? s->lock_acquisitions : uint64_t(0); },
                         ms::description(format("Row lock acquisitions for {} lock", stat_name)))(cf)(ks).set_skip_when_empty(),
                 ms::make_queue_length(format("row_lock_{}_operations_currently_waiting_for_lock", stat_name),
-                        [this, member] {return _row_locker_stats ? (_row_locker_stats.get()->*member).operations_currently_waiting_for_lock : uint64_t(0);},
+                        [get_stats] { auto s = get_stats(); return s ? s->operations_currently_waiting_for_lock : uint64_t(0); },
                         ms::description(format("Operations currently waiting for {} lock", stat_name)))(cf)(ks),
                 ms::make_histogram(format("row_lock_{}_waiting_time", stat_name), ms::description(format("Histogram representing time that operations spent on waiting for {} lock", stat_name)),
-                        [this, member] {return _row_locker_stats ? to_metrics_histogram((_row_locker_stats.get()->*member).estimated_waiting_for_lock) : seastar::metrics::histogram{};})(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
+                        [get_stats] { auto s = get_stats(); return s ? to_metrics_histogram(s->estimated_waiting_for_lock) : seastar::metrics::histogram{}; })(cf)(ks).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
             });
         };
         add_row_lock_metrics(&row_locker::stats::exclusive_row, "exclusive_row");
@@ -2163,8 +2168,8 @@ void table::set_metrics() {
         add_row_lock_metrics(&row_locker::stats::shared_partition, "shared_partition");
 
         // View metrics are created only for base tables, so there's no point in adding them to views (which cannot act as base tables for other views)
-        if (!_schema->is_view()) {
-            _view_stats.register_stats();
+        if (_view_stats) {
+            _view_stats->register_stats();
         }
 
         if (uses_tablets()) {
@@ -2225,7 +2230,9 @@ void table::set_metrics() {
 
 void table::deregister_metrics() {
     _metrics.clear();
-    _view_stats._metrics.clear();
+    if (_view_stats) {
+        _view_stats->_metrics.clear();
+    }
 }
 
 size_t compaction_group::live_sstable_count() const noexcept {
@@ -3259,10 +3266,10 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _config(std::move(config))
     , _erm(std::move(erm))
     , _storage_opts(std::move(sopts))
-    , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()),
+    , _view_stats(_schema->is_view() ? nullptr : std::make_unique<db::view::stats>(
+                         format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()),
                          keyspace_label(_schema->ks_name()),
-                         column_family_label(_schema->cf_name())
-                        )
+                         column_family_label(_schema->cf_name())))
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _sg_manager(make_storage_group_manager())
