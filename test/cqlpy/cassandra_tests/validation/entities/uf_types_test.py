@@ -141,9 +141,10 @@ def test_types_with_and_without_nulls(cql, test_keyspace):
             values[0] = 2
             cql.execute(insert_stmt, values)
 
+            use_wasm = is_scylla(cql, test_keyspace)
+            lang = "wasm" if use_wasm else "java"
+
             for type_def in type_defs:
-                use_wasm = is_scylla(cql, test_keyspace)
-                lang = "wasm" if use_wasm else "java"
                 fun_name = unique_name()
                 fun_wasm_src = read_function_from_file("test_types_with_and_without_nulls", f"check_arg_and_return_{type_def.column_name}", fun_name) if use_wasm else 'return input;'
                 fun_src = f"(input {type_def.udf_type}) CALLED ON NULL INPUT RETURNS {type_def.udf_type} LANGUAGE {lang} AS '{fun_wasm_src}'"
