@@ -13,7 +13,7 @@ import uuid
 from ...porting import *
 
 from cassandra.util import Date
-from ....util import new_function, unique_name, new_secondary_index
+from ....util import new_function, unique_name, new_secondary_index, is_scylla as is_scylla_util
 import os
 
 def is_scylla(cql, test_keyspace):
@@ -141,7 +141,7 @@ def test_types_with_and_without_nulls(cql, test_keyspace):
             values[0] = 2
             cql.execute(insert_stmt, values)
 
-            use_wasm = is_scylla(cql, test_keyspace)
+            use_wasm = is_scylla_util(cql)
             lang = "wasm" if use_wasm else "java"
 
             for type_def in type_defs:
