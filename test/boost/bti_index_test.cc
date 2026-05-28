@@ -897,7 +897,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         .with_column("ck1", short_type, column_kind::clustering_key)
         .with_column("ck2", short_type, column_kind::clustering_key)
         .build();
-    auto sst_ver = sstables::sstable_version_types::me;
+    auto sst_ver = sstables::sstable_version_types::mt;
 
     random_dataset_config cfg;
     const int max_ops = 3;
@@ -1115,7 +1115,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_row_index_header) {
         sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
         auto close_fw = defer([&] { fw.close(); });
         sstables::trie::write_row_index_header(
-            sstables::sstable_version_types::me,
+            sstables::sstable_version_types::mt,
             fw,
             pk,
             partition_data_start,

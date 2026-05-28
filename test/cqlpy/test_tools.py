@@ -1616,8 +1616,8 @@ def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
             matched = sstable_re.match(stem)
             assert matched is not None, f"unmatched sstable component path: {fn}"
             sstable_version = matched["version"]
-            # "ms" is currently the default sstable format version.
-            assert sstable_version == "ms", f"unexpected sstable format: {sstable_version}"
+            # "mt" is currently the default sstable format version.
+            assert sstable_version == "mt", f"unexpected sstable format: {sstable_version}"
 
 def test_create_local_key_file(scylla_path):
     with tempfile.TemporaryDirectory() as dir:
