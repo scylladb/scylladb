@@ -13,7 +13,7 @@ import pytest
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import gather_safely, wait_for_cql_and_get_hosts
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
         reconnect_driver, wait_for_cdc_generations_publishing
@@ -107,8 +107,7 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
     cql, _ = await manager.get_ready_cql(live_servers)
 
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
-    for h in hosts:
-        await delete_discovery_state_and_group0_id(cql, h)
+    await gather_safely(*(delete_discovery_state_and_group0_id(cql, h) for h in hosts))
 
     recovery_leader_id = await manager.get_host_id(live_servers[0].server_id)
 
@@ -125,15 +124,13 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
         await manager.remove_node(initiator.server_id, being_removed.server_id, ignored)
 
     logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
-    for srv in live_servers:
-        await manager.server_remove_config_option(srv.server_id, 'recovery_leader')
+    await gather_safely(*(manager.server_remove_config_option(srv.server_id, 'recovery_leader') for srv in live_servers))
 
     cql = await reconnect_driver(manager)
     hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 60)
 
     logging.info(f'Deleting persistent data of group 0 {first_group0_id} on {live_servers}')
-    for h in hosts:
-        await delete_raft_group_data(first_group0_id, cql, h)
+    await gather_safely(*(delete_raft_group_data(first_group0_id, cql, h) for h in hosts))
 
     logging.info('Performing consistency checks after the recovery procedure')
     await wait_for_cdc_generations_publishing(cql, hosts, time.time() + 60)

@@ -113,8 +113,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     cql, _ = await manager.get_ready_cql(live_servers)
 
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
-    for h in hosts:
-        await delete_discovery_state_and_group0_id(cql, h)
+    await gather_safely(*(delete_discovery_state_and_group0_id(cql, h) for h in hosts))
 
     # FIXME: use the API to find the recovery leader here when it is implemented. A background operation like a tablet
     # migration could change the group 0 state just before losing the majority. Then, node 0 could be an incorrect
@@ -194,12 +193,10 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         new_servers.extend(replace_results)
 
     logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
-    for srv in live_servers:
-        await manager.server_remove_config_option(srv.server_id, 'recovery_leader')
+    await gather_safely(*(manager.server_remove_config_option(srv.server_id, 'recovery_leader') for srv in live_servers))
 
     logging.info(f'Deleting persistent data of group 0 {first_group0_id} on {live_servers}')
-    for h in hosts:
-        await delete_raft_group_data(first_group0_id, cql, h)
+    await gather_safely(*(delete_raft_group_data(first_group0_id, cql, h) for h in hosts))
 
     # Disable load balancer on the topology coordinator node so that an ongoing tablet migration doesn't fail one of the
     # check_system_topology_and_cdc_generations_v3_consistency calls below. A tablet migration can suddenly make
