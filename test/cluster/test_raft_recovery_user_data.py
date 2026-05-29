@@ -45,25 +45,14 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     previous state. For replace, add a single node (a sanity check verifying that the cluster is functioning properly).
     7. Stop sending writes.
     """
-    # Currently, the constraints imposed by `rf_rack_valid_keyspaces` are quite strict
-    # and adjusting this test to working with it may require significant changes in the test.
-    # Let's disable the option explicitly until we do that.
-    rf_rack_cfg = {'rf_rack_valid_keyspaces': False}
     # Workaround for flakiness from https://github.com/scylladb/scylladb/issues/23565.
-    hints_cfg = {'hinted_handoff_enabled': False}
-    cfg = {
-        'endpoint_snitch': 'GossipingPropertyFileSnitch',
-        'tablets_mode_for_new_keyspaces': 'enabled',
-    } | rf_rack_cfg | hints_cfg
-
-    property_file_dc1 = {'dc': 'dc1', 'rack': 'rack1'}
-    property_file_dc2 = {'dc': 'dc2', 'rack': 'rack2'}
+    cfg = {'hinted_handoff_enabled': False}
 
     # Add servers to dc2 first, so 3 out of 5 voters will be there.
     logging.info('Adding servers that will be killed to dc2')
-    dead_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc2)
+    dead_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc2')
     logging.info('Adding servers that will survive majority loss to dc1')
-    live_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc1)
+    live_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc1')
     logging.info(f'Servers to survive majority loss: {live_servers}, servers to be killed: {dead_servers}')
 
     cql, _ = await manager.get_ready_cql(live_servers + dead_servers)
@@ -151,10 +140,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         await manager.api.exclude_node(live_servers[0].ip_addr, dead_host_ids)
 
         logging.info(f'Decreasing RF of {ks_name} to 0 in dc2')
-        for i in range(1, rf + 1):
-            # ALTER KEYSPACE with tablets can decrease RF only by one.
-            await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
-                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf - i}}}""")
+        await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
+                            {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': 0}}""")
 
         logging.info(f'Removing {dead_servers}')
         for i, being_removed in enumerate(dead_servers):
@@ -178,7 +165,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
             replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True,
                                         ignore_dead_nodes=[dead_srv.ip_addr for dead_srv in dead_servers[i + 1:]])
             # Specify the leader as the only seed to make sure it receives all join requests (for simplicity).
-            return await manager.server_add(replace_cfg=replace_cfg, config=cfg, property_file=property_file_dc2,
+            return await manager.server_add(replace_cfg=replace_cfg, config=cfg,
+                                            property_file={'dc': 'dc2', 'rack': f'rack{i + 1}'},
                                             seeds=[recovery_leader.ip_addr])
         replace_tasks = [asyncio.create_task(replace_server(i, srv)) for i, srv in enumerate(dead_servers)]
 
@@ -212,7 +200,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     new_servers_num = 3 if remove_dead_nodes_with == "remove" else 1
     logging.info(f'Adding {new_servers_num} new servers to dc2')
-    new_servers += await manager.servers_add(new_servers_num, config=cfg, property_file=property_file_dc2)
+    new_servers += await manager.servers_add(new_servers_num, config=cfg, auto_rack_dc='dc2')
 
     # Reconnect the driver as a workaround for https://github.com/scylladb/scylladb/issues/27862.
     await reconnect_driver(manager)
@@ -220,9 +208,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     if remove_dead_nodes_with == "remove":
         logging.info(f'Increasing RF of {ks_name} back to {rf} in dc2')
-        for i in range(1, rf + 1):
-            await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
-                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {i}}}""")
+        await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
+                            {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf}}}""")
 
     # After increasing RF back to 3 in dc2 (if remove_dead_nodes_with == "remove"), we can start sending writes to dc2.
     ccluster_dc2 = cluster_con(
