@@ -1901,7 +1901,7 @@ async def test_drop_keyspace_while_split(manager: ManagerClient):
 
     # start a DROP and wait for it to disable compaction
     drop_ks_task = cql.run_async(f'DROP KEYSPACE {ks};')
-    await s0_log.wait_for('truncate_compaction_disabled_wait: wait')
+    await s0_log.wait_for('truncate_compaction_disabled_wait: waiting for message')
 
     # release split
     await manager.api.message_injection(servers[0].ip_addr, "split_storage_groups_wait")
@@ -1948,13 +1948,13 @@ async def test_drop_with_tablet_migration_cleanup(manager: ManagerClient):
 
         # Wait until the leaving replica is about to be cleaned up.
         # storage_group's gate has been closed, but the compaction groups have not yet been stopped and disabled
-        await slog.wait_for("wait_before_stop_compaction_groups: wait", from_mark=smark)
+        await slog.wait_for("wait_before_stop_compaction_groups: waiting for message", from_mark=smark)
 
         # Start dropping the table
         drop_future = cql.run_async(f"DROP TABLE {ks}.test;")
 
         # Wait for truncate to complete disabling compaction
-        await slog.wait_for("truncate_compaction_disabled_wait: wait", from_mark=smark)
+        await slog.wait_for("truncate_compaction_disabled_wait: waiting for message", from_mark=smark)
 
         # Release the migration's tablet cleanup
         await manager.api.message_injection(server.ip_addr, "wait_before_stop_compaction_groups")

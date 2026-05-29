@@ -45,16 +45,11 @@ using error_injection_parameters = std::unordered_map<sstring, sstring>;
 // in class error_injection below). Parameters:
 // timeout - the timeout after which the pause is aborted
 // as (optional) - abort_source used to abort the pause
-// share - if true (default), injection handlers share received messages:
-//         every message can be received by all handlers (even if they start
-//         waiting in the future). If false, only one handler can receive a
-//         specific message; other handlers will wait for new messages.
 struct wait_for_message {
     std::chrono::milliseconds timeout;
-    abort_source* as;
-    bool share;
-    wait_for_message(std::chrono::milliseconds tmo, abort_source* a = nullptr, bool share_ = true) noexcept
-        : timeout(tmo), as(a), share(share_) {}
+    abort_source* as = nullptr;
+    wait_for_message(std::chrono::milliseconds tmo) noexcept : timeout(tmo) {}
+    wait_for_message(std::chrono::milliseconds tmo, abort_source* a) noexcept : timeout(tmo), as(a) {}
 };
 
 /**
@@ -552,12 +547,14 @@ public:
     // Injects a pause in the code execution that's woken up explicitly by the injector
     // request
     // \param wfm -- the wait_for_message instance that describes details of the pause
-    future<> inject(const std::string_view& name, utils::wait_for_message wfm) {
+    // \param share_messages -- if true, all concurrent handlers share received messages;
+    //   if false, each message is consumed by exactly one handler
+    future<> inject(const std::string_view& name, utils::wait_for_message wfm, bool share_messages = true) {
         co_await inject(name, [name, wfm] (injection_handler& handler) -> future<> {
             errinj_logger.info("{}: waiting for message", name);
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + wfm.timeout, wfm.as);
             errinj_logger.info("{}: message received", name);
-        }, wfm.share);
+        }, share_messages);
     }
 
     template <typename T = std::string_view>
@@ -728,7 +725,7 @@ public:
 
     // \brief Inject "breakpoint"
     [[gnu::always_inline]]
-    future<> inject(const std::string_view& name, utils::wait_for_message wfm) {
+    future<> inject(const std::string_view& name, utils::wait_for_message wfm, bool share_messages = true) {
         return make_ready_future<>();
     }
 

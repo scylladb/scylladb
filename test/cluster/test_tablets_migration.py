@@ -538,7 +538,7 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
         # Start migration - move tablet to other node
         move_task = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, 'test', replica[0], replica[1], dst_host_id, 0, tablet_token))
 
-        await log.wait_for("Waiting after tablet cleanup", from_mark=mark, timeout=60)
+        await log.wait_for("wait_after_tablet_cleanup: waiting for message", from_mark=mark, timeout=60)
 
         # Restart the leaving replica (src_server)
         await manager.server_stop(src_server.server_id, convict=False)

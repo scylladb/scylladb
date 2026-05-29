@@ -770,10 +770,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
     for (const auto& gen_id : topology.committed_cdc_generations) {
         rtlogger.trace("topology_state_load: process committed cdc generation {}", gen_id);
-        co_await utils::get_local_injector().inject("topology_state_load_before_update_cdc", [](auto& handler) -> future<> {
-            rtlogger.info("topology_state_load_before_update_cdc hit, wait for message");
-            co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
-        });
+        co_await utils::get_local_injector().inject("topology_state_load_before_update_cdc", utils::wait_for_message{std::chrono::minutes(5)});
         co_await _cdc_gens.local().handle_cdc_generation(gen_id);
         if (gen_id == topology.committed_cdc_generations.back()) {
             rtlogger.debug("topology_state_load: the last committed CDC generation ID: {}", gen_id);
@@ -4491,7 +4488,7 @@ future<> storage_service::local_topology_barrier() {
     // share=false: each barrier_and_drain invocation needs its own message
     // to proceed. Without this, a single message_injection call would release
     // all past and future handlers sharing the same injection.
-    co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5), nullptr, false));
+    co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5)), false);
     if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
         for (auto& n : _topology_state_machine._topology.transition_nodes) {
             if (!_address_map.find(locator::host_id{n.first.uuid()})) {
@@ -5114,10 +5111,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         }
 
         if (file_stream_enabled && (trinfo->transition != locator::tablet_transition_kind::intranode_migration || table.uses_logstor())) {
-            co_await utils::get_local_injector().inject("migration_streaming_wait", [] (auto& handler) {
-                rtlogger.info("migration_streaming_wait: start");
-                return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
-            });
+            co_await utils::get_local_injector().inject("migration_streaming_wait", utils::wait_for_message{std::chrono::minutes(2)});
 
             auto dst_node = trinfo->pending_replica->host;
             auto dst_shard_id = trinfo->pending_replica->shard;
@@ -5174,10 +5168,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 throw std::runtime_error(fmt::format("Cannot stream within the same node using regular migration, tablet: {}, shard {} -> {}",
                                                      tablet, leaving_replica->shard, trinfo->pending_replica->shard));
             }
-            co_await utils::get_local_injector().inject("migration_streaming_wait", [] (auto& handler) {
-                rtlogger.info("migration_streaming_wait: start");
-                return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
-            });
+            co_await utils::get_local_injector().inject("migration_streaming_wait", utils::wait_for_message{std::chrono::minutes(2)});
             auto& table = _db.local().find_column_family(tablet.table);
             std::vector<sstring> tables = {table.schema()->cf_name()};
             auto my_id = tm->get_my_id();
@@ -5219,9 +5210,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             auto& table = db.find_column_family(tablet.table);
             return table.maybe_split_compaction_group_of(tablet.tablet);
         });
-        co_await utils::get_local_injector().inject("pause_after_streaming_tablet", [] (auto& handler) {
-            return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(1));
-        });
+        co_await utils::get_local_injector().inject("pause_after_streaming_tablet", utils::wait_for_message{std::chrono::minutes(1)});
         co_return tablet_operation_result();
     });
 }
