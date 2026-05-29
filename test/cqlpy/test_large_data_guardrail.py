@@ -421,3 +421,218 @@ def test_collection_no_warning_below_soft_limit(cql, test_keyspace, logfile):
 
             assert_no_log(logfile, WARN_RE,
                           lambda: cql.execute(insert, [1, 1, {4, 5}]))
+
+
+# ---------------------------------------------------------------------------
+# Per-table enable/disable toggle
+# ---------------------------------------------------------------------------
+
+
+def test_per_table_disabled_at_create(cql, test_keyspace):
+    """A table created with guardrails disabled must never reject writes."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_partition_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_partition_fail_threshold_mb', '1'))
+
+        schema = "pk int, ck int, v blob, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = false") as tbl:
+            make_oversized_partition(cql, tbl, pk=1, num_rows=2,
+                                    value_size_bytes=600 * 1024)
+            nodetool.flush(cql, tbl)
+
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, v) VALUES (?, ?, ?)")
+            cql.execute(insert, [1, 99, b"\x00"])
+
+
+def test_per_table_alter_disable(cql, test_keyspace):
+    """ALTER TABLE ... WITH large_data_guardrails_enabled = false must stop
+    rejection."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_partition_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_partition_fail_threshold_mb', '1'))
+
+        schema = "pk int, ck int, v blob, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            make_oversized_partition(cql, tbl, pk=1, num_rows=2,
+                                    value_size_bytes=600 * 1024)
+            nodetool.flush(cql, tbl)
+
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, v) VALUES (?, ?, ?)")
+            with pytest.raises(WriteFailure, match=REJECT_PARTITION_RE):
+                cql.execute(insert, [1, 99, b"\x00"])
+
+            cql.execute(f"ALTER TABLE {tbl} WITH large_data_guardrails_enabled = false")
+            cql.execute(insert, [1, 99, b"\x00"])
+
+
+def test_per_table_alter_reenable(cql, test_keyspace):
+    """After disabling then re-enabling guardrails, writes to a large
+    partition must be rejected again."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_partition_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_partition_fail_threshold_mb', '1'))
+
+        schema = "pk int, ck int, v blob, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = false") as tbl:
+            make_oversized_partition(cql, tbl, pk=1, num_rows=2,
+                                    value_size_bytes=600 * 1024)
+            nodetool.flush(cql, tbl)
+
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, v) VALUES (?, ?, ?)")
+            cql.execute(insert, [1, 99, b"\x00"])
+
+            cql.execute(f"ALTER TABLE {tbl} WITH large_data_guardrails_enabled = true")
+            with pytest.raises(WriteFailure, match=REJECT_PARTITION_RE):
+                cql.execute(insert, [1, 100, b"\x00"])
+
+
+# ---------------------------------------------------------------------------
+# Exemptions
+# ---------------------------------------------------------------------------
+
+
+def test_lwt_paxos_learn_is_exempt(cql, test_keyspace):
+    """LWT (Paxos) commit writes must bypass the guardrail."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_partition_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_partition_fail_threshold_mb', '1'))
+
+        schema = "pk int, ck int, v blob, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            make_oversized_partition(cql, tbl, pk=1, num_rows=2,
+                                    value_size_bytes=600 * 1024)
+            nodetool.flush(cql, tbl)
+
+            # Non-LWT write is rejected.
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, v) VALUES (?, ?, ?)")
+            with pytest.raises(WriteFailure, match=REJECT_PARTITION_RE):
+                cql.execute(insert, [1, 99, b"\x00"])
+
+            # LWT write succeeds (Paxos learn bypasses guardrail).
+            lwt = cql.prepare(
+                f"INSERT INTO {tbl} (pk, ck, v) VALUES (?, ?, ?) IF NOT EXISTS")
+            cql.execute(lwt, [1, 100, b"\x00"])
+
+
+# ---------------------------------------------------------------------------
+# Multi-category: all guardrails fire independently
+# ---------------------------------------------------------------------------
+
+
+def test_all_guardrails_warn_independently(cql, test_keyspace, logfile):
+    """When an SSTable has records in all three categories, each guardrail
+    must warn independently (fail=0 means warn-only)."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_partition_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_partition_fail_threshold_mb', '0'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_row_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_row_fail_threshold_mb', '0'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_collection_elements_count_warning_threshold', '50'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_cell_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_collection_elements_fail_threshold', '0'))
+
+        schema = "pk int, ck int, v blob, s set<int>, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            # Build data large in all three dimensions under pk=1, ck=0.
+            insert_v = cql.prepare(f"INSERT INTO {tbl} (pk, ck, v) VALUES (?, ?, ?)")
+            cql.execute(insert_v, [1, 0, bytes(1200 * 1024)])
+            update_s = cql.prepare(
+                f"UPDATE {tbl} SET s = s + ? WHERE pk = ? AND ck = ?")
+            for i in range(60):
+                cql.execute(update_s, [{i}, 1, 0])
+
+            nodetool.flush(cql, tbl)
+
+            insert_both = cql.prepare(
+                f"INSERT INTO {tbl} (pk, ck, v, s) VALUES (?, ?, ?, ?)")
+            cql.execute(insert_both, [1, 0, b"\x00", {999}])
+
+            wait_for_all_logs(logfile, [
+                r"partition size.*exceeds",
+                r"row size.*exceeds",
+                r"collection element count.*exceeds",
+            ], timeout=5)
+
+
+def test_each_guardrail_rejects_independently(cql, test_keyspace):
+    """Each hard limit must reject independently, with separate PKs isolating
+    each category."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_partition_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_row_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_collection_elements_count_warning_threshold', '50'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_cell_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_partition_fail_threshold_mb', '2'))
+        cfg.enter_context(config_value_context(cql,
+            'rows_count_fail_threshold', '0'))
+        cfg.enter_context(config_value_context(cql,
+            'large_row_fail_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_collection_elements_fail_threshold', '50'))
+
+        schema = "pk int, ck int, v blob, s set<int>, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            insert_v = cql.prepare(
+                f"INSERT INTO {tbl} (pk, ck, v) VALUES (?, ?, ?)")
+
+            # pk=1: 20 rows x 150 KB ~ 3 MB partition, each row < 1 MB.
+            for ck in range(20):
+                cql.execute(insert_v, [1, ck, bytes(150 * 1024)])
+
+            # pk=2: single 1.2 MB row; partition total < 2 MB.
+            cql.execute(insert_v, [2, 0, bytes(1200 * 1024)])
+
+            # pk=3: 60-element collection; row and partition tiny.
+            update_s = cql.prepare(
+                f"UPDATE {tbl} SET s = s + ? WHERE pk = ? AND ck = ?")
+            for i in range(60):
+                cql.execute(update_s, [{i}, 3, 0])
+
+            nodetool.flush(cql, tbl)
+
+            # Partition rejection.
+            with pytest.raises(WriteFailure, match="(?i)partition size.*exceeds"):
+                cql.execute(insert_v, [1, 99, b"\x00"])
+
+            # Row rejection.
+            with pytest.raises(WriteFailure, match="(?i)row size.*exceeds"):
+                cql.execute(insert_v, [2, 0, b"\x00"])
+            # Different CK in pk=2 succeeds.
+            cql.execute(insert_v, [2, 99, b"\x00"])
+
+            # Collection rejection.
+            insert_s = cql.prepare(
+                f"INSERT INTO {tbl} (pk, ck, s) VALUES (?, ?, ?)")
+            with pytest.raises(WriteFailure,
+                    match="(?i)collection element count.*exceeds"):
+                cql.execute(insert_s, [3, 0, {999}])
+            # Writing without the collection column succeeds.
+            cql.execute(insert_v, [3, 0, b"\x00"])
+            # Different CK in pk=3 succeeds.
+            cql.execute(insert_s, [3, 99, {999}])
