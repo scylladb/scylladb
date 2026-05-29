@@ -446,6 +446,10 @@ class ScyllaRESTAPIClient:
         """Drop sstable caches"""
         await self.client.post(f"/system/drop_sstable_caches", host=node_ip)
 
+    async def get_shard_to_numa_node_mapping(self, node_ip: str) -> list[int]:
+        """Return the shard-to-NUMA-node mapping (index = shard, value = NUMA node ID)."""
+        return await self.client.get_json("/system/shard_to_numa_node_mapping", host=node_ip)
+
     async def keyspace_flush(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> None:
         """Flush the specified or all tables in the keyspace"""
         url = f"/storage_service/keyspace_flush/{keyspace}"
