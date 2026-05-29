@@ -15,7 +15,6 @@ extra_scylla_config_options:
   {
     experimental_features: [
                              udf,
-                             alternator-streams,
                              keyspace-storage-options
     ],
     alternator_port: 8000,

@@ -109,7 +109,6 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         # to add here specific experimental features as they are introduced.
         'enable_user_defined_functions': True,
         'experimental_features': ['udf',
-                                  'alternator-streams',
                                   'broadcast-tables',
                                   'keyspace-storage-options',
                                   'views-with-tablets'],

@@ -1508,10 +1508,6 @@ bool executor::add_stream_options(const rjson::value& stream_specification, sche
     }
 
     if (stream_enabled->GetBool()) {
-        if (!sp.features().alternator_streams) {
-            throw api_error::validation("StreamSpecification: alternator streams feature not enabled in cluster.");
-        }
-
         cdc::options opts;
         opts.enabled(true);
         opts.tablet_merge_blocked(true);

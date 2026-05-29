@@ -115,7 +115,6 @@ struct experimental_features_t {
     enum class feature {
         UNUSED,
         UDF,
-        ALTERNATOR_STREAMS,
         BROADCAST_TABLES,
         KEYSPACE_STORAGE_OPTIONS,
         STRONGLY_CONSISTENT_TABLES,
