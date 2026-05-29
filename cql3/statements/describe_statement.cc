@@ -52,6 +52,7 @@
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/sorting.hh"
 #include "replica/database.hh"
 #include "cql3/description.hh"
@@ -73,8 +74,8 @@ namespace {
 
 template <typename Range, typename Describer>
     requires std::is_invocable_r_v<description, Describer, std::ranges::range_value_t<Range>>
-future<std::vector<description>> generate_descriptions(Range&& range, const Describer& describer, bool sort_by_name = true) {
-    std::vector<description> result{};
+future<utils::chunked_vector<description>> generate_descriptions(Range&& range, const Describer& describer, bool sort_by_name = true) {
+    utils::chunked_vector<description> result{};
     if constexpr (std::ranges::sized_range<Range>) {
         result.reserve(std::ranges::size(range));
     }
@@ -94,8 +95,8 @@ future<std::vector<description>> generate_descriptions(Range&& range, const Desc
 // `cql3::description` is a move-only type at the moment, and so we cannot initialize a vector passing
 // its instances as elements of an initializer list. This function serves as an intermediary to avoid
 // unnecessarily bloating some parts of the code below.
-std::vector<description> wrap_in_vector(description desc) {
-    std::vector<description> result{};
+utils::chunked_vector<description> wrap_in_vector(description desc) {
+    utils::chunked_vector<description> result{};
     result.reserve(1);
     result.push_back(std::move(desc));
     return result;
@@ -152,7 +153,7 @@ future<std::vector<user_type>> get_sorted_types(const lw_shared_ptr<keyspace_met
     co_return co_await utils::topological_sort(all_udts, adjacency);
 }
 
-future<std::vector<description>> types(replica::database& db, const lw_shared_ptr<keyspace_metadata>& ks, with_create_statement with_stmt) {
+future<utils::chunked_vector<description>> types(replica::database& db, const lw_shared_ptr<keyspace_metadata>& ks, with_create_statement with_stmt) {
     auto udts = co_await get_sorted_types(ks);
     auto describer = [with_stmt] (const user_type udt) -> cql3::description {
         return udt->describe(with_stmt);
@@ -160,7 +161,7 @@ future<std::vector<description>> types(replica::database& db, const lw_shared_pt
     co_return co_await generate_descriptions(udts, describer, false);
 }
     
-future<std::vector<description>> function(replica::database& db, const sstring& ks, const sstring& name) {
+future<utils::chunked_vector<description>> function(replica::database& db, const sstring& ks, const sstring& name) {
     auto fs = functions::instance().find(functions::function_name(ks, name));
     if (fs.empty()) {
         throw exceptions::invalid_request_exception(format("Function '{}' not found in keyspace '{}'", name, ks));
@@ -182,7 +183,7 @@ future<std::vector<description>> function(replica::database& db, const sstring& 
     co_return co_await generate_descriptions(udfs, describer, true);
 }
 
-future<std::vector<description>> functions(replica::database& db,const sstring& ks, with_create_statement with_stmt) {
+future<utils::chunked_vector<description>> functions(replica::database& db,const sstring& ks, with_create_statement with_stmt) {
     auto udfs = cql3::functions::instance().get_user_functions(ks);
     auto describer = [with_stmt] (shared_ptr<const functions::user_function> udf) {
         return udf->describe(with_stmt);
@@ -190,7 +191,7 @@ future<std::vector<description>> functions(replica::database& db,const sstring& 
     co_return co_await generate_descriptions(udfs, describer, true);
 }
 
-future<std::vector<description>> aggregate(replica::database& db, const sstring& ks, const sstring& name) {
+future<utils::chunked_vector<description>> aggregate(replica::database& db, const sstring& ks, const sstring& name) {
     auto fs = functions::instance().find(functions::function_name(ks, name));
     if (fs.empty()) {
         throw exceptions::invalid_request_exception(format("Aggregate '{}' not found in keyspace '{}'", name, ks));
@@ -211,7 +212,7 @@ future<std::vector<description>> aggregate(replica::database& db, const sstring&
     co_return co_await generate_descriptions(udas, describer, true);
 }
 
-future<std::vector<description>> aggregates(replica::database& db, const sstring& ks, with_create_statement with_stmt) {
+future<utils::chunked_vector<description>> aggregates(replica::database& db, const sstring& ks, with_create_statement with_stmt) {
     auto udas = functions::instance().get_user_aggregates(ks);
     auto describer = [with_stmt] (shared_ptr<const functions::user_aggregate> uda) {
         return uda->describe(with_stmt);
@@ -299,7 +300,7 @@ std::optional<description> describe_cdc_log_table(const data_dictionary::databas
     return schema_desc;
 }
 
-future<std::vector<description>> table(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
+future<utils::chunked_vector<description>> table(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
     auto table = db.try_find_table(ks, name);
     if (!table) {
         throw exceptions::invalid_request_exception(format("Table '{}' not found in keyspace '{}'", name, ks));
@@ -313,7 +314,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     auto schema = table->schema();
     auto idxs = table->get_index_manager().list_indexes();
     auto views = table->views();
-    std::vector<description> result;
+    utils::chunked_vector<description> result;
 
     // table
     auto table_desc = schema->describe(replica::make_schema_describe_helper(schema, db), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
@@ -375,7 +376,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     co_return result;
 }
 
-future<std::vector<description>> tables(const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
+future<utils::chunked_vector<description>> tables(const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
     auto& replica_db = db.real_database();
     auto tables = ks->tables() | std::views::filter([&replica_db] (const schema_ptr& s) {
         return !cdc::is_log_for_some_table(replica_db, s->ks_name(), s->cf_name()) && !service::paxos::paxos_store::try_get_base_table(s->cf_name());
@@ -383,7 +384,7 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
     std::ranges::sort(tables, std::ranges::less(), std::mem_fn(&schema::cf_name));
 
     if (with_internals) {
-        std::vector<description> result;
+        utils::chunked_vector<description> result;
         for (const auto& t: tables) {
             auto tables_desc = co_await table(db, ks->name(), t->cf_name(), *with_internals);
             result.insert(result.end(), std::make_move_iterator(tables_desc.begin()), std::make_move_iterator(tables_desc.end()));
@@ -395,7 +396,7 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
 
     co_return tables | std::views::transform([&db] (auto&& t) {
         return t->describe(replica::make_schema_describe_helper(t, db), describe_option::NO_STMTS);
-    }) | std::ranges::to<std::vector>();
+    }) | std::ranges::to<utils::chunked_vector<description>>();
 }
 
 // DESCRIBE UTILITY
@@ -423,7 +424,7 @@ lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(const data_dictionary::da
             Descriptions don't contain create_statements.
  *  @throw `invalid_request_exception` if there is no such keyspace
  */
-future<std::vector<description>> list_elements(const data_dictionary::database& db, const sstring& ks, element_type element) {
+future<utils::chunked_vector<description>> list_elements(const data_dictionary::database& db, const sstring& ks, element_type element) {
     auto ks_meta = get_keyspace_metadata(db, ks);
     auto& replica_db = db.real_database();
 
@@ -447,7 +448,7 @@ future<std::vector<description>> list_elements(const data_dictionary::database& 
             Description contains create_statement.
  *  @throw `invalid_request_exception` if there is no such keyspace or there is no element with given name
  */
-future<std::vector<description>> describe_element(const data_dictionary::database& db, const sstring& ks, element_type element, const sstring& name, bool with_internals) {
+future<utils::chunked_vector<description>> describe_element(const data_dictionary::database& db, const sstring& ks, element_type element, const sstring& name, bool with_internals) {
     auto ks_meta = get_keyspace_metadata(db, ks);
     auto& replica_db = db.real_database();
 
@@ -471,12 +472,12 @@ future<std::vector<description>> describe_element(const data_dictionary::databas
             Descriptions contain create_statements.
  *  @throw `invalid_request_exception` if there is no such keyspace or there is no element with given name
  */
-future<std::vector<description>> describe_all_keyspace_elements(const data_dictionary::database& db, const sstring& ks, bool with_internals) {
+future<utils::chunked_vector<description>> describe_all_keyspace_elements(const data_dictionary::database& db, const sstring& ks, bool with_internals) {
     auto ks_meta = get_keyspace_metadata(db, ks);
     auto& replica_db = db.real_database();
-    std::vector<description> result;
+    utils::chunked_vector<description> result;
 
-    auto inserter = [&result] (std::vector<description>&& elements) mutable {
+    auto inserter = [&result] (utils::chunked_vector<description>&& elements) mutable {
         result.insert(result.end(), std::make_move_iterator(elements.begin()), std::make_move_iterator(elements.end()));
     };
 
@@ -507,7 +508,7 @@ std::vector<lw_shared_ptr<column_specification>> get_element_column_specificatio
     return col_specs;
 }
 
-std::vector<std::vector<managed_bytes_opt>> serialize_descriptions(std::vector<description>&& descs, bool serialize_create_statement = true) {
+std::vector<std::vector<managed_bytes_opt>> serialize_descriptions(utils::chunked_vector<description>&& descs, bool serialize_create_statement = true) {
     return descs | std::views::as_rvalue | std::views::transform([serialize_create_statement] (description desc) {
         return std::move(desc).serialize(serialize_create_statement);
     }) | std::ranges::to<std::vector>();
@@ -655,7 +656,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
     auto db = qp.db();
 
     auto result = co_await std::visit(overloaded_functor{
-        [&] (const schema_desc& config) -> future<std::vector<description>> {
+        [&] (const schema_desc& config) -> future<utils::chunked_vector<description>> {
             auto& auth_service = *client_state.get_auth_service();
 
             if (config.with_hashed_passwords) {
@@ -667,7 +668,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
             }
 
             auto keyspaces = config.full_schema ? db.get_all_keyspaces() : db.get_user_keyspaces();
-            std::vector<description> schema_result;
+            utils::chunked_vector<description> schema_result;
 
             for (auto&& ks: keyspaces) {
                 if (!config.full_schema && db.extensions().is_extension_internal_keyspace(ks)) {
@@ -691,7 +692,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
 
             co_return schema_result;
         },
-        [&] (const keyspace_desc& config) -> future<std::vector<description>> {
+        [&] (const keyspace_desc& config) -> future<utils::chunked_vector<description>> {
             auto ks = client_state.get_raw_keyspace();
             if (config.keyspace) {
                 ks = *config.keyspace;
@@ -735,7 +736,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> listing_describe_statement::
         std::ranges::sort(keyspaces);
     }
 
-    std::vector<description> result;
+    utils::chunked_vector<description> result;
     for (auto&& ks: keyspaces) {
         auto ks_result = co_await list_elements(db, ks, _element);
         result.insert(result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
