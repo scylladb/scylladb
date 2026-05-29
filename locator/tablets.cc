@@ -582,12 +582,16 @@ tablet_replica tablet_map::get_primary_replica(tablet_id id, const locator::topo
     return maybe_get_primary_replica(id, replicas, topo, [&] (const auto& _) { return true; }).value();
 }
 
-tablet_replica tablet_map::get_secondary_replica(tablet_id id) const {
-    if (get_tablet_info(id).replicas.size() < 2) {
+tablet_replica tablet_map::get_secondary_replica(tablet_id id, const locator::topology& topo) const {
+    const auto& orig_replicas = get_tablet_info(id).replicas;
+    if (orig_replicas.size() < 2) {
         throw std::runtime_error(format("No secondary replica for tablet id {}", id));
     }
-    const auto& replicas = get_tablet_info(id).replicas;
-    return replicas.at((size_t(id)+1) % replicas.size());
+    tablet_replica_set replicas = orig_replicas;
+    std::ranges::sort(replicas, tablet_replica_comparator(topo));
+    // This formula must match the one in get_primary_replica(),
+    // just with + 1.
+    return replicas.at((size_t(id) + size_t(id) / replicas.size() + 1) % replicas.size());
 }
 
 std::optional<tablet_replica> tablet_map::maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
