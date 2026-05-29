@@ -7,6 +7,7 @@
  */
 #include "fsm.hh"
 #include <random>
+#include <ranges>
 #include <seastar/core/coroutine.hh>
 #include "raft/raft.hh"
 #include "utils/assert.hh"
@@ -35,11 +36,37 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
     // After we observed the state advance commit_idx to persisted one (if provided)
     // so that the log can be replayed
     _commit_idx = std::max(_commit_idx, commit_idx);
-    logger.trace("fsm[{}]: starting, current term {}, log length {}, commit index {}", _tag, _current_term, _log.last_idx(), _commit_idx);
 
-    // Init timeout settings
-    if (_log.get_configuration().current.size() == 1 && _log.get_configuration().can_vote(_my_id)) {
-        become_candidate(_config.enable_prevoting);
+    // A node that "starts as a candidate" calls an election immediately on
+    // startup instead of waiting for the randomized election timeout. There is
+    // no existing leader to disrupt in these cases, so prevoting is skipped too
+    // -- the extra round-trip would be pure overhead. We start as a candidate:
+    //  - as the (voting) member of a single-node group: it is the only possible
+    //    leader, so it should take over right away;
+    //  - as the smallest-id voting member of a fresh multi-node group (empty
+    //    log, i.e. last_idx() == 0), but only when fast bootstrap is enabled.
+    //    Restricting it to a single, deterministically-chosen node avoids all
+    //    nodes racing to call an election simultaneously (which wastes a term
+    //    and risks split votes). Fast bootstrap is gated by a config flag so
+    //    that a bare fsm (e.g. in unit tests) keeps the classic behaviour of
+    //    starting as a follower; raft::server enables it.
+    // Any node with a non-empty log has already participated in the group and
+    // must go through the normal timeout path.
+    const auto& cfg = _log.get_configuration();
+    const bool start_as_candidate = cfg.can_vote(_my_id) && (
+        cfg.current.size() == 1 || (
+            _config.enable_fast_bootstrap &&
+            _log.last_idx() == index_t{0} &&
+            std::ranges::none_of(cfg.current, [this](const auto& m) {
+                return m.can_vote && m.addr.id < _my_id;
+            })
+        )
+    );
+    logger.trace("fsm[{}]: starting, current term {}, log length {}, commit index {}, start_as_candidate {}",
+            _tag, _current_term, _log.last_idx(), _commit_idx, start_as_candidate);
+
+    if (start_as_candidate) {
+        become_candidate(false);
     } else {
         reset_election_timeout();
     }

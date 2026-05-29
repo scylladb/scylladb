@@ -2420,3 +2420,94 @@ BOOST_AUTO_TEST_CASE(test_ping_leader_sends_immediately) {
     auto& reply = std::get<raft::append_reply>(msg.second);
     BOOST_CHECK(std::holds_alternative<raft::append_reply::rejected>(reply.result));
 }
+
+
+// Test that with fast bootstrap enabled, a fresh multi-node group (empty log)
+// makes the smallest-id voter immediately become a candidate at construction
+// time and send a vote request without prevoting. A non-voter with an even
+// smaller id is present to verify that non-voters are never selected to start
+// the election.
+BOOST_AUTO_TEST_CASE(test_start_as_candidate) {
+    server_id N_id = id(), A_id = id(), B_id = id();
+    // N_id is allocated first, so it has the smallest id overall, but it is a
+    // non-voter and must be ignored. A_id is the smallest voter.
+    BOOST_CHECK(N_id < A_id);
+    BOOST_CHECK(A_id < B_id);
+    raft::configuration cfg(raft::config_member_set{
+            raft::config_member{server_addr_from_id(N_id), is_voter::no},
+            raft::config_member{server_addr_from_id(A_id), is_voter::yes},
+            raft::config_member{server_addr_from_id(B_id), is_voter::yes}});
+
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .enable_fast_bootstrap = true};
+
+    {
+        raft::log log(raft::snapshot_descriptor{.config = cfg});
+        fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+
+        // Smallest-id voter on a fresh group: immediately a candidate (not a
+        // prevote candidate — prevoting is skipped on a fresh group). The
+        // smaller-id non-voter N is ignored.
+        BOOST_CHECK(A.is_candidate());
+        BOOST_CHECK(!A.is_prevote_candidate());
+        // Term should have been bumped to 1
+        BOOST_CHECK_EQUAL(A.get_current_term(), term_t{1});
+
+        // The output should contain a vote request (not prevote) to B only;
+        // the non-voter N is not asked to vote.
+        auto output = A.get_output();
+        BOOST_CHECK_EQUAL(output.messages.size(), 1);
+        BOOST_CHECK_EQUAL(output.messages[0].first, B_id);
+        auto& vr = std::get<raft::vote_request>(output.messages[0].second);
+        BOOST_CHECK(!vr.is_prevote);
+        BOOST_CHECK_EQUAL(vr.current_term, term_t{1});
+    }
+
+    {
+        // The larger-id voter must NOT start an election; it stays a
+        // follower and waits for the election timeout.
+        raft::log log(raft::snapshot_descriptor{.config = cfg});
+        fsm_debug B(B_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+        BOOST_CHECK(B.is_follower());
+    }
+
+    {
+        // The non-voter has the smallest id but is not eligible to start an
+        // election; it stays a follower.
+        raft::log log(raft::snapshot_descriptor{.config = cfg});
+        fsm_debug N(N_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+        BOOST_CHECK(N.is_follower());
+    }
+}
+
+// Test that fast bootstrap is gated by enable_fast_bootstrap: with the flag
+// off (the default), even the smallest-id voter on a fresh group stays a
+// follower. This is what keeps the bare fsm usable in tests.
+BOOST_AUTO_TEST_CASE(test_no_start_as_candidate_without_fast_bootstrap) {
+    server_id A_id = id(), B_id = id();
+    BOOST_CHECK(A_id < B_id);
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true};
+    fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+
+    BOOST_CHECK(A.is_follower());
+}
+
+// Test that a non-empty log (a restarted server, not a fresh group) does not
+// trigger immediate candidacy even for the smallest-id voter with fast
+// bootstrap enabled.
+BOOST_AUTO_TEST_CASE(test_no_start_as_candidate_with_nonempty_log) {
+    server_id A_id = id(), B_id = id();
+    BOOST_CHECK(A_id < B_id);
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+
+    // Snapshot at index 1 => non-empty log.
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{1}, .config = cfg});
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .enable_fast_bootstrap = true};
+    fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+
+    BOOST_CHECK(A.is_follower());
+}

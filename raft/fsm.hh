@@ -59,6 +59,12 @@ struct fsm_config {
     size_t max_log_size;
     // If set to true will enable prevoting stage during election
     bool enable_prevoting;
+    // If set to true, on a fresh multi-node group (empty log) the smallest-id
+    // voting member starts an election immediately on construction instead of
+    // waiting for the election timeout, which speeds up the initial leader
+    // election. Disabled by default so that a bare fsm starts as a follower;
+    // raft::server enables it.
+    bool enable_fast_bootstrap = false;
 };
 
 class fsm;
