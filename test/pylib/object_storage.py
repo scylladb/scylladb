@@ -17,6 +17,7 @@ import uuid
 
 from test.pylib.minio_server import MinioServer
 from test.pylib.dockerized_service import DockerizedServer
+from test.pylib.host_registry import HostRegistry
 from operator import attrgetter
 
 import pytest
@@ -115,26 +116,41 @@ S3_Server = S3Server
 
 class MinioWrapper(S3Server):
     def __init__(self, tempdir):
-        self.server = MinioServer(tempdir,
-                                  '127.0.0.1',
-                                  logging.getLogger('minio'))
-        super().__init__(
-                tempdir,
-                self.server.address,
-                self.server.port,
-                self.server.access_key,
-                self.server.secret_key,
-                MinioServer.DEFAULT_REGION,
-                self.server.bucket_name)
+        self.host_registry = HostRegistry()
+        self.leased_host = None
+        self.server = None
+        # Fields are fully initialized by start(); base-class values are
+        # placeholders until then.
+        super().__init__(tempdir, '', 0, '', '', MinioServer.DEFAULT_REGION, '')
 
     def create_endpoint_conf(self):
         return MinioServer.create_conf(self.address, self.region)
 
     async def start(self):
-        return self.server.start()
+        self.leased_host = await self.host_registry.lease_host()
+        self.server = MinioServer(self.tempdir,
+                                  self.leased_host,
+                                  logging.getLogger('minio'))
+        try:
+            await self.server.start()
+        except Exception:
+            await self.host_registry.release_host(self.leased_host)
+            self.leased_host = None
+            raise
+        self.ip = self.server.address
+        self.port = self.server.port
+        self.address = f'http://{self.ip}:{self.port}'
+        self.acc_key = self.server.access_key
+        self.secret_key = self.server.secret_key
+        self.bucket_name = self.server.bucket_name
 
     async def stop(self):
-        return self.server.stop()
+        try:
+            await self.server.stop()
+        finally:
+            if self.leased_host is not None:
+                await self.host_registry.release_host(self.leased_host)
+                self.leased_host = None
 
 
 class GSFront:
