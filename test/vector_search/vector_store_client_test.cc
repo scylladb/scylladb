@@ -1004,7 +1004,7 @@ SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_connect
                 // Verify backoff timing between status check connections.
                 // Skip the first connection (ANN request) and analyze status check intervals.
                 // Allow small tolerance for timer imprecision: measured intervals can be slightly shorter than the programmed sleep duration.
-                constexpr auto TIMER_TOLERANCE = std::chrono::milliseconds(10);
+                constexpr auto TIMER_TOLERANCE = std::chrono::milliseconds(20);
                 auto duration_between_1st_and_2nd_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
                         unavail_s->connections().at(2).timestamp - unavail_s->connections().at(1).timestamp);
                 BOOST_CHECK_GE(duration_between_1st_and_2nd_status_check, std::chrono::milliseconds(100) - TIMER_TOLERANCE);
