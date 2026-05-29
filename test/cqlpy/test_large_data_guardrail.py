@@ -321,3 +321,103 @@ def test_row_no_warning_below_soft_limit(cql, test_keyspace, logfile):
 
             assert_no_log(logfile, WARN_RE,
                           lambda: cql.execute(insert, [1, 1, b"\x00"]))
+
+
+# ---------------------------------------------------------------------------
+# Collection element count threshold
+# ---------------------------------------------------------------------------
+
+
+def test_collection_rejects_after_flush(cql, test_keyspace):
+    """A collection exceeding the element-count hard limit must be rejected."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_collection_elements_count_warning_threshold', '50'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_cell_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_collection_elements_fail_threshold', '50'))
+
+        schema = "pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            build_large_collection(cql, tbl, pk=1, ck=0, num_elements=60)
+            nodetool.flush(cql, tbl)
+
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, s) VALUES (?, ?, ?)")
+            with pytest.raises(WriteFailure, match=REJECT_COLLECTION_RE):
+                cql.execute(insert, [1, 0, {0}])
+
+            # Different CK succeeds.
+            cql.execute(insert, [1, 99, {0}])
+            # Different partition succeeds.
+            cql.execute(insert, [2, 0, {0}])
+
+
+def test_collection_disabled_when_zero(cql, test_keyspace):
+    """When fail threshold is 0, no rejection even above the soft limit."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_collection_elements_count_warning_threshold', '50'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_cell_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_collection_elements_fail_threshold', '0'))
+
+        schema = "pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            build_large_collection(cql, tbl, pk=1, ck=0, num_elements=60)
+            nodetool.flush(cql, tbl)
+
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, s) VALUES (?, ?, ?)")
+            cql.execute(insert, [1, 0, {0}])
+
+
+# ---------------------------------------------------------------------------
+# Soft-limit warnings — collection
+# ---------------------------------------------------------------------------
+
+
+def test_collection_soft_limit_logs_warning(cql, test_keyspace, logfile):
+    """A collection above the detection threshold but below the hard limit
+    must produce a warning log entry."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_collection_elements_count_warning_threshold', '50'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_cell_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_collection_elements_fail_threshold', '10000'))
+
+        schema = "pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            build_large_collection(cql, tbl, pk=1, ck=0, num_elements=60)
+            nodetool.flush(cql, tbl)
+
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, s) VALUES (?, ?, ?)")
+            cql.execute(insert, [1, 0, {0}])
+
+            wait_for_log(logfile, WARN_RE, timeout=5)
+
+
+def test_collection_no_warning_below_soft_limit(cql, test_keyspace, logfile):
+    """A small collection must not produce any warning."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_collection_elements_count_warning_threshold', '50'))
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_cell_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_collection_elements_fail_threshold', '10000'))
+
+        schema = "pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, s) VALUES (?, ?, ?)")
+            cql.execute(insert, [1, 0, {1, 2, 3}])
+            nodetool.flush(cql, tbl)
+
+            assert_no_log(logfile, WARN_RE,
+                          lambda: cql.execute(insert, [1, 1, {4, 5}]))
