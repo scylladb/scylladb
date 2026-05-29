@@ -23,6 +23,7 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
         reconnect_driver, start_writes, wait_for_cdc_generations_publishing
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
 async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes_with: str):
     """
@@ -162,11 +163,35 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
             initiator = live_servers[i]
             await manager.remove_node(initiator.server_id, being_removed.server_id, ignored)
     else:
-        logging.info(f'Replacing {dead_servers}')
-        for i, being_replaced in enumerate(dead_servers):
+        # Replace dead nodes concurrently. Not recommended for users, but it should work, and it significantly speeds up
+        # the test in debug mode.
+        # Enable topology_coordinator_pause_before_processing_backlog and wait for all join requests to be placed before
+        # unblocking the topology coordinator to prevent the request rejection due to a non-ignored node being down.
+        # Ignoring all dead nodes in all replace requests would also result in rejection due to ignoring a left node.
+        recovery_leader = live_servers[0]
+        inj = 'topology_coordinator_pause_before_processing_backlog'
+        await manager.api.enable_injection(recovery_leader.ip_addr, inj, one_shot=True)
+        log = await manager.server_open_log(recovery_leader.server_id)
+        mark = await log.mark()
+
+        logging.info(f'Starting replacement of {dead_servers}')
+        async def replace_server(i, being_replaced):
             replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True,
                                         ignore_dead_nodes=[dead_srv.ip_addr for dead_srv in dead_servers[i + 1:]])
-            new_servers.append(await manager.server_add(replace_cfg=replace_cfg, config=cfg, property_file=property_file_dc2))
+            # Specify the leader as the only seed to make sure it receives all join requests (for simplicity).
+            return await manager.server_add(replace_cfg=replace_cfg, config=cfg, property_file=property_file_dc2,
+                                            seeds=[recovery_leader.ip_addr])
+        replace_tasks = [asyncio.create_task(replace_server(i, srv)) for i, srv in enumerate(dead_servers)]
+
+        logging.info(f'Waiting for join requests to be placed')
+        for _ in dead_servers:
+            mark, _ = await log.wait_for("placed join request for", from_mark=mark)
+
+        await manager.api.message_injection(recovery_leader.ip_addr, inj)
+
+        logging.info('Waiting for replace operations to complete')
+        replace_results = await gather_safely(*replace_tasks)
+        new_servers.extend(replace_results)
 
     logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
     for srv in live_servers:
