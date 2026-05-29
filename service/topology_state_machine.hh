@@ -90,6 +90,7 @@ enum class global_topology_request: uint16_t {
     noop_request,
     snapshot_tables,
     finalize_migration,
+    quiesce,
 };
 
 struct ring_slice {

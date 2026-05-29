@@ -1244,6 +1244,55 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await update_topology_state(std::move(guard), std::move(updates), "no-op request completed");
         }
         break;
+        case global_topology_request::quiesce: {
+            std::optional<sstring> error;
+            utils::chunked_vector<canonical_mutation> updates;
+            bool requires_schema_changes = false;
+
+            try {
+                rtlogger.debug("quiesce topology request: refreshing tablet load stats");
+                auto [load_stats, complete] = co_await collect_tablet_load_stats(require_live_nodes::yes);
+                if (!complete) {
+                    error = "incomplete load stats";
+                } else {
+                    auto tm = get_token_metadata_ptr();
+                    _tablet_allocator.set_load_stats(load_stats);
+                    _topo_sm.event.broadcast();
+                    auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, {});
+                    if (!plan.empty()) {
+                        error = "tablet balance plan is not empty";
+                        co_await generate_tablet_transition_updates(updates, guard, plan);
+                        requires_schema_changes = plan.requires_schema_changes();
+                    } else if (!tm->tablets().is_idle()) {
+                        error = "tablet resize in progress";
+                    }
+                }
+            } catch (...) {
+                error = fmt::format("quiesce request failed: {}", std::current_exception());
+                updates.clear();
+            }
+
+            updates.push_back(canonical_mutation(
+                    topology_mutation_builder(guard.write_timestamp())
+                         .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                         .build()));
+            updates.push_back(canonical_mutation(
+                    topology_request_tracking_mutation_builder(req_id)
+                         .set("start_time", db_clock::now())
+                         .done(error)
+                         .build()));
+            if (error) {
+                auto reason = fmt::format("quiesce request deferred: {}", *error);
+                if (requires_schema_changes) {
+                    co_await update_topology_state_with_mixed_change(std::move(guard), std::move(updates), reason);
+                } else {
+                    co_await update_topology_state(std::move(guard), std::move(updates), reason);
+                }
+            } else {
+                co_await update_topology_state(std::move(guard), std::move(updates), "quiesce request completed");
+            }
+        }
+        break;
         case global_topology_request::snapshot_tables: {
             rtlogger.info("SNAPSHOT TABLES requested");
             topology_mutation_builder builder(guard.write_timestamp());
