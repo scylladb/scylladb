@@ -31,7 +31,6 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_service.hh"
 #include "service/topology_state_machine.hh"
-#include "utils/sorting.hh"
 #include <seastar/core/reactor.hh>
 #include "utils/managed_string.hh"
 
@@ -343,15 +342,40 @@ future<> service_level_controller::auth_integration::reload_cache(qos::query_con
     // includes only roles with attached service level
     const auto attributes = co_await role_manager.query_attribute_for_all("service_level", qs);
 
-    std::map<sstring, service_level_options> effective_sl_map;
+    struct effective_sl_map_entry {
+        std::optional<service_level_options> effective_sl;
+        bool fully_computed = false;
+    };
+    std::map<sstring, effective_sl_map_entry> effective_sl_map;
 
-    auto sorted = co_await utils::topological_sort(all_roles, hierarchy);
-    // Roles are sorted from the top of the hierarchy to the bottom. 
-    /// `GRANT role1 TO role2` means role2 is higher in the hierarchy than role1, so role2 will be before
-    // role1 in `sorted` vector.
-    // That's why if we iterate over the vector in reversed order, we will visit the roles from the bottom
-    // and we can use already calculated effective service levels for all of the subroles.
-    for (auto& role: sorted | std::views::reverse) {
+    // The effective service level of a role depends on the service level directly attached to it,
+    // as well as the effective service levels of the roles granted to it. Go over all roles
+    // and compute an effective service level for each one of them, recursively computing
+    // effective service levels of the granted roles, if needed. The role grants graph should not
+    // have cycles, but if we detect one - print it and gracefully handle it.
+    std::vector<sstring> roles_stack;
+    noncopyable_function<std::optional<service_level_options>(sstring)> compute_effective_sl;
+    compute_effective_sl = [&] (sstring role) -> std::optional<service_level_options> {
+        auto [entry_it, inserted] = effective_sl_map.try_emplace(role);
+        auto& entry = entry_it->second;
+        if (!inserted) {
+            if (entry.fully_computed) {
+                return entry.effective_sl;
+            } else {
+                auto cycle_printer = seastar::value_of([&] {
+                    auto cycle_begin = std::ranges::find(roles_stack, role);
+                    return fmt::join(std::ranges::subrange(cycle_begin, roles_stack.end()), " -> ");
+                });
+                static logger::rate_limit cycle_detected_rate_limit{std::chrono::minutes(5)};
+                sl_logger.log(log_level::warn, cycle_detected_rate_limit,
+                        "Cycle detected in the system.role_members table: {} -> {}. "
+                        "Some service level parameters might be computed incorrectly.",
+                        cycle_printer, role);
+                return std::nullopt;
+            }
+        }
+
+        roles_stack.push_back(role);
         std::optional<service_level_options> sl_options;
 
         if (auto sl_name_it = attributes.find(role); sl_name_it != attributes.end()) {
@@ -370,28 +394,40 @@ future<> service_level_controller::auth_integration::reload_cache(qos::query_con
         auto [it, it_end] = hierarchy.equal_range(role);
         while (it != it_end) {
             auto& subrole = it->second;
-            if (auto sub_sl_it = effective_sl_map.find(subrole); sub_sl_it != effective_sl_map.end()) {
+            std::optional<service_level_options> sub_sl_options = compute_effective_sl(subrole);
+            if (sub_sl_options) {
                 if (sl_options) {
-                    sl_options = sl_options->merge_with(sub_sl_it->second);
+                    sl_options = sl_options->merge_with(*sub_sl_options);
                 } else {
-                    sl_options = sub_sl_it->second;
+                    sl_options = sub_sl_options;
                 }
             }
 
             ++it;
         }
 
-        if (sl_options) {
-            effective_sl_map.insert({role, *sl_options});
-        }
+        entry.effective_sl = sl_options;
+        entry.fully_computed = true;
+
+        roles_stack.pop_back();
+        return sl_options;
+    };
+
+    for (const auto& role: all_roles) {
+        compute_effective_sl(role);
         co_await coroutine::maybe_yield();
     }
 
-    co_await _sl_controller.container().invoke_on_all([effective_sl_map] (service_level_controller& sl_controller) -> future<> {
+    const auto new_effective_sl_cache = effective_sl_map
+            | std::views::filter([] (const auto& p) { return p.second.effective_sl.has_value(); })
+            | std::views::transform([] (const auto& p) { return std::pair{p.first, *p.second.effective_sl}; })
+            | std::ranges::to<std::map<sstring, service_level_options>>();
+
+    co_await _sl_controller.container().invoke_on_all([&new_effective_sl_cache] (service_level_controller& sl_controller) -> future<> {
         // We probably cannot predict if `auth_integration` is still in place on another shard,
         // so let's play it safe here.
         if (sl_controller._auth_integration) {
-            sl_controller._auth_integration->_cache = std::move(effective_sl_map);
+            sl_controller._auth_integration->_cache = new_effective_sl_cache;
         }
         co_await sl_controller.notify_effective_service_levels_cache_reloaded();
     });
