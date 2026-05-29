@@ -207,14 +207,13 @@ using ihistogram = basic_ihistogram<std::chrono::microseconds>;
  * class and set a handler at its constructor.
  */
 class meter_timer {
-    std::function<void()> _fun;
     timer<> _timer;
 public:
     static constexpr latency_counter::duration tick_interval() {
         return std::chrono::seconds(10);
     }
 
-    meter_timer(std::function<void()>&& fun) : _fun(std::move(fun)), _timer(_fun) {
+    meter_timer(noncopyable_function<void()>&& fun) : _timer(std::move(fun)) {
         _timer.arm_periodic(tick_interval());
     }
 };
