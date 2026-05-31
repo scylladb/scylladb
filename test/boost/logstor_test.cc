@@ -21,9 +21,13 @@
 #include "idl/logstor.dist.hh"
 #include "idl/logstor.dist.impl.hh"
 #include "replica/logstor/segment_io.hh"
+#include "dht/i_partitioner.hh"
 #include "schema/schema_builder.hh"
 #include <seastar/core/simple-stream.hh>
+#include "sstables/key.hh"
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 
 using namespace replica::logstor;
 
@@ -51,7 +55,7 @@ log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::ti
     auto m = make_kv_mutation(schema, std::move(pk), std::move(value), ts);
     return log_record {
         .header = {
-            .key = primary_index_key{m.decorated_key()},
+            .key = primary_index_key{*m.schema(), m.decorated_key()},
             .timestamp = ts,
             .table = schema->id(),
         },
@@ -229,9 +233,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
 
     primary_index index(schema, accounting, nullptr);
 
-    const auto pk0 = primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()};
-    const auto pk1 = primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()};
-    const auto pk2 = primary_index_key{make_kv_mutation(schema, "pk2", "v2").decorated_key()};
+    const auto pk0 = primary_index_key{*schema, make_kv_mutation(schema, "pk0", "v0").decorated_key()};
+    const auto pk1 = primary_index_key{*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key()};
+    const auto pk2 = primary_index_key{*schema, make_kv_mutation(schema, "pk2", "v2").decorated_key()};
 
     const log_location loc0{.segment = log_segment_id{1}, .offset = 0, .size = 11};
     const log_location loc0_old{.segment = log_segment_id{1}, .offset = 16, .size = 7};
@@ -391,11 +395,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     };
 
     std::vector<entry> entries = {
-        { primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()}, {.segment = log_segment_id{11}, .offset = 0, .size = 5} },
-        { primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()}, {.segment = log_segment_id{12}, .offset = 0, .size = 7} },
-        { primary_index_key{make_kv_mutation(schema, "pk2", "v2").decorated_key()}, {.segment = log_segment_id{13}, .offset = 0, .size = 11} },
-        { primary_index_key{make_kv_mutation(schema, "pk3", "v3").decorated_key()}, {.segment = log_segment_id{14}, .offset = 0, .size = 13} },
-        { primary_index_key{make_kv_mutation(schema, "pk4", "v4").decorated_key()}, {.segment = log_segment_id{15}, .offset = 0, .size = 17} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk0", "v0").decorated_key()}, {.segment = log_segment_id{11}, .offset = 0, .size = 5} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key()}, {.segment = log_segment_id{12}, .offset = 0, .size = 7} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk2", "v2").decorated_key()}, {.segment = log_segment_id{13}, .offset = 0, .size = 11} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk3", "v3").decorated_key()}, {.segment = log_segment_id{14}, .offset = 0, .size = 13} },
+        { primary_index_key{*schema, make_kv_mutation(schema, "pk4", "v4").decorated_key()}, {.segment = log_segment_id{15}, .offset = 0, .size = 17} },
     };
 
     std::sort(entries.begin(), entries.end(), [&] (const entry& a, const entry& b) {
