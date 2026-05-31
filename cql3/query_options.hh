@@ -95,11 +95,13 @@ public:
 private:
     const cql_config& _cql_config;
     const db::consistency_level _consistency;
+    const bool _skip_metadata;
     const std::optional<std::vector<std::string_view>> _names;
     raw_value_vector _values;
     raw_value_view_vector _value_views;
     unset_bind_variable_vector _unset;
-    const bool _skip_metadata;
+    // _skip_metadata packed before _names (see commit "pack _skip_metadata") --
+    // _tablet_version_block added by TABLETS_ROUTING_V2 (e361059676).
     std::optional<locator::tablet_version_block> _tablet_version_block;
     const specific_options _options;
     std::optional<std::vector<query_options>> _batch_options;
