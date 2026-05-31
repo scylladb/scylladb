@@ -137,9 +137,6 @@ public:
         // unless the reader is fast-forwarded to a new range.
         bool _end_of_stream = false;
 
-        // Set by fill buffer for segregating output by partition range.
-        std::optional<dht::partition_range> _next_range;
-
         schema_ptr _schema;
         reader_permit _permit;
         friend class mutation_reader;
