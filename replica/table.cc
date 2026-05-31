@@ -4689,9 +4689,6 @@ void table::set_schema(schema_ptr s) {
     if (_counter_cell_locks) {
         _counter_cell_locks->set_schema(s);
     }
-    if (_logstor_index) {
-        _logstor_index->set_schema(s);
-    }
     _schema = std::move(s);
     _large_data_guardrail = make_large_data_guardrail();
     _large_data_guardrail->rebuild(*get_sstables());

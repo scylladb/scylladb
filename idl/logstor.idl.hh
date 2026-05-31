@@ -14,7 +14,8 @@ namespace replica {
 namespace logstor {
 
 struct primary_index_key {
-    dht::decorated_key dk;
+    dht::token _token;
+    std::array<uint8_t, 20> _hash;
 };
 
 class log_record_header {
