@@ -140,17 +140,16 @@ async def test_basic_write_read(manager: ManagerClient):
         logger.info("Select raft group id for the tablet")
         group_id = await get_table_raft_group_id(manager, ks, 'test')
 
-        logger.info(f"Get current leader for the group {group_id}")
-        try:
-            leader_host_id = await wait_for_leader(manager, servers[0], group_id)
-        except:
-            # We need to wait for leader on a replica, and first server might not be one
-            leader_host_id = await wait_for_leader(manager, servers[1], group_id)
-        leader_host = host_by_host_id(leader_host_id)
-
         tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, "test", 0)
         assert len(tablet_replicas) == 2
         replica_host_ids = [replica[0] for replica in tablet_replicas]
+
+        logger.info(f"Get current leader for the group {group_id}")
+        if host_ids[0] in replica_host_ids:
+            leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+        else:
+            leader_host_id = await wait_for_leader(manager, servers[1], group_id)
+        leader_host = host_by_host_id(leader_host_id)
 
         logger.info(f"Get the non-leader replica for the group {group_id}")
         non_leader_replica_host_id = [host_id for host_id in replica_host_ids if str(host_id) != str(leader_host_id)][0]
@@ -738,17 +737,17 @@ async def test_forward_cql_exception_passthrough(manager: ManagerClient):
             table_name = table.split('.')[-1]
             group_id = await get_table_raft_group_id(manager, ks, table_name)
 
-            logger.info(f"Get current leader for the group {group_id}")
-            try:
-                leader_host_id = await wait_for_leader(manager, servers[0], group_id)
-            except:
-                # We need to wait for leader on a replica, and first server might not be one
-                leader_host_id = await wait_for_leader(manager, servers[1], group_id)
-            leader_host = [host for host in hosts if str(host.host_id) == str(leader_host_id)][0]
 
             tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
             assert len(tablet_replicas) == 2
             replica_host_ids = [replica[0] for replica in tablet_replicas]
+
+            logger.info(f"Get current leader for the group {group_id}")
+            if host_ids[0] in replica_host_ids:
+                leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+            else:
+                leader_host_id = await wait_for_leader(manager, servers[1], group_id)
+            leader_host = [host for host in hosts if str(host.host_id) == str(leader_host_id)][0]
 
             logger.info(f"Get the non-leader replica for the group {group_id}")
             non_leader_replica_host_id = [host_id for host_id in replica_host_ids if str(host_id) != str(leader_host_id)][0]
@@ -1447,15 +1446,14 @@ async def test_leader_cache_eliminates_redirect(manager: ManagerClient):
             table_name = table.split('.')[-1]
             group_id = await get_table_raft_group_id(manager, ks, table_name)
 
-            try:
-                leader_host_id = await wait_for_leader(manager, servers[0], group_id)
-            except:
-                leader_host_id = await wait_for_leader(manager, servers[1], group_id)
-
             tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
             assert len(tablet_replicas) == 2
             replica_host_ids = [replica[0] for replica in tablet_replicas]
 
+            if host_ids[0] in replica_host_ids:
+                leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+            else:
+                leader_host_id = await wait_for_leader(manager, servers[1], group_id)
             # Find the rack of the leader
             leader_server = next(s for hid, s in zip(host_ids, servers) if str(hid) == leader_host_id)
             leader_rack = leader_server.rack
@@ -1532,18 +1530,15 @@ async def test_read_forwarding(manager: ManagerClient):
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
             group_id = await get_table_raft_group_id(manager, ks, table_name)
-
-            for server in servers:
-                try:
-                    leader_host_id = await wait_for_leader(manager, server, group_id)
-                    break
-                except:
-                    continue
-
-            leader_host = host_by_host_id(leader_host_id)
-
             tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
             replica_host_ids = [replica[0] for replica in tablet_replicas]
+
+            for i in range(4):
+                if host_ids[i] in replica_host_ids:
+                    leader_host_id = await wait_for_leader(manager, servers[i], group_id)
+                    break
+            leader_host = host_by_host_id(leader_host_id)
+
             non_leader_replica_host_id = [hid for hid in replica_host_ids if str(hid) != str(leader_host_id)][0]
             non_leader_replica_host = host_by_host_id(non_leader_replica_host_id)
             non_replica_host_id = [hid for hid in host_ids if str(hid) not in [str(r) for r in replica_host_ids]][0]
