@@ -22,6 +22,7 @@
 #include "sstables/sstables.hh"
 #include "sstable_test.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "readers/from_mutations.hh"
@@ -324,9 +325,14 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_fast_forward_across_tablet_ranges) {
         std::unordered_map<locator::tablet_id, std::vector<dht::decorated_key>> keys_per_tablet;
 
         table.disable_auto_compaction().get();
-        for (int i = 0; i < 10; i++) {
-            env.execute_cql(fmt::format("INSERT INTO test_tablet_sstable_set.test (pk) VALUES ({})", i)).get();
-            auto key = dht::decorate_key(*s, partition_key::from_singular(*s, i));
+        for (int i = 0; i < 10
+                || keys_per_tablet.size() < 2
+                || keys_per_tablet.at(locator::tablet_id(0)).size() < 2
+                || keys_per_tablet.at(locator::tablet_id(1)).size() < 2;
+                i++) {
+            auto val = tests::random::get_int<int32_t>();
+            env.execute_cql(fmt::format("INSERT INTO test_tablet_sstable_set.test (pk) VALUES ({})", val)).get();
+            auto key = dht::decorate_key(*s, partition_key::from_singular(*s, val));
             keys_per_tablet[tmap.get_tablet_id(key.token())].push_back(key);
             // produces single-partition sstables, to stress incremental selector.
             table.flush().get();
@@ -340,8 +346,8 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_fast_forward_across_tablet_ranges) {
         auto set = replica::make_tablet_sstable_set(s, *sgm.get(), tmap);
 
         utils::get_local_injector().enable("enable_read_debug_log");
-        testlog.info("first tablet range: {}", tmap.get_token_range(locator::tablet_id(0)));
-        testlog.info("second tablet range: {}", tmap.get_token_range(locator::tablet_id(1)));
+        testlog.info("first tablet range: {}: keys={}", tmap.get_token_range(locator::tablet_id(0)), keys_per_tablet.at(locator::tablet_id(0)).size());
+        testlog.info("second tablet range: {}: keys={}", tmap.get_token_range(locator::tablet_id(1)), keys_per_tablet.at(locator::tablet_id(1)).size());
 
         auto& keys_for_first_tablet = keys_per_tablet.at(locator::tablet_id(0));
         auto& keys_for_second_tablet = keys_per_tablet.at(locator::tablet_id(1));
@@ -357,7 +363,11 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_fast_forward_across_tablet_ranges) {
 
         auto read_and_check = [&] (auto& reader, const dht::decorated_key& expected) {
             auto mopt = read_mutation_from_mutation_reader(reader).get();
-            BOOST_REQUIRE(mopt && mopt->decorated_key().equal(*s, expected));
+            BOOST_REQUIRE(mopt);
+            if (!mopt->decorated_key().equal(*s, expected)) {
+                testlog.error("Expected key: {}, got {}", expected, mopt->decorated_key());
+            }
+            BOOST_REQUIRE(mopt->decorated_key().equal(*s, expected));
         };
         auto end_of_stream_check = [&] (auto& reader) {
             BOOST_REQUIRE(!read_mutation_from_mutation_reader(reader).get());
