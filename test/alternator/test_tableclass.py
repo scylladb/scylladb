@@ -45,7 +45,6 @@ def flush_and_drop_cache(optional_rest_api, table):
 
 # Test CreateTable creating a table with the non-default TableClass
 # "STANDARD_INFREQUENT_ACCESS".
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_create_table_sia(dynamodb, optional_rest_api):
     schema = {
         'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -72,7 +71,6 @@ def test_tableclass_create_table_sia(dynamodb, optional_rest_api):
 
 # Test CreateTable creating a table with the default "STANDARD" TableClass
 # explicitly specified.
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_create_table_standard(dynamodb, optional_rest_api):
     schema = {
         'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -105,10 +103,10 @@ def test_tableclass_describe_table_explicit_standard(dynamodb):
             'TableClass': 'STANDARD'
         }
 
+
 # Test that setting TableClass to unsupported names produces an error.
 # This test also confirms that the TableClass string is cases sensitive -
 # 'STANDARD' works (as we checked above) but lowercase 'standard' doesn't.
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_create_table_bad_tableclass(dynamodb):
     for tableclass in ['invalid_tableclass_name', 'standard']:
         schema = {
