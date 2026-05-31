@@ -165,7 +165,6 @@ def wait_for_active(table):
 #    related variables. You can still access your table normally while it is
 #    converted. Note that no more than two table class updates on your table
 #    are allowed in a 30-day trailing period."
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_update_table(dynamodb):
     schema = {
         'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -292,7 +291,6 @@ def test_tableclass_sia_indexes_use_zstd(dynamodb, scylla_only):
 # DynamoDB documents that when UpdateTable changes a table's table class,
 # all its secondary indexes change too, and that a GSI added later uses the
 # table's table class.
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_update_table_indexes(dynamodb, scylla_only):
     schema = {
         'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' },
