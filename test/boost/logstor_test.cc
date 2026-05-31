@@ -31,8 +31,10 @@
 
 #include "replica/logstor/segment_io.hh"
 #include "replica/database.hh"
+#include "dht/i_partitioner.hh"
 #include "schema/schema_builder.hh"
 #include <seastar/core/simple-stream.hh>
+#include "sstables/key.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -53,7 +55,7 @@ schema_ptr make_kv_schema() {
 }
 
 primary_index_key make_index_key(const schema& s, const dht::decorated_key& dk) {
-    return primary_index_key{dk};
+    return primary_index_key{s, dk};
 }
 
 mutation make_kv_mutation(schema_ptr schema, sstring pk, sstring value, api::timestamp_type ts = api::min_timestamp) {
@@ -355,7 +357,7 @@ class test_compaction_group_handle final : public logstor_group {
 public:
     test_compaction_group_handle(schema_ptr schema, logstor& ls)
         : _table_id(schema->id())
-        , _owned_index(ls.make_primary_index(schema, false))
+        , _owned_index(ls.make_primary_index(false))
         , _index(*_owned_index)
         , _cm(ls.get_compaction_manager()) {
         _cm.add(*this);
@@ -937,7 +939,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
         }
     } accounting;
 
-    primary_index index(schema, accounting, nullptr);
+    primary_index index(accounting, nullptr);
 
     const auto pk0 = make_index_key(*schema, make_kv_mutation(schema, "pk0", "v0").decorated_key());
     const auto pk1 = make_index_key(*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key());
@@ -1093,7 +1095,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
         }
     } accounting;
 
-    primary_index index(schema, accounting, nullptr);
+    primary_index index(accounting, nullptr);
 
     struct entry {
         primary_index_key key;

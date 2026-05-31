@@ -83,7 +83,8 @@ std::optional<mutation> cache_tracker::peek(const primary_index_entry& pie, sche
     std::optional<mutation> cached_mut;
     _read_section(region(), [&] {
         if (pie._cached_entry) {
-            cached_mut = mutation(pie._cached_entry->schema(), pie.key().dk, pie._cached_entry->partition());
+            dht::decorated_key dk(pie.key().token(), pie._cached_entry->key());
+            cached_mut.emplace(pie._cached_entry->schema(), dk, pie._cached_entry->partition());
         }
     });
 

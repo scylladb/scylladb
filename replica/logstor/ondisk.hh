@@ -11,14 +11,8 @@
 #include "idl/uuid.dist.hh"
 #include "idl/uuid.dist.impl.hh"
 #include "dht/token.hh"
-#include "dht/decorated_key.hh"
-#include "keys/keys.hh"
 #include "replica/logstor/types.hh"
 #include "serializer.hh"
-// Declares serializer<dht::decorated_key>, which the index key serializer below delegates to.
-// It names the key types without including them, so it has to come after the headers above.
-#include "idl/token.dist.hh"
-#include "idl/token.dist.impl.hh"
 
 namespace replica::logstor {
 
@@ -83,21 +77,25 @@ bool validate_record_header(const record_header& rh);
 namespace ser {
 
 // The index key and the log record header are logstor's own on-disk format, so their encoding
-// lives here rather than in an IDL definition. The key delegates to the decorated_key serializer,
-// which is shared with the rest of the tree.
+// lives here rather than in an IDL definition.
 template <>
 struct serializer<replica::logstor::primary_index_key> {
     template <typename Output>
     static void write(Output& out, const replica::logstor::primary_index_key& key) {
-        serializer<dht::decorated_key>::write(out, key.dk);
+        serializer<int64_t>::write(out, key._token.raw());
+        out.write(reinterpret_cast<const char*>(key._hash.data()), key._hash.size());
     }
     template <typename Input>
     static replica::logstor::primary_index_key read(Input& in) {
-        return replica::logstor::primary_index_key{serializer<dht::decorated_key>::read(in)};
+        replica::logstor::primary_index_key key;
+        key._token = dht::token::from_int64(serializer<int64_t>::read(in));
+        in.read(reinterpret_cast<char*>(key._hash.data()), key._hash.size());
+        return key;
     }
     template <typename Input>
     static void skip(Input& in) {
-        serializer<dht::decorated_key>::skip(in);
+        serializer<int64_t>::skip(in);
+        in.skip(replica::logstor::key_hash_size);
     }
 };
 

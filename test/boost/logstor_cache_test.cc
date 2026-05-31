@@ -46,13 +46,13 @@ schema_ptr make_logstor_schema() {
 primary_index_key make_primary_index_key(const schema& schema, sstring pk) {
     auto pkey = partition_key::from_single_value(schema, serialized(pk));
     auto dk = dht::decorate_key(schema, pkey);
-    return primary_index_key{dk};
+    return primary_index_key{schema, dk};
 }
 
 primary_index_key make_fixed_token_key(const schema& schema, int64_t token, sstring pk) {
     auto pkey = partition_key::from_single_value(schema, serialized(pk));
     auto dk = dht::decorated_key(dht::token::from_int64(token), std::move(pkey));
-    return primary_index_key{dk};
+    return primary_index_key{schema, dk};
 }
 
 index_entry make_index_entry(uint32_t segment, uint32_t offset, uint32_t size, api::timestamp_type timestamp) {
@@ -122,7 +122,7 @@ std::vector<primary_index_key> insert_same_token_keys(primary_index& index, cons
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_eviction) {
     auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    primary_index index(schema, noop_space_accounting, &cache.logstor_tracker);
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
 
     auto key0 = make_primary_index_key(*schema, "pk0");
     auto key1 = make_primary_index_key(*schema, "pk1");
@@ -207,7 +207,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_drain_cache_preserves_index_entries) {
     auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    primary_index index(schema, noop_space_accounting, &cache.logstor_tracker);
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
 
     auto key0 = make_primary_index_key(*schema, "pk0");
     auto key1 = make_primary_index_key(*schema, "pk1");
@@ -234,7 +234,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_drain_cache_preserves_index_
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalancing) {
     auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    primary_index index(schema, noop_space_accounting, &cache.logstor_tracker);
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
 
     constexpr int64_t fixed_token = 7;
     auto hot_keys = insert_same_token_keys(index, *schema, fixed_token, 0, 24);
@@ -294,7 +294,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_resumes_across_batches_by_token) {
     auto schema = make_logstor_schema();
-    primary_index index(schema, noop_space_accounting, nullptr);
+    primary_index index(noop_space_accounting, nullptr);
 
     insert_same_token_keys(index, *schema, 7, 0, 2);
     insert_same_token_keys(index, *schema, 11, 100, 3);
@@ -328,7 +328,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_resumes_across_batches_
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_token_batch_intact) {
     auto schema = make_logstor_schema();
-    primary_index index(schema, noop_space_accounting, nullptr);
+    primary_index index(noop_space_accounting, nullptr);
 
     insert_same_token_keys(index, *schema, 23, 0, 5);
     insert_same_token_keys(index, *schema, 29, 100, 1);
@@ -353,7 +353,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_to
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_exchange) {
     auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    primary_index index(schema, noop_space_accounting, &cache.logstor_tracker);
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
 
     constexpr int64_t fixed_token = 19;
     auto keys = insert_same_token_keys(index, *schema, fixed_token, 20'000, 8);
@@ -398,7 +398,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_excha
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_upgrades_cached_partition_after_schema_change) {
     auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    primary_index index(schema, noop_space_accounting, &cache.logstor_tracker);
+    primary_index index(noop_space_accounting, &cache.logstor_tracker);
 
     auto key = make_primary_index_key(*schema, "pk0");
     BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
@@ -408,7 +408,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_upgrades_cached_partition_after_sche
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, 1);
 
     auto new_schema = schema_builder(schema).with_column("v2", utf8_type).build();
-    index.set_schema(new_schema);
 
     auto hits_before = cache.shared_tracker.get_stats().partition_hits;
     BOOST_REQUIRE(lookup_exists(index, key, new_schema));
