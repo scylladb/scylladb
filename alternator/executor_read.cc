@@ -354,6 +354,7 @@ filter::filter(parsed::expression_cache& parsed_expression_cache, const rjson::v
             resolve_condition_expression(parsed,
                     expression_attribute_names, expression_attribute_values,
                     used_attribute_names, used_attribute_values);
+            validate_filter_expression(parsed);
             _imp = expression_filter { std::move(parsed) };
         } catch(expressions_syntax_error& e) {
             throw api_error::validation(e.what());

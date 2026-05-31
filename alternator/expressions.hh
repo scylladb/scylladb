@@ -65,6 +65,7 @@ void resolve_condition_expression(parsed::condition_expression& ce,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values);
+void validate_filter_expression(const parsed::condition_expression& ce);
 
 void validate_value(const rjson::value& v, const char* caller);
 
