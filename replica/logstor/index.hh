@@ -7,16 +7,17 @@
  */
 #pragma once
 
-#include "dht/decorated_key.hh"
-#include "dht/ring_position.hh"
+#include "dht/i_partitioner.hh"
 #include <functional>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <optional>
+#include "dht/token.hh"
 #include "types.hh"
 #include "utils/bptree.hh"
 #include "utils/double-decker.hh"
 #include "utils/on_internal_error.hh"
 #include "utils/phased_barrier.hh"
+#include "utils/small_vector.hh"
 #include <utility>
 #include "replica/logstor/cache.hh"
 
@@ -77,7 +78,7 @@ public:
     }
 
     size_t memory_usage() const noexcept {
-        return sizeof(primary_index_entry) + _key.dk.external_memory_usage();
+        return sizeof(primary_index_entry);
     }
 
     bool is_head() const noexcept { return _flags._head; }
@@ -91,20 +92,12 @@ public:
     const index_entry& entry() const noexcept { return _e; }
 
     friend class primary_index;
+
 };
 
-inline dht::ring_position_view ring_position_view_to_compare(const primary_index_key& key) {
-    return key.dk;
-}
-
 struct primary_index_key_cmp {
-
-    dht::ring_position_comparator cmp;
-
-    primary_index_key_cmp(const schema& s) : cmp(s) {}
-
     std::strong_ordering operator()(const primary_index_key& lhs, const primary_index_key& rhs) const noexcept {
-        return cmp(lhs.dk, rhs.dk);
+        return lhs <=> rhs;
     }
     std::strong_ordering operator()(int64_t lhs, const primary_index_key& rhs) const noexcept {
         return dht::tri_compare_raw(lhs, rhs.token().raw());
@@ -113,25 +106,19 @@ struct primary_index_key_cmp {
         return dht::tri_compare_raw(lhs.token().raw(), rhs);
     }
     std::strong_ordering operator()(const primary_index_entry& lhs, const primary_index_entry& rhs) const noexcept {
-        return cmp(lhs.key().dk, rhs.key().dk);
+        return lhs.key() <=> rhs.key();
     }
     std::strong_ordering operator()(const primary_index_entry& lhs, const primary_index_key& rhs) const noexcept {
-        return cmp(lhs.key().dk, rhs.dk);
+        return lhs.key() <=> rhs;
     }
     std::strong_ordering operator()(const primary_index_key& lhs, const primary_index_entry& rhs) const noexcept {
-        return cmp(lhs.dk, rhs.key().dk);
+        return lhs <=> rhs.key();
     }
     std::strong_ordering operator()(const primary_index_entry& lhs, int64_t rhs) const noexcept {
         return (*this)(lhs.key(), rhs);
     }
     std::strong_ordering operator()(int64_t lhs, const primary_index_entry& rhs) const noexcept {
         return (*this)(lhs, rhs.key());
-    }
-    std::strong_ordering operator()(const primary_index_entry& lhs, const dht::ring_position_view& rhs) const noexcept {
-        return cmp(lhs.key().dk, rhs);
-    }
-    std::strong_ordering operator()(const dht::ring_position_view& lhs, const primary_index_entry& rhs) const noexcept {
-        return cmp(lhs, rhs.key().dk);
     }
 };
 
@@ -274,7 +261,6 @@ public:
 
 private:
     partitions_type _partitions;
-    schema_ptr _schema;
     size_t _key_count = 0;
     size_t _memory_usage = 0;
 
@@ -321,43 +307,42 @@ private:
             auto next_key = chunk_end->key();
             _partitions.erase_and_dispose(begin, chunk_end, dispose);
             co_await coroutine::maybe_yield();
-            begin = _partitions.lower_bound(next_key, primary_index_key_cmp(*_schema));
+            begin = _partitions.lower_bound(next_key, primary_index_key_cmp{});
         }
     }
 
     auto find_key(this auto& self, const primary_index_key& key) {
-        return self._partitions.find(key, primary_index_key_cmp{*self._schema});
+        return self._partitions.find(key, primary_index_key_cmp{});
     }
 
     auto position_at_range_start(this auto& self, const dht::token_range& tr) -> decltype(self._partitions.begin()) {
         return tr.start()
                 ? (tr.start()->is_inclusive()
-                    ? self._partitions.lower_bound(tr.start()->value().raw(), primary_index_key_cmp{*self._schema})
-                    : self._partitions.upper_bound(tr.start()->value().raw(), primary_index_key_cmp{*self._schema}))
+                    ? self._partitions.lower_bound(tr.start()->value().raw(), primary_index_key_cmp{})
+                    : self._partitions.upper_bound(tr.start()->value().raw(), primary_index_key_cmp{}))
                 : self._partitions.begin();
     }
 
     auto position_at_range_end(this auto& self, const dht::token_range& tr) -> decltype(self._partitions.end()) {
         return tr.end()
                 ? (tr.end()->is_inclusive()
-                    ? self._partitions.upper_bound(tr.end()->value().raw(), primary_index_key_cmp{*self._schema})
-                    : self._partitions.lower_bound(tr.end()->value().raw(), primary_index_key_cmp{*self._schema}))
+                    ? self._partitions.upper_bound(tr.end()->value().raw(), primary_index_key_cmp{})
+                    : self._partitions.lower_bound(tr.end()->value().raw(), primary_index_key_cmp{}))
                 : self._partitions.end();
     }
 
     const_iterator upper_bound(dht::token token) const {
-        return _partitions.upper_bound(token.raw(), primary_index_key_cmp{*_schema});
+        return _partitions.upper_bound(token.raw(), primary_index_key_cmp{});
     }
 
 public:
     explicit primary_index(schema_ptr schema, cache_tracker* ct)
         : _partitions(dht::raw_token_less_comparator{})
-        , _schema(std::move(schema))
         , _cache_tracker(ct)
         {}
 
     void set_schema(schema_ptr s) {
-        _schema = std::move(s);
+        (void)s;
     }
 
     future<> drain_cache() {
@@ -455,7 +440,7 @@ public:
 
     std::pair<bool, std::optional<index_entry>> insert(const primary_index_key& key, index_entry new_entry, entry_cmp_fn cmp = default_entry_cmp) {
         partitions_type::bound_hint hint;
-        auto i = _partitions.lower_bound(key, primary_index_key_cmp(*_schema), hint);
+        auto i = _partitions.lower_bound(key, primary_index_key_cmp{}, hint);
         if (hint.match) {
             if (cmp(i->_e, new_entry) <= 0) {
                 // Overwriting with newer data: evict stale cached mutation.

@@ -20,9 +20,13 @@
 #include "idl/logstor.dist.hh"
 #include "idl/logstor.dist.impl.hh"
 #include "replica/logstor/segment_io.hh"
+#include "dht/i_partitioner.hh"
 #include "schema/schema_builder.hh"
 #include <seastar/core/simple-stream.hh>
+#include "sstables/key.hh"
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 
 using namespace replica::logstor;
 
@@ -50,7 +54,7 @@ log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::ti
     auto m = make_kv_mutation(schema, std::move(pk), std::move(value), ts);
     return log_record {
         .header = {
-            .key = primary_index_key{m.decorated_key()},
+            .key = primary_index_key{*m.schema(), m.decorated_key()},
             .timestamp = ts,
             .table = schema->id(),
         },

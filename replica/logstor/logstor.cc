@@ -9,20 +9,28 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/future.hh>
-#include "dht/decorated_key.hh"
 #include "query/query-request.hh"
 #include "readers/from_mutations.hh"
+#include "readers/empty.hh"
 #include "keys/keys.hh"
+#include "replica/logstor/key_utils.hh"
 #include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/types.hh"
 #include <seastar/core/when_all.hh>
 #include "utils/managed_bytes.hh"
-#include <openssl/ripemd.h>
+#include <seastar/util/defer.hh>
 #include <openssl/evp.h>
+#include <algorithm>
+#include <queue>
+#include <vector>
 
 namespace replica::logstor {
 
 seastar::logger logstor_logger("logstor");
+
+primary_index_key::primary_index_key(const schema& s, const dht::decorated_key& dk)
+    : primary_index_key(dk.token(), compute_key_hash(s, dk.key().view())) {
+}
 
 static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
     const auto& partition = m.partition();
@@ -97,7 +105,7 @@ std::unique_ptr<primary_index> logstor::make_primary_index(schema_ptr schema, bo
 
 
 future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout) {
-    primary_index_key key(m.decorated_key());
+    primary_index_key key(*m.schema(), m.decorated_key());
     table_id table = m.schema()->id();
     auto& index = cg.get_logstor_index();
 
@@ -137,7 +145,7 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
 future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
     auto op = index.start_read();
 
-    primary_index_key pk(dk);
+    primary_index_key pk(*s, dk);
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     auto lookup = index.lookup_for_read(pk, s, !bypass_cache);

@@ -39,13 +39,13 @@ schema_ptr make_logstor_schema() {
 primary_index_key make_primary_index_key(const schema& schema, sstring pk) {
     auto pkey = partition_key::from_single_value(schema, serialized(pk));
     auto dk = dht::decorate_key(schema, pkey);
-    return primary_index_key{dk};
+    return primary_index_key{schema, dk};
 }
 
 primary_index_key make_fixed_token_key(const schema& schema, int64_t token, sstring pk) {
     auto pkey = partition_key::from_single_value(schema, serialized(pk));
     auto dk = dht::decorated_key(dht::token::from_int64(token), std::move(pkey));
-    return primary_index_key{dk};
+    return primary_index_key{schema, dk};
 }
 
 index_entry make_index_entry(uint32_t segment, uint32_t offset, uint32_t size, api::timestamp_type timestamp) {
