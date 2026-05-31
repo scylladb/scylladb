@@ -554,7 +554,7 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
     };
 }
 
-future<cql_server::forward_cql_result>
+future<foreign_ptr<std::unique_ptr<cql_transport::response>>>
 cql_server::forward_cql(
     locator::host_id target_host,
     unsigned target_shard,
@@ -562,7 +562,8 @@ cql_server::forward_cql(
     bool is_write,
     uint16_t stream,
     tracing::trace_state_ptr trace_state,
-    forward_cql_execute_request req)
+    forward_cql_execute_request req,
+    const locator::host_id_or_exception_callback& on_forwarding_finished)
 {
     clogger.trace("Forwarding CQL request to {} shard {}", target_host, target_shard);
     tracing::trace(trace_state, "Forwarding CQL request to {} shard {}", target_host, target_shard);
@@ -577,6 +578,9 @@ cql_server::forward_cql(
             std::exception_ptr eptr = response_fut.get_exception();
             if (try_catch<seastar::rpc::timeout_error>(eptr)) {
                 clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC timeout. Will return blanket timeout exception", target_host, target_shard);
+                if (on_forwarding_finished) {
+                    on_forwarding_finished(eptr);
+                }
                 eptr = is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_timeout_exception(
                         format("Write request timed out while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, db::write_type::SIMPLE))
@@ -584,6 +588,9 @@ cql_server::forward_cql(
                         format("Read request timed out while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, false));
             } else if (try_catch<seastar::rpc::closed_error>(eptr)) {
                 clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC closed connection. Will return blanket failure exception", target_host, target_shard);
+                if (on_forwarding_finished) {
+                    on_forwarding_finished(eptr);
+                }
                 eptr = is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_failure_exception(
                         format("Write request failed while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, 0, db::write_type::SIMPLE))
@@ -601,10 +608,10 @@ cql_server::forward_cql(
             _stats.requests_forwarded_successfully++;
             clogger.trace("Forwarded CQL request executed successfully on replica: {}", target_host);
             tracing::trace(trace_state, "Forwarded CQL request executed successfully on replica: {}", target_host);
-            co_return forward_cql_result{
-                .response = std::make_unique<cql_transport::response>(stream, cql_binary_opcode::RESULT, response.response_flags, std::move(response.response_body)),
-                .final_host = current_host,
-            };
+            if (on_forwarding_finished) {
+                on_forwarding_finished(current_host);
+            }
+            co_return std::make_unique<cql_transport::response>(stream, cql_binary_opcode::RESULT, response.response_flags, std::move(response.response_body));
         case forward_cql_status::error: {
             _stats.requests_forwarded_failed++;
             clogger.trace("Forwarded CQL request failed on replica: {}", target_host);
@@ -612,15 +619,9 @@ cql_server::forward_cql(
             auto result = std::make_unique<cql_transport::response>(stream, cql_binary_opcode::ERROR,
                                                         response.response_flags, std::move(response.response_body));
             if (response.timeout) {
-                co_return forward_cql_result{
-                    .response = co_await sleep_until_timeout_passes(*response.timeout, std::move(result)),
-                    .final_host = current_host,
-                };
+                co_return co_await sleep_until_timeout_passes(*response.timeout, std::move(result));
             }
-            co_return forward_cql_result{
-                .response = std::move(result),
-                .final_host = current_host,
-            };
+            co_return std::move(result);
         }
         case forward_cql_status::prepared_not_found: {
             _stats.requests_forwarded_prepared_not_found++;
@@ -1960,16 +1961,11 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 .cached_fn_calls = std::move(cached_fn_calls),
             };
 
-            auto result = co_await forward_cql(
+            auto response = co_await forward_cql(
                 target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(),
-                stream, trace_state, std::move(req));
+                stream, trace_state, std::move(req), (*bounce_msg)->on_forwarding_finished());
 
-            const auto& on_node_resolved = (*bounce_msg)->on_node_resolved();
-            if (on_node_resolved) {
-                on_node_resolved(result.final_host);
-            }
-
-            co_return cql_server::result_with_foreign_response_ptr(std::move(result.response));
+            co_return cql_server::result_with_foreign_response_ptr(std::move(response));
         }
     }
     co_return std::move(msg);

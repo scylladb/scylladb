@@ -40,7 +40,7 @@ enum class read_type {
 
 struct need_redirect {
     locator::tablet_replica target;
-    noncopyable_function<void(locator::host_id)> on_node_resolved;
+    locator::host_id_or_exception_callback on_forwarding_finished;
 };
 template <typename T = std::monostate>
 using value_or_redirect = std::variant<T, need_redirect>;

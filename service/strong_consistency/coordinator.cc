@@ -199,8 +199,12 @@ static need_redirect redirect_to_leader(locator::tablet_replica target, groups_m
         // The `local()` here is needed to update the cache on the shard handling
         // the client request which may be different from the shard currently
         // executing the statement.
-        .on_node_resolved = [container = &gm.container(), group_id] (locator::host_id leader) {
-            container->local().leader_cache().put(group_id, leader);
+        .on_forwarding_finished = [container = &gm.container(), group_id] (locator::host_id_or_exception leader) {
+            if (std::holds_alternative<locator::host_id>(leader)) {
+                container->local().leader_cache().put(group_id, std::get<locator::host_id>(leader));
+            } else {
+                container->local().leader_cache().erase(group_id);
+            }
         },
     };
 }
@@ -240,11 +244,11 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
         // For now, reads skip the cache because any replica can serve them.
         if (use_leader_cache) {
             if (const auto cached = _groups_manager.leader_cache().get(raft_info.group_id)) {
-                if (const auto* target = find_replica(tablet_info, *cached)) {
+                if (const auto* target = find_replica(tablet_info, *cached); target && _gossiper.is_alive(target->host)) {
                     return make_ready_future<value_or_redirect<operation_ctx>>(
                         redirect_to_leader(*target, _groups_manager, raft_info.group_id));
                 }
-                // Cached leader is no longer a replica, evict it.
+                // Cached leader is no longer a replica/alive, evict it.
                 _groups_manager.leader_cache().erase(raft_info.group_id);
             }
         }
