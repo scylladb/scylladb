@@ -28,11 +28,11 @@ thread_local query_options query_options::DEFAULT{default_cql_config,
 query_options::query_options(query_options&& o) noexcept
     : _cql_config(o._cql_config)
     , _consistency(o._consistency)
+    , _skip_metadata(o._skip_metadata)
     , _names(std::move(o._names))
     , _values(std::move(o._values))
     , _value_views()
     , _unset(std::move(o._unset))
-    , _skip_metadata(o._skip_metadata)
     , _options(std::move(o._options))
     , _batch_options(std::move(o._batch_options))
     , _list_append_seq(o._list_append_seq)
@@ -68,11 +68,11 @@ query_options::query_options(const cql_config& cfg,
                            )
    : _cql_config(cfg)
    , _consistency(consistency)
+   , _skip_metadata(skip_metadata)
    , _names(std::move(names))
    , _values(std::move(values))
    , _value_views(std::move(value_views))
    , _unset(std::move(unset))
-   , _skip_metadata(skip_metadata)
    , _options(std::move(options))
 {
 }
@@ -86,11 +86,11 @@ query_options::query_options(const cql_config& cfg,
                              )
     : _cql_config(cfg)
     , _consistency(consistency)
+    , _skip_metadata(skip_metadata)
     , _names(std::move(names))
     , _values(std::move(values.values))
     , _value_views()
     , _unset(std::move(values.unset))
-    , _skip_metadata(skip_metadata)
     , _options(std::move(options))
 {
     fill_value_views();
@@ -105,11 +105,11 @@ query_options::query_options(const cql_config& cfg,
                              )
     : _cql_config(cfg)
     , _consistency(consistency)
+    , _skip_metadata(skip_metadata)
     , _names(std::move(names))
     , _values()
     , _value_views(std::move(value_views.values))
     , _unset(std::move(value_views.unset))
-    , _skip_metadata(skip_metadata)
     , _options(std::move(options))
 {
 }

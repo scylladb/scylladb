@@ -94,11 +94,11 @@ public:
 private:
     const cql_config& _cql_config;
     const db::consistency_level _consistency;
+    const bool _skip_metadata;
     const std::optional<std::vector<std::string_view>> _names;
     raw_value_vector _values;
     raw_value_view_vector _value_views;
     unset_bind_variable_vector _unset;
-    const bool _skip_metadata;
     const specific_options _options;
     std::optional<std::vector<query_options>> _batch_options;
     // We must use the same microsecond-precision timestamp for
