@@ -8,6 +8,7 @@
 #include <boost/test/unit_test.hpp>
 #include <optional>
 
+#include "replica/logstor/types.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 
@@ -61,7 +62,7 @@ mutation make_mutation(simple_schema& schema, const dht::decorated_key& dk, sstr
 }
 
 void populate(primary_index& index, const dht::decorated_key& dk, const mutation& m) {
-    auto it = index.find(dk);
+    auto it = index.find(primary_index_key{dk});
     BOOST_REQUIRE(it != index.end());
     auto* ct = index.cache_tracker();
     BOOST_REQUIRE(ct);
@@ -69,16 +70,16 @@ void populate(primary_index& index, const dht::decorated_key& dk, const mutation
 }
 
 mutation lookup(primary_index& index, replica::logstor::cache_tracker& tracker, const dht::decorated_key& dk, schema_ptr schema) {
-    auto it = index.find(dk);
+    auto it = index.find(primary_index_key{dk});
     BOOST_REQUIRE(it != index.end());
 
-    auto result = tracker.lookup(*it, std::move(schema));
+    auto result = tracker.lookup(*it, schema);
     BOOST_REQUIRE(result);
-    return std::move(*result);
+    return mutation(std::move(schema), dk, std::move(*result));
 }
 
 bool lookup_exists(primary_index& index, replica::logstor::cache_tracker& tracker, const dht::decorated_key& dk, schema_ptr schema) {
-    auto it = index.find(dk);
+    auto it = index.find(primary_index_key{dk});
     BOOST_REQUIRE(it != index.end());
 
     return bool(tracker.lookup(*it, std::move(schema)));
@@ -157,7 +158,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
 
     BOOST_REQUIRE(index.erase(primary_index_key{dk1}, make_index_entry(1, 10, 10, 1).location) == false);
     BOOST_REQUIRE(index.erase(primary_index_key{dk1}, make_index_entry(2, 10, 12, 2).location));
-    BOOST_REQUIRE(index.find(dk1) == index.end());
+    BOOST_REQUIRE(index.find(primary_index_key{dk1}) == index.end());
 
     populate(index, dk2, mut2);
     populate(index, dk3, mut3);
@@ -175,7 +176,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_evictions, evictions_before + 1);
 
     auto cached_after_eviction = int(lookup_exists(index, cache.logstor_tracker, dk0, schema.schema()))
-            + int(index.find(dk2) != index.end() && lookup_exists(index, cache.logstor_tracker, dk2, schema.schema()))
+            + int(index.find(primary_index_key{dk2}) != index.end() && lookup_exists(index, cache.logstor_tracker, dk2, schema.schema()))
             + int(lookup_exists(index, cache.logstor_tracker, dk3, schema.schema()));
     BOOST_REQUIRE_EQUAL(cached_after_eviction, 2);
 
@@ -183,11 +184,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, 6);
     assert_that(lookup(index, cache.logstor_tracker, dk0, schema.schema())).is_equal_to(mut0);
 
-    index.erase(dht::partition_range::make_singular(dk2)).get();
-    BOOST_REQUIRE(index.find(dk2) == index.end());
+    BOOST_REQUIRE(index.erase(primary_index_key{dk2}, make_index_entry(2, 20, 12, 2).location));
+    BOOST_REQUIRE(index.find(primary_index_key{dk2}) == index.end());
 
-    BOOST_REQUIRE(index.find(dk0) != index.end());
-    BOOST_REQUIRE(index.find(dk3) != index.end());
+    BOOST_REQUIRE(index.find(primary_index_key{dk0}) != index.end());
+    BOOST_REQUIRE(index.find(primary_index_key{dk3}) != index.end());
 
     index.clear().get();
     BOOST_REQUIRE(index.empty());
@@ -215,8 +216,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_drain_cache_preserves_index_
 
     index.drain_cache().get();
 
-    BOOST_REQUIRE(index.find(dk0) != index.end());
-    BOOST_REQUIRE(index.find(dk1) != index.end());
+    BOOST_REQUIRE(index.find(primary_index_key{dk0}) != index.end());
+    BOOST_REQUIRE(index.find(primary_index_key{dk1}) != index.end());
     BOOST_REQUIRE(!lookup_exists(index, cache.logstor_tracker, dk0, schema.schema()));
     BOOST_REQUIRE(!lookup_exists(index, cache.logstor_tracker, dk1, schema.schema()));
 }
@@ -274,12 +275,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, insertions_before_repopulate + hot_keys.size());
 
     for (size_t i = 0; i < hot_keys.size(); ++i) {
-        auto it = index.find(hot_keys[i]);
+        auto it = index.find(primary_index_key{hot_keys[i]});
         BOOST_REQUIRE(it != index.end());
         assert_that(lookup(index, cache.logstor_tracker, hot_keys[i], schema.schema())).is_equal_to(hot_mutations[i]);
     }
 
-    BOOST_REQUIRE(index.find(grown_keys.back()) != index.end());
+    BOOST_REQUIRE(index.find(primary_index_key{grown_keys.back()}) != index.end());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_exchange) {

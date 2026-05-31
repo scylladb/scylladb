@@ -172,7 +172,7 @@ public:
 
     void evict(const primary_index_entry&) noexcept;
 
-    std::optional<mutation> lookup(const primary_index_entry&, schema_ptr) noexcept;
+    std::optional<mutation_partition> lookup(const primary_index_entry&, schema_ptr) noexcept;
 
     void populate(const primary_index_entry&, const mutation&) noexcept;
 

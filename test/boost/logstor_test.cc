@@ -22,9 +22,13 @@
 #include "idl/logstor.dist.hh"
 #include "idl/logstor.dist.impl.hh"
 #include "replica/logstor/segment_io.hh"
+#include "dht/i_partitioner.hh"
 #include "schema/schema_builder.hh"
 #include <seastar/core/simple-stream.hh>
+#include "sstables/key.hh"
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/tmpdir.hh"
 
 using namespace replica::logstor;
@@ -237,8 +241,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
 
     auto sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
     BOOST_REQUIRE_EQUAL(sh.table, schema->id());
-    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.dk.token());
-    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.dk.token());
+    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.token());
+    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.token());
 }
 
 // Checks that a raw write buffer can hold and seal a record whose serialized size is exactly max_record_size().
@@ -455,14 +459,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
     BOOST_REQUIRE(std::holds_alternative<segment_header::full>(maybe_header->v));
     auto& full = std::get<segment_header::full>(maybe_header->v);
     auto expected_first_token = std::min({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     auto expected_last_token = std::max({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     BOOST_REQUIRE_EQUAL(full.table, schema->id());
     BOOST_REQUIRE_EQUAL(full.first_token, expected_first_token);
@@ -804,9 +808,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     BOOST_REQUIRE(!new_segment_ids.contains(stale_pk0_location->location.segment));
     BOOST_REQUIRE(!new_segment_ids.contains(stale_pk1_location->location.segment));
 
-    auto actual_pk0 = ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get();
-    auto actual_pk1 = ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get();
-    auto actual_pk2 = ls.read(*schema, cg.logstor_index(), pk2.dk, schema->full_slice()).get();
+    auto actual_pk0 = ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk1 = ls.read(*schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk2 = ls.read(*schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
 
     BOOST_REQUIRE(actual_pk0);
     BOOST_REQUIRE(actual_pk1);

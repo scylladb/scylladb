@@ -5705,7 +5705,7 @@ future<> compaction_group::cleanup() {
     _t.rebuild_statistics();
 
     if (_t.uses_logstor()) {
-        co_await _t.logstor_index().erase(p_range);
+        co_await _t.logstor_index().erase(token_range());
         co_await discard_logstor_segments();
     }
 
