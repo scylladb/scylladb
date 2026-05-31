@@ -67,21 +67,6 @@ inline bool needs_filtering(oper_t op) {
            (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
 }
 
-inline auto find_needs_filtering(const expression& e) {
-    return find_binop(e, [] (const binary_operator& bo) { return needs_filtering(bo.op); });
-}
-
-inline bool has_slice_or_needs_filtering(const expression& e) {
-    return find_binop(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
-}
-
-/// True iff binary_operator involves a collection.
-extern bool is_on_collection(const binary_operator&);
-
-bool contains_multi_column_restriction(const expression&);
-
-bool has_only_eq_binops(const expression&);
-
 static
 value_set
 solve(const predicate& ac, const query_options& options) {
@@ -302,13 +287,6 @@ to_predicates(
                 .on = on_row{},
         });
     };
-    static auto cannot_solve_on_column = [] (const expression& e, const column_definition* cdef) -> std::vector<predicate> {
-        return to_vector(predicate{
-                .solve_for = nullptr,
-                .filter = e,
-                .on = on_column{cdef},
-        });
-    };
     return expr::visit(overloaded_functor{
             [] (const constant& constant_val) -> std::vector<predicate> {
                 std::optional<bool> bool_val = get_bool_value(constant_val);
@@ -402,7 +380,12 @@ to_predicates(
                                     .op = oper.op,
                                 });
                             }
-                            return cannot_solve_on_column(oper, col.col);
+                            return to_vector(predicate{
+                                .solve_for = nullptr,
+                                .filter = oper,
+                                .on = on_column{col.col},
+                                .op = oper.op,
+                            });
                         },
                         [&] (const subscript& s) -> std::vector<predicate> {
                             const column_value& col = get_subscripted_column(s);
@@ -433,7 +416,13 @@ to_predicates(
                                     .is_subscript = true,
                                 });
                             }
-                            return cannot_solve_on_column(oper, col.col);
+                            return to_vector(predicate{
+                                .solve_for = nullptr,
+                                .filter = oper,
+                                .on = on_column{col.col},
+                                .op = oper.op,
+                                .is_subscript = true,
+                            });
                         },
                         [&] (const tuple_constructor& tuple) -> std::vector<predicate> {
                             auto columns = tuple.elements
@@ -784,22 +773,18 @@ static bool are_predicates_supported_by(const std::vector<predicate>& preds,
     return bool(result);
 }
 
-static std::pair<std::optional<secondary_index::index>, expr::expression> do_find_idx(
+struct do_find_idx_result {
+    std::optional<secondary_index::index> index;
+    expr::expression restrictions;
+    std::vector<predicate> indexed_column_predicates;
+};
+
+static do_find_idx_result do_find_idx(
         bool uses_secondary_indexing,
         const secondary_index::secondary_index_manager& sim,
         std::span<const index_search_group> search_groups,
         allow_local_index allow_local);
 
-
-bool is_on_collection(const binary_operator& b) {
-    if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
-        return true;
-    }
-    if (auto tuple = expr::as_if<tuple_constructor>(&b.lhs)) {
-        return std::ranges::any_of(tuple->elements, [] (const expression& v) { return expr::is<subscript>(v); });
-    }
-    return false;
-}
 
 bool is_empty_restriction(const expression& e) {
     bool contains_non_conjunction = recurse_until(e, [&](const expression& e) -> bool {
@@ -807,48 +792,6 @@ bool is_empty_restriction(const expression& e) {
     });
 
     return !contains_non_conjunction;
-}
-
-static
-std::function<bytes_opt (const query_options&)>
-build_value_for_fn(const column_definition& cdef, const expression& e, const schema& s) {
-    auto ac = to_predicate_on_column(e, &cdef, &s);
-    return [ac] (const query_options& options) -> bytes_opt {
-        value_set possible_vals = solve(ac, options);
-        return std::visit(overloaded_functor {
-            [&](const value_list& val_list) -> bytes_opt {
-                if (val_list.empty()) {
-                    return std::nullopt;
-                }
-
-                if (val_list.size() != 1) {
-                    on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", ac.filter));
-                }
-
-                return to_bytes(val_list.front());
-            },
-            [&](const interval<managed_bytes>&) -> bytes_opt {
-                on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", ac.filter));
-            }
-        }, possible_vals);
-    };
-}
-
-bool contains_multi_column_restriction(const expression& e) {
-    const binary_operator* find_res = find_binop(e, [](const binary_operator& binop) {
-        return is<tuple_constructor>(binop.lhs);
-    });
-    return find_res != nullptr;
-}
-
-bool has_only_eq_binops(const expression& e) {
-    const expr::binary_operator* non_eq_binop = find_in_expression<expr::binary_operator>(e,
-        [](const expr::binary_operator& binop) {
-            return binop.op != expr::oper_t::EQ;
-        }
-    );
-
-    return non_eq_binop == nullptr;
 }
 
 statement_restrictions::statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering)
@@ -890,9 +833,13 @@ statement_restrictions::statement_restrictions(private_tag,
     bool ck_is_empty = true;
     bool has_mc_clustering = false;
     bool ck_has_slice = false;
+    bool ck_is_on_collection = false;
+    bool ck_is_all_eq = true;
     const column_definition* ck_last_column = nullptr;
     const predicate* first_mc_pred = nullptr;
     bool pk_is_empty = true;
+    bool pk_is_all_eq = true;
+    bool pk_has_slice_or_needs_filtering = false;
     bool has_token = false;
     std::optional<predicate> token_pred;
     std::unordered_map<const column_definition*, predicate> pk_range_preds;
@@ -919,6 +866,9 @@ statement_restrictions::statement_restrictions(private_tag,
                 mc_ck_preds.push_back(pred);
                 if (pred.is_slice) {
                     ck_has_slice = true;
+                }
+                if (!pred.equality) {
+                    ck_is_all_eq = false;
                 }
             } else {
 
@@ -962,6 +912,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
                     mc_ck_preds.push_back(pred);
                     ck_has_slice = true;
+                    ck_is_all_eq = false;
                 } else {
                     throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", pred.filter));
                 }
@@ -981,6 +932,9 @@ statement_restrictions::statement_restrictions(private_tag,
             _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, pred.filter);
             pk_is_empty = false;
             has_token = true;
+            if (!pred.equality) {
+                pk_is_all_eq = false;
+            }
             if (token_pred) {
                 token_pred = make_conjunction(std::move(*token_pred), pred);
             } else {
@@ -1019,6 +973,12 @@ statement_restrictions::statement_restrictions(private_tag,
                     }
                 }
                 _partition_range_is_simple &= !pred.is_in;
+                if (pred.is_slice || (pred.op && needs_filtering(*pred.op))) {
+                    pk_has_slice_or_needs_filtering = true;
+                }
+                if (!pred.equality) {
+                    pk_is_all_eq = false;
+                }
             } else if (def->is_clustering_key()) {
                 if (has_mc_clustering) {
                     throw exceptions::invalid_request_exception(
@@ -1057,6 +1017,12 @@ statement_restrictions::statement_restrictions(private_tag,
                 }
                 if (pred.is_slice) {
                     ck_has_slice = true;
+                }
+                if (pred.op == oper_t::CONTAINS || pred.op == oper_t::CONTAINS_KEY) {
+                    ck_is_on_collection = true;
+                }
+                if (!pred.equality) {
+                    ck_is_all_eq = false;
                 }
                 if (ck_last_column == nullptr || schema->position(*new_column) > schema->position(*ck_last_column)) {
                     ck_last_column = new_column;
@@ -1097,11 +1063,12 @@ statement_restrictions::statement_restrictions(private_tag,
                 if (found == sc_ck_preds.end()) {
                     break;
                 }
-                if (find_needs_filtering(found->second.filter)) {
+                const auto& preds = sc_ck_pred_vectors[&col];
+                if (std::ranges::any_of(preds, [](const predicate& p) { return p.op && needs_filtering(*p.op); })) {
                     break;
                 }
                 prefix.push_back(found->second);
-                if (has_slice(found->second.filter)) {
+                if (std::ranges::any_of(preds, [](const predicate& p) { return p.is_slice; })) {
                     break;
                 }
             }
@@ -1118,6 +1085,10 @@ statement_restrictions::statement_restrictions(private_tag,
         }
     }
     _has_multi_column = has_mc_clustering;
+    _ck_is_on_collection = ck_is_on_collection;
+    _ck_is_all_eq = ck_is_all_eq;
+    _pk_is_all_eq = pk_is_all_eq;
+    _pk_has_slice_or_needs_filtering = pk_has_slice_or_needs_filtering;
     if (_check_indexes) {
         auto cf = db.find_column_family(schema);
         auto& sim = cf.get_index_manager();
@@ -1184,7 +1155,7 @@ statement_restrictions::statement_restrictions(private_tag,
     if (_uses_secondary_indexing || clustering_key_restrictions_need_filtering()) {
         _index_restrictions.push_back(_clustering_columns_restrictions);
         search_groups.push_back({sc_ck_pred_vectors, _clustering_columns_restrictions});
-    } else if (find_binop(_clustering_columns_restrictions, is_on_collection)) {
+    } else if (_ck_is_on_collection) {
         fail(unimplemented::cause::INDEXES);
     }
 
@@ -1210,12 +1181,12 @@ statement_restrictions::statement_restrictions(private_tag,
         const expr::allow_local_index allow_local_for_idx(
                 !has_partition_key_unrestricted_components()
                 && partition_key_restrictions_is_all_eq());
-        auto [idx_found, idx_restrictions] = do_find_idx(
+        auto idx_result = do_find_idx(
                 _uses_secondary_indexing, sim, search_groups, allow_local_for_idx);
-        if (idx_found) {
-            _idx_opt = std::make_unique<secondary_index::index>(std::move(*idx_found));
+        if (idx_result.index) {
+            _idx_opt = std::make_unique<secondary_index::index>(std::move(*idx_result.index));
         }
-        _idx_restrictions = std::move(idx_restrictions);
+        _idx_column_predicates = std::move(idx_result.indexed_column_predicates);
     }
 
     calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db, sc_pk_pred_vectors, sc_ck_pred_vectors, sc_nonpk_pred_vectors);
@@ -1264,13 +1235,9 @@ statement_restrictions::statement_restrictions(private_tag,
 
     _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(regular_columns_filter));
 
-    auto multi_column_restrictions = expr::conjunction{
-        .children = expr::boolean_factors(_clustering_columns_restrictions)
-                | std::ranges::views::filter(contains_multi_column_restriction)
-                | std::ranges::to<std::vector>()
-    };
-
-    _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(multi_column_restrictions));
+    if (_has_multi_column) {
+        _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), _clustering_columns_restrictions);
+    }
 
     if (uses_secondary_indexing()) {
         auto& index_opt = _idx_opt;
@@ -1308,12 +1275,12 @@ statement_restrictions::clustering_key_restrictions_has_IN() const {
 
 bool
 statement_restrictions::clustering_key_restrictions_has_only_eq() const {
-    return has_only_eq_binops(_clustering_columns_restrictions);
+    return _ck_is_all_eq;
 }
 
 bool
 statement_restrictions::has_token_restrictions() const {
-    return has_partition_token(_partition_key_restrictions, *_schema);
+    return std::holds_alternative<token_range_restrictions>(_partition_range_restrictions);
 }
 
 bool
@@ -1374,13 +1341,13 @@ bool statement_restrictions::is_empty() const {
 }
 
 
-static std::pair<std::optional<secondary_index::index>, expr::expression> do_find_idx(
+static do_find_idx_result do_find_idx(
         bool uses_secondary_indexing,
         const secondary_index::secondary_index_manager& sim,
         std::span<const index_search_group> search_groups,
         allow_local_index allow_local) {
     if (!uses_secondary_indexing) {
-        return {std::nullopt, expr::conjunction({})};
+        return {std::nullopt, expr::conjunction({}), {}};
     }
 
     // Current score table:
@@ -1397,6 +1364,7 @@ static std::pair<std::optional<secondary_index::index>, expr::expression> do_fin
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
     expr::expression chosen_index_restrictions = expr::conjunction({});
+    std::vector<predicate> chosen_index_predicates;
 
     // Several indexes may be usable for this query. When their score is tied,
     // let's pick one by order of the columns mentioned in the restriction
@@ -1424,16 +1392,17 @@ static std::pair<std::optional<secondary_index::index>, expr::expression> do_fin
                     chosen_index = index;
                     chosen_index_score = index_score(index);
                     chosen_index_restrictions = group.restriction_expr;
+                    chosen_index_predicates = preds;
                 }
             }
         });
     }
-    return {chosen_index, chosen_index_restrictions};
+    return {chosen_index, chosen_index_restrictions, std::move(chosen_index_predicates)};
 }
 
-std::pair<std::optional<secondary_index::index>, expr::expression>
+std::optional<secondary_index::index>
 statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
-    return {_idx_opt ? std::optional<secondary_index::index>(*_idx_opt) : std::nullopt, _idx_restrictions};
+    return _idx_opt ? std::optional<secondary_index::index>(*_idx_opt) : std::nullopt;
 }
 
 bool statement_restrictions::has_eq_restriction_on_column(const column_definition& column) const {
@@ -1539,7 +1508,7 @@ bool statement_restrictions::partition_key_restrictions_is_empty() const {
 }
 
 bool statement_restrictions::partition_key_restrictions_is_all_eq() const {
-    return has_only_eq_binops(_partition_key_restrictions);
+    return _pk_is_all_eq;
 }
 
 size_t statement_restrictions::partition_key_restrictions_size() const {
@@ -1549,7 +1518,7 @@ size_t statement_restrictions::partition_key_restrictions_size() const {
 bool statement_restrictions::pk_restrictions_need_filtering() const {
      return !is_empty_restriction(_partition_key_restrictions)
          && !has_token_restrictions()
-         && (has_partition_key_unrestricted_components() || has_slice_or_needs_filtering(_partition_key_restrictions));
+         && (has_partition_key_unrestricted_components() || _pk_has_slice_or_needs_filtering);
 }
 
 size_t statement_restrictions::clustering_columns_restrictions_size() const {
@@ -1557,7 +1526,7 @@ size_t statement_restrictions::clustering_columns_restrictions_size() const {
 }
 
 bool statement_restrictions::clustering_key_restrictions_need_filtering() const {
-    if (contains_multi_column_restriction(_clustering_columns_restrictions)) {
+    if (_has_multi_column) {
         return false;
     }
 
@@ -1586,7 +1555,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
         return;
     }
 
-    if (find_binop(_clustering_columns_restrictions, is_on_collection)
+    if (_ck_is_on_collection
         && !_has_queriable_ck_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
@@ -2296,17 +2265,16 @@ get_clustering_bounds_fn_t
 build_range_from_raw_bounds_fn(
         const std::vector<predicate>& exprs, const schema& schema) {
     std::vector<std::function<query::clustering_range (const query_options&)>> range_builders;
-    for (const auto& e : exprs | std::views::transform(&predicate::filter)) {
-        if (auto b = find_clustering_order(e)) {
-            range_builders.emplace_back([bb = *b, &schema] (const query_options& options) {
-                auto* b = &bb;
-                cql3::raw_value tup_val = expr::evaluate(b->rhs, options);
+    for (const auto& pred : exprs) {
+        if (pred.order == expr::comparison_order::clustering) {
+            range_builders.emplace_back([b = expr::as<binary_operator>(pred.filter), &schema] (const query_options& options) {
+                cql3::raw_value tup_val = expr::evaluate(b.rhs, options);
                 if (tup_val.is_null()) {
-                    on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", *b));
+                    on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", b));
                 }
 
                 const auto r = to_range(
-                    b->op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val, *type_of(b->rhs))));
+                    b.op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val, *type_of(b.rhs))));
                 return r;
             });
         }
@@ -2596,11 +2564,11 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
             // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
             break;
         }
-        const auto any_binop = find_binop(e.filter, [] (auto&&) { return true; });
-        if (!any_binop) {
+        auto* on_col = std::get_if<on_column>(&e.on);
+        if (!on_col) {
             break;
         }
-        const auto col = expr::as<column_value>(any_binop->lhs).col;
+        const auto col = on_col->column;
         auto col_in_index = idx_tbl_schema.get_column_definition(col->name());
         auto replaced = replace_column_def(e.filter, col_in_index);
         auto a = to_predicate_on_column(replaced, col_in_index, &idx_tbl_schema);
@@ -2687,15 +2655,32 @@ std::vector<query::clustering_range> statement_restrictions::get_local_index_clu
 
 get_singleton_value_fn_t
 statement_restrictions::build_value_for_index_partition_key_fn() const {
-    if (!_idx_opt) {
+    if (_idx_column_predicates.empty()) {
         return {};
     }
-    const column_definition* cdef = _schema->get_column_definition(to_bytes(_idx_opt->target_column()));
-    if (!cdef) {
-        throw exceptions::invalid_request_exception("Indexed column not found in schema");
+    auto merged = _idx_column_predicates[0];
+    for (size_t i = 1; i < _idx_column_predicates.size(); ++i) {
+        merged = make_conjunction(std::move(merged), _idx_column_predicates[i]);
     }
+    return [merged = std::move(merged)] (const query_options& options) -> bytes_opt {
+        value_set possible_vals = solve(merged, options);
+        return std::visit(overloaded_functor {
+            [&](const value_list& val_list) -> bytes_opt {
+                if (val_list.empty()) {
+                    return std::nullopt;
+                }
 
-    return build_value_for_fn(*cdef, _idx_restrictions, *_schema);
+                if (val_list.size() != 1) {
+                    on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", merged.filter));
+                }
+
+                return to_bytes(val_list.front());
+            },
+            [&](const interval<managed_bytes>&) -> bytes_opt {
+                on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", merged.filter));
+            }
+        }, possible_vals);
+    };
 }
 
 bytes_opt

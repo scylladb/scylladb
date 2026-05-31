@@ -178,6 +178,9 @@ private:
 
     bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
     bool _has_multi_column; ///< True iff _clustering_columns_restrictions has a multi-column restriction.
+    bool _ck_is_on_collection = false; ///< True iff _clustering_columns_restrictions has a collection restriction (CONTAINS/CONTAINS_KEY).
+    bool _ck_is_all_eq = true; ///< True iff all CK restrictions use EQ operator only.
+    bool _pk_is_all_eq = true; ///< True iff all PK restrictions use EQ operator only.
 
     std::vector<expr::expression> _where; ///< The entire WHERE clause (factorized).
 
@@ -214,6 +217,7 @@ private:
     partition_range_restrictions _partition_range_restrictions;
 
     bool _partition_range_is_simple; ///< False iff _partition_range_restrictions imply a Cartesian product.
+    bool _pk_has_slice_or_needs_filtering = false; ///< True iff any PK restriction has a slice or needs-filtering operator.
 
 
     check_indexes _check_indexes = check_indexes::yes;
@@ -223,7 +227,7 @@ private:
     std::vector<const column_definition*> _column_defs_for_filtering;
     schema_ptr _view_schema;
     std::unique_ptr<secondary_index::index> _idx_opt;
-    expr::expression _idx_restrictions = expr::conjunction({});
+    std::vector<predicate> _idx_column_predicates; ///< Predicates for the chosen index's target column.
     get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
     get_clustering_bounds_fn_t _get_clustering_bounds_fn;
     get_clustering_bounds_fn_t _get_global_index_clustering_ranges_fn;
@@ -339,9 +343,8 @@ public:
      * Determines the index to be used with the restriction.
      * @param db - the data_dictionary::database context (for extracting index manager)
      * @return If an index can be used, an optional containing this index, otherwise an empty optional.
-     * In case the index is returned, second parameter returns the index restriction it uses.
      */
-    std::pair<std::optional<secondary_index::index>, expr::expression> find_idx(const secondary_index::secondary_index_manager& sim) const;
+    std::optional<secondary_index::index> find_idx(const secondary_index::secondary_index_manager& sim) const;
 
     /**
      * Checks if the partition key has some unrestricted components.

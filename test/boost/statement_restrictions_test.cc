@@ -414,7 +414,7 @@ SEASTAR_TEST_CASE(index_selection) {
                     /*for_view=*/false,
                     /*allow_filtering=*/true,
                     restrictions::check_indexes::yes);
-            auto [idx, restrictions_expr] = sr->find_idx(sim);
+            auto idx = sr->find_idx(sim);
             return {where_clause,
                     idx ? std::optional(idx->metadata().name()) : std::nullopt,
                     sr->uses_secondary_indexing(),
@@ -897,7 +897,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                 ctx_msg("has_eq_restriction_on_column(fs)"));
 
             // --- Index selection ---
-            auto [idx_opt, idx_expr] = sr->find_idx(sim);
+            auto idx_opt = sr->find_idx(sim);
 
             // Determine expected index.  The scoring algorithm:
             //   - do_find_idx iterates _index_restrictions (PK group, then

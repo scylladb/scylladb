@@ -1037,7 +1037,7 @@ view_indexed_table_select_statement::prepare(data_dictionary::database db,
 {
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
-    auto [index_opt, used_index_restrictions] = restrictions->find_idx(sim);
+    auto index_opt = restrictions->find_idx(sim);
 
     if (!index_opt) {
         throw std::runtime_error("No index found.");
@@ -1063,7 +1063,6 @@ view_indexed_table_select_statement::prepare(data_dictionary::database db,
             std::move(per_partition_limit),
             stats,
             *index_opt,
-            std::move(used_index_restrictions),
             view_schema,
             std::move(attrs));
 
@@ -1080,12 +1079,10 @@ view_indexed_table_select_statement::view_indexed_table_select_statement(schema_
                                                            std::optional<expr::expression> per_partition_limit,
                                                            cql_stats &stats,
                                                            const secondary_index::index& index,
-                                                           expr::expression used_index_restrictions,
                                                            schema_ptr view_schema,
                                                            std::unique_ptr<attributes> attrs)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats, std::move(attrs)}
     , _index{index}
-    , _used_index_restrictions(std::move(used_index_restrictions))
     , _view_schema(view_schema)
 {
     throwing_assert(_view_schema);
