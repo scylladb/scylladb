@@ -10,21 +10,29 @@
 #include <seastar/util/log.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics.hh>
-#include "dht/decorated_key.hh"
 #include "query/query-request.hh"
 #include "readers/from_mutations.hh"
 #include "readers/forwardable.hh"
+#include "readers/empty.hh"
 #include "keys/keys.hh"
+#include "replica/logstor/key_utils.hh"
 #include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/types.hh"
 #include <seastar/core/when_all.hh>
 #include "utils/managed_bytes.hh"
-#include <openssl/ripemd.h>
+#include <seastar/util/defer.hh>
 #include <openssl/evp.h>
+#include <algorithm>
+#include <queue>
+#include <vector>
 
 namespace replica::logstor {
 
 seastar::logger logstor_logger("logstor");
+
+primary_index_key::primary_index_key(const schema& s, const dht::decorated_key& dk)
+    : primary_index_key(dk.token(), compute_key_hash(s, dk.key().view())) {
+}
 
 static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
     const auto& partition = m.partition();
@@ -123,7 +131,7 @@ future<> logstor::write(const mutation& m, write_target target, db::timeout_cloc
     auto gate_holder = _async_gate.hold();
 
     auto& cg = *target.cg;
-    primary_index_key key(m.decorated_key());
+    primary_index_key key(*m.schema(), m.decorated_key());
     table_id table = m.schema()->id();
     auto& index = cg.logstor_index();
 
@@ -158,7 +166,7 @@ future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index&
 
     auto op = index.start_read();
 
-    primary_index_key pk(dk);
+    primary_index_key pk(*s, dk);
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     auto lookup = index.lookup_for_read(pk, s, !bypass_cache);
@@ -167,13 +175,17 @@ future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index&
     }
 
     if (lookup->cached_mutation) {
-        co_return std::move(*lookup->cached_mutation);
+        auto& cached = *lookup->cached_mutation;
+        if (cached.decorated_key().key() != dk.key()) [[unlikely]] {
+            co_await coroutine::return_exception(key_mismatch_error(dk.key(), cached.decorated_key().key(), key_mismatch_error::cache_location{}));
+        }
+        co_return std::move(cached);
     }
 
     auto record = co_await _segment_manager.read(lookup->entry.location);
 
     if (record.mut.key() != dk.key()) [[unlikely]] {
-        on_internal_error(logstor_logger, format("Key mismatch reading log entry: expected {}, got {}", dk.key(), record.mut.key()));
+        co_await coroutine::return_exception(key_mismatch_error(dk.key(), record.mut.key(), lookup->entry.location));
     }
 
     mutation m = record.mut.to_mutation(s);

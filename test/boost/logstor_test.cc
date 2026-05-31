@@ -33,8 +33,10 @@
 #include "idl/logstor.dist.impl.hh"
 #include "replica/logstor/segment_io.hh"
 #include "replica/database.hh"
+#include "dht/i_partitioner.hh"
 #include "schema/schema_builder.hh"
 #include <seastar/core/simple-stream.hh>
+#include "sstables/key.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -55,7 +57,7 @@ schema_ptr make_kv_schema() {
 }
 
 primary_index_key make_index_key(const schema& s, const dht::decorated_key& dk) {
-    return primary_index_key{dk};
+    return primary_index_key{s, dk};
 }
 
 mutation make_kv_mutation(schema_ptr schema, sstring pk, sstring value, api::timestamp_type ts = api::min_timestamp) {
