@@ -321,6 +321,41 @@ Alternator Streams differ in some respects from DynamoDB Streams:
   24 hours through the old StreamArn even after re-enabling.
   <https://scylladb.atlassian.net/browse/SCYLLADB-1873>
 
+## Table Class
+
+DynamoDB's _table class_ option allows choosing between two storage tiers with
+different cost/performance tradeoffs: `STANDARD` (the default) and
+`STANDARD_INFREQUENT_ACCESS`. In DynamoDB, the latter reduces storage costs by
+60% in exchange for 25% higher per-request costs.
+
+Alternator supports the `TableClass` option in `CreateTable` and `UpdateTable`,
+and reports it back in `DescribeTable`, by mapping it to different SSTable
+compression settings:
+
+* `STANDARD` uses LZ4 with dictionaries, which gives reasonable compression
+  at low CPU overhead.
+* `STANDARD_INFREQUENT_ACCESS` uses Zstandard (zstd) with dictionaries,
+  which gives better compression ratios with higher CPU and memory overheads.
+
+There are a few small differences from DynamoDB's behavior:
+
+* In DynamoDB, `DescribeTable` always returns a `TableClassSummary` object
+  when `TableClass` was explicitly set to `STANDARD` (either in `CreateTable`
+  or by `UpdateTable`). Alternator omits `TableClassSummary` in this case,
+  just like DynamoDB omits it in the default `STANDARD` case.
+
+* After `UpdateTable` changes the table class, DynamoDB returns a
+  `LastUpdateDateTime` field inside `TableClassSummary` in subsequent
+  `DescribeTable` calls. Alternator does not yet return this field.
+
+* In DynamoDB, changing the table class via `UpdateTable` triggers a background
+  operation to change the table's storage, and is limited to two changes per
+  30-day period. In Alternator, the compression setting in the schema is
+  updated immediately, but existing SSTables are **not** rewritten; only new
+  SSTables written by subsequent writes and compactions will use the new
+  compression. Alternator also does not enforce the two-changes-per-month
+  limit.
+
 ## Unimplemented API features
 
 In general, every DynamoDB API feature available in Amazon DynamoDB should
@@ -415,12 +450,6 @@ they should be easy to detect. Here is a list of these unimplemented features:
   and its operations ImportTable, DescribeImport, ListImports.
   This feature was added to DynamoDB in August 2022.
   <https://github.com/scylladb/scylla/issues/11739>
-
-* Alternator does not support the TableClass table option choosing between
-  several storage options with different cost/performance characteristics.
-  All Alternator tables are stored the same way. This table option was added
-  to DynamoDB in December 2021.
-  <https://github.com/scylladb/scylla/issues/10431>
 
 * Alternator does not support the table option DeletionProtectionEnabled
   that can be used to forbid table deletion. This table option was added to
