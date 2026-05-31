@@ -45,7 +45,6 @@ def flush_and_drop_cache(optional_rest_api, table):
 
 # Test CreateTable creating a table with the non-default TableClass
 # "STANDARD_INFREQUENT_ACCESS".
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_create_table_sia(dynamodb, optional_rest_api):
     schema = {
         'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -72,7 +71,6 @@ def test_tableclass_create_table_sia(dynamodb, optional_rest_api):
 
 # Test CreateTable creating a table with the default "STANDARD" TableClass
 # explicitly specified.
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_create_table_standard(dynamodb, optional_rest_api):
     schema = {
         'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -105,9 +103,9 @@ def test_tableclass_describe_table_explicit_standard(dynamodb):
             'TableClass': 'STANDARD'
         }
 
+
 # The CreateTable response includes a TableClassSummary with the TableClass
 # given in the request - for STANDARD too.
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 @pytest.mark.parametrize('table_class', ['STANDARD', 'STANDARD_INFREQUENT_ACCESS'])
 def test_tableclass_create_table_response(dynamodb, table_class):
     name = unique_table_name()
@@ -130,7 +128,6 @@ def test_tableclass_create_table_response(dynamodb, table_class):
 # Test that setting TableClass to unsupported names produces an error.
 # This test also confirms that the TableClass string is cases sensitive -
 # 'STANDARD' works (as we checked above) but lowercase 'standard' doesn't.
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_create_table_bad_tableclass(dynamodb):
     for tableclass in ['invalid_tableclass_name', 'standard']:
         schema = {
@@ -260,7 +257,6 @@ def test_tableclass_standard_uses_lz4(dynamodb, scylla_only):
 # to using ZSTD compression in the sstables.
 # If we ever change the implementation of what the different table classes
 # mean, we'll need to change this test.
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_sia_uses_zstd(dynamodb, scylla_only):
     schema = {
         'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -273,7 +269,6 @@ def test_tableclass_sia_uses_zstd(dynamodb, scylla_only):
 # DynamoDB documents that all of a table's secondary indexes use the same
 # table class as the base table. Check that when a table is created with
 # STANDARD_INFREQUENT_ACCESS, its LSI and GSI also use ZSTD compression.
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_sia_indexes_use_zstd(dynamodb, scylla_only):
     schema = {
         'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' },
