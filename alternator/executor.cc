@@ -1981,6 +1981,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
             schema_builder builder(tab);
 
+            if (handle_table_class(request, builder, p.local().features())) {
+                empty_request = false;
+            }
+
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
             if (stream_specification && stream_specification->IsObject()) {
                 empty_request = false;
@@ -2291,7 +2295,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
 
             if (empty_request) {
-                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification or BillingMode to be specified");
+                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification, BillingMode or TableClass to be specified");
             }
 
             co_await verify_permission(enforce_authorization, warn_authorization, client_state_other_shard.get(), schema, auth::permission::ALTER, e.local()._stats);

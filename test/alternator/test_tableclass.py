@@ -144,7 +144,6 @@ def wait_for_active(table):
 #    related variables. You can still access your table normally while it is
 #    converted. Note that no more than two table class updates on your table
 #    are allowed in a 30-day trailing period."
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 def test_tableclass_update_table(dynamodb):
     schema = {
         'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
