@@ -526,7 +526,7 @@ public:
             cql3::computed_function_values cached_fn_calls,
             seastar::lowres_clock::time_point timeout,
             bool is_write,
-            noncopyable_function<void(locator::host_id)> on_node_resolved = {});
+            locator::host_id_or_exception_callback on_forwarding_finished = {});
 
     void update_authorized_prepared_cache_config();
 

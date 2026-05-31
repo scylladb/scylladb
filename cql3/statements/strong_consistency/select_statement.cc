@@ -63,7 +63,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&query_result)) {
         bool is_write = false;
-        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_node_resolved));
+        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
     }
 
     co_return co_await process_results(get<lw_shared_ptr<query::result>>(std::move(query_result)),

@@ -1894,3 +1894,77 @@ async def test_crash_recovery_after_flush(manager: ManagerClient):
             assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
 
     await manager.server_stop_gracefully(server.server_id)
+
+
+async def test_write_from_non_replica_after_leader_down(manager: ManagerClient):
+    """
+    Verify that if a raft group leader goes down, a non-replica node can still
+    successfully write by detecting the stale leader cache entry and evicting it.
+
+    Setup: 4-node cluster (RF=3, 1 tablet, --smp=1).
+    - --smp=1 ensures both writes hit the same shard on the non-replica, so
+      the leader-cache entry written by the first write is visible during
+      the second write.
+    - RF=3 gives 3 replicas and 1 non-replica.
+    - Stopping one of the 3 replicas (the leader) still leaves a quorum of 2,
+      so a new leader can be elected and the second write can succeed.
+    """
+    cmdline = DEFAULT_CMDLINE + ['--smp=1']
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='my_dc')
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
+            replica_host_ids = [str(replica[0]) for replica in tablet_replicas]
+            assert len(replica_host_ids) == 3
+
+            # Identify the initial leader.
+            for i in range(4):
+                if host_ids[i] in replica_host_ids:
+                    leader_host_id = await wait_for_leader(manager, servers[i], group_id)
+                    break
+            for i in range(4):
+                if leader_host_id == host_ids[i]:
+                    leader_server = servers[i]
+                    break
+
+            # Pick the one node that is not a replica.
+            non_replica_host_id = [host_id for host_id in host_ids if str(host_id) not in replica_host_ids][0]
+            non_replica_host = [host for host in hosts if str(host.host_id) == str(non_replica_host_id)][0]
+            logger.info(f"Non-replica: {non_replica_host}, initial leader: {leader_host_id}")
+
+            # First write from the non-replica. This forces the node to resolve
+            # the leader (via a redirect roundtrip) and populate its leader cache.
+            logger.info("First write from non-replica - populates leader cache")
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (1, 1)", host=non_replica_host)
+
+            logger.info(f"Stopping leader {leader_host_id}")
+            await manager.server_stop(leader_server.server_id, convict=True)
+            await manager.others_not_see_server(leader_server.ip_addr)
+
+            # Wait until new election finishes. If we don't do that, the next write may be forwarded to the downed
+            # leader not because of a stale cache entry, but because the raft group hasn't started electing the new leader yet.
+            for i in range(4):
+                if host_ids[i] in replica_host_ids and host_ids[i] != leader_host_id:
+                    async def wait_for_new_leader():
+                        new_leader = await wait_for_leader(manager, servers[i], group_id)
+                        return None if new_leader == leader_host_id else new_leader
+                    await wait_for(wait_for_new_leader, time.time() + 60)
+
+            # Second write from the non-replica. Without the fix the non-replica
+            # would try to forward to the dead cached leader and get a write
+            # failure, because the stale cache entry is never evicted.
+            logger.info("Second write from non-replica after leader change")
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (2, 2)", host=non_replica_host)
+
+            # Verify the row was written.
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 2", host=non_replica_host)
+            assert len(rows) == 1
+            assert rows[0].c == 2
