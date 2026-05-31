@@ -378,8 +378,10 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
     auto& value = get_typed_value(key_typed_value, type_to_string(column.type), column.name_as_text(), "key column");
     std::string_view value_view = rjson::to_string_view(value);
     if (value_view.empty()) {
+        const std::string_view type_word = column.type == utf8_type ? " string" :
+                column.type == bytes_type ? " binary" : "";
         throw api_error::validation(
-                format("The AttributeValue for a key attribute cannot contain an empty string value. Key: {}", column.name_as_text()));
+                fmt::format("The AttributeValue for a key attribute cannot contain an empty{} value. Key: {}", type_word, column.name_as_text()));
     }
     if (column.type == bytes_type) {
         // FIXME: it's difficult at this point to get information if value was provided
