@@ -2846,6 +2846,11 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(warm_tags)));
             }
 
+            bool table_class_updated = handle_table_class(request, builder, p.local());
+            if (table_class_updated) {
+                empty_request = false;
+            }
+
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
             rjson::value* gsi_updates = rjson::find(request, "GlobalSecondaryIndexUpdates");
             rjson::value* vector_index_updates = rjson::find(request, "VectorIndexUpdates");
@@ -3272,6 +3277,8 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         }
                         const bool include_all_columns = true;
                         view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
+                        // A new GSI uses the base table's TableClass.
+                        view_builder.set_compressor_params(schema->get_compressor_params());
                         new_views.emplace_back(view_builder.build());
                     } else if (op == "Delete") {
                         elogger.trace("Deleting GSI {}", index_name);
@@ -3288,11 +3295,21 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
 
             if (empty_request) {
-                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification or BillingMode to be specified");
+                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification, BillingMode or TableClass to be specified");
             }
 
             co_await verify_permission(enforce_authorization, warn_authorization, local_client_state, schema, auth::permission::ALTER, e.local()._stats);
-            auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::vector<view_ptr>(), group0_guard.write_timestamp());
+            // When the TableClass changes, the table's existing secondary
+            // indexes change to the same TableClass as the base table.
+            std::vector<view_ptr> view_updates;
+            if (table_class_updated) {
+                for (const view_ptr& view : p.local().data_dictionary().find_column_family(tab).views()) {
+                    schema_builder view_builder(view);
+                    view_builder.set_compressor_params(schema->get_compressor_params());
+                    view_updates.push_back(view_ptr(view_builder.build()));
+                }
+            }
+            auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::move(view_updates), group0_guard.write_timestamp());
             for (view_ptr view : new_views) {
                 auto m2 = co_await service::prepare_new_view_announcement(p.local(), view, group0_guard.write_timestamp());
                 std::move(m2.begin(), m2.end(), std::back_inserter(m));
