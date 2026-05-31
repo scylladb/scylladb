@@ -175,6 +175,122 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_trim) {
     }
 }
 
+// Compatibility test for partition key encoding.
+//
+// The encoding has to stay stable across Scylla versions,
+// so it's good to have a test with fixed inputs and outputs.
+BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_fixed_cases_mt) {
+    struct fixed_case {
+        // Name of the test case, for logging.
+        const char* name;
+        // Columns of the partition key.
+        std::vector<data_type> col_types;
+        std::vector<bytes> col_values;
+        int64_t token;
+        // Hex strings representing the encodings of various
+        // ring positions around the token and key.
+        const char* at_key;
+        const char* before_token;
+        const char* after_token;
+        const char* before_key;
+        const char* after_key;
+    };
+
+    std::vector<fixed_case> cases = {
+        {
+            "bigint",
+            {long_type},
+            {from_hex("0123456789abcdef")},
+            0x6f24ac460b9c0027,
+            "40ef24ac460b9c0027400123456789abcdef0038",
+            "40ef24ac460b9c002720",
+            "40ef24ac460b9c002760",
+            "40ef24ac460b9c0027400123456789abcdef0020",
+            "40ef24ac460b9c0027400123456789abcdef0060",
+        },
+        {
+            "int",
+            {int32_type},
+            {from_hex("01020304")},
+            0x0a0090a9da040fe3,
+            "408a0090a9da040fe340010203040038",
+            "408a0090a9da040fe320",
+            "408a0090a9da040fe360",
+            "408a0090a9da040fe340010203040020",
+            "408a0090a9da040fe340010203040060",
+        },
+        {
+            "blob_all_nuls",
+            {bytes_type},
+            {from_hex("00000000")},
+            0xcfa0f7ddd84c76bc,
+            "404fa0f7ddd84c76bc4000fefefefe38",
+            "404fa0f7ddd84c76bc20",
+            "404fa0f7ddd84c76bc60",
+            "404fa0f7ddd84c76bc4000fefefefe20",
+            "404fa0f7ddd84c76bc4000fefefefe60",
+        },
+        {
+            "blob_no_nuls",
+            {bytes_type},
+            {from_hex("0102030405")},
+            0xfe94a31bab98860e,
+            "407e94a31bab98860e4001020304050038",
+            "407e94a31bab98860e20",
+            "407e94a31bab98860e60",
+            "407e94a31bab98860e4001020304050020",
+            "407e94a31bab98860e4001020304050060",
+        },
+        {
+            "bigint_blob_pair",
+            {long_type, bytes_type},
+            {from_hex("0123456789abcdef"), from_hex("0100020003")},
+            0x79086c2c2e019e3e,
+            "40f9086c2c2e019e3e4000ff080123456789abcdef00feff050100ff0200ff0300fe38",
+            "40f9086c2c2e019e3e20",
+            "40f9086c2c2e019e3e60",
+            "40f9086c2c2e019e3e4000ff080123456789abcdef00feff050100ff0200ff0300fe20",
+            "40f9086c2c2e019e3e4000ff080123456789abcdef00feff050100ff0200ff0300fe60",
+        },
+    };
+
+    using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
+    auto sst_ver = sstables::sstable_version_types::mt;
+
+    for (const auto& tc : cases) {
+        auto sb = schema_builder("ks", "t");
+        for (size_t i = 0; i < tc.col_types.size(); ++i) {
+            sb.with_column(to_bytes(fmt::format("pk{}", i)), tc.col_types[i], column_kind::partition_key);
+        }
+        auto s = sb.build();
+
+        auto pk = partition_key::from_exploded(*s, tc.col_values);
+        auto tok = dht::token::from_int64(tc.token);
+
+        struct subcase {
+            const char* kind;
+            const partition_key* pk_ptr;
+            int8_t weight;
+            const char* expected;
+        };
+        std::array<subcase, 5> subs = {{
+            {"at_key",       &pk,     0, tc.at_key},
+            {"before_token", nullptr, -1, tc.before_token},
+            {"after_token",  nullptr, +1, tc.after_token},
+            {"before_key",   &pk,    -1, tc.before_key},
+            {"after_key",    &pk,    +1, tc.after_key},
+        }};
+        for (const auto& sub : subs) {
+            auto rpv = dht::ring_position_view(tok, sub.pk_ptr, sub.weight);
+            encoding enc(sst_ver, *s, rpv);
+            auto got_hex = fmt::format("{}", fmt_hex(linearize(enc.begin())));
+            BOOST_REQUIRE_MESSAGE(got_hex == sub.expected,
+                fmt::format("case '{}' position_kind={}: expected={} got={}",
+                    tc.name, sub.kind, sub.expected, got_hex));
+        }
+    }
+}
+
 // Generate an ordered list of various clustering positions views,
 // which together should cover all kinds of various pairwise comparisons.
 static std::generator<position_in_partition_view> generate_pipvs(const schema& string_pair_ck_schema) {
