@@ -229,7 +229,6 @@ async def test_alternator_tables_respect_compression_config(manager: ScyllaClust
         table.delete()
 
 
-@pytest.mark.xfail(reason="#10431 - TableClass not yet supported")
 async def test_alternator_tableclass_respects_compression_config(manager: ScyllaClusterManager):
     """
     Check that Alternator's TableClass option keeps the compression options
