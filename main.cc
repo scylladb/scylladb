@@ -2375,6 +2375,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 // Need to do it before allowing incoming messaging service connections since
                 // storage proxy's and migration manager's verbs may access group0.
                 group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
+                group0_service.enable_group0_state_machine().get();
             }
 
             // The call to setup_group0_if_exists() above guarantees that, if group0 is
