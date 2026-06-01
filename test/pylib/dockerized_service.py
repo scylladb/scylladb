@@ -15,6 +15,27 @@ from typing import Callable
 
 logger = logging.getLogger("DockerizedServer")
 
+# Number of times we retry launching the container when the host port forward
+# fails to bind. See _PortInUseError for why this is necessary.
+PORT_BIND_MAX_RETRIES = 8
+
+
+class _PortInUseError(RuntimeError):
+    """Raised when the container could not bind the forwarded host port.
+
+    Rootless podman picks a free host port by probing with a temporary
+    listener, then closes it before the port forwarder rebinds the port.
+    Another process can grab the port in that window, which makes
+    ``podman run`` fail with::
+
+        Error: rootlessport listen tcp 0.0.0.0:<port>: bind: address already in use
+
+    The failure is transient: retrying the launch lets podman pick a fresh
+    random port, so it is worth a handful of attempts before giving up.
+    See https://github.com/containers/podman/issues/10205
+    """
+
+
 class DockerizedServer:
     """class for running an external dockerized service image, typically mock server"""
     # pylint: disable=too-many-instance-attributes
@@ -41,12 +62,35 @@ class DockerizedServer:
         self.echo_thread = None
 
     async def start(self):
-        """Starts docker image on a random port"""
-        exe = pathlib.Path(next(exe for exe in [shutil.which(path) 
-                                                for path in ["podman", "docker"]] 
+        """Starts the docker image on a random port, retrying on port-bind failures (see _PortInUseError)."""
+        exe = pathlib.Path(next(exe for exe in [shutil.which(path)
+                                                for path in ["podman", "docker"]]
                                                 if exe is not None)).resolve()
-        sid = str(uuid.uuid4())
-        name = f'{self.logfilenamebase}-{sid}'
+        for attempt in range(PORT_BIND_MAX_RETRIES + 1):
+            name = f'{self.logfilenamebase}-{uuid.uuid4()}'
+            try:
+                await self._start_attempt(exe, name)
+                return
+            except _PortInUseError as e:
+                if attempt >= PORT_BIND_MAX_RETRIES:
+                    raise
+                logger.warning("Container %s failed to bind host port (attempt %d/%d), retrying: %s",
+                               name, attempt + 1, PORT_BIND_MAX_RETRIES, e)
+
+    async def _cleanup_failed_attempt(self, proc):
+        """Tear down the half-started container and reader thread after a failed launch."""
+        proc.kill()
+        proc.wait()
+        if self.echo_thread:
+            await self.echo_thread
+            self.echo_thread = None
+        if self.logfile:
+            self.logfile.close()
+            self.logfile = None
+        self.port = None
+
+    async def _start_attempt(self, exe, name):
+        """Launch the container once. Raises _PortInUseError if the host port could not be bound."""
         logfilename = (pathlib.Path(self.tmpdir) / name).with_suffix(".log")
         self.logfile = logfilename.open("wb")
 
@@ -111,10 +155,10 @@ class DockerizedServer:
         self.echo_thread = loop.run_in_executor(None, process_io)
         ok = await ready_fut
         if not ok:
-            self.logfile.close()
-            proc.kill()
-            proc.wait()
-            raise RuntimeError("Could not parse expected launch message from container")
+            # is_failure_line matched (e.g. "address already in use"); this is a
+            # transient host port-bind race, so let start() retry on a new port.
+            await self._cleanup_failed_attempt(proc)
+            raise _PortInUseError(f"Container {name} failed to bind host port")
 
         check_proc = await asyncio.create_subprocess_exec(exe
                                                           , *["container", "port", name]
