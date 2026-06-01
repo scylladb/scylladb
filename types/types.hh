@@ -312,6 +312,10 @@ class user_type_impl;
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
     std::optional<uint32_t> _value_length_if_fixed;
+    // Lazily computed by cql3_type_name(). Grouped here with the other large
+    // members so that _kind and the _contains_* bools below pack into a single
+    // trailing word, keeping sizeof(abstract_type) at one cache line (64 bytes).
+    mutable sstring _cql3_type_name;
 public:
     enum class kind : int8_t {
         ascii,
@@ -491,8 +495,6 @@ public:
     bool bound_value_needs_to_be_reserialized() const;
 
     friend class list_type_impl;
-private:
-    mutable sstring _cql3_type_name;
 protected:
     bool _contains_set_or_map = false;
     bool _contains_collection = false;
