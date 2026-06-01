@@ -4218,6 +4218,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_retry_failed_rf_change_tablet_rebuilds(group0_guard guard);
 
+    using require_live_nodes = bool_class<struct require_live_nodes_tag>;
+
+    struct tablet_load_stats_collect_result {
+        locator::load_stats_ptr stats;
+        bool complete;
+    };
+
+    future<tablet_load_stats_collect_result> collect_tablet_load_stats(require_live_nodes require);
     future<> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
 
@@ -4431,7 +4439,7 @@ future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(
     co_return true;
 }
 
-future<> topology_coordinator::refresh_tablet_load_stats() {
+future<topology_coordinator::tablet_load_stats_collect_result> topology_coordinator::collect_tablet_load_stats(require_live_nodes require) {
     co_await utils::get_local_injector().inject("refresh_tablet_load_stats_pause", utils::wait_for_message(5min));
     auto tm = get_token_metadata_ptr();
 
@@ -4465,7 +4473,7 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
 
             locator::load_stats node_stats;
             if (!_gossiper.is_alive(dst)) {
-                if (_load_stats_per_node.contains(dst) &&
+                if (require == require_live_nodes::no && _load_stats_per_node.contains(dst) &&
                         !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
                     node_stats = _load_stats_per_node[dst];
                 } else {
@@ -4536,10 +4544,17 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
         stats.tables.clear();
     }
 
-    rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
+    co_return tablet_load_stats_collect_result{
+        .stats = make_lw_shared<const locator::load_stats>(std::move(stats)),
+        .complete = !table_load_stats_invalid,
+    };
+}
 
-    _tablet_allocator.set_load_stats(make_lw_shared<const locator::load_stats>(std::move(stats)));
+future<> topology_coordinator::refresh_tablet_load_stats() {
+    auto [load_stats, _] = co_await collect_tablet_load_stats(require_live_nodes::no);
+    _tablet_allocator.set_load_stats(std::move(load_stats));
     _topo_sm.event.broadcast(); // wake up load balancer.
+    rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
 }
 
 future<> topology_coordinator::start_tablet_load_stats_refresher() {
