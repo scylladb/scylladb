@@ -8,7 +8,15 @@
 
 #include <boost/test/unit_test.hpp>
 #include <deque>
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/thread_test_case.hh>
 #include "db/large_data_handler.hh"
+#include "mutation/mutation.hh"
+#include "mutation/atomic_cell.hh"
+#include "mutation/collection_mutation.hh"
+#include "schema/schema_builder.hh"
+#include "exceptions/exceptions.hh"
+#include "types/set.hh"
 
 using sstables::large_data_record;
 using sstables::large_data_type;
@@ -228,6 +236,134 @@ BOOST_AUTO_TEST_CASE(test_auto_unlink_on_record_destruction) {
     }
     // store destroyed → records destroyed → auto_unlink fires
     BOOST_REQUIRE(set.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Coordinator guardrail tests
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr uint64_t MB = 1024 * 1024;
+
+schema_ptr make_simple_schema() {
+    return schema_builder(1, "ks", "tbl")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("v", bytes_type)
+        .build();
+}
+
+schema_ptr make_static_schema() {
+    return schema_builder(1, "ks", "tbl")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("s", bytes_type, column_kind::static_column)
+        .with_column("v", bytes_type)
+        .build();
+}
+
+mutation make_mutation_with_cell(schema_ptr s, size_t value_size) {
+    auto key = partition_key::from_exploded(*s, {to_bytes("pk1")});
+    auto c_key = clustering_key::from_exploded(*s, {to_bytes("ck1")});
+    mutation m(s, key);
+    auto cell = atomic_cell::make_live(*bytes_type, 0, bytes(value_size, 'x'));
+    const column_definition& v_col = *s->get_column_definition("v");
+    m.set_clustered_cell(c_key, v_col, std::move(cell));
+    return m;
+}
+
+mutation make_mutation_with_static_cell(schema_ptr s, size_t value_size) {
+    auto key = partition_key::from_exploded(*s, {to_bytes("pk1")});
+    mutation m(s, key);
+    auto cell = atomic_cell::make_live(*bytes_type, 0, bytes(value_size, 'x'));
+    const column_definition& s_col = *s->get_column_definition("s");
+    m.set_static_cell(s_col, std::move(cell));
+    return m;
+}
+
+mutation make_mutation_with_tombstone(schema_ptr s) {
+    auto key = partition_key::from_exploded(*s, {to_bytes("pk1")});
+    auto c_key = clustering_key::from_exploded(*s, {to_bytes("ck1")});
+    mutation m(s, key);
+    const column_definition& v_col = *s->get_column_definition("v");
+    auto cell = atomic_cell::make_dead(0, gc_clock::now());
+    m.set_clustered_cell(c_key, v_col, std::move(cell));
+    return m;
+}
+
+db::guardrail_config make_coordinator_config(
+        uint32_t cell_fail_mb = 0, uint32_t cell_warn_mb = 0,
+        uint32_t row_fail_mb = 0, uint32_t row_warn_mb = 0,
+        uint32_t collection_fail = 0, uint32_t collection_warn = 0) {
+    return db::guardrail_config{
+        .partition_size_fail_threshold_mb = utils::updateable_value<uint32_t>(0),
+        .partition_size_warn_threshold_mb = utils::updateable_value<uint32_t>(0),
+        .rows_count_fail_threshold = utils::updateable_value<uint32_t>(0),
+        .rows_count_warn_threshold = utils::updateable_value<uint32_t>(0),
+        .row_size_fail_threshold_mb = utils::updateable_value<uint32_t>(row_fail_mb),
+        .row_size_warn_threshold_mb = utils::updateable_value<uint32_t>(row_warn_mb),
+        .collection_elements_fail_threshold = utils::updateable_value<uint32_t>(collection_fail),
+        .collection_elements_warn_threshold = utils::updateable_value<uint32_t>(collection_warn),
+        .cell_size_fail_threshold_mb = utils::updateable_value<uint32_t>(cell_fail_mb),
+        .cell_size_warn_threshold_mb = utils::updateable_value<uint32_t>(cell_warn_mb),
+    };
+}
+
+void coordinator_check(const db::large_data_guardrail& g, const mutation& m) {
+    g.check_coordinator(*m.schema(), m.partition(), m.key());
+}
+
+} // anonymous namespace
+
+// Cell guardrail tests
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_cell_hard_limit_rejects_large_cell) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(1 /* cell_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, MB + 1);
+    BOOST_REQUIRE_THROW(coordinator_check(g, m), exceptions::invalid_request_exception);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_cell_hard_limit_allows_small_cell) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(1 /* cell_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, 100);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_cell_hard_limit_allows_at_threshold) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(1 /* cell_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, MB);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_cell_hard_limit_disabled_when_zero) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config();
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, 2 * MB);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_cell_hard_limit_allows_tombstone) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(1 /* cell_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_tombstone(s);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_cell_hard_limit_rejects_large_static_cell) {
+    auto s = make_static_schema();
+    auto cfg = make_coordinator_config(1 /* cell_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_static_cell(s, MB + 1);
+    BOOST_REQUIRE_THROW(coordinator_check(g, m), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
