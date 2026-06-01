@@ -1777,7 +1777,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                 }
                 // bytes not counting overhead
                 auto pos = s->position();
-                auto max = std::max<size_t>(pos, max_size);
+                auto max = std::min<size_t>(pos, max_size);
                 auto buf_rem = std::min(max_size - max, s->_buffer_ostream.size());
 
                 size_t avail;
@@ -1791,8 +1791,8 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                 } else {
                     co_await s->cycle();
                     auto pos = s->position();
-                    auto max = std::max<size_t>(pos, max_size);
-                    auto file_rem = max - pos;
+                    auto max = std::min<size_t>(pos, max_size);
+                    auto file_rem = max_size - max;
 
                     if (file_rem < align) {
                         co_await s->close();
