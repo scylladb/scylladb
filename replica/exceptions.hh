@@ -82,13 +82,29 @@ public:
 
 using abort_requested_exception = seastar::abort_requested_exception;
 
+/// Thrown when a schema downgrade (converting data from a newer schema to an
+/// older one) encounters an incompatible column type. This means a cell would
+/// be silently dropped, causing data loss. With raft-based schema versions
+/// (timeuuid/v1), we can detect downgrades and throw instead of losing data.
+class incompatible_schema_downgrade_exception final : public replica_exception {
+    seastar::sstring _message;
+public:
+    incompatible_schema_downgrade_exception(seastar::sstring message)
+        : _message(std::move(message))
+    { }
+
+    const seastar::sstring& message() const { return _message; }
+    virtual const char* what() const noexcept override { return _message.c_str(); }
+};
+
 struct exception_variant {
     std::variant<unknown_exception,
             no_exception,
             rate_limit_exception,
             stale_topology_exception,
             abort_requested_exception,
-            critical_disk_utilization_exception
+            critical_disk_utilization_exception,
+            incompatible_schema_downgrade_exception
     > reason;
 
     exception_variant()

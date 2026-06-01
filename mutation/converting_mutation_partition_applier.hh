@@ -34,8 +34,11 @@ private:
     static bool is_compatible(const column_definition& new_def, const abstract_type& old_type, column_kind kind);
     static atomic_cell upgrade_cell(const abstract_type& new_type, const abstract_type& old_type, atomic_cell_view cell,
                                     atomic_cell::collection_member cm = atomic_cell::collection_member::no);
-    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell);
-    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell);public:
+    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell,
+                            bool is_downgrade = false);
+    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell,
+                            bool is_downgrade = false);
+public:
     converting_mutation_partition_applier(
             const column_mapping& visited_column_mapping,
             const schema& target_schema,
@@ -52,5 +55,9 @@ private:
 
     // Appends the cell to dst upgrading it to the new schema.
     // Cells must have monotonic names.
-    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell);
+    // When is_downgrade is true and a cell type is incompatible, throws
+    // replica::incompatible_schema_downgrade_exception instead of silently
+    // dropping the cell.
+    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def,
+                            const atomic_cell_or_collection& cell, bool is_downgrade = false);
 };

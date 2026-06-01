@@ -27,13 +27,18 @@ class critical_disk_utilization_exception {
     sstring failed_action();
 };
 
+class incompatible_schema_downgrade_exception {
+    sstring message();
+};
+
 struct exception_variant {
     std::variant<replica::unknown_exception,
             replica::no_exception,
             replica::rate_limit_exception,
             replica::stale_topology_exception,
             replica::abort_requested_exception,
-            replica::critical_disk_utilization_exception
+            replica::critical_disk_utilization_exception,
+            replica::incompatible_schema_downgrade_exception
     > reason;
 };
 

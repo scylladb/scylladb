@@ -13,6 +13,7 @@
 #include "mutation/mutation_partition_view.hh"
 #include "mutation/mutation_partition.hh"
 #include "schema/schema.hh"
+#include "replica/exceptions.hh"
 
 bool
 converting_mutation_partition_applier::is_compatible(const column_definition& new_def, const abstract_type& old_type, column_kind kind) {
@@ -33,16 +34,31 @@ converting_mutation_partition_applier::upgrade_cell(const abstract_type& new_typ
 }
 
 void
-converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell) {
-    if (!is_compatible(new_def, old_type, kind) || cell.timestamp() <= new_def.dropped_at()) {
+converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type,
+                                                   atomic_cell_view cell, bool is_downgrade) {
+    if (!is_compatible(new_def, old_type, kind)) {
+        if (is_downgrade) {
+            throw replica::incompatible_schema_downgrade_exception(fmt::format(
+                "Incompatible schema downgrade: column '{}' type {} is not compatible with {}",
+                new_def.name_as_text(), new_def.type->name(), old_type.name()));
+        }
+        return;
+    }
+    if (cell.timestamp() <= new_def.dropped_at()) {
         return;
     }
     dst.apply(new_def, upgrade_cell(*new_def.type, old_type, cell));
 }
 
 void
-converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell) {
+converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type,
+                                                   collection_mutation_view cell, bool is_downgrade) {
     if (!is_compatible(new_def, old_type, kind)) {
+        if (is_downgrade) {
+            throw replica::incompatible_schema_downgrade_exception(fmt::format(
+                "Incompatible schema downgrade: column '{}' type {} is not compatible with {}",
+                new_def.name_as_text(), new_def.type->name(), old_type.name()));
+        }
         return;
     }
 
@@ -163,10 +179,11 @@ converting_mutation_partition_applier::accept_row_cell(column_id id, collection_
 }
 
 void
-converting_mutation_partition_applier::append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell) {
+converting_mutation_partition_applier::append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def,
+                                                   const atomic_cell_or_collection& cell, bool is_downgrade) {
     if (new_def.is_atomic()) {
-        accept_cell(dst, kind, new_def, *old_def.type, cell.as_atomic_cell(old_def));
+        accept_cell(dst, kind, new_def, *old_def.type, cell.as_atomic_cell(old_def), is_downgrade);
     } else {
-        accept_cell(dst, kind, new_def, *old_def.type, cell.as_collection_mutation());
+        accept_cell(dst, kind, new_def, *old_def.type, cell.as_collection_mutation(), is_downgrade);
     }
 }
