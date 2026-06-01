@@ -2144,6 +2144,52 @@ SEASTAR_TEST_CASE(test_oversized_with_terminate_in_buffer_wait) {
     }, exts.get());
 }
 
+
+SEASTAR_TEST_CASE(test_oversized_at_segment_boundary) {
+    co_await test_oversized(1, 1, [&](commitlog& log) -> future<> {
+        // Add an entry that is exactly segment_size - chunk+entry overhead.
+        // provoking segment overflow.
+        auto uuid = make_table_id();
+        auto max_size = log.max_record_size();
+        auto buf = fragmented_temporary_buffer::allocate_to_fit(max_size);
+        auto h = co_await log.add_mutation(uuid, buf.size_bytes(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            for (auto& tmp : buf) {
+                dst.write(tmp.get(), tmp.size());
+            }
+        });
+
+        co_await log.sync_all_segments();
+        auto pos = log.current_position();
+
+        BOOST_CHECK_EQUAL(h.rp().id, pos.id);
+        BOOST_CHECK_LT(h.rp().pos, pos.pos);
+
+        // TODO: maybe export this so we don't know it here as well...
+        auto overhead = 2 * sizeof(uint32_t);
+        auto base_size = 1024*1024 - pos.pos - overhead;
+        auto sector_overhead = log.sector_overhead(pos.id, base_size);
+
+        BOOST_CHECK_GT(sector_overhead, 0);
+
+        // With bug, we get to write this in same segment as above, even though we overshoot position now
+        buf = fragmented_temporary_buffer::allocate_to_fit(base_size - sector_overhead);
+        auto h2 = co_await log.add_mutation(uuid, buf.size_bytes(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            for (auto& tmp : buf) {
+                dst.write(tmp.get(), tmp.size());
+            }
+        });
+
+        // Should have gone to new segment.
+        BOOST_CHECK_NE(h2.rp().id, pos.id);
+
+        h.release();
+        h2.release();
+
+        // Now, if bugged, oversized test will overflow size calc and crash.
+        // With test, it will not.
+    });
+}
+
 // tests #20862 - buffer usage counter not being updated correctly
 SEASTAR_TEST_CASE(test_commitlog_buffer_size_counter) {
     commitlog::config cfg;
