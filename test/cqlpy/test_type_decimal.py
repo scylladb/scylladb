@@ -308,7 +308,10 @@ def test_decimal_si_and_mv_representation(cql, test_keyspace):
 # but in arithmetic.
 # This test is skipped because it would hang or crash the tests.
 # Reproduces SCYLLADB-1576
-@pytest.mark.skip_bug(reason="SCYLLADB-1576")
+@pytest.mark.skip_bug(
+    link="https://scylladb.atlassian.net/browse/SCYLLADB-1576",
+    reason="Decimal operator+= OOM on extreme scale difference",
+)
 def test_decimal_sum_extreme_scale_oom(cql, test_keyspace):
     with new_test_table(cql, test_keyspace,
             "p int, c decimal, PRIMARY KEY (p)") as table:

@@ -35,7 +35,10 @@ def read_function_from_file(file_name, wasm_name=None, udf_name=None):
         print(f"Can't open {wat_path}.\nPlease build Wasm examples.")
         exit(1)
 
-@pytest.mark.skip_bug(reason="Issue #22799")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/22799",
+    reason="CI regression, no understanding why this started happening ",
+)
 def test_complex_null_values(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(txt text, i int)") as type:
         schema = f"(key int primary key, lst list<double>, st set<text>, mp map<int, boolean>, tup frozen<tuple<double, text, int, boolean>>, udt frozen<{type}>)"
@@ -163,7 +166,10 @@ def test_types_with_and_without_nulls(cql, test_keyspace):
                     assertRows(execute(cql, table, f"SELECT {fun_name}({type_def.column_name}) FROM %s WHERE key = 1"), row("called"))
                     assertRows(execute(cql, table, f"SELECT {fun_name}({type_def.column_name}) FROM %s WHERE key = 2"), row(None))
 
-@pytest.mark.skip_bug(reason="Issue #13746")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
 @pytest.mark.xfail(reason="Issue #13855")
 @pytest.mark.xfail(reason="Issue #13860")
 @pytest.mark.xfail(reason="Issue #13866")
@@ -200,7 +206,10 @@ def test_function_with_frozen_set_type(cql, test_keyspace):
 
             assertInvalidMessage(cql, "", "cannot be frozen", f"DROP FUNCTION {test_keyspace}.{ret_name}(frozen<set<int>>)")
 
-@pytest.mark.skip_bug(reason="Issue #13746")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
 @pytest.mark.xfail(reason="Issue #13855")
 @pytest.mark.xfail(reason="Issue #13860")
 @pytest.mark.xfail(reason="Issue #13866")
@@ -237,7 +246,10 @@ def test_function_with_frozen_list_type(cql, test_keyspace):
 
             assertInvalidMessage(cql, "", "cannot be frozen", f"DROP FUNCTION {test_keyspace}.{ret_name}(frozen<list<int>>)")
 
-@pytest.mark.skip_bug(reason="Issue #13746")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
 @pytest.mark.xfail(reason="Issue #13855")
 @pytest.mark.xfail(reason="Issue #13860")
 @pytest.mark.xfail(reason="Issue #13866")
@@ -274,7 +286,10 @@ def test_function_with_frozen_map_type(cql, test_keyspace):
 
             assertInvalidMessage(cql, "", "cannot be frozen", f"DROP FUNCTION {test_keyspace}.{ret_name}(frozen<map<int, int>>)")
 
-@pytest.mark.skip_bug(reason="Issue #13746")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
 def test_function_with_frozen_tuple_type(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b frozen<tuple<int, int>>)") as table:
         with new_secondary_index(cql, table, "b"):
@@ -311,7 +326,10 @@ def test_function_with_frozen_tuple_type(cql, test_keyspace):
             cql.execute(f"DROP FUNCTION {test_keyspace}.{fun_name} (frozen<tuple<int, int>>)")
             assertRowCount(cql.execute(f"SELECT * from system_schema.functions WHERE keyspace_name = '{test_keyspace}' AND function_name = '{fun_name}'"), 0)
 
-@pytest.mark.skip_bug(reason="Issue #13746")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13746",
+    reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",
+)
 def test_function_with_frozen_udt_type(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(f int)") as type:
         with create_table(cql, test_keyspace, f"(a int PRIMARY KEY, b frozen<{type}>)") as table:

@@ -181,8 +181,17 @@ async def test_downgrade_after_successful_upgrade_fails(manager: ManagerClient) 
             expected_error=f"Feature '{TEST_FEATURE_NAME}' was previously enabled in the cluster")
 
 
+<<<<<<< HEAD
 @pytest.mark.skip_bug(reason="issue #14194")
 @pytest.mark.asyncio
+||||||| parent of a1b8630c73 (test: enforce skip_bug(link, reason) and migrate call sites)
+@pytest.mark.skip_bug(reason="issue #14194")
+=======
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/14194",
+    reason="Nodes removed from the cluster may prevent features from being enabled for A_VERY_LONG_TIME (3 days) ",
+)
+>>>>>>> a1b8630c73 (test: enforce skip_bug(link, reason) and migrate call sites)
 async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerClient) -> None:
     """Upgrades all but one node in the cluster to enable the test feature.
        Then, the last one is shut down and removed via `nodetool removenode`.

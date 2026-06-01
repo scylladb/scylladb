@@ -116,8 +116,17 @@ async def test_tablet_repair_progress(manager: ManagerClient):
 async def test_tablet_repair_progress_split(manager: ManagerClient):
     await do_test_tablet_repair_progress_split_merge(manager, do_split=True)
 
+<<<<<<< HEAD
 @pytest.mark.asyncio
 @pytest.mark.skip_bug(reason="https://github.com/scylladb/scylladb/issues/26844")
+||||||| parent of a1b8630c73 (test: enforce skip_bug(link, reason) and migrate call sites)
+@pytest.mark.skip_bug(reason="https://github.com/scylladb/scylladb/issues/26844")
+=======
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/26844",
+    reason="Tablet repair scheduler crashes",
+)
+>>>>>>> a1b8630c73 (test: enforce skip_bug(link, reason) and migrate call sites)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_progress_merge(manager: ManagerClient):
     await do_test_tablet_repair_progress_split_merge(manager, do_merge=True)

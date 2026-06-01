@@ -35,7 +35,10 @@ def test_coroutine_frame(gdb_cmd):
     )
     if "COROUTINE_NOT_FOUND" in result.stdout:
         # See https://github.com/scylladb/scylladb/issues/22501
-        skip_bug("Failed to find coroutine task. Skipping test. https://github.com/scylladb/scylladb/issues/22501")
+        skip_bug(
+            link="https://github.com/scylladb/scylladb/issues/22501",
+            reason="Coroutine task cannot be found in this GDB scenario",
+        )
     assert result.returncode == 0, (
         f"GDB command `coro_frame` failed. stdout: {result.stdout} stderr: {result.stderr}"
     )

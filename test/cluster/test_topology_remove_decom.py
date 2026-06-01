@@ -70,8 +70,17 @@ async def test_decommission_node_add_column(manager: ManagerClient, random_table
     await random_tables.verify_schema()
 
 
+<<<<<<< HEAD
 @pytest.mark.asyncio
 @pytest.mark.skip_bug(reason="Wait for @slow attribute, #11713")
+||||||| parent of a1b8630c73 (test: enforce skip_bug(link, reason) and migrate call sites)
+@pytest.mark.skip_bug(reason="Wait for @slow attribute, #11713")
+=======
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/11713",
+    reason="Wait for @slow attribute",
+)
+>>>>>>> a1b8630c73 (test: enforce skip_bug(link, reason) and migrate call sites)
 async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_tables: RandomTables):
     stopped = False
     ddl_failed = False

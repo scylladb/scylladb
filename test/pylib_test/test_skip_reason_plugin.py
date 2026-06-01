@@ -23,12 +23,17 @@ _BASE_CONFTEST = textwrap.dedent("""\
     import enum
     import pytest
     from test.pylib.skip_reason_plugin import SkipReasonPlugin
+    from test.pylib.skip_types import SkipType as ProjectSkipType
 
     class SkipType(enum.StrEnum):
         SKIP_BUG = "bug"
         SKIP_NOT_IMPLEMENTED = "not_implemented"
         SKIP_SLOW = "slow"
         SKIP_ENV = "env"
+
+        get_reason_default = staticmethod(ProjectSkipType.get_reason_default)
+        get_reason_skip_bug = staticmethod(ProjectSkipType.get_reason_skip_bug)
+
         @property
         def marker_name(self):
             return self.name.lower()
@@ -52,16 +57,33 @@ def skippytest(pytester: pytest.Pytester) -> pytest.Pytester:
 
 # -- Typed markers ----------------------------------------------------------
 
-@pytest.mark.parametrize("marker, skip_type, reason", [
-    ("skip_bug",             "bug",            "scylladb/scylladb#99999"),
-    ("skip_not_implemented", "not_implemented", "feature X not built yet"),
-    ("skip_slow",            "slow",            "takes 10 minutes"),
-    ("skip_env",             "env",             "need --special-flag"),
-], ids=["bug", "not_implemented", "slow", "env"])
-def test_typed_marker_skips_with_prefix(skippytest, marker, skip_type, reason):
+def test_skip_bug_marker_skips_with_prefix(skippytest):
     skippytest.makepyfile(f"""
         import pytest
-        @pytest.mark.{marker}(reason="{reason}")
+        @pytest.mark.skip_bug(
+            link="https://github.com/scylladb/scylladb/issues/99999",
+            reason="Known tablet scheduler crash",
+        )
+        def test_target():
+            assert False
+    """)
+    result = skippytest.runpytest("-rs")
+    result.assert_outcomes(skipped=1)
+    out = result.stdout.str()
+    assert "[bug]" in out
+    assert "Known tablet scheduler crash" in out
+    assert "https://github.com/scylladb/scylladb/issues/99999" in out
+
+
+@pytest.mark.parametrize("marker, skip_type, reason", [
+    ("skip_not_implemented", "not_implemented", "feature X not built yet"),
+    ("skip_slow", "slow", "takes 10 minutes"),
+    ("skip_env", "env", "need --special-flag"),
+])
+def test_non_bug_typed_marker_skips_with_prefix(skippytest, marker, skip_type, reason):
+    skippytest.makepyfile(f"""
+        import pytest
+        @pytest.mark.{marker}(reason=\"{reason}\")
         def test_target():
             assert False
     """)
@@ -72,24 +94,42 @@ def test_typed_marker_skips_with_prefix(skippytest, marker, skip_type, reason):
     assert reason in out
 
 
-def test_typed_marker_positional_reason(skippytest):
-    """Reason passed as a positional arg (not keyword) must also work."""
+def test_skip_bug_positional_reason_rejected(skippytest):
+    """Old positional form for skip_bug must be rejected."""
     skippytest.makepyfile("""
         import pytest
         @pytest.mark.skip_bug("scylladb/scylladb#55555")
         def test_positional():
             assert False
     """)
+    result = skippytest.runpytest()
+    result.stderr.fnmatch_lines(["*no longer accepts positional arguments*"])
+    assert result.ret != 0
+
+
+@pytest.mark.parametrize("marker, skip_type", [
+    ("skip_not_implemented", "not_implemented"),
+    ("skip_slow", "slow"),
+    ("skip_env", "env"),
+])
+def test_typed_marker_positional_reason_accepted(skippytest, marker, skip_type):
+    """Non-bug typed markers still accept a positional reason for backwards compatibility."""
+    skippytest.makepyfile(f"""
+        import pytest
+        @pytest.mark.{marker}("positional reason")
+        def test_positional():
+            pass
+    """)
     result = skippytest.runpytest("-rs")
     result.assert_outcomes(skipped=1)
     out = result.stdout.str()
-    assert "[bug]" in out
-    assert "scylladb/scylladb#55555" in out
+    assert f"[{skip_type}]" in out
+    assert "positional reason" in out
 
 
 # -- Missing reason ---------------------------------------------------------
 
-@pytest.mark.parametrize("marker", ["skip_bug", "skip_not_implemented"])
+@pytest.mark.parametrize("marker", ["skip_not_implemented", "skip_slow", "skip_env"])
 def test_missing_reason_is_rejected(skippytest, marker):
     skippytest.makepyfile(f"""
         import pytest
@@ -99,6 +139,30 @@ def test_missing_reason_is_rejected(skippytest, marker):
     """)
     result = skippytest.runpytest()
     result.stderr.fnmatch_lines(["*requires a 'reason' argument*"])
+    assert result.ret != 0
+
+
+def test_skip_bug_requires_link_and_reason(skippytest):
+    skippytest.makepyfile("""
+        import pytest
+        @pytest.mark.skip_bug(reason="Some explanation")
+        def test_missing_link():
+            pass
+    """)
+    result = skippytest.runpytest()
+    result.stderr.fnmatch_lines(["*requires both 'link' and 'reason'*"])
+    assert result.ret != 0
+
+
+def test_skip_bug_invalid_link_rejected(skippytest):
+    skippytest.makepyfile("""
+        import pytest
+        @pytest.mark.skip_bug(link="https://example.com/123", reason="Broken behavior")
+        def test_invalid_link():
+            pass
+    """)
+    result = skippytest.runpytest()
+    result.stderr.fnmatch_lines(["*invalid 'link' value*"])
     assert result.ret != 0
 
 
@@ -140,7 +204,10 @@ def test_bare_skip_in_pytest_param_rejected(skippytest):
 def test_typed_skip_does_not_reject(skippytest):
     skippytest.makepyfile("""
         import pytest
-        @pytest.mark.skip_bug(reason="scylladb/scylladb#11111")
+        @pytest.mark.skip_bug(
+            link="https://github.com/scylladb/scylladb/issues/11111",
+            reason="Known issue in validation pipeline",
+        )
         def test_typed():
             pass
     """)
@@ -188,7 +255,10 @@ def test_runtime_skip_populates_junit(skippytest, tmp_path):
 def test_junit_xml_contains_skip_type(skippytest, tmp_path):
     skippytest.makepyfile("""
         import pytest
-        @pytest.mark.skip_bug(reason="scylladb/scylladb#77777")
+        @pytest.mark.skip_bug(
+            link="https://github.com/scylladb/scylladb/issues/77777",
+            reason="Known issue in compaction path",
+        )
         def test_bug():
             pass
     """)
@@ -200,7 +270,8 @@ def test_junit_xml_contains_skip_type(skippytest, tmp_path):
     assert 'name="skip_type"' in xml
     assert 'value="bug"' in xml
     assert 'name="skip_reason"' in xml
-    assert "scylladb/scylladb#77777" in xml
+    assert "Known issue in compaction path" in xml
+    assert "https://github.com/scylladb/scylladb/issues/77777" in xml
 
 
 def test_report_callback_is_invoked(pytester: pytest.Pytester, tmp_path):
@@ -211,9 +282,14 @@ def test_report_callback_is_invoked(pytester: pytest.Pytester, tmp_path):
         import pytest
         from pathlib import Path
         from test.pylib.skip_reason_plugin import SkipReasonPlugin
+        from test.pylib.skip_types import SkipType as ProjectSkipType
 
         class SkipType(enum.StrEnum):
             SKIP_BUG = "bug"
+
+            get_reason_default = staticmethod(ProjectSkipType.get_reason_default)
+            get_reason_skip_bug = staticmethod(ProjectSkipType.get_reason_skip_bug)
+
             @property
             def marker_name(self):
                 return self.name.lower()
@@ -231,13 +307,16 @@ def test_report_callback_is_invoked(pytester: pytest.Pytester, tmp_path):
     )
     pytester.makepyfile("""
         import pytest
-        @pytest.mark.skip_bug(reason="scylladb/scylladb#44444")
+        @pytest.mark.skip_bug(
+            link="https://github.com/scylladb/scylladb/issues/44444",
+            reason="Known issue in callback flow",
+        )
         def test_cb():
             pass
     """)
     result = pytester.runpytest()
     result.assert_outcomes(skipped=1)
-    assert cb_path.read_text() == "bug:scylladb/scylladb#44444"
+    assert cb_path.read_text() == "bug:Known issue in callback flow (https://github.com/scylladb/scylladb/issues/44444)"
 
 
 # -- Typed marker + skip_mode interaction -----------------------------------
@@ -261,7 +340,10 @@ def test_typed_marker_with_skip_mode_populates_junit(skippytest, tmp_path):
     skippytest.makeconftest(_SKIP_MODE_CONFTEST)
     skippytest.makepyfile("""
         import pytest
-        @pytest.mark.skip_bug(reason="scylladb/scylladb#26844")
+        @pytest.mark.skip_bug(
+            link="https://github.com/scylladb/scylladb/issues/26844",
+            reason="Tablet repair scheduler crashes",
+        )
         @pytest.mark.skip_mode(mode="release", reason="no error injections")
         def test_both():
             assert False
@@ -273,7 +355,8 @@ def test_typed_marker_with_skip_mode_populates_junit(skippytest, tmp_path):
     # JUnit XML must have the typed skip metadata.
     xml = xml_path.read_text()
     assert 'value="bug"' in xml
-    assert "scylladb/scylladb#26844" in xml
+    assert "Tablet repair scheduler crashes" in xml
+    assert "https://github.com/scylladb/scylladb/issues/26844" in xml
 
 
 def test_skip_mode_prefix_populates_junit(skippytest, tmp_path):

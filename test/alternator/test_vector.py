@@ -1219,7 +1219,10 @@ def test_wait_for_vector_index_active(vs, needs_vector_store):
 # and this test used to fail before this was fixed.
 # To save a bit of time, we don't test all combinations of hash and range
 # key types but test each type at least once as a hash key and a range key.
-@pytest.mark.skip_bug(reason="Bug in vector store for non-string keys, fails very slowly so let's skip")
+@pytest.mark.skip_bug(
+    link="https://scylladb.atlassian.net/browse/VECTOR-374",
+    reason="Bug in vector store for non-string keys, fails very slowly",
+)
 @pytest.mark.parametrize('hash_type,range_type', [
     ('N', None), ('B', None), ('S', 'N'),  ('S', 'B'),
 ], ids=[

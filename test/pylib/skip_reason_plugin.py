@@ -11,7 +11,10 @@ project's ``conftest.py`` via :class:`SkipReasonPlugin`.
 
 Usage as decorator (after conftest.py registers the plugin)::
 
-    @pytest.mark.skip_bug(reason="scylladb/scylladb#12345")
+    @pytest.mark.skip_bug(
+        link="https://github.com/scylladb/scylladb/issues/12345",
+        reason="Known repair scheduler crash",
+    )
     @pytest.mark.skip_not_implemented(reason="no per tablet support yet")
 
 Usage at runtime (inside test body or fixture) — prefer the
@@ -21,7 +24,6 @@ convenience wrappers from :mod:`test.pylib.skip_types`::
     skip_env("need --runveryslow option")
 """
 
-from __future__ import annotations
 
 from collections.abc import Callable
 from enum import StrEnum
@@ -61,7 +63,7 @@ class SkipReasonPlugin:
 
     Args:
         skip_types: A :class:`~enum.StrEnum` whose members define the
-            typed skip markers.  Each member's ``marker_name`` property
+            typed skip markers. Each member's ``marker_name`` property
             becomes the pytest marker name, and its value becomes the
             tag written to reports.
         report_callback: Optional callback invoked with
@@ -78,10 +80,24 @@ class SkipReasonPlugin:
         self._skip_types = skip_types
         self._report_callback = report_callback
 
-    @staticmethod
-    def _get_reason(mark: pytest.Mark) -> str:
-        """Extract reason from a marker (keyword or positional)."""
-        return mark.kwargs.get("reason") or (mark.args[0] if mark.args else "")
+    def _get_reason(
+        self,
+        mark: pytest.Mark,
+        *,
+        marker_name: str,
+        nodeid: str,
+    ) -> str:
+        """Extract normalized skip reason from a marker.
+        Delegates marker-specific validation to the skip type definition.
+        """
+        context = f"Marker @pytest.mark.{marker_name} on {nodeid}"
+        skip_types = self._skip_types
+        handler = getattr(skip_types, f"get_reason_{marker_name}", None)
+        if handler is None:
+            handler = getattr(skip_types, "get_reason_default", None)
+        if handler is None:
+            return mark.kwargs.get("reason") or (mark.args[0] if mark.args else "")
+        return handler(mark, context)
 
     @staticmethod
     def _parse_skip_type(longrepr) -> tuple[str, str] | None:
@@ -103,7 +119,7 @@ class SkipReasonPlugin:
             # Convert typed skip markers to real pytest.mark.skip.
             for st in self._skip_types:
                 for mark in item.iter_markers(st.marker_name):
-                    reason = self._get_reason(mark)
+                    reason = self._get_reason(mark, marker_name=st.marker_name, nodeid=item.nodeid)
                     if not reason:
                         raise pytest.UsageError(
                             f"Marker @pytest.mark.{st.marker_name} on {item.nodeid} "
@@ -116,7 +132,7 @@ class SkipReasonPlugin:
             # Reject bare pytest.mark.skip not added by typed markers.
             # skip_mode sets SKIP_TYPE_KEY before this hook runs (trylast).
             if SKIP_TYPE_KEY not in item.stash:
-                bare = [self._get_reason(m) for m in item.iter_markers("skip")]
+                bare = [self._get_reason(m, marker_name="skip", nodeid=item.nodeid) for m in item.iter_markers("skip")]
                 if bare:
                     alternatives = ", ".join(
                         f"@pytest.mark.{st.marker_name}" for st in self._skip_types)
