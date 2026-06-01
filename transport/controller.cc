@@ -262,6 +262,7 @@ future<> controller::do_start_server() {
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
               .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,
               .cql_duplicate_bind_variable_names_refer_to_same_variable = cfg.cql_duplicate_bind_variable_names_refer_to_same_variable,
+              .max_relations_in_where_clause = cfg.max_relations_in_where_clause,
               .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
               .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds
             };
