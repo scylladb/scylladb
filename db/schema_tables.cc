@@ -46,7 +46,6 @@
 #include "replica/tablets.hh"
 
 #include "db/marshal/type_parser.hh"
-#include "db/config.hh"
 #include "db/extensions.hh"
 #include "utils/hashers.hh"
 
@@ -117,19 +116,6 @@ schema_ctxt::schema_ctxt(const db::extensions& extensions, unsigned murmur3_part
     , _extensions(extensions)
     , _murmur3_partitioner_ignore_msb_bits(murmur3_partitioner_ignore_msb_bits)
     , _user_types(std::move(uts))
-{}
-
-schema_ctxt::schema_ctxt(replica::database& db)
-    : schema_ctxt(db.get_config().extensions(), db.get_config().murmur3_partitioner_ignore_msb_bits(),
-                  db.as_user_types_storage(), db.features(), &db)
-{}
-
-schema_ctxt::schema_ctxt(sharded<replica::database>& db)
-    : schema_ctxt(db.local())
-{}
-
-schema_ctxt::schema_ctxt(sharded<service::storage_proxy>& proxy)
-    : schema_ctxt(proxy.local().get_db())
 {}
 
 namespace schema_tables {
