@@ -39,7 +39,7 @@ this part is serialized with other vnode-based operations, including those from 
 Decommission which is still in the tablet draining phase can be canceled using Task Manager API.
 See :doc:`Task manager </operating-scylla/admin-tools/task-manager>`.
 
-.. rubric:: See also
+See also
 
 * :doc:`Remove a Node from a ScyllaDB Cluster (Down Scale) </operating-scylla/procedures/cluster-management/remove-node>`
 * :doc:`Decommissioning a Data Center </operating-scylla/procedures/cluster-management/decommissioning-data-center>`
