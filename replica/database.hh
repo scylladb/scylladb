@@ -150,6 +150,7 @@ class config;
 class extensions;
 class rp_handle;
 class data_listeners;
+class schema_ctxt;
 class large_data_handler;
 class system_table_corrupt_data_handler;
 class nop_corrupt_data_handler;
@@ -1764,6 +1765,7 @@ public:
     db::commitlog* commitlog_for(const schema_ptr& schema);
     std::shared_ptr<data_dictionary::user_types_storage> as_user_types_storage() const noexcept;
     const data_dictionary::user_types_storage& user_types() const noexcept;
+    db::schema_ctxt get_schema_ctxt();
     future<> init_commitlog();
     future<> init_logstor();
     future<> recover_logstor();

@@ -483,7 +483,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 {
     SCYLLA_ASSERT(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 
-    local_schema_registry().init(*this, std::chrono::seconds(get_config().schema_registry_grace_period())); // TODO: we're never unbound.
+    local_schema_registry().init(get_schema_ctxt(), std::chrono::seconds(get_config().schema_registry_grace_period())); // TODO: we're never unbound.
     setup_metrics();
 
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
@@ -501,6 +501,11 @@ std::shared_ptr<data_dictionary::user_types_storage> database::as_user_types_sto
 
 const data_dictionary::user_types_storage& database::user_types() const noexcept {
     return *_user_types;
+}
+
+db::schema_ctxt database::get_schema_ctxt() {
+    return db::schema_ctxt(extensions(), get_config().murmur3_partitioner_ignore_msb_bits(),
+                           as_user_types_storage(), features(), this);
 }
 
 locator::static_effective_replication_map_ptr keyspace::get_static_effective_replication_map() const {
