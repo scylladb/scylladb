@@ -1050,6 +1050,21 @@ public:
 
 bool operator==(const schema&, const schema&);
 
+void schema_extension_cast_failed(const sstring& name); // defined in schema.cc so the required headers don't go to schema.hh
+
+template <typename Extension>
+shared_ptr<Extension> get_schema_extension(const schema::extensions_map& extensions, const sstring& name) {
+    auto it = extensions.find(name);
+    if (it == extensions.end()) {
+        return nullptr;
+    }
+    auto ext = dynamic_pointer_cast<Extension>(it->second);
+    if (!ext) {
+        schema_extension_cast_failed(name);
+    }
+    return ext;
+}
+
 /**
  * Wrapper for schema_ptr used by functions that expect an engaged view_info field.
  */
