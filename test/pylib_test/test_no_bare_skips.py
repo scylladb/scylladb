@@ -13,32 +13,19 @@ Any new skip must use the typed markers or the typed skip() helper.
 
 import ast
 import os
-import pathlib
 import subprocess
 import sys
 
-_TEST_ROOT = pathlib.Path(__file__).resolve().parent.parent
-
-def _iter_test_py_files():
-    """Yield all .py files under test/ excluding pylib_test/, pylib/ and __pycache__."""
-    for p in sorted(_TEST_ROOT.rglob("*.py")):
-        rel = p.relative_to(_TEST_ROOT)
-        parts = rel.parts
-        if "__pycache__" in parts:
-            continue
-        if parts[0] in ("pylib_test", "pylib"):
-            continue
-        yield p
+from test import TEST_DIR
+from test.pylib_test._scan_py_files import iter_test_py_files, parse_python_file
 
 
 def test_no_bare_pytest_skip_calls_in_codebase():
     """Verify no test files use bare pytest.skip() (must use typed skip() helper)."""
     violations = []
-    for path in _iter_test_py_files():
-        source = path.read_text()
-        try:
-            tree = ast.parse(source, filename=str(path))
-        except SyntaxError:
+    for path in iter_test_py_files():
+        tree = parse_python_file(path)
+        if tree is None:
             continue
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -78,7 +65,7 @@ def test_no_bare_skip_markers_in_collection():
          "--ignore=unit",
          "-p", "no:sugar"],
         capture_output=True, text=True,
-        cwd=str(_TEST_ROOT),
+        cwd=str(TEST_DIR),
         env=env,
     )
     # If a bare skip exists, plugin raises UsageError → non-zero exit.
