@@ -800,7 +800,13 @@ async def test_restore_tablets_vs_migration(build_mode: str, manager: ManagerCli
         current = tablet.replicas[0]
         target = s1_host_id if current[0] == s0_host_id else s0_host_id
         await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "block_tablet_streaming", False, parameters={'keyspace': ks, 'table': 'test'}) for s in servers])
+
+        target_server = servers[1] if target == s1_host_id else servers[0]
+        log = await manager.server_open_log(target_server.server_id)
+        mark = await log.mark()
+
         migration_task = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, "test", current[0], current[1], target, 0, tablet.last_token))
+        await log.wait_for("block_tablet_streaming: waiting", from_mark=mark, timeout=30)
 
         logger.info(f'Restore cluster via {servers[1].ip_addr}')
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
