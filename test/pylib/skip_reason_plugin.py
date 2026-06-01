@@ -33,6 +33,7 @@ import pytest
 # StashKeys to carry skip metadata from collection to reporting.
 SKIP_TYPE_KEY = pytest.StashKey[str]()
 SKIP_REASON_KEY = pytest.StashKey[str]()
+SKIP_MARKER_ERROR_KEY = pytest.StashKey[str]()
 
 
 def skip(reason: str, skip_type: StrEnum):
@@ -112,6 +113,23 @@ class SkipReasonPlugin:
             return tag, reason.lstrip()
         return None
 
+    @staticmethod
+    def _is_xdist_worker(config: pytest.Config) -> bool:
+        """Return True when running inside an xdist worker process."""
+        return hasattr(config, "workerinput")
+
+    def _handle_collection_error(self, item: pytest.Item, error: pytest.UsageError) -> None:
+        """Raise collection errors normally, but downgrade on xdist workers.
+
+        Worker-side UsageError/collection exceptions can crash xdist workers and
+        surface as INTERNALERROR in the controller. Under xdist workers, stash
+        the validation message and fail the test in setup instead.
+        """
+        message = str(error)
+        if not self._is_xdist_worker(item.config):
+            raise error
+        item.stash[SKIP_MARKER_ERROR_KEY] = message
+
     @pytest.hookimpl(trylast=True)
     def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
         """Apply typed markers and warn on bare skips."""
@@ -119,12 +137,17 @@ class SkipReasonPlugin:
             # Convert typed skip markers to real pytest.mark.skip.
             for st in self._skip_types:
                 for mark in item.iter_markers(st.marker_name):
-                    reason = self._get_reason(mark, marker_name=st.marker_name, nodeid=item.nodeid)
+                    try:
+                        reason = self._get_reason(mark, marker_name=st.marker_name, nodeid=item.nodeid)
+                    except pytest.UsageError as exc:
+                        self._handle_collection_error(item, exc)
+                        continue
                     if not reason:
-                        raise pytest.UsageError(
+                        self._handle_collection_error(item, pytest.UsageError(
                             f"Marker @pytest.mark.{st.marker_name} on {item.nodeid} "
                             f"requires a 'reason' argument."
-                        )
+                        ))
+                        continue
                     item.add_marker(pytest.mark.skip(reason=f"[{st}] {reason}"))
                     item.stash[SKIP_TYPE_KEY] = str(st)
                     item.stash[SKIP_REASON_KEY] = reason
@@ -136,10 +159,16 @@ class SkipReasonPlugin:
                 if bare:
                     alternatives = ", ".join(
                         f"@pytest.mark.{st.marker_name}" for st in self._skip_types)
-                    raise pytest.UsageError(
+                    self._handle_collection_error(item, pytest.UsageError(
                         f"Untyped skip on {item.nodeid}: {'; '.join(bare)}. "
                         f"Use {alternatives} instead.",
-                    )
+                    ))
+
+    def pytest_runtest_setup(self, item: pytest.Item) -> None:
+        """Fail invalid marker definitions as regular test failures on xdist workers."""
+        marker_error = item.stash.get(SKIP_MARKER_ERROR_KEY, None)
+        if marker_error:
+            pytest.fail(marker_error, pytrace=False)
 
     @pytest.hookimpl(hookwrapper=True)
     def pytest_runtest_makereport(self, item: pytest.Item):
