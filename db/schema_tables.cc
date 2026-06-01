@@ -109,17 +109,19 @@ namespace {
         });
 }
 
-schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts,
+schema_ctxt::schema_ctxt(const db::extensions& extensions, unsigned murmur3_partitioner_ignore_msb_bits,
+                         std::shared_ptr<data_dictionary::user_types_storage> uts,
                          const gms::feature_service& features, replica::database* db)
     : _db(db)
     , _features(features)
-    , _extensions(cfg.extensions())
-    , _murmur3_partitioner_ignore_msb_bits(cfg.murmur3_partitioner_ignore_msb_bits())
+    , _extensions(extensions)
+    , _murmur3_partitioner_ignore_msb_bits(murmur3_partitioner_ignore_msb_bits)
     , _user_types(std::move(uts))
 {}
 
 schema_ctxt::schema_ctxt(replica::database& db)
-    : schema_ctxt(db.get_config(), db.as_user_types_storage(), db.features(), &db)
+    : schema_ctxt(db.get_config().extensions(), db.get_config().murmur3_partitioner_ignore_msb_bits(),
+                  db.as_user_types_storage(), db.features(), &db)
 {}
 
 schema_ctxt::schema_ctxt(sharded<replica::database>& db)

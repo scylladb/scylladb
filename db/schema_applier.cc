@@ -734,8 +734,8 @@ future<frozen_schema_diff> schema_diff_per_shard::freeze() const {
 
 future<schema_diff_per_shard> schema_diff_per_shard::copy_from(replica::database& db, in_progress_types_storage& types_storage, const frozen_schema_diff& oth) {
     auto uts = std::make_shared<in_progress_types_storage_per_shard>(types_storage.local());
-    schema_ctxt ctxt(db.get_config(), uts, db.features(), &db);
-    schema_ctxt commited_ctxt(db.get_config(), uts->committed_storage(), db.features(), &db);
+    schema_ctxt ctxt(db.extensions(), db.get_config().murmur3_partitioner_ignore_msb_bits(), uts, db.features(), &db);
+    schema_ctxt commited_ctxt(db.extensions(), db.get_config().murmur3_partitioner_ignore_msb_bits(), uts->committed_storage(), db.features(), &db);
     schema_diff_per_shard result;
 
     for (const auto& c : oth.created) {

@@ -67,7 +67,8 @@ class config;
 
 class schema_ctxt {
 public:
-    schema_ctxt(const config&, std::shared_ptr<data_dictionary::user_types_storage> uts, const gms::feature_service&,
+    schema_ctxt(const extensions&, unsigned murmur3_partitioner_ignore_msb_bits,
+                std::shared_ptr<data_dictionary::user_types_storage> uts, const gms::feature_service&,
                 replica::database* = nullptr);
     schema_ctxt(replica::database&);
     schema_ctxt(sharded<replica::database>&);

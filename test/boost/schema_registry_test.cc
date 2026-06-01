@@ -48,7 +48,8 @@ struct dummy_init {
     dummy_init()
             : config(std::make_unique<db::config>())
             , fs({get_disabled_features_from_db_config(*config)}) {
-        local_schema_registry().init(db::schema_ctxt(*config, std::make_shared<data_dictionary::dummy_user_types_storage>(), fs),
+        local_schema_registry().init(db::schema_ctxt(config->extensions(), config->murmur3_partitioner_ignore_msb_bits(),
+                                                     std::make_shared<data_dictionary::dummy_user_types_storage>(), fs),
                                      std::chrono::seconds(config->schema_registry_grace_period()));
     }
 };
