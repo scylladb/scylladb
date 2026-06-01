@@ -517,4 +517,50 @@ SEASTAR_THREAD_TEST_CASE(test_coordinator_collection_frozen_not_checked_by_eleme
     BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
 }
 
+// Mixed guardrail tests
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_cell_limit_independent_of_row_limit) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(1 /* cell_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, MB + 1);
+    BOOST_REQUIRE_THROW(coordinator_check(g, m), exceptions::invalid_request_exception);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_row_limit_independent_of_cell_limit) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(0, 0, 1 /* row_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, MB + 1);
+    BOOST_REQUIRE_THROW(coordinator_check(g, m), exceptions::invalid_request_exception);
+}
+
+// Per-table toggle and noop tests
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_noop_allows_everything) {
+    auto s = make_simple_schema();
+    auto m = make_mutation_with_cell(s, 2 * MB);
+    BOOST_REQUIRE_NO_THROW(
+        db::noop_large_data_guardrail::instance()->check(*m.schema(), m.partition(), m.key()));
+}
+
+BOOST_AUTO_TEST_CASE(test_per_table_guardrails_enabled_by_extension) {
+    auto s = schema_builder(1, "ks", "tbl_guardrails")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("v", bytes_type)
+        .set_large_data_guardrails_enabled(true)
+        .build();
+    BOOST_REQUIRE(s->large_data_guardrails_enabled());
+}
+
+BOOST_AUTO_TEST_CASE(test_per_table_guardrails_disabled_by_default) {
+    auto s = schema_builder(1, "ks", "tbl_no_guardrails")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("v", bytes_type)
+        .build();
+    BOOST_REQUIRE(!s->large_data_guardrails_enabled());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
