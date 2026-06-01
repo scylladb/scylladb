@@ -4,6 +4,11 @@ The location of ScyllaDB SSTables is specified in scylla.yaml ``data_file_direct
 
 SSTable 3.x is more efficient and requires less disk space than the SSTable 2.x.
 
+For more information on each of the SSTable formats, see below:
+
+* :doc:`SSTable 2.x </architecture/sstable/sstable2/index>`
+* :doc:`SSTable 3.x </architecture/sstable/sstable3/index>`
+
 SSTable Version Support
 ------------------------
 
@@ -13,11 +18,11 @@ SSTable Version Support
 
    * - SSTable Version
      - ScyllaDB Version
-   * - 3.x ('ms')
+   * - 3.x (``ms``)
      - 2025.4 and above
-   * - 3.x ('me')
+   * - 3.x (``me``)
      - 2022.2 and above
-   * - 3.x ('md')
+   * - 3.x (``md``)
      - 2021.1
 
 * The supported formats are ``me`` and ``ms``.
@@ -27,3 +32,10 @@ SSTable Version Support
   **writes**. The legacy SSTable formats (``ka``, ``la``, ``mc``) remain
   supported for reads, which is essential for restoring clusters from existing
   backups.
+
+The ms Format: Trie-Based SSTable Index
+-----------------------------------------
+
+The ``ms`` format introduces a *trie-based* SSTable index.
+
+For a detailed description of the trie index format, see :doc:`SSTable ms Index </architecture/sstable/sstable3/sstable-ms-index>`.
