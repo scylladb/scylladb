@@ -14,7 +14,10 @@
 #include "db/large_data_handler.hh"
 #include "keys/keys.hh"
 #include "mutation/mutation_partition.hh"
+#include "mutation/atomic_cell.hh"
+#include "mutation/collection_mutation.hh"
 #include "replica/exceptions.hh"
+#include "exceptions/exceptions.hh"
 #include "sstables/sstables.hh"
 #include "gms/feature_service.hh"
 #include "cql3/untyped_result_set.hh"
@@ -25,7 +28,31 @@ namespace db {
 
 namespace {
 constexpr uint64_t MB = 1024 * 1024;
+
+enum class guardrail_source { replica, coordinator };
+
+template <guardrail_source Source, typename ContextFn>
+void enforce_threshold(const schema& s, uint64_t value,
+        uint64_t fail_threshold, uint64_t warn_threshold,
+        std::string_view metric, ContextFn&& make_context) {
+    if (fail_threshold > 0 && value > fail_threshold) [[unlikely]] {
+        auto msg = seastar::format(
+            "Large data guardrail: {} {} exceeds hard limit {} "
+            "(keyspace={}, table={}, {})",
+            metric, value, fail_threshold, s.ks_name(), s.cf_name(), make_context());
+        if constexpr (Source == guardrail_source::replica) {
+            throw replica::large_data_exception(s.ks_name(), s.cf_name(), std::move(msg));
+        } else {
+            throw exceptions::invalid_request_exception(std::move(msg));
+        }
+    }
+    if (warn_threshold > 0 && value > warn_threshold) [[unlikely]] {
+        large_data_logger.warn("Large data guardrail: {} {} exceeds soft limit {} "
+            "(keyspace={}, table={}, {})",
+            metric, value, warn_threshold, s.ks_name(), s.cf_name(), make_context());
+    }
 }
+} // anonymous namespace
 
 nop_large_data_handler::nop_large_data_handler()
     : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(),
@@ -175,37 +202,19 @@ void large_data_guardrail::check(const schema& s, const mutation_partition& mp,
 }
 
 void large_data_guardrail::check_partition(const schema& s, bytes_view pk_bytes, partition_key_view pk) const {
-    const uint64_t size_fail = uint64_t(_cfg.partition_size_fail_threshold_mb()) * MB;
-    const uint64_t size_warn = uint64_t(_cfg.partition_size_warn_threshold_mb()) * MB;
-    const uint64_t rows_fail = uint64_t(_cfg.rows_count_fail_threshold());
-    const uint64_t rows_warn = uint64_t(_cfg.rows_count_warn_threshold());
-
     auto entry = _index.lookup_partition(pk_bytes);
     if (!entry) [[likely]] {
         return;
     }
-    if (size_fail > 0 && entry->partition_size >= size_fail) {
-        throw replica::large_data_exception(s.ks_name(), s.cf_name(), format(
-            "Large data guardrail: partition size {} exceeds hard limit {} "
-            "(keyspace={}, table={}, partition_key={})",
-            entry->partition_size, size_fail, s.ks_name(), s.cf_name(), pk));
-    }
-    if (entry->partition_size >= size_warn) {
-        large_data_logger.warn("Large data guardrail: partition size {} exceeds soft limit {} "
-            "(keyspace={}, table={}, partition_key={})",
-            entry->partition_size, size_warn, s.ks_name(), s.cf_name(), pk);
-    }
-    if (rows_fail > 0 && entry->rows >= rows_fail) {
-        throw replica::large_data_exception(s.ks_name(), s.cf_name(), format(
-            "Large data guardrail: partition row count {} exceeds hard limit {} "
-            "(keyspace={}, table={}, partition_key={})",
-            entry->rows, rows_fail, s.ks_name(), s.cf_name(), pk));
-    }
-    if (entry->rows >= rows_warn) {
-        large_data_logger.warn("Large data guardrail: partition row count {} exceeds soft limit {} "
-            "(keyspace={}, table={}, partition_key={})",
-            entry->rows, rows_warn, s.ks_name(), s.cf_name(), pk);
-    }
+    auto context = [&] { return seastar::format("partition_key={}", pk); };
+    enforce_threshold<guardrail_source::replica>(s, entry->partition_size,
+        uint64_t(_cfg.partition_size_fail_threshold_mb()) * MB,
+        uint64_t(_cfg.partition_size_warn_threshold_mb()) * MB,
+        "partition size", context);
+    enforce_threshold<guardrail_source::replica>(s, entry->rows,
+        uint64_t(_cfg.rows_count_fail_threshold()),
+        uint64_t(_cfg.rows_count_warn_threshold()),
+        "partition row count", context);
 }
 
 void large_data_guardrail::check_rows_and_collections(const schema& s, bytes_view pk_bytes,
@@ -230,25 +239,16 @@ void large_data_guardrail::check_rows_and_collections(const schema& s, bytes_vie
 
 void large_data_guardrail::check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
         bytes_view ck_bytes, const clustering_key_prefix* ck) const {
-    const uint64_t fail = uint64_t(_cfg.row_size_fail_threshold_mb()) * MB;
-    const uint64_t warn = uint64_t(_cfg.row_size_warn_threshold_mb()) * MB;
     auto row_size = _index.lookup_row(pk_bytes, ck_bytes);
     if (!row_size) [[likely]] {
         return;
     }
-    if (fail > 0 && *row_size >= fail) {
-        throw replica::large_data_exception(s.ks_name(), s.cf_name(), format(
-            "Large data guardrail: row size {} exceeds hard limit {} "
-            "(keyspace={}, table={}, clustering_key={})",
-            *row_size, fail, s.ks_name(), s.cf_name(),
-            ck ? format("{}", ck->with_schema(s)) : sstring()));
-    }
-    if (*row_size >= warn) {
-        large_data_logger.warn("Large data guardrail: row size {} exceeds soft limit {} "
-            "(keyspace={}, table={}, clustering_key={})",
-            *row_size, warn, s.ks_name(), s.cf_name(),
-            ck ? format("{}", ck->with_schema(s)) : sstring());
-    }
+    enforce_threshold<guardrail_source::replica>(s, *row_size,
+        uint64_t(_cfg.row_size_fail_threshold_mb()) * MB,
+        uint64_t(_cfg.row_size_warn_threshold_mb()) * MB,
+        "row size",
+        [&] { return seastar::format("clustering_key={}",
+            ck ? seastar::format("{}", ck->with_schema(s)) : sstring()); });
 }
 
 void large_data_guardrail::check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
@@ -257,25 +257,75 @@ void large_data_guardrail::check_collection_element_count(const schema& s, bytes
     if (cdef.is_atomic()) {
         return;
     }
-    const uint64_t fail = uint64_t(_cfg.collection_elements_fail_threshold());
-    const uint64_t warn = uint64_t(_cfg.collection_elements_warn_threshold());
     auto col_bytes = to_bytes(cdef.name_as_text());
     auto count = _index.lookup_collection(pk_bytes, ck_bytes, bytes_view(col_bytes));
     if (!count) [[likely]] {
         return;
     }
-    if (fail > 0 && *count >= fail) {
-        throw replica::large_data_exception(s.ks_name(), s.cf_name(), format(
-            "Large data guardrail: collection element count {} exceeds hard limit {} "
-            "(keyspace={}, table={}, column={}, clustering_key={})",
-            *count, fail, s.ks_name(), s.cf_name(), cdef.name_as_text(),
-            ck ? format("{}", ck->with_schema(s)) : sstring()));
+    enforce_threshold<guardrail_source::replica>(s, *count,
+        uint64_t(_cfg.collection_elements_fail_threshold()),
+        uint64_t(_cfg.collection_elements_warn_threshold()),
+        "collection element count",
+        [&] { return seastar::format("column={}, clustering_key={}",
+            cdef.name_as_text(),
+            ck ? seastar::format("{}", ck->with_schema(s)) : sstring()); });
+}
+
+void large_data_guardrail::check_coordinator(const schema& s, const mutation_partition& mp,
+        partition_key_view pk) const {
+    const uint64_t cell_fail = uint64_t(_cfg.cell_size_fail_threshold_mb()) * MB;
+    const uint64_t cell_warn = uint64_t(_cfg.cell_size_warn_threshold_mb()) * MB;
+    const uint64_t row_fail = uint64_t(_cfg.row_size_fail_threshold_mb()) * MB;
+    const uint64_t row_warn = uint64_t(_cfg.row_size_warn_threshold_mb()) * MB;
+    const uint64_t coll_fail = uint64_t(_cfg.collection_elements_fail_threshold());
+    const uint64_t coll_warn = uint64_t(_cfg.collection_elements_warn_threshold());
+
+    auto check_cell = [&](const column_definition& cdef, const atomic_cell_or_collection& cell) {
+        if (!cdef.is_atomic()) {
+            return;
+        }
+        auto acv = cell.as_atomic_cell(cdef);
+        if (!acv.is_live()) {
+            return;
+        }
+        enforce_threshold<guardrail_source::coordinator>(s, acv.value_size(),
+            cell_fail, cell_warn, "cell value size",
+            [&] { return seastar::format("column={}", cdef.name_as_text()); });
+    };
+
+    auto check_collection = [&](const column_definition& cdef, const atomic_cell_or_collection& cell) {
+        if (cdef.is_atomic()) {
+            return;
+        }
+        enforce_threshold<guardrail_source::coordinator>(s, cell.as_collection_mutation().size(),
+            coll_fail, coll_warn, "collection element count",
+            [&] { return seastar::format("column={}", cdef.name_as_text()); });
+    };
+
+    if (!mp.static_row().empty()) {
+        auto static_size = mp.static_row().external_memory_usage(s, column_kind::static_column);
+        enforce_threshold<guardrail_source::coordinator>(s, static_size,
+            row_fail, row_warn, "static row size",
+            [&] { return seastar::format("partition_key={}", pk); });
+        mp.static_row().for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
+            const column_definition& cdef = s.static_column_at(id);
+            check_cell(cdef, cell);
+            check_collection(cdef, cell);
+        });
     }
-    if (*count >= warn) {
-        large_data_logger.warn("Large data guardrail: collection element count {} exceeds soft limit {} "
-            "(keyspace={}, table={}, column={}, clustering_key={})",
-            *count, warn, s.ks_name(), s.cf_name(), cdef.name_as_text(),
-            ck ? format("{}", ck->with_schema(s)) : sstring());
+
+    for (const rows_entry& e : mp.clustered_rows()) {
+        if (e.dummy()) {
+            continue;
+        }
+        enforce_threshold<guardrail_source::coordinator>(s, e.memory_usage(s),
+            row_fail, row_warn, "row size",
+            [&] { return seastar::format("clustering_key={}", e.key().with_schema(s)); });
+        e.row().cells().for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
+            const column_definition& cdef = s.regular_column_at(id);
+            check_cell(cdef, cell);
+            check_collection(cdef, cell);
+        });
     }
 }
 
