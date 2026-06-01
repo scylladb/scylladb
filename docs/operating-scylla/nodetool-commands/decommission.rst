@@ -13,9 +13,6 @@ Use the ``nodetool netstats`` command to monitor the progress of the token reall
 
     You cannot decomission a node if any existing node is down.
 
-See :doc:`Remove a Node from a ScyllaDB Cluster (Down Scale) </operating-scylla/procedures/cluster-management/remove-node>`
-for procedure details.
-
 Before you run ``nodetool decommission``:
 
 * Review current disk space utilization on existing nodes and make sure the amount 
@@ -38,5 +35,12 @@ this part is serialized with other vnode-based operations, including those from 
 
 Decommission which is still in the tablet draining phase can be canceled using Task Manager API.
 See :doc:`Task manager </operating-scylla/admin-tools/task-manager>`.
+
+See also:
+
+* :doc:`Remove a Node from a ScyllaDB Cluster (Down Scale) </operating-scylla/procedures/cluster-management/remove-node>`
+* :doc:`Decommissioning a Data Center </operating-scylla/procedures/cluster-management/decommissioning-data-center>`
+* :doc:`Replace a Running Node </operating-scylla/procedures/cluster-management/replace-running-node>`
+* :doc:`Failed Decommission Troubleshooting </troubleshooting/failed-decommission>`
 
 .. include:: nodetool-index.rst
