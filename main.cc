@@ -2088,6 +2088,52 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 throw std::runtime_error("Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.");
             }
 
+            checkpoint(stop_signal, "starting CDC Generation Management service");
+            cdc::generation_service::config cdc_config;
+            cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
+            cdc_generation_service.start(std::move(cdc_config), std::ref(sys_ks), std::ref(db)).get();
+            auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
+                cdc_generation_service.stop().get();
+            });
+
+            utils::get_local_injector().inject("stop_after_starting_cdc_generation_service",
+                [] { std::raise(SIGSTOP); });
+
+            checkpoint(stop_signal, "starting group 0 service");
+            group0_service.start().get();
+            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
+                sl_controller.local().abort_group0_operations();
+                group0_service.abort_and_drain().get();
+                group0_service.destroy();
+            });
+
+            utils::get_local_injector().inject("stop_after_starting_group0_service",
+                [] { std::raise(SIGSTOP); });
+
+            // Set up group0 service since it is needed by group0 setup just below
+            ss.local().set_group0(group0_service);
+
+            // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
+            ss.local().init_address_map(gossip_address_map.local()).get();
+            auto cancel_address_map_subscription = defer_verbose_shutdown("storage service uninit address map", [&ss] {
+                ss.local().uninit_address_map().get();
+            });
+
+            // Need to make sure storage service stopped using group0 before running group0_service.abort()
+            // Normally it is done in storage_service::do_drain(), but in case start up fail we need to do it
+            // here as well
+            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
+               ss.local().wait_for_group0_stop().get();
+            });
+
+            if (!group0_service.maintenance_mode() && sys_ks.local().bootstrap_complete()) {
+                // Start group0 raft server early so that its log is replayed and
+                // mutations are applied to system tables before non-system keyspaces
+                // are loaded. The in-memory state machine is enabled later, after
+                // all its dependencies are initialized.
+                group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
+            }
+
             checkpoint(stop_signal, "loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
@@ -2177,17 +2223,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     return lifecycle_notifier.local().unregister_subscriber(&local_proxy);
                 }).get();
             });
-
-            checkpoint(stop_signal, "starting CDC Generation Management service");
-            cdc::generation_service::config cdc_config;
-            cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
-            cdc_generation_service.start(std::move(cdc_config), std::ref(sys_ks), std::ref(db)).get();
-            auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
-                cdc_generation_service.stop().get();
-            });
-
-            utils::get_local_injector().inject("stop_after_starting_cdc_generation_service",
-                [] { std::raise(SIGSTOP); });
 
             auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
 
@@ -2343,42 +2378,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              */
             db.local().enable_autocompaction_toggle();
 
-            checkpoint(stop_signal, "starting group 0 service");
-            group0_service.start().get();
-            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
-                sl_controller.local().abort_group0_operations();
-                group0_service.abort_and_drain().get();
-                group0_service.destroy();
-            });
-
-            utils::get_local_injector().inject("stop_after_starting_group0_service",
-                [] { std::raise(SIGSTOP); });
-
-            // Set up group0 service earlier since it is needed by group0 setup just below
-            ss.local().set_group0(group0_service);
-
-            // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
-            ss.local().init_address_map(gossip_address_map.local()).get();
-            auto cancel_address_map_subscription = defer_verbose_shutdown("storage service uninit address map", [&ss] {
-                ss.local().uninit_address_map().get();
-            });
-
-            // Need to make sure storage service stopped using group0 before running group0_service.abort()
-            // Normally it is done in storage_service::do_drain(), but in case start up fail we need to do it
-            // here as well
-            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
-               ss.local().wait_for_group0_stop().get();
-            });
-
-            if (!group0_service.maintenance_mode() && sys_ks.local().bootstrap_complete()) {
-                // Setup group0 early in case the node is bootstrapped already and the group exists.
-                // Need to do it before allowing incoming messaging service connections since
-                // storage proxy's and migration manager's verbs may access group0.
-                group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
+            if (!group0_service.maintenance_mode() && sys_ks.local().bootstrap_complete() && group0_service.joined_group0()) {
+                // Enable the in-memory state machine now that non-system keyspaces
+                // are loaded — reload_state() reads tablet metadata and view building
+                // state which reference user table schemas.
                 group0_service.enable_group0_state_machine().get();
             }
 
-            // The call to setup_group0_if_exists() above guarantees that, if group0 is
+            // The call to enable_group0_state_machine() above guarantees that, if group0 is
             // created and started, the locally persisted group0 state has been applied
             // before it returns. As a result, tablet Raft groups are started using
             // tablet metadata that is at least as recent as the locally persisted version.
