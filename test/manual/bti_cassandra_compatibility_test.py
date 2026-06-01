@@ -32,12 +32,17 @@ import logging
 import os
 import pathlib
 import random
+import re
 import shlex
 import signal
 import tempfile
 import typing
 import uuid
 import yaml
+
+# Add the root of the repository to path so that we can import test.pylib below.
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
 from test.pylib.driver_utils import safe_driver_shutdown
 
@@ -378,12 +383,21 @@ async def start_node(image: str, cluster_workdir: PathLike, addr: str, seed: str
         "--rm",
         "--name", f"{cluster_name}_{addr}",
         "--log-driver", "passthrough-tty",
+        # Use the parent (dbuild) container's netns so the per-cluster 127.x.y.z
+        # address is bindable inside the cassandra container. With the default
+        # private netns, only 127.0.0.1 exists on the inner loopback, so binds
+        # to 127.x.y.z fail and `podman exec ... cqlsh` (which defaults to
+        # 127.0.0.1) can't reach the published port either.
+        "--network", "host",
         "-v", f"{yaml_path}:/etc/cassandra/cassandra.yaml",
         "-v", f"{os.path.realpath(cluster_workdir)}/{cassandra_workdir}:/var/lib/cassandra",
         "-v", f"{modified_entrypoint_path}:{entrypoint_path}",
         "-v", f"{os.path.realpath(cluster_workdir)}:/cluster",
-        "-p", f"{addr}:9042:9042",
         "-e", f"CASSANDRA_LISTEN_ADDRESS={addr}",
+        # CASSANDRA_RPC_ADDRESS controls the native CQL bind (port 9042).
+        # The image entrypoint defaults it to 0.0.0.0, which would collide
+        # with concurrent clusters on host networking. Pin it to {addr}.
+        "-e", f"CASSANDRA_RPC_ADDRESS={addr}",
         "-e", f"JVM_OPTS=-Dcassandra.skip_wait_for_gossip_to_settle=0 -Dcassandra.ring_delay_ms=0",
         image,
         # "-f" means "run in foreground"
@@ -512,6 +526,9 @@ async def main(seed: int, partition_count: Optional[int], row_count: Optional[in
         clone_tablename = f"{orig_tablename}_clone"
     with open(f"{workdir}/scylla/schema.cql", "r") as f:
         schema = f.read().strip()
+        # Scylla's DESCRIBE emits a `tombstone_gc` table option that Cassandra
+        # doesn't understand. Strip it before feeding the schema to cqlsh.
+        schema = re.sub(r"\s*AND tombstone_gc\s*=\s*\{[^}]*\}", "", schema)
         # Doing this replace via naive string operations is hacky, but good enough.
         clone_schema = schema.replace(orig_tablename, clone_tablename)
 
@@ -519,20 +536,22 @@ async def main(seed: int, partition_count: Optional[int], row_count: Optional[in
         module_logger.info(f"Phase 2: import the Scylla-BIG files into Cassandra.")
         # Copy Scylla-generated files into the upload directory (visible to the Cassandra container).
         await bash(f"rm -rf {cassandra_dir}/upload && cp -r {workdir}/scylla {cassandra_dir}/upload")
+        with open(f"{cassandra_dir}/upload/schema.cql", "w") as f:
+            f.write(schema)
         with open(f"{cassandra_dir}/upload/schema_clone.cql", "w") as f:
             f.write(clone_schema)
         async with with_cluster(cassandra_image, cassandra_dir) as (cluster_name, addrs, _):
             process_logger.info(f"Cluster name: {cluster_name}, addresses: {addrs}")
             module_logger.info(f"Recreate keyspace.")
-            await bash(f"""podman exec {cluster_name}_{addrs[0]} cqlsh -e "DROP KEYSPACE IF EXISTS ks; CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}};" """)
+            await bash(f"""podman exec {cluster_name}_{addrs[0]} cqlsh {addrs[0]} -e "DROP KEYSPACE IF EXISTS ks; CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}};" """)
             module_logger.info(f"Delete potential leftovers from earlier tests.")
             await bash(f"podman exec {cluster_name}_{addrs[0]} bash -c 'rm -rf /var/lib/cassandra/data/ks/*'")
             module_logger.info(f"CREATE the imported table.")
-            await bash(f"podman exec {cluster_name}_{addrs[0]} cqlsh -f /cluster/upload/schema.cql")
+            await bash(f"podman exec {cluster_name}_{addrs[0]} cqlsh {addrs[0]} -f /cluster/upload/schema.cql")
             # Note: this line must be before the next one, because orig_table_dirname is a prefix of clone_tablename.
             orig_table_dirname = glob.glob(f"{cassandra_dir}/{addrs[0]}/data/ks/{orig_tablename}*")[0]
             module_logger.info(f"CREATE a clone of the imported table. (The sstable will be copied to it later.)")
-            await bash(f"podman exec {cluster_name}_{addrs[0]} cqlsh -f /cluster/upload/schema_clone.cql")
+            await bash(f"podman exec {cluster_name}_{addrs[0]} cqlsh {addrs[0]} -f /cluster/upload/schema_clone.cql")
             clone_table_dirname = glob.glob(f"{cassandra_dir}/{addrs[0]}/data/ks/{clone_tablename}*")[0]
             module_logger.info(f"Import the sstable from the upload directory.")
             await bash(f"podman exec {cluster_name}_{addrs[0]} bash -c 'rm -rf /var/lib/cassandra/upload && cp -r /cluster/upload /var/lib/cassandra/upload'")
