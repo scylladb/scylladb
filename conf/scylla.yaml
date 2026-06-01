@@ -439,6 +439,10 @@ large_row_fail_threshold_mb: 20
 # Log a warning when writing cells larger than this value
 # compaction_large_cell_warning_threshold_mb: 1
 
+# Reject writes with cell value size exceeding this threshold (MB).
+# Set to 0 to disable.
+large_cell_fail_threshold_mb: 2
+
 # Log a warning when row number is larger than this value
 # compaction_rows_count_warning_threshold: 100000
 
