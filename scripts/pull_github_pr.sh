@@ -41,6 +41,7 @@ done
 ALLOW_SUBMODULE=0
 ALLOW_UNSTABLE=0
 ALLOW_ANY_BRANCH=0
+EXTERNAL_REPO="${EXTERNAL_REPO:-}"
 
 function print_usage {
 cat << EOF
@@ -73,6 +74,11 @@ Options:
 --force
     Sets all above --allow-* options
 
+--repo REPO_URL
+    Fetch the PR from REPO_URL instead of the current repository's remote.
+    The GitHub API is also queried against REPO_URL's project.
+    Can also be set via the EXTERNAL_REPO environment variable.
+
 EOF
 }
 
@@ -96,6 +102,14 @@ do
         --allow-any-branch)
             ALLOW_ANY_BRANCH=1
             shift
+            ;;
+        --repo)
+            if [[ -z "$2" || "$2" == --* ]]; then
+                echo "error: --repo requires a repository URL argument" >&2
+                exit 1
+            fi
+            EXTERNAL_REPO="$2"
+            shift 2
             ;;
         +([0-9]))
             PR_NUM=$1
@@ -177,7 +191,14 @@ REMOTE_SLASH_BRANCH="$(git rev-parse --abbrev-ref --symbolic-full-name  @{upstre
 REMOTE="${REMOTE_SLASH_BRANCH%/*}"
 REMOTE_URL="$(git config --get "remote.$REMOTE.url")"
 PROJECT=`sed 's/git@github.com://;s#https://github.com/##;s/\.git$//;' <<<"${REMOTE_URL}"`
-PR_PREFIX=https://api.github.com/repos/$PROJECT/pulls
+
+FETCH_REMOTE="$REMOTE"
+PR_PROJECT="$PROJECT"
+if [[ -n "$EXTERNAL_REPO" ]]; then
+    FETCH_REMOTE="$EXTERNAL_REPO"
+    PR_PROJECT=$(sed 's/git@github.com://;s#https://github.com/##;s/\.git$//;' <<<"$EXTERNAL_REPO")
+fi
+PR_PREFIX=https://api.github.com/repos/$PR_PROJECT/pulls
 
 echo "Fetching info on PR #$PR_NUM... "
 PR_DATA=$(curl -s $PR_PREFIX/$PR_NUM)
@@ -211,11 +232,11 @@ if [[ $ALLOW_ANY_BRANCH -eq 0 ]]; then
     fi
 fi
 
-git fetch "$REMOTE" pull/$PR_NUM/head
+git fetch "$FETCH_REMOTE" pull/$PR_NUM/head
 
 nr_commits=$(git log --pretty=oneline HEAD..FETCH_HEAD | wc -l)
 
-closes="${NL}${NL}Closes ${PROJECT}#${PR_NUM}${NL}"
+closes="${NL}${NL}Closes ${PR_PROJECT}#${PR_NUM}${NL}"
 
 if [[ "$PR_TITLE" = *submodule* ]]; then
     ALLOW_SUBMODULE=1
