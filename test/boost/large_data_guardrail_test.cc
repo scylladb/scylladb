@@ -366,4 +366,46 @@ SEASTAR_THREAD_TEST_CASE(test_coordinator_cell_hard_limit_rejects_large_static_c
     BOOST_REQUIRE_THROW(coordinator_check(g, m), exceptions::invalid_request_exception);
 }
 
+// Row guardrail tests
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_row_hard_limit_rejects_large_row) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(0, 0, 1 /* row_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, MB + 1);
+    BOOST_REQUIRE_THROW(coordinator_check(g, m), exceptions::invalid_request_exception);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_row_hard_limit_allows_small_row) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(0, 0, 1 /* row_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, 100);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_row_hard_limit_disabled_when_zero) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config();
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, 2 * MB);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_row_hard_limit_rejects_large_static_row) {
+    auto s = make_static_schema();
+    auto cfg = make_coordinator_config(0, 0, 1 /* row_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_static_cell(s, MB + 1);
+    BOOST_REQUIRE_THROW(coordinator_check(g, m), exceptions::invalid_request_exception);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_row_hard_limit_allows_tombstone) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(0, 0, 1 /* row_fail_mb */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_tombstone(s);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
