@@ -50,3 +50,45 @@ The following C++ APIs are provided in `db::system_distributed_keyspace`:
 - insert\_snapshot\_sstable
 
 - get\_snapshot\_sstables
+
+---
+
+# system\_distributed.snapshot\_remote\_locations
+
+## Purpose
+
+This table stores per-datacenter object storage coordinates for snapshots. When the
+restore\_tablets API is called, it populates this table with the endpoint, bucket and
+prefix for the given snapshot and datacenter. Worker nodes look up the object storage
+location from this table using the snapshot name carried in the tablet transition.
+
+## Schema
+
+~~~
+CREATE TABLE system_distributed.snapshot_remote_locations (
+    snapshot_name text,
+    datacenter text,
+    endpoint text,
+    bucket text,
+    prefix text,
+    state int,
+    PRIMARY KEY (snapshot_name, datacenter)
+)
+~~~
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `snapshot_name` | text (partition key) | Name of the snapshot |
+| `datacenter` | text (clustering key) | Datacenter where the snapshot is located |
+| `endpoint` | text | Object storage endpoint URL |
+| `bucket` | text | Object storage bucket name |
+| `prefix` | text | Prefix path within the bucket |
+| `state` | int | Snapshot state (0=unknown, 1=local, 2=being\_backed\_up, 3=remote\_and\_local, 4=remote) |
+
+## APIs
+
+The following C++ APIs are provided in `db::system_distributed_keyspace`:
+
+- insert\_snapshot\_remote\_location
+
+- get\_snapshot\_remote\_location

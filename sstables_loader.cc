@@ -963,8 +963,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         throw std::runtime_error(format("No restore config for tablet {} restore transition", tid));
     }
 
-    locator::restore_config restore_cfg = *trinfo->restore_cfg;
-    llog.info("Downloading sstables for tablet {} from {}@{}/{}", tid, restore_cfg.snapshot_name, restore_cfg.endpoint, restore_cfg.bucket);
+    sstring snapshot_name = trinfo->restore_cfg->snapshot_name;
 
     auto s = _db.local().find_schema(tid.table);
     auto tablet_range = tmap.get_token_range(tid.tablet);
@@ -974,11 +973,14 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     auto datacenter = topo.get_datacenter();
     auto rack = topo.get_rack();
 
-    auto sst_infos = co_await _sys_dist_ks.get_snapshot_sstables(restore_cfg.snapshot_name, keyspace_name, table_name, datacenter, rack,
+    auto snapshot_info = co_await _sys_dist_ks.get_snapshot_remote_location(snapshot_name, datacenter);
+    llog.info("Downloading sstables for tablet {} from {}@{}/{}", tid, snapshot_name, snapshot_info.endpoint, snapshot_info.bucket);
+
+    auto sst_infos = co_await _sys_dist_ks.get_snapshot_sstables(snapshot_name, keyspace_name, table_name, datacenter, rack,
             db::consistency_level::LOCAL_QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
     llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);
     if (sst_infos.empty()) {
-        throw std::runtime_error(format("No SSTables found in system_distributed.snapshot_sstables for {}", restore_cfg.snapshot_name));
+        throw std::runtime_error(format("No SSTables found in system_distributed.snapshot_sstables for {}", snapshot_name));
     }
 
     auto [ fully, partially ] = co_await get_sstables_for_tablet(sst_infos, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
@@ -999,7 +1001,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         toc_names_by_prefix[e.prefix].emplace_back(e.toc_name);
     }
 
-    auto ep_type = _storage_manager.get_endpoint_type(restore_cfg.endpoint);
+    auto ep_type = _storage_manager.get_endpoint_type(snapshot_info.endpoint);
     sstables::sstable_open_config cfg {
         .load_bloom_filter = false,
     };
@@ -1009,7 +1011,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
 
     auto sstables_on_shards = co_await map_reduce(toc_names_by_prefix, [&] (auto ent) {
         return replica::distributed_loader::get_sstables_from_object_store(_db, s->ks_name(), s->cf_name(),
-                std::move(ent.second), restore_cfg.endpoint, ep_type, restore_cfg.bucket, std::move(ent.first), cfg, [&] { return nullptr; }).then_unpack([] (table_id, auto sstables) {
+                std::move(ent.second), snapshot_info.endpoint, ep_type, snapshot_info.bucket, std::move(ent.first), cfg, [&] { return nullptr; }).then_unpack([] (table_id, auto sstables) {
                     return make_ready_future<std::vector<sstables_col>>(std::move(sstables));
                 });
     }, std::vector<prefix_sstables>(this_smp_shard_count()), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
@@ -1049,7 +1051,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             return init;
         });
 
-    co_await container().invoke_on_all([tid, &downloaded_ssts, snap_name = restore_cfg.snapshot_name, keyspace_name, table_name, datacenter, rack] (auto& loader) -> future<> {
+    co_await container().invoke_on_all([tid, &downloaded_ssts, snap_name = snapshot_name, keyspace_name, table_name, datacenter, rack] (auto& loader) -> future<> {
         auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
         co_await max_concurrent_for_each(shard_ssts, 16, [&loader, tid, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
             sstables::shared_sstable attached_sst = co_await loader.attach_sstable(tid.table, min_info);
@@ -1228,6 +1230,9 @@ protected:
 
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, sstring prefix, utils::chunked_vector<sstring> manifests) {
     auto tablet_count = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, snap_name, std::move(manifests));
+
+    auto datacenter = _db.local().get_token_metadata().get_topology().get_datacenter();
+    co_await _sys_dist_ks.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix);
 
     co_await container().invoke_on(0, [tid, tablet_count] (auto& sl) -> future<> {
         co_await sl._ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
