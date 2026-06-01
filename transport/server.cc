@@ -1948,6 +1948,7 @@ cql3::dialect
 cql_server::connection::get_dialect() const {
     return cql3::dialect{
         .duplicate_bind_variable_names_refer_to_same_variable = _server._config.cql_duplicate_bind_variable_names_refer_to_same_variable,
+        .max_relations_in_where_clause = _server._config.max_relations_in_where_clause,
     };
 }
 

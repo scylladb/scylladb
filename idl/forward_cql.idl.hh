@@ -16,6 +16,7 @@ namespace cql3 {
 
 struct dialect {
     bool duplicate_bind_variable_names_refer_to_same_variable;
+    unsigned max_relations_in_where_clause;
 };
 
 }

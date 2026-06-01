@@ -1580,6 +1580,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Use on a new, parallel algorithm for performing aggregate queries.")
     , cql_duplicate_bind_variable_names_refer_to_same_variable(this, "cql_duplicate_bind_variable_names_refer_to_same_variable", liveness::LiveUpdate, value_status::Used, true,
             "A bind variable that appears twice in a CQL query refers to a single variable (if false, no name matching is performed).")
+    , max_relations_in_where_clause(this, "max_relations_in_where_clause", liveness::LiveUpdate, value_status::Used, 100,
+            "Maximum number of relations allowed in a WHERE clause. Queries with too many relations can cause quadratic complexity.")
     , select_internal_page_size(this, "select_internal_page_size", liveness::LiveUpdate, value_status::Used, 10000,
             "SELECT statements with aggregation or GROUP BYs or a secondary index may use this page size for their internal reading data, not the page size specified in the query options.")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port.")
