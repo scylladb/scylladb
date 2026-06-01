@@ -1123,11 +1123,12 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, locator:
             // with TTL (refresh TTL in case column mapping already existed prior to that).
             // We don't set the CDC schema here because it's not included in the RPC and we're
             // not using raft mode.
-            auto us = s.unfreeze(db::schema_ctxt(proxy), nullptr);
+            auto& db = proxy.local().local_db();
+            auto ctxt = db.get_schema_ctxt();
+            auto us = s.unfreeze(ctxt, nullptr);
             // if this is a view - sanity check that its schema doesn't need fixing.
             schema_ptr base_schema;
             if (us->is_view()) {
-                auto& db = proxy.local().local_db();
                 base_schema = db.find_schema(us->view_info()->base_id());
                 db::schema_tables::check_no_legacy_secondary_index_mv_schema(db, view_ptr(us), base_schema);
             }

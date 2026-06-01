@@ -2003,7 +2003,8 @@ future<schema_ptr> create_table_from_name(sharded<service::storage_proxy>& proxy
     if (!sm.live()) {
         co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
-    const schema_ctxt& ctxt = proxy;
+    auto& db = proxy.local().local_db();
+    auto ctxt = db.get_schema_ctxt();
     // The CDC schema is set to nullptr because we don't have it yet, but we will
     // check and update it soon if needed in create_tables_from_tables_partition.
     co_return create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), nullptr);
@@ -2574,7 +2575,8 @@ static future<view_ptr> create_view_from_table_row(sharded<service::storage_prox
     if (!sm.live()) {
         co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
-    const schema_ctxt& ctxt = proxy;
+    auto& db = proxy.local().local_db();
+    auto ctxt = db.get_schema_ctxt();
     co_return create_view_from_mutations(ctxt, std::move(sm), ctxt.user_types());
 }
 
