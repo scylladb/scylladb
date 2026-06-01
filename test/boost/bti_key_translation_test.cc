@@ -28,25 +28,60 @@ static std::vector<std::byte> linearize(comparable_bytes_iterator auto&& it) {
 
 // Generate an ordered list of various ring position views,
 // which together should cover all kinds of various pairwise comparisons.
-static std::generator<dht::ring_position_view> generate_rpvs(const schema& string_pair_pk_schema) {
+//
+// The expected ordering depends on `sst_ver`:
+// `mt` sorts partition keys within the same token by a bytewise comparison of their "legacy encoding",
+// `ms` sorts them by a typed column-by-column comparison.
+static std::generator<dht::ring_position_view> generate_rpvs(
+        const schema& string_pair_pk_schema,
+        sstables::sstable_version_types sst_ver) {
     constexpr auto alphabet = std::string_view("\x00\xff", 2);
     constexpr auto max_len = 2;
     auto all_strings = tests::generate_all_strings(alphabet, max_len);
-    co_yield dht::ring_position_view::min();
-    for (const auto& token : {dht::token::first(), dht::token::last()}) {
-        using token_bound = dht::ring_position_view::token_bound;
-        co_yield dht::ring_position_view(token, token_bound::start);
-        for (const auto& pk1 : all_strings)
+
+    std::vector<partition_key> pks;
+    for (const auto& pk1 : all_strings) {
         for (const auto& pk2 : all_strings) {
             std::vector<data_value> components;
             components.emplace_back(pk1);
             components.emplace_back(pk2);
-            auto pk = partition_key::from_deeply_exploded(string_pair_pk_schema, components);
+            pks.push_back(partition_key::from_deeply_exploded(string_pair_pk_schema, components));
+        }
+    }
+
+    std::vector<dht::token> tokens{
+        dht::token::first(),
+        dht::token::last()
+    };
+
+    std::vector<dht::ring_position_view> rpvs;
+    for (const auto& token : tokens) {
+        for (const auto& pk : pks) {
             for (int weight = -1; weight <= 1; ++weight) {
-                co_yield dht::ring_position_view(token, &pk, weight);
+                rpvs.push_back(dht::ring_position_view(token, &pk, weight));
             }
         }
-        co_yield dht::ring_position_view(token, token_bound::end);
+    }
+    if (sst_ver == sstables::sstable_version_types::ms) {
+        // ms encodes the partition key component-wise, so for two same-token
+        // rpvs the expected order is given by partition_key::tri_compare
+        // (NOT the ring comparator, which compares pks by their legacy form).
+        partition_key::tri_compare pk_cmp(string_pair_pk_schema);
+        std::ranges::sort(rpvs, [&pk_cmp] (const dht::ring_position_view& a, const dht::ring_position_view& b) {
+            if (auto cmp = a.token() <=> b.token(); cmp != 0) {
+                return cmp < 0;
+            }
+            if (auto cmp = pk_cmp(*a.key(), *b.key()); cmp != 0) {
+                return cmp < 0;
+            }
+            return a.weight() < b.weight();
+        });
+    } else {
+        std::ranges::sort(rpvs, dht::ring_position_less_comparator(string_pair_pk_schema));
+    }
+
+    for (const auto& rpv : rpvs) {
+        co_yield rpv;
     }
 }
 
@@ -58,9 +93,10 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_ord
         .with_column("pk2", utf8_type, column_kind::partition_key)
         .build();
     using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
+  for (auto sst_ver : {sstables::sstable_version_types::ms, sstables::sstable_version_types::mt}) {
+    testlog.info("checking sstable_version={}", sst_ver);
     std::unique_ptr<encoding> prev;
-    auto sst_ver = sstables::sstable_version_types::ms;
-    for (const auto& rpv : generate_rpvs(*s)) {
+    for (const auto& rpv : generate_rpvs(*s, sst_ver)) {
         if (!prev) {
             prev = std::make_unique<encoding>(sst_ver, *s, rpv);
         } else {
@@ -75,6 +111,7 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_ord
     auto prev_bytes = linearize(prev->begin());
     SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view(dht::maximum_token(), nullptr, -1)).begin()));
     SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view::max()).begin()));
+  }
 }
 
 // Tests lazy_comparable_bytes_from_ring_position::trim().
@@ -100,15 +137,16 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_trim) {
         partition_key::from_deeply_exploded(*s, components);
     });
     using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
-    auto sst_ver = sstables::sstable_version_types::ms;
-    const auto dk = dht::decorated_key(dht::token::from_int64(42), std::move(pk));
+  for (auto sst_ver : {sstables::sstable_version_types::ms, sstables::sstable_version_types::mt}) {
+    testlog.info("checking sstable_version={}", sst_ver);
+    const auto dk = dht::decorated_key(dht::token::from_int64(42), pk);
     const auto encoded = linearize(encoding(sst_ver, *s, dk).begin());
 
     constexpr auto modification_byte = std::byte('z');
     for (size_t view_position = 0; view_position <= encoded.size(); ++view_position)
     for (size_t trim_position = 0; trim_position <= view_position; ++trim_position)
     for (size_t modification_position = 0; modification_position <= trim_position; ++modification_position) {
-        auto enc = encoding(sst_ver, *s, std::move(dk));
+        auto enc = encoding(sst_ver, *s, dk);
         {
             size_t n_seen = 0;
             auto it = enc.begin();
@@ -135,6 +173,7 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_trim) {
         testlog.debug("new_encoded={}, expected_encoded={}", fmt_hex(new_encoded), fmt_hex(expected_encoded));
         SCYLLA_ASSERT(new_encoded == expected_encoded);
     }
+  }
 }
 
 // Generate an ordered list of various clustering positions views,
