@@ -60,6 +60,7 @@ const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
 const sstring cf_prop_defs::KW_TABLETS = "tablets";
 
 const sstring cf_prop_defs::KW_STORAGE_ENGINE = "storage_engine";
+const sstring cf_prop_defs::KW_LARGE_DATA_GUARDRAILS_ENABLED = "large_data_guardrails_enabled";
 
 schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions& exts) const {
     schema::extensions_map er;
@@ -109,6 +110,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         KW_COMPRESSION, KW_CRC_CHECK_CHANCE,  KW_ID, KW_PAXOSGRACESECONDS,
         KW_SYNCHRONOUS_UPDATES, KW_TABLETS,
         KW_STORAGE_ENGINE,
+        KW_LARGE_DATA_GUARDRAILS_ENABLED,
     });
     static std::set<sstring> obsolete_keywords({
         sstring("index_interval"),
@@ -208,6 +210,12 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
             }
         } else {
             throw exceptions::configuration_exception(format("Illegal value for '{}'", KW_STORAGE_ENGINE));
+        }
+    }
+
+    if (has_property(KW_LARGE_DATA_GUARDRAILS_ENABLED) && get_boolean(KW_LARGE_DATA_GUARDRAILS_ENABLED, false)) {
+        if (!db.features().large_data_guardrails) {
+            throw exceptions::configuration_exception("large_data_guardrails_enabled cannot be used until all nodes in the cluster enable this feature");
         }
     }
 }
@@ -416,6 +424,9 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
         if (storage_engine == "logstor") {
             builder.set_logstor();
         }
+    }
+    if (has_property(KW_LARGE_DATA_GUARDRAILS_ENABLED)) {
+        builder.set_large_data_guardrails_enabled(get_boolean(KW_LARGE_DATA_GUARDRAILS_ENABLED, false));
     }
 }
 

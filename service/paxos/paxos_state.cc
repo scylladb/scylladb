@@ -260,7 +260,14 @@ future<> paxos_state::learn(storage_proxy& sp, paxos_store& paxos_store, schema_
             on_internal_error(logger, format("schema version in learn does not match current schema"));
         }
 
-        co_await sp.mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
+        // Skip the large-partition write guardrail for the Paxos learn write.
+        // Paxos cannot recover from a partial-replica rejection here: rejecting
+        // on a subset of replicas would leave the cluster in an inconsistent
+        // state where some replicas have applied the decision and others
+        // haven't. The decision was already accepted; it must be durably
+        // committed by every reachable replica.
+        co_await sp.mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout,
+                std::monostate{}, /* skip_large_data_guardrails */ true);
     } else {
         logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
         tracing::trace(tr_state, "Not committing decision {} as ballot timestamp predates last truncation time", decision);

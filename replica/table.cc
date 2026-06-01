@@ -53,6 +53,7 @@
 #include "mutation/mutation_source_metadata.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
+#include "cdc/log.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/lister.hh"
@@ -1603,6 +1604,7 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
             add_maintenance_sstable(cg, sst);
         }
         update_stats_for_new_sstable(sst);
+        _large_data_guardrail->register_sstable(sst);
         if (trigger_compaction) {
             try_trigger_compaction(cg);
         }
@@ -2051,6 +2053,10 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             return update_cache(cg, old, newtabs);
         });
 
+        for (const auto& sst : newtabs) {
+            _large_data_guardrail->register_sstable(sst);
+        }
+
         co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
             const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
             if (this_table_name == handler.get("table_name")) {
@@ -2266,6 +2272,11 @@ void table::rebuild_statistics() {
     });
 }
 
+void table::rebuild_large_data_index() {
+    auto& sstables = *get_sstables();
+    _large_data_guardrail->rebuild(sstables);
+}
+
 void table::subtract_compaction_group_from_stats(const compaction_group& cg) noexcept {
     _stats.live_disk_space_used -= cg.live_disk_space_used_full_stats();
     _stats.total_disk_space_used -= cg.total_disk_space_used_full_stats();
@@ -2438,6 +2449,8 @@ compaction_group::merge_sstables_from(compaction_group& group) {
         backlog_tracker_adjust_charges({}, sstables_to_merge);
     });
     _t.rebuild_statistics();
+    // No large data index update needed: SSTables just moved between
+    // compaction groups within the same table, and the index is table-wide.
 }
 
 future<>
@@ -2565,6 +2578,9 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
     cache.refresh_snapshot();
 
     _t.rebuild_statistics();
+    for (auto& sst : desc.new_sstables) {
+        _t._large_data_guardrail->register_sstable(sst);
+    }
 
     co_await builder.delete_sstables_atomically(unused_sstables_for_deletion(std::move(desc)));
 }
@@ -3268,6 +3284,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _index_manager(this->as_data_dictionary())
     , _flush_barrier(format("[table {}.{}] flush_barrier", _schema->ks_name(), _schema->cf_name()))
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
+    , _large_data_guardrail(make_large_data_guardrail())
     , _async_gate(format("[table {}.{}] async_gate", _schema->ks_name(), _schema->cf_name()))
     , _pending_writes_phaser(format("[table {}.{}] pending_writes", _schema->ks_name(), _schema->cf_name()))
     , _pending_reads_phaser(format("[table {}.{}] pending_reads", _schema->ks_name(), _schema->cf_name()))
@@ -4728,6 +4745,17 @@ db::commitlog* table::commitlog() const {
     return _commitlog;
 }
 
+shared_ptr<db::large_data_guardrail_base> table::make_large_data_guardrail() const {
+    bool enabled = _schema->large_data_guardrails_enabled()
+        && !is_internal_keyspace(_schema->ks_name())
+        && !_schema->is_view()
+        && !cdc::is_log_name(_schema->cf_name());
+    if (enabled) {
+        return make_shared<db::large_data_guardrail>(_config.guardrail_config);
+    }
+    return db::noop_large_data_guardrail::instance();
+}
+
 void table::set_schema(schema_ptr s) {
     SCYLLA_ASSERT(s->is_counter() == _schema->is_counter());
     tlogger.debug("Changing schema version of {}.{} ({}) from {} to {}",
@@ -4749,6 +4777,8 @@ void table::set_schema(schema_ptr s) {
         _logstor_index->set_schema(s);
     }
     _schema = std::move(s);
+    _large_data_guardrail = make_large_data_guardrail();
+    _large_data_guardrail->rebuild(*get_sstables());
 
     for (auto&& v : _views) {
         v->view_info()->reset_view_info();
@@ -4988,7 +5018,8 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
 
 template void table::do_apply(compaction_group& cg, db::rp_handle&&, const mutation&);
 
-future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h,
+                      db::timeout_clock::time_point timeout, shared_ptr<db::large_data_guardrail_base> guardrails) {
     if (_virtual_writer) [[unlikely]] {
         return (*_virtual_writer)(m);
     }
@@ -5001,12 +5032,12 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
         return _logstor->write(m.unfreeze(m_schema), cg, std::move(ss_holder));
     }
 
-    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder)]() mutable {
-        do_apply(cg, std::move(h), m, m_schema);
+    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), guardrails = std::move(guardrails)]() mutable {
+        do_apply(cg, std::move(h), m, m_schema, *guardrails);
     }, timeout);
 }
 
-template void table::do_apply(compaction_group& cg, db::rp_handle&&, const frozen_mutation&, const schema_ptr&);
+template void table::do_apply(compaction_group& cg, db::rp_handle&&, const frozen_mutation&, const schema_ptr&, const db::large_data_guardrail_base&);
 
 future<>
 write_memtable_to_sstable(mutation_reader reader,

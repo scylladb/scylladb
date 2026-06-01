@@ -8,11 +8,18 @@
 
 #pragma once
 
+#include <concepts>
 #include <cstdint>
+#include <optional>
+#include <seastar/core/shared_ptr.hh>
+#include <boost/intrusive/set.hpp>
+#include "bytes.hh"
 #include "schema/schema_fwd.hh"
 #include "system_keyspace.hh"
 #include "sstables/shared_sstable.hh"
+#include "sstables/types.hh"
 #include "utils/assert.hh"
+#include "utils/hash.hh"
 #include "utils/updateable_value.hh"
 #include "utils/pluggable.hh"
 
@@ -21,9 +28,148 @@ class sstable;
 class key;
 }
 
+class partition_key_view;
+class mutation_partition;
+
 namespace db {
 
 class system_keyspace;
+
+using sstables::large_data_record;
+
+struct lookup_key {
+    bytes_view pk;
+    bytes_view ck;
+    bytes_view column_name;
+};
+
+// Compile-time comparison depth, one per multiset.
+//   partition → pk only
+//   row       → pk + ck
+//   cell      → pk + ck + column_name
+enum class record_type { partition, row, collection };
+
+template<record_type Depth>
+struct record_compare {
+private:
+    static bytes_view get_pk(const large_data_record& r) noexcept { return bytes_view(r.partition_key.value); }
+    static bytes_view get_pk(const lookup_key& k) noexcept { return k.pk; }
+    static bytes_view get_ck(const large_data_record& r) noexcept { return bytes_view(r.clustering_key.value); }
+    static bytes_view get_ck(const lookup_key& k) noexcept { return k.ck; }
+    static bytes_view get_col(const large_data_record& r) noexcept { return bytes_view(r.column_name.value); }
+    static bytes_view get_col(const lookup_key& k) noexcept { return k.column_name; }
+public:
+    template<typename L, typename R>
+        requires (std::same_as<L, large_data_record> || std::same_as<R, large_data_record>)
+    bool operator()(const L& a, const R& b) const noexcept {
+        auto l_pk = get_pk(a), r_pk = get_pk(b);
+        if (l_pk != r_pk) {
+            return l_pk < r_pk;
+        }
+        if constexpr (Depth == record_type::partition) {
+            return false;
+        }
+        auto l_ck = get_ck(a), r_ck = get_ck(b);
+        if (l_ck != r_ck) {
+            return l_ck < r_ck;
+        }
+        if constexpr (Depth == record_type::row) {
+            return false;
+        }
+        return get_col(a) < get_col(b);
+    }
+};
+
+template<record_type Depth>
+using record_set = boost::intrusive::multiset<large_data_record,
+    boost::intrusive::member_hook<large_data_record,
+        large_data_record::index_hook_type, &large_data_record::_index_hook>,
+    boost::intrusive::compare<record_compare<Depth>>,
+    boost::intrusive::constant_time_size<false>>;
+
+// Per-table index over large_data_records from all live SSTables.
+// Links directly into records stored in each SSTable's scylla_metadata
+// via intrusive member hooks (auto_unlink).  Aggregation (max across
+// SSTables for the same key) happens at lookup time via equal_range.
+class large_data_record_index {
+public:
+    struct partition_entry {
+        uint64_t partition_size = 0;
+        uint64_t rows = 0;
+    };
+
+    void register_sstable(sstables::shared_sstable sst);
+
+    void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables);
+
+    std::optional<partition_entry> lookup_partition(bytes_view pk_bytes) const;
+    std::optional<uint64_t> lookup_row(bytes_view pk_bytes, bytes_view ck_bytes) const;
+    std::optional<uint64_t> lookup_collection(bytes_view pk_bytes,
+            bytes_view ck_bytes, bytes_view column_name) const;
+
+private:
+    record_set<record_type::partition> _partitions;
+    record_set<record_type::row> _rows;
+    record_set<record_type::collection> _collections;
+};
+
+struct guardrail_config {
+    utils::updateable_value<uint32_t> partition_size_fail_threshold_mb;
+    utils::updateable_value<uint32_t> partition_size_warn_threshold_mb;
+    utils::updateable_value<uint32_t> rows_count_fail_threshold;
+    utils::updateable_value<uint32_t> rows_count_warn_threshold;
+    utils::updateable_value<uint32_t> row_size_fail_threshold_mb;
+    utils::updateable_value<uint32_t> row_size_warn_threshold_mb;
+    utils::updateable_value<uint32_t> collection_elements_fail_threshold;
+    utils::updateable_value<uint32_t> collection_elements_warn_threshold;
+};
+
+// Each replica::table holds a unique_ptr to either a real guardrail or a
+// noop.  The guardrail owns the per-table large_data_record_index, so
+// noop tables pay no index-maintenance cost.
+class large_data_guardrail_base {
+public:
+    virtual ~large_data_guardrail_base() = default;
+    virtual void check(const schema& s, const mutation_partition& mp,
+                       partition_key_view pk) const = 0;
+    virtual void register_sstable(sstables::shared_sstable sst) = 0;
+    virtual void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) = 0;
+};
+
+class noop_large_data_guardrail final : public large_data_guardrail_base {
+public:
+    static shared_ptr<large_data_guardrail_base> instance() {
+        static thread_local auto inst = make_shared<noop_large_data_guardrail>();
+        return inst;
+    }
+    void check(const schema&, const mutation_partition&,
+               partition_key_view) const override {}
+    void register_sstable(sstables::shared_sstable) override {}
+    void rebuild(const std::unordered_set<sstables::shared_sstable>&) override {}
+};
+
+class large_data_guardrail final : public large_data_guardrail_base {
+public:
+    explicit large_data_guardrail(guardrail_config cfg) noexcept
+        : _cfg(std::move(cfg)) {}
+
+    void check(const schema& s, const mutation_partition& mp,
+               partition_key_view pk) const override;
+    void register_sstable(sstables::shared_sstable sst) override;
+    void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) override;
+
+private:
+    void check_partition(const schema& s, bytes_view pk_bytes, partition_key_view pk) const;
+    void check_rows_and_collections(const schema& s, bytes_view pk_bytes, const mutation_partition& mp, partition_key_view pk) const;
+    void check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+            bytes_view ck_bytes, const clustering_key_prefix* ck) const;
+    void check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+            const column_definition& cdef, bytes_view ck_bytes,
+            const clustering_key_prefix* ck) const;
+
+    guardrail_config _cfg;
+    large_data_record_index _index;
+};
 
 class large_data_handler {
 public:

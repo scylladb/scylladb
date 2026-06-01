@@ -65,6 +65,7 @@ public:
     static const sstring KW_TABLETS;
 
     static const sstring KW_STORAGE_ENGINE;
+    static const sstring KW_LARGE_DATA_GUARDRAILS_ENABLED;
 
     // FIXME: In origin the following consts are in CFMetaData.
     static constexpr int32_t DEFAULT_DEFAULT_TIME_TO_LIVE = 0;

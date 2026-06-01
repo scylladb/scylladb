@@ -77,6 +77,7 @@
 #include "replica/tables_metadata_lock.hh"
 #include "service/topology_guard.hh"
 #include "utils/disk_space_monitor.hh"
+#include "db/large_data_handler.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -480,6 +481,7 @@ public:
         unsigned x_log2_compaction_groups{0};
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
         utils::updateable_value<bool> enable_tombstone_gc_for_streaming_and_repair;
+        db::guardrail_config guardrail_config;
     };
 
     using snapshot_details = db::snapshot_ctl::table_snapshot_details;
@@ -552,6 +554,8 @@ private:
     std::unique_ptr<logstor::primary_index> _logstor_index;
 
     std::unique_ptr<cell_locker> _counter_cell_locks; // Memory-intensive; allocate only when needed.
+
+    shared_ptr<db::large_data_guardrail_base> _large_data_guardrail;
 
     // Labels used to identify writes and reads for this table in the rate_limiter structure.
     db::rate_limiter::label _rate_limiter_label_for_writes;
@@ -1011,6 +1015,7 @@ public:
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;
 private:
+    shared_ptr<db::large_data_guardrail_base> make_large_data_guardrail() const;
     void update_tombstone_gc_rf_one();
 
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
@@ -1028,13 +1033,14 @@ public:
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
-        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema);
+        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema, *db::noop_large_data_guardrail::instance());
     }
     void apply(const mutation& m, db::rp_handle&& h = {}) {
         do_apply(compaction_group_for_token(m.token()), std::move(h), m);
     }
 
-    future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point tmo);
+    future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h,
+                   db::timeout_clock::time_point tmo, shared_ptr<db::large_data_guardrail_base> guardrails);
     future<> apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point tmo);
 
     // Returns at most "cmd.limit" rows
@@ -1305,6 +1311,14 @@ public:
     const secondary_index::secondary_index_manager& get_index_manager() const noexcept {
         return _index_manager;
     }
+
+    shared_ptr<db::large_data_guardrail_base> get_large_data_guardrail() const noexcept {
+        return _large_data_guardrail;
+    }
+
+    // Rebuild from current SSTable set.  Used at startup; after that
+    // the index is maintained incrementally via register_sstable.
+    void rebuild_large_data_index();
 
     sstables::sstables_manager& get_sstables_manager() noexcept {
         return _sstables_manager;
@@ -1705,7 +1719,8 @@ private:
             tracing::trace_state_ptr,
             db::timeout_clock::time_point,
             db::commitlog_force_sync,
-            db::per_partition_rate_limit::info> _apply_stage;
+            db::per_partition_rate_limit::info,
+            bool /* skip_large_data_guardrails */> _apply_stage;
 
     flat_hash_map<sstring, keyspace> _keyspaces;
     tables_metadata _tables_metadata;
@@ -1768,7 +1783,9 @@ public:
     future<> init_logstor();
     future<> recover_logstor();
     const gms::feature_service& features() const { return _feat; }
-    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
+    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&,
+                               db::timeout_clock::time_point timeout,
+                                shared_ptr<db::large_data_guardrail_base> guardrails);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
 
     drain_progress get_drain_progress() const noexcept {
@@ -1796,7 +1813,7 @@ private:
     auto sum_read_concurrency_sem_var(std::invocable<reader_concurrency_semaphore&> auto member);
     auto sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaphore::stats&> auto stats_member);
 
-    future<> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync, db::per_partition_rate_limit::info rate_limit_info);
+    future<> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails);
     future<> do_apply_many(const utils::chunked_vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
@@ -1974,7 +1991,7 @@ public:
                                                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, bool tombstone_gc_enabled = true);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
-    future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog_force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info = std::monostate{});
+    future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog_force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info = std::monostate{}, bool skip_large_data_guardrails = false);
     // Apply mutations atomically.
     // On restart, either all mutations will be replayed or none of them.
     // All mutations must belong to the same commitlog domain.

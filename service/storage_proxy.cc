@@ -650,9 +650,10 @@ private:
                         seastar::log_level l = seastar::log_level::warn;
                         if (is_timeout_exception(eptr)
                                 || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)
+                                || std::holds_alternative<replica::large_data_exception>(errors.local.reason)
                                 || std::holds_alternative<abort_requested_exception>(errors.local.reason)) {
-                            // ignore timeouts, abort requests and rate limit exceptions so that logs are not flooded.
-                            // database's total_writes_timedout or total_writes_rate_limited counter was incremented.
+                            // ignore timeouts, abort requests, rate limit and large-data rejections so that logs are not flooded.
+                            // database's total_writes_timedout, total_writes_rate_limited or total_writes_rejected_due_to_large_partition counter was incremented.
                             l = seastar::log_level::debug;
                         }
                         slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to_host_id, shard, eptr);
@@ -793,6 +794,9 @@ private:
                         return error::FAILURE;
                     } else if constexpr (std::is_same_v<Ex, replica::critical_disk_utilization_exception>) {
                         msg = e.what();
+                        return error::FAILURE;
+                    } else if constexpr (std::is_same_v<Ex, replica::large_data_exception>) {
+                        msg = e.message();
                         return error::FAILURE;
                     }
                 }, exception->reason);
@@ -3461,17 +3465,17 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
 
 future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
-        smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
+        smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
-    auto apply = [this, erm, s, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
+    auto apply = [this, erm, s, &m, tr_state, sync, timeout, smp_grp, rate_limit_info, skip_large_data_guardrails] (shard_id shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         auto shard_rate_limit = rate_limit_info;
         if (shard == this_shard_id()) {
             shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
         }
         return _db.invoke_on(shard, {smp_grp, timeout},
-                [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, shard_rate_limit] (replica::database& db) mutable -> future<> {
-            return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit);
+                [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, shard_rate_limit, skip_large_data_guardrails] (replica::database& db) mutable -> future<> {
+            return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit, skip_large_data_guardrails);
         });
     };
     return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
@@ -4778,6 +4782,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 msg = e->grab_cause();
             } else if (auto* e = try_catch<replica::critical_disk_utilization_exception>(eptr)) {
                 msg = e->what();
+            } else if (auto* e = try_catch<replica::large_data_exception>(eptr)) {
+                msg = e->message();
             } else {
                 slogger.error("exception during mutation write to {}.{} on {}: {}",
                     schema->ks_name(), schema->cf_name(), coordinator, eptr);

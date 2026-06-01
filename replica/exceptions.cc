@@ -25,6 +25,8 @@ exception_variant try_encode_replica_exception(std::exception_ptr eptr) {
         return abort_requested_exception();
     } catch (const critical_disk_utilization_exception& e) {
         return e;
+    } catch (const large_data_exception& e) {
+        return e;
     } catch (...) {
         return no_exception{};
     }
