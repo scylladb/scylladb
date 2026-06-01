@@ -197,6 +197,7 @@ async def test_cdc_virtual_tables(manager: ManagerClient):
                 if new_tablet_count == expected_tablet_count:
                     return True
             await wait_for(lambda: tablet_count_is(prev_tablet_count * 2), time.time() + 60)
+            await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
             new_history_count = (await cql.run_async(f"SELECT COUNT(*) AS cnt FROM system.cdc_streams_history WHERE table_id={log_table_id}"))[0].cnt
             assert new_history_count > prev_history_count
 
@@ -275,6 +276,7 @@ async def test_cdc_stream_split_and_merge_basic(manager: ManagerClient):
                 return True
 
         await wait_for(lambda: tablet_count_is(prev_tablet_count * 2), time.time() + 60)
+        await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
         await assert_streams_are_synchronized_with_tablets()
 
         # Reconstruct the stream set in each timestamp in two ways:
@@ -305,6 +307,7 @@ async def test_cdc_stream_split_and_merge_basic(manager: ManagerClient):
         prev_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test_scylla_cdc_log')
         await cql.run_async(f"ALTER TABLE {ks}.test_scylla_cdc_log WITH tablets = {{'min_tablet_count': {prev_tablet_count // 2}}};")
         await wait_for(lambda: tablet_count_is(prev_tablet_count // 2), time.time() + 60)
+        await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
         await assert_streams_are_synchronized_with_tablets()
 
         await validate_stream_history()
@@ -393,6 +396,7 @@ async def test_cdc_stream_garbage_collection(manager: ManagerClient):
             if len(rows) > 0:
                 return True
         await wait_for(new_stream_timestamp_created, time.time() + 60)
+        await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
 
         ts_before = await cql.run_async(f"SELECT * FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='test' ORDER BY timestamp DESC")
         streams_before = await cql.run_async(f"SELECT * FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='test'")
@@ -406,6 +410,7 @@ async def test_cdc_stream_garbage_collection(manager: ManagerClient):
             if len(rows) == 1:
                 return True
         await wait_for(streams_garbage_collected, time.time() + 60)
+        await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
 
         ts_after = await cql.run_async(f"SELECT * FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='test' ORDER BY timestamp DESC")
         streams_after = await cql.run_async(f"SELECT * FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='test'")
