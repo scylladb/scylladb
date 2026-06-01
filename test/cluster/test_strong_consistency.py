@@ -1263,7 +1263,10 @@ async def test_abort_forwarded_write_upon_shutdown(manager: ManagerClient):
             await stop_fut
 
 
-@pytest.mark.skip_bug(reason="SCYLLADB-1056")
+@pytest.mark.skip_bug(
+    link="https://scylladb.atlassian.net/browse/SCYLLADB-1056",
+    reason="Speed up abortion of applier fiber in raft::server_impl::abort",
+)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerClient):
     """
@@ -1330,7 +1333,10 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerCl
         await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
 
 
-@pytest.mark.skip_bug(reason="SCYLLADB-1056")
+@pytest.mark.skip_bug(
+    link="https://scylladb.atlassian.net/browse/SCYLLADB-1056",
+    reason="Speed up abortion of applier fiber in raft::server_impl::abort",
+)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient):
     """

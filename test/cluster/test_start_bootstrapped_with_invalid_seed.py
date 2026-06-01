@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_nodes_cluster
 
 
-@pytest.mark.skip_bug(reason="Test is disabled due to scylladb/scylladb#28153")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/28153",
+    reason="Test is disabled",
+)
 async def test_start_bootstrapped_with_invalid_seed(manager: ManagerClient):
     """
     Issue https://github.com/scylladb/scylladb/issues/14945.

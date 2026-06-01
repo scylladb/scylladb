@@ -429,12 +429,18 @@ async def do_test_tablet_incremental_repair_with_split_and_merge(manager, do_spl
 
     await verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks, repaired_keys, unrepaired_keys)
 
-@pytest.mark.skip_bug(reason="https://github.com/scylladb/scylladb/issues/24153")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/24153",
+    reason="token_group_based_splitting_mutation_writer - Token group id cannot go backwards, current=0, previous=1",
+)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_incremental_repair_with_split_and_merge(manager: ManagerClient):
     await do_test_tablet_incremental_repair_with_split_and_merge(manager, do_split=True, do_merge=True)
 
-@pytest.mark.skip_bug(reason="https://github.com/scylladb/scylladb/issues/24153")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/24153",
+    reason="token_group_based_splitting_mutation_writer - Token group id cannot go backwards, current=0, previous=1 ",
+)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_incremental_repair_with_split(manager: ManagerClient):
     await do_test_tablet_incremental_repair_with_split_and_merge(manager, do_split=True, do_merge=False)
