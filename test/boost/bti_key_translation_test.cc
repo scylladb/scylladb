@@ -93,25 +93,25 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_ord
         .with_column("pk2", utf8_type, column_kind::partition_key)
         .build();
     using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
-  for (auto sst_ver : {sstables::sstable_version_types::ms, sstables::sstable_version_types::mt}) {
-    testlog.info("checking sstable_version={}", sst_ver);
-    std::unique_ptr<encoding> prev;
-    for (const auto& rpv : generate_rpvs(*s, sst_ver)) {
-        if (!prev) {
-            prev = std::make_unique<encoding>(sst_ver, *s, rpv);
-        } else {
-            auto curr = std::make_unique<encoding>(sst_ver, *s, rpv);
-            auto prev_bytes = linearize(prev->begin());
-            auto curr_bytes = linearize(curr->begin());
-            testlog.debug("prev_bytes={}, curr_bytes={}", fmt_hex(prev_bytes), fmt_hex(curr_bytes));
-            SCYLLA_ASSERT(prev_bytes < curr_bytes);
-            std::swap(prev, curr);
+    for (auto sst_ver : {sstables::sstable_version_types::ms, sstables::sstable_version_types::mt}) {
+        testlog.info("checking sstable_version={}", sst_ver);
+        std::unique_ptr<encoding> prev;
+        for (const auto& rpv : generate_rpvs(*s, sst_ver)) {
+            if (!prev) {
+                prev = std::make_unique<encoding>(sst_ver, *s, rpv);
+            } else {
+                auto curr = std::make_unique<encoding>(sst_ver, *s, rpv);
+                auto prev_bytes = linearize(prev->begin());
+                auto curr_bytes = linearize(curr->begin());
+                testlog.debug("prev_bytes={}, curr_bytes={}", fmt_hex(prev_bytes), fmt_hex(curr_bytes));
+                SCYLLA_ASSERT(prev_bytes < curr_bytes);
+                std::swap(prev, curr);
+            }
         }
+        auto prev_bytes = linearize(prev->begin());
+        SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view(dht::maximum_token(), nullptr, -1)).begin()));
+        SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view::max()).begin()));
     }
-    auto prev_bytes = linearize(prev->begin());
-    SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view(dht::maximum_token(), nullptr, -1)).begin()));
-    SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view::max()).begin()));
-  }
 }
 
 // Tests lazy_comparable_bytes_from_ring_position::trim().
@@ -137,43 +137,43 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_trim) {
         partition_key::from_deeply_exploded(*s, components);
     });
     using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
-  for (auto sst_ver : {sstables::sstable_version_types::ms, sstables::sstable_version_types::mt}) {
-    testlog.info("checking sstable_version={}", sst_ver);
-    const auto dk = dht::decorated_key(dht::token::from_int64(42), pk);
-    const auto encoded = linearize(encoding(sst_ver, *s, dk).begin());
+    for (auto sst_ver : {sstables::sstable_version_types::ms, sstables::sstable_version_types::mt}) {
+        testlog.info("checking sstable_version={}", sst_ver);
+        const auto dk = dht::decorated_key(dht::token::from_int64(42), pk);
+        const auto encoded = linearize(encoding(sst_ver, *s, dk).begin());
 
-    constexpr auto modification_byte = std::byte('z');
-    for (size_t view_position = 0; view_position <= encoded.size(); ++view_position)
-    for (size_t trim_position = 0; trim_position <= view_position; ++trim_position)
-    for (size_t modification_position = 0; modification_position <= trim_position; ++modification_position) {
-        auto enc = encoding(sst_ver, *s, dk);
-        {
-            size_t n_seen = 0;
-            auto it = enc.begin();
-            while (it != std::default_sentinel) {
-                auto fragment_start = n_seen;
-                n_seen += (*it).size_bytes();
-                if (fragment_start <= modification_position && modification_position < n_seen) {
-                    (*it)[modification_position - fragment_start] = modification_byte;
+        constexpr auto modification_byte = std::byte('z');
+        for (size_t view_position = 0; view_position <= encoded.size(); ++view_position)
+        for (size_t trim_position = 0; trim_position <= view_position; ++trim_position)
+        for (size_t modification_position = 0; modification_position <= trim_position; ++modification_position) {
+            auto enc = encoding(sst_ver, *s, dk);
+            {
+                size_t n_seen = 0;
+                auto it = enc.begin();
+                while (it != std::default_sentinel) {
+                    auto fragment_start = n_seen;
+                    n_seen += (*it).size_bytes();
+                    if (fragment_start <= modification_position && modification_position < n_seen) {
+                        (*it)[modification_position - fragment_start] = modification_byte;
+                    }
+                    if (view_position <= n_seen) {
+                        break;
+                    }
+                    ++it;
                 }
-                if (view_position <= n_seen) {
-                    break;
-                }
-                ++it;
+                enc.trim(trim_position);
             }
-            enc.trim(trim_position);
+            auto expected_encoded = encoded;
+            if (modification_position < trim_position) {
+                expected_encoded[modification_position] = modification_byte;
+            }
+            expected_encoded.resize(trim_position);
+            auto new_encoded = linearize(enc.begin());
+            testlog.debug("view_position={}, trim_position={}, modification_position={}", view_position, trim_position, modification_position);
+            testlog.debug("new_encoded={}, expected_encoded={}", fmt_hex(new_encoded), fmt_hex(expected_encoded));
+            SCYLLA_ASSERT(new_encoded == expected_encoded);
         }
-        auto expected_encoded = encoded;
-        if (modification_position < trim_position) {
-            expected_encoded[modification_position] = modification_byte;
-        }
-        expected_encoded.resize(trim_position);
-        auto new_encoded = linearize(enc.begin());
-        testlog.debug("view_position={}, trim_position={}, modification_position={}", view_position, trim_position, modification_position);
-        testlog.debug("new_encoded={}, expected_encoded={}", fmt_hex(new_encoded), fmt_hex(expected_encoded));
-        SCYLLA_ASSERT(new_encoded == expected_encoded);
     }
-  }
 }
 
 // Generate an ordered list of various clustering positions views,
