@@ -1783,7 +1783,12 @@ const cdc::options& schema::user_properties::get_cdc_options() const {
     const auto& schema_extensions = extensions;
 
     if (auto it = schema_extensions.find(cdc::cdc_extension::NAME); it != schema_extensions.end()) {
-        return dynamic_pointer_cast<cdc::cdc_extension>(it->second)->get_options();
+        auto ext = dynamic_pointer_cast<cdc::cdc_extension>(it->second);
+        if (!ext) {
+            on_internal_error(dblog,
+                    "Failed to decode CDC options from the schema extensions. The table schema may have been written by a newer Scylla version.");
+        }
+        return ext->get_options();
     }
     return default_cdc_options;
 }
