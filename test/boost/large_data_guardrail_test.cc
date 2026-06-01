@@ -314,6 +314,53 @@ void coordinator_check(const db::large_data_guardrail& g, const mutation& m) {
     g.check_coordinator(*m.schema(), m.partition(), m.key());
 }
 
+schema_ptr make_set_schema() {
+    auto set_type = set_type_impl::get_instance(int32_type, true);
+    return schema_builder(1, "ks", "tbl")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("s", set_type)
+        .build();
+}
+
+schema_ptr make_static_set_schema() {
+    auto set_type = set_type_impl::get_instance(int32_type, true);
+    return schema_builder(1, "ks", "tbl")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("s", set_type, column_kind::static_column)
+        .build();
+}
+
+schema_ptr make_frozen_set_schema() {
+    auto set_type = set_type_impl::get_instance(int32_type, false);
+    return schema_builder(1, "ks", "tbl")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("v", set_type)
+        .build();
+}
+
+mutation make_mutation_with_set(schema_ptr s, size_t element_count, bool is_static = false) {
+    auto key = partition_key::from_exploded(*s, {to_bytes("pk1")});
+    auto c_key = clustering_key::from_exploded(*s, {to_bytes("ck1")});
+    mutation m(s, key);
+    collection_mutation_writer w({});
+    for (size_t i = 0; i < element_count; ++i) {
+        auto key = int32_type->decompose(int(i));
+        w.push_back(
+            managed_bytes_view(bytes_view(key)),
+            atomic_cell::make_live(*bytes_type, 0, bytes_view(), atomic_cell::collection_member::yes));
+    }
+    const column_definition& col = *s->get_column_definition("s");
+    auto serialized = std::move(w).finish();
+    if (is_static) {
+        m.set_static_cell(col, std::move(serialized));
+    } else {
+        m.set_clustered_cell(c_key, col, std::move(serialized));
+    }
+    return m;
+}
+
 } // anonymous namespace
 
 // Cell guardrail tests
@@ -405,6 +452,68 @@ SEASTAR_THREAD_TEST_CASE(test_coordinator_row_hard_limit_allows_tombstone) {
     auto cfg = make_coordinator_config(0, 0, 1 /* row_fail_mb */);
     db::large_data_guardrail g(std::move(cfg));
     auto m = make_mutation_with_tombstone(s);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+// Collection guardrail tests
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_collection_hard_limit_rejects_large_set) {
+    auto s = make_set_schema();
+    auto cfg = make_coordinator_config(0, 0, 0, 0, 100 /* collection_fail */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_set(s, 101);
+    BOOST_REQUIRE_THROW(coordinator_check(g, m), exceptions::invalid_request_exception);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_collection_hard_limit_allows_small_set) {
+    auto s = make_set_schema();
+    auto cfg = make_coordinator_config(0, 0, 0, 0, 100 /* collection_fail */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_set(s, 10);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_collection_hard_limit_allows_at_threshold) {
+    auto s = make_set_schema();
+    auto cfg = make_coordinator_config(0, 0, 0, 0, 100 /* collection_fail */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_set(s, 100);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_collection_hard_limit_disabled_when_zero) {
+    auto s = make_set_schema();
+    auto cfg = make_coordinator_config();
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_set(s, 10000);
+    BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_collection_hard_limit_rejects_large_static_set) {
+    auto s = make_static_set_schema();
+    auto cfg = make_coordinator_config(0, 0, 0, 0, 100 /* collection_fail */);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_set(s, 101, true /* is_static */);
+    BOOST_REQUIRE_THROW(coordinator_check(g, m), exceptions::invalid_request_exception);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_collection_frozen_not_checked_by_element_count) {
+    auto s = make_frozen_set_schema();
+    auto set_type = set_type_impl::get_instance(int32_type, false);
+    auto key = partition_key::from_exploded(*s, {to_bytes("pk1")});
+    mutation m(s, key);
+
+    set_type_impl::native_type elements;
+    for (int i = 0; i < 200; ++i) {
+        elements.push_back(data_value(i));
+    }
+    auto frozen_value = make_set_value(set_type, std::move(elements));
+    const column_definition& v_col = *s->get_column_definition("v");
+    auto cell = atomic_cell::make_live(*set_type, 0, frozen_value.serialize_nonnull());
+    m.set_clustered_cell(clustering_key::make_empty(), v_col, std::move(cell));
+
+    auto cfg = make_coordinator_config(0, 0, 0, 0, 100 /* collection_fail */);
+    db::large_data_guardrail g(std::move(cfg));
     BOOST_REQUIRE_NO_THROW(coordinator_check(g, m));
 }
 
