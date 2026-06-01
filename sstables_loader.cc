@@ -959,11 +959,11 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     if (!trinfo) {
         throw std::runtime_error(fmt::format("No transition info for tablet {}", tid));
     }
-    if (!trinfo->restore_cfg) {
-        throw std::runtime_error(format("No restore config for tablet {} restore transition", tid));
+    if (trinfo->snapshot_name.empty()) {
+        throw std::runtime_error(format("No snapshot name for tablet {} restore transition", tid));
     }
 
-    sstring snapshot_name = trinfo->restore_cfg->snapshot_name;
+    sstring snapshot_name = trinfo->snapshot_name;
 
     auto s = _db.local().find_schema(tid.table);
     auto tablet_range = tmap.get_token_range(tid.tablet);

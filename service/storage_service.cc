@@ -5781,7 +5781,7 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name, sst
                 updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
                     .set_stage(last_token, locator::tablet_transition_stage::restore)
                     .set_new_replicas(last_token, tmap.get_tablet_info(tid).replicas)
-                    .set_restore_config(last_token, locator::restore_config{ snap_name, endpoint, bucket })
+                    .set_snapshot_name(last_token, snap_name)
                     .set_transition(last_token, locator::tablet_transition_kind::restore)
                     .build());
 

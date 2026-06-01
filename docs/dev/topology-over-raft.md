@@ -993,8 +993,9 @@ problems in practice.
 # Tablet restore transition
 
 The `restore` tablet transition kind is used by the tablet-aware restore to download SSTables
-from object storage. The transition contains `restore_config` with snapshot name, endpoint and
-bucket.
+from object storage. The transition contains a `snapshot_name` string identifying the snapshot.
+The object storage coordinates (endpoint, bucket) are looked up from the
+`system_distributed.snapshot_remote_locations` table using the snapshot name and datacenter.
 
 Like `repair`, the `restore` transition does not change token ownership — replicas remain intact.
 The topology coordinator processes a tablet in this stage by calling the `RESTORE_TABLET` RPC on

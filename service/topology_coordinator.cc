@@ -2320,12 +2320,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                     break;
                 case locator::tablet_transition_stage::restore: {
-                    if (!trinfo.restore_cfg.has_value()) {
-                        on_internal_error(rtlogger, format("Cannot handle restore transition without config for tablet {}", gid));
+                    if (trinfo.snapshot_name.empty()) {
+                        on_internal_error(rtlogger, format("Cannot handle restore transition without snapshot name for tablet {}", gid));
                     }
                     if (action_failed(tablet_state.restore)) {
                         rtlogger.debug("Clearing restore transition for {} due to error", gid);
-                        updates.emplace_back(get_mutation_builder().del_transition(last_token).del_restore_config(last_token).build());
+                        updates.emplace_back(get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).build());
                         break;
                     }
                     if (advance_in_background(gid, tablet_state.restore, "restore", [this, gid, &tmap] () -> future<> {
@@ -2342,7 +2342,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         });
                     })) {
                         rtlogger.debug("Clearing restore transition for {}", gid);
-                        updates.emplace_back(get_mutation_builder().del_transition(last_token).del_restore_config(last_token).build());
+                        updates.emplace_back(get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).build());
                     }
                 }
                     break;
