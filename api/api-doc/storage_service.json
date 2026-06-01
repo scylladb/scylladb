@@ -1011,11 +1011,14 @@
                      "paramType":"query"
                   },
                   {
-                     "name":"backup_location",
-                     "description":"JSON array of backup location objects. Each object must contain: 'datacenter' (string), 'endpoint' (string), 'bucket' (string), and 'manifests' (array of strings). Currently, the array must contain exactly one entry.",
+                     "name":"backup_source_location",
+                     "description":"Array of backup location objects. Currently, the array must contain exactly one entry.",
                      "required":true,
                      "allowMultiple":false,
                      "type":"array",
+                     "items":{
+                        "$ref":"backup_location"
+                     },
                      "paramType":"body"
                   }
                ]
@@ -3945,6 +3948,31 @@
                   "$ref":"vnode_tablet_migration_node_status"
                },
                "description":"Per-node storage mode information. Empty if the keyspace is not being migrated."
+            }
+         }
+      },
+      "backup_location":{
+         "id":"backup_location",
+         "description":"A backup location entry describing where to find SSTables",
+         "properties":{
+            "datacenter":{
+               "type":"string",
+               "description":"The datacenter name"
+            },
+            "endpoint":{
+               "type":"string",
+               "description":"The object store endpoint URL"
+            },
+            "bucket":{
+               "type":"string",
+               "description":"The object store bucket name"
+            },
+            "manifests":{
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "description":"List of manifest file paths"
             }
          }
       }
