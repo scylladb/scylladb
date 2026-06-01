@@ -279,33 +279,18 @@ std::optional<caching_options> cf_prop_defs::get_caching_options() const {
 }
 
 const cdc::options* cf_prop_defs::get_cdc_options(const schema::extensions_map& schema_exts) const {
-    auto it = schema_exts.find(cdc::cdc_extension::NAME);
-    if (it == schema_exts.end()) {
-        return nullptr;
-    }
-
-    auto cdc_ext = dynamic_pointer_cast<cdc::cdc_extension>(it->second);
-    return &cdc_ext->get_options();
+    auto ext = get_schema_extension<cdc::cdc_extension>(schema_exts, cdc::cdc_extension::NAME);
+    return ext ? &ext->get_options() : nullptr;
 }
 
 const tombstone_gc_options* cf_prop_defs::get_tombstone_gc_options(const schema::extensions_map& schema_exts) const {
-    auto it = schema_exts.find(tombstone_gc_extension::NAME);
-    if (it == schema_exts.end()) {
-        return nullptr;
-    }
-
-    auto ext = dynamic_pointer_cast<tombstone_gc_extension>(it->second);
-    return &ext->get_options();
+    auto ext = get_schema_extension<tombstone_gc_extension>(schema_exts, tombstone_gc_extension::NAME);
+    return ext ? &ext->get_options() : nullptr;
 }
 
 const db::per_partition_rate_limit_options* cf_prop_defs::get_per_partition_rate_limit_options(const schema::extensions_map& schema_exts) const {
-    auto it = schema_exts.find(db::per_partition_rate_limit_extension::NAME);
-    if (it == schema_exts.end()) {
-        return nullptr;
-    }
-
-    auto ext = dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second);
-    return &ext->get_options();
+    auto ext = get_schema_extension<db::per_partition_rate_limit_extension>(schema_exts, db::per_partition_rate_limit_extension::NAME);
+    return ext ? &ext->get_options() : nullptr;
 }
 
 std::optional<db::tablet_options::map_type> cf_prop_defs::get_tablet_options() const {

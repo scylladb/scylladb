@@ -1326,9 +1326,9 @@ static future<> mark_view_schemas_as_built(utils::chunked_vector<mutation>& out,
 // Callers must ensure the builder already has CDC options with enabled=true.
 static void defer_enabling_streams_block_tablet_merges(schema_builder& builder) {
     auto& exts = builder.get_extensions();
-    auto it = exts.find(cdc::cdc_extension::NAME);
-    throwing_assert(it != exts.end());
-    auto opts = dynamic_pointer_cast<cdc::cdc_extension>(it->second)->get_options();
+    auto ext = get_schema_extension<cdc::cdc_extension>(exts, cdc::cdc_extension::NAME);
+    throwing_assert(ext);
+    auto opts = ext->get_options();
     throwing_assert(opts.enabled());
     opts.enabled(false);
     opts.enable_requested(true);

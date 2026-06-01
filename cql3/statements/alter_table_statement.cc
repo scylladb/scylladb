@@ -426,8 +426,8 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                 throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
             }
 
-            if (auto it = schema_extensions.find(cdc::cdc_extension::NAME); it != schema_extensions.end()) {
-                const auto& cdc_opts = dynamic_pointer_cast<cdc::cdc_extension>(it->second)->get_options();
+            if (auto cdc_ext = get_schema_extension<cdc::cdc_extension>(schema_extensions, cdc::cdc_extension::NAME)) {
+                const auto& cdc_opts = cdc_ext->get_options();
                 if (!cdc_opts.is_enabled_set()) {
                     // "enabled" flag not specified
                     throw exceptions::invalid_request_exception("Altering CDC options requires specifying \"enabled\" flag");
