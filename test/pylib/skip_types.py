@@ -25,16 +25,25 @@ Usage::
 from enum import StrEnum
 
 import re
+
 import pytest
+
 from test.pylib.skip_reason_plugin import skip
 
+
+_GITHUB_ISSUE_LINK_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/issues/\d+/?$")
+_JIRA_LINK_RE = re.compile(r"^https://scylladb\.atlassian\.net/browse/[A-Z][A-Z0-9]+-\d+$")
+
+
+def _is_valid_skip_bug_link(link: str) -> bool:
+    """Return True if *link* is a supported skip_bug issue URL."""
+    return bool(_GITHUB_ISSUE_LINK_RE.fullmatch(link) or _JIRA_LINK_RE.fullmatch(link))
 
 
 # ScyllaDB-specific skip categories.
 # Each member name (lowercased) is the pytest marker, e.g.
 # ``SKIP_BUG`` → ``@pytest.mark.skip_bug``, tag ``"bug"``.
 class SkipType(StrEnum):
-
     SKIP_BUG = "bug"
     SKIP_NOT_IMPLEMENTED = "not_implemented"
     SKIP_SLOW = "slow"
@@ -45,11 +54,9 @@ class SkipType(StrEnum):
         """Validate and format skip_bug arguments."""
         link = link.strip()
         reason = reason.strip()
-        _GITHUB_ISSUE_LINK_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/issues/\d+/?$")
-        _JIRA_LINK_RE = re.compile(r"^https://scylladb\.atlassian\.net/browse/[A-Z][A-Z0-9]+-\d+$")
         if not link:
             raise pytest.UsageError(f"{context}: 'link' is required.")
-        if not (_GITHUB_ISSUE_LINK_RE.fullmatch(link) or _JIRA_LINK_RE.fullmatch(link)):
+        if not _is_valid_skip_bug_link(link):
             raise pytest.UsageError(
                 f"{context}: invalid 'link' value {link!r}. "
                 "Expected a GitHub issue URL or a ScyllaDB Jira URL.",
