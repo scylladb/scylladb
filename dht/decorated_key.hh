@@ -30,11 +30,19 @@ namespace dht {
 // Total ordering defined by comparators is compatible with Origin's ordering.
 class decorated_key {
 public:
-    dht::token _token;
+    // The token is stored as a raw 8-byte value (without the token kind)
+    // instead of a full dht::token (16 bytes), to save memory. Decorated keys
+    // only ever carry key-kind tokens or the before_all_keys sentinel
+    // (dht::minimum_token(), used as an initial/empty marker); both round-trip
+    // losslessly through the raw value. after_all_keys is never stored here.
+    raw_token _token;
     partition_key _key;
 
     decorated_key(dht::token t, partition_key k)
-        : _token(std::move(t))
+        // minimum_token() (before_all_keys) is stored as a disengaged raw_token; key tokens go through
+        // raw_token(const token&), which asserts kind==key in DEBUG so that an after_all_keys token (which
+        // would silently collapse onto token::last() via raw()==INT64_MAX) is caught instead of stored.
+        : _token(t.is_minimum() ? raw_token() : raw_token(t))
         , _key(std::move(k)) {
     }
 
@@ -56,8 +64,8 @@ public:
     std::strong_ordering tri_compare(const schema& s, const decorated_key& other) const;
     std::strong_ordering tri_compare(const schema& s, const ring_position& other) const;
 
-    const dht::token& token() const noexcept {
-        return _token;
+    dht::token token() const noexcept {
+        return dht::token(_token);
     }
 
     const partition_key& key() const {
@@ -65,7 +73,7 @@ public:
     }
 
     size_t external_memory_usage() const {
-        return _key.external_memory_usage() + _token.external_memory_usage();
+        return _key.external_memory_usage();
     }
 
     size_t memory_usage() const {
@@ -102,6 +110,6 @@ template <> struct fmt::formatter<dht::decorated_key> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     template <typename FormatContext>
     auto format(const dht::decorated_key& dk, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{key: {}, token: {}}}", dk._key, dk._token);
+        return fmt::format_to(ctx.out(), "{{key: {}, token: {}}}", dk._key, dk.token());
     }
 };

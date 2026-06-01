@@ -281,7 +281,7 @@ bool ring_position::less_compare(const schema& s, const ring_position& other) co
 }
 
 std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh) {
-    auto token_cmp = *lh._token <=> *rh._token;
+    auto token_cmp = lh._token <=> rh._token;
     if (token_cmp != 0) {
         return token_cmp;
     }
@@ -302,7 +302,7 @@ std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_vi
 }
 
 std::strong_ordering ring_position_comparator_for_sstables::operator()(ring_position_view lh, sstables::decorated_key_view rh) const {
-    auto token_cmp = *lh._token <=> rh.token();
+    auto token_cmp = lh._token <=> rh.token();
     if (token_cmp != 0) {
         return token_cmp;
     }
@@ -574,7 +574,7 @@ double overlap_ratio(const dht::token_range& base, const dht::token_range& other
 auto fmt::formatter<dht::ring_position_view>::format(const dht::ring_position_view& pos, fmt::format_context& ctx) const
     -> decltype(ctx.out()) {
     auto out = ctx.out();
-    out = fmt::format_to(out, "{{{}", *pos._token);
+    out = fmt::format_to(out, "{{{}", pos.token());
     if (pos._key) {
         out = fmt::format_to(out, ", {}", *pos._key);
     }

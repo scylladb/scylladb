@@ -163,12 +163,29 @@ class ring_position_view {
     // For example {_token=t1, _key=nullptr, _weight=1} is ordered after {_token=t1, _key=k1, _weight=0},
     // but {_token=t1, _key=nullptr, _weight=-1} is ordered before it.
     //
-    const dht::token* _token; // always not nullptr
+    // Stored as a raw 8-byte token value (without the token kind) to keep this
+    // hot, by-value comparison type small (it is passed by value into the ring
+    // position comparators). The token kind is reconstructed on demand by
+    // token(): a disengaged raw value (INT64_MIN) maps to the minimum (before
+    // all keys) token, and the maximum (after all keys) sentinel is recognized
+    // via _weight == after_all_keys_weight.
+    raw_token _token;
     const partition_key* _key; // Can be nullptr
     int8_t _weight;
 private:
-    ring_position_view() noexcept : _token(nullptr), _key(nullptr), _weight(0) { }
-    explicit operator bool() const noexcept { return bool(_token); }
+    // _weight == disengaged_weight marks a disengaged ring_position_view,
+    // used by optimized_optional<ring_position_view>. Valid weights are -1/0/1,
+    // plus the special after_all_keys_weight for the maximum sentinel.
+    static constexpr int8_t disengaged_weight = std::numeric_limits<int8_t>::min();
+    // Dedicated weight for the after-all-keys (maximum_token) sentinel,
+    // distinguishing it from ring_position_view(token::last(), token_bound::end)
+    // which has weight 1. Both have raw value INT64_MAX and no key.
+    static constexpr int8_t after_all_keys_weight = 2;
+    ring_position_view() noexcept : _token(), _key(nullptr), _weight(disengaged_weight) { }
+    explicit operator bool() const noexcept { return _weight != disengaged_weight; }
+    // Private constructor for the after-all-keys sentinel.
+    ring_position_view(const dht::token& token, int8_t sentinel_weight)
+        : _token(token.raw()), _key(nullptr), _weight(sentinel_weight) { }
 public:
     using token_bound = ring_position::token_bound;
     struct after_key_tag {};
@@ -181,15 +198,17 @@ public:
 
     static ring_position_view max() noexcept {
         static auto max_token = maximum_token();
-        return { max_token, nullptr, 1 };
+        return ring_position_view(max_token, after_all_keys_weight);
     }
 
     bool is_min() const noexcept {
-        return _token->is_minimum();
+        // The minimum (before all keys) token is the only one whose raw value
+        // is INT64_MIN; real keys are normalized away from it.
+        return _token.value == std::numeric_limits<int64_t>::min();
     }
 
     bool is_max() const noexcept {
-        return _token->is_maximum();
+        return _weight == after_all_keys_weight;
     }
 
     static ring_position_view for_range_start(const partition_range& r) {
@@ -217,9 +236,10 @@ public:
     }
 
     ring_position_view(const dht::ring_position& pos, after_key after = after_key::no)
-        : _token(&pos.token())
+        : _token(pos.token().raw())
         , _key(pos.has_key() ? &*pos.key() : nullptr)
-        , _weight(pos.has_key() ? bool(after) : pos.relation_to_keys())
+        , _weight(pos.has_key() ? bool(after)
+                  : (pos.token().is_maximum() ? after_all_keys_weight : pos.relation_to_keys()))
     { }
 
     ring_position_view(const ring_position_view& pos) = default;
@@ -232,29 +252,40 @@ public:
     { }
 
     ring_position_view(const dht::decorated_key& key, after_key after_key = after_key::no)
-        : _token(&key.token())
+        : _token(key._token)
         , _key(&key.key())
         , _weight(bool(after_key))
     { }
 
     ring_position_view(const dht::token& token, const partition_key* key, int8_t weight)
-        : _token(&token)
+        : _token(token.raw())
         , _key(key)
-        , _weight(weight)
+        , _weight(!key && token.is_maximum() ? after_all_keys_weight : weight)
     { }
 
     explicit ring_position_view(const dht::token& token, token_bound bound = token_bound::start)
-        : _token(&token)
+        : _token(token.raw())
         , _key(nullptr)
-        , _weight(static_cast<std::underlying_type_t<token_bound>>(bound))
+        , _weight(token.is_maximum() ? after_all_keys_weight
+                  : static_cast<std::underlying_type_t<token_bound>>(bound))
     { }
 
-    const dht::token& token() const noexcept { return *_token; }
+    // Reconstructs the full token (with its kind) from the stored raw value.
+    // Returned by value because the kind is not stored.
+    dht::token token() const noexcept {
+        if (is_max()) {
+            return maximum_token();
+        }
+        return dht::token(_token);
+    }
     const partition_key* key() const { return _key; }
     int weight() const { return _weight; }
 
     // Only when key() == nullptr
-    token_bound get_token_bound() const { return token_bound(_weight); }
+    token_bound get_token_bound() const {
+        // after_all_keys_weight is logically "end" — it's past all keys.
+        return token_bound(_weight == after_all_keys_weight ? 1 : _weight);
+    }
     // Only when key() != nullptr
     after_key is_after_key() const { return after_key(_weight == 1); }
 
@@ -345,7 +376,7 @@ public:
     ring_position_ext& operator=(const ring_position_ext& other) = default;
 
     ring_position_ext(ring_position_view v)
-        : _token(*v._token)
+        : _token(v.token())
         , _key(v._key ? std::make_optional(*v._key) : std::nullopt)
         , _weight(v._weight)
     { }
