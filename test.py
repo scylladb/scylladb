@@ -65,9 +65,6 @@ class ThreadsCalculator:
                  non_debug_max_test_memory: float = 4e9
                  ):
         sys_mem = int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
-        test_mem = min(sys_mem / test_memory_fraction, max_test_memory)
-        if "debug" in modes:
-            test_mem *= debug_test_memory_multiplier
         system_memory_reserve = int(min(
             max(sys_mem / system_memory_reserve_fraction, min_system_memory_reserve),
             max_system_memory_reserve,
