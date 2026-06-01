@@ -141,6 +141,8 @@ using unwrap_uninitialized_t = typename unwrap_uninitialized<T>::type;
 
 using uexpression = uninitialized<expression>;
 
+inline int max_expression_nesting = 12;
+
 }
 
 @context {
@@ -150,6 +152,7 @@ using uexpression = uninitialized<expression>;
     listener_type* listener;
 
     dialect _dialect;
+    int _nesting = 0;
 
     // Keeps the names of all bind variables. For bind variables without a name ('?'), the name is nullptr.
     // Maps bind_index -> name.
@@ -248,6 +251,24 @@ using uexpression = uninitialized<expression>;
         _missing_tokens.emplace_back(token);
         return token;
     }
+
+    class nesting_guard {
+        int& _nesting_ref;
+    public:
+        nesting_guard(CqlParser& context) : _nesting_ref(context._nesting) {
+            if (++_nesting_ref > max_expression_nesting) {
+                context.add_recognition_error("expression nested too deeply");
+            }
+        }
+        ~nesting_guard() {
+            --_nesting_ref;
+        }
+        nesting_guard(const nesting_guard&) = delete;
+        nesting_guard(nesting_guard&&) = delete;
+        nesting_guard& operator=(const nesting_guard&) = delete;
+        nesting_guard& operator=(nesting_guard&&) = delete;
+    };
+
 }
 
 @lexer::namespace{cql3_parser}
@@ -426,6 +447,7 @@ selector returns [shared_ptr<raw_selector> s]
     ;
 
 unaliasedSelector returns [uexpression tmp]
+    @init { nesting_guard guard(*this); }
     :  ( c=cident                                  { tmp = unresolved_identifier{std::move(c)}; }
        | v=value                                   { tmp = std::move(v); }
        | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
@@ -455,7 +477,13 @@ countArgument
 
 whereClause returns [uexpression clause]
     @init { std::vector<expression> terms; }
-    : e1=relation { terms.push_back(std::move(e1)); } (K_AND en=relation { terms.push_back(std::move(en)); })*
+    : e1=relation { terms.push_back(std::move(e1)); }
+      (K_AND en=relation {
+          terms.push_back(std::move(en));
+          if (terms.size() > _dialect.max_relations_in_where_clause) {
+              add_recognition_error("too many relations in WHERE clause");
+          }
+      })*
         { clause = conjunction{std::move(terms)}; }
     ;
 
@@ -1713,6 +1741,7 @@ functionArgs returns [std::vector<expression> a]
     ;
 
 term returns [uexpression term1]
+    @init { nesting_guard guard(*this); }
     : v=value                          { $term1 = std::move(v); }
     | f=functionName args=functionArgs { $term1 = function_call{std::move(f), std::move(args)}; }
     | '(' c=comparatorType ')' t=term  { $term1 = cast{.style = cast::cast_style::c, .arg = std::move(t), .type = c}; }
@@ -1861,7 +1890,10 @@ relationType returns [oper_t op = oper_t{}]
     ;
 
 relation returns [uexpression e]
-    @init{ oper_t rt; }
+    @init{
+        oper_t rt;
+        nesting_guard guard(*this);
+    }
     : name=cident type=relationType t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t)); }
 
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term

@@ -211,6 +211,7 @@ private:
     cql3::dialect test_dialect() {
         return cql3::dialect{
             .duplicate_bind_variable_names_refer_to_same_variable = _db.local().get_config().cql_duplicate_bind_variable_names_refer_to_same_variable(),
+            .max_relations_in_where_clause = _db.local().get_config().max_relations_in_where_clause(),
         };
     }
 

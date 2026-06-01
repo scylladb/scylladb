@@ -9,6 +9,7 @@ namespace cql3 {
 
 struct dialect {
     bool duplicate_bind_variable_names_refer_to_same_variable = true;  // if :a is found twice in a query, the two references are to the same variable (see #15559)
+    unsigned max_relations_in_where_clause = 100; // maximum number of relations in a WHERE clause
     bool operator==(const dialect&) const = default;
 };
 
@@ -17,6 +18,7 @@ dialect
 internal_dialect() {
     return dialect{
         .duplicate_bind_variable_names_refer_to_same_variable = true,
+        .max_relations_in_where_clause = 100,
     };
 }
 
@@ -28,7 +30,7 @@ struct fmt::formatter<cql3::dialect> {
 
     template <typename FormatContext>
     auto format(const cql3::dialect& d, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "cql3::dialect{{duplicate_bind_variable_names_refer_to_same_variable={}}}",
-                d.duplicate_bind_variable_names_refer_to_same_variable);
+        return fmt::format_to(ctx.out(), "cql3::dialect{{duplicate_bind_variable_names_refer_to_same_variable={}, max_relations_in_where_clause={}}}",
+                d.duplicate_bind_variable_names_refer_to_same_variable, d.max_relations_in_where_clause);
     }
 };
