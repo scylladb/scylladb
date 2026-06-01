@@ -63,7 +63,10 @@ mutation_fragment_stream_validator::validate(dht::token t, const partition_key* 
     if (_prev_partition_key.token() == t && pkey && _prev_partition_key.key().legacy_tri_compare(_schema, *pkey) >= 0) {
         return ooo_key_result(_schema, t, pkey, _prev_partition_key);
     }
-    _prev_partition_key._token = t;
+    if (t.is_maximum()) {
+        return validation_result::invalid(format("unexpected after-all-keys token: {}", t));
+    }
+    _prev_partition_key._token = t.is_minimum() ? dht::raw_token() : dht::raw_token(t);
     if (pkey) {
         _prev_partition_key._key = *pkey;
     } else {

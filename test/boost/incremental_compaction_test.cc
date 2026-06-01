@@ -705,11 +705,11 @@ SEASTAR_TEST_CASE(gc_sstable_no_premature_release_with_overlapping_inputs_test) 
                 for (const auto& old_sst : desc.old_sstables) {
                     if (old_sst->get_origin() == "garbage_collection") {
                         gc_release_count++;
-                        auto gc_first = old_sst->get_first_decorated_key()._token;
-                        auto gc_last = old_sst->get_last_decorated_key()._token;
+                        auto gc_first = old_sst->get_first_decorated_key().token();
+                        auto gc_last = old_sst->get_last_decorated_key().token();
                         for (const auto& alive : alive_inputs) {
-                            auto alive_first = alive->get_first_decorated_key()._token;
-                            auto alive_last = alive->get_last_decorated_key()._token;
+                            auto alive_first = alive->get_first_decorated_key().token();
+                            auto alive_last = alive->get_last_decorated_key().token();
                             auto gc_range = ::wrapping_interval<dht::token>::make(gc_first, gc_last);
                             auto alive_range = ::wrapping_interval<dht::token>::make(alive_first, alive_last);
                             if (gc_range.overlaps(alive_range, dht::token_comparator())) {
