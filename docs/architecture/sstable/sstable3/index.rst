@@ -8,6 +8,7 @@ ScyllaDB SSTable - 3.x
    sstables-3-statistics
    sstables-3-summary
    sstables-3-index
+   sstable-ms-index
    sstable-format
 
 .. include:: ../_common/sstable_what_is.rst
@@ -20,5 +21,6 @@ For more information on ScyllaDB 3.x SSTable formats, see below:
 * :doc:`SSTable 3.0 Data File Format <sstables-3-data-file-format>`
 * :doc:`SSTable 3.0 Statistics <sstables-3-statistics>` 
 * :doc:`SSTable 3.0 Summary <sstables-3-summary>`
-* :doc:`SSTable 3.0 Index <sstables-3-index>`
+* :doc:`SSTable 3.0 Index (me/md format) <sstables-3-index>`
+* :doc:`SSTable ms Index (Trie-Based) <sstable-ms-index>`
 * :doc:`SSTable 3.0 Format in ScyllaDB <sstable-format>`
