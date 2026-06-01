@@ -5041,8 +5041,12 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         SCYLLA_ASSERT(keyspace);
         SCYLLA_ASSERT(table);
         auto s = _db.local().find_column_family(tablet.table).schema();
-        bool should_block = s->ks_name() == *keyspace && s->cf_name() == *table;
-        while (should_block && !handler.poll_for_message() && !_async_gate.is_closed()) {
+        if (s->ks_name() != *keyspace || s->cf_name() != *table) {
+            co_return;
+        }
+
+        rtlogger.info("block_tablet_streaming: waiting");
+        while (!handler.poll_for_message() && !_async_gate.is_closed()) {
             co_await sleep(std::chrono::milliseconds(100));
         }
     });
