@@ -1363,12 +1363,12 @@ private:
         // all overlapping input sstables have been exhausted.
         auto gc_not_exhausted = [this] (const sstables::shared_sstable& gc_sst) {
             auto gc_range = ::wrapping_interval<dht::token>::make(
-                gc_sst->get_first_decorated_key()._token,
-                gc_sst->get_last_decorated_key()._token);
+                gc_sst->get_first_decorated_key().token(),
+                gc_sst->get_last_decorated_key().token());
             for (const auto& input_sst : _sstables) {
                 auto input_range = ::wrapping_interval<dht::token>::make(
-                    input_sst->get_first_decorated_key()._token,
-                    input_sst->get_last_decorated_key()._token);
+                    input_sst->get_first_decorated_key().token(),
+                    input_sst->get_last_decorated_key().token());
                 if (gc_range.overlaps(input_range, dht::token_comparator())) {
                     return true; // overlaps with a remaining input sstable, not exhausted yet
                 }
