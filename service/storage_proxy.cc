@@ -65,6 +65,7 @@
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
 #include "service/paxos/proposal.hh"
+#include "db/large_data_handler.hh"
 #include "service/topology_mutation.hh"
 #include "locator/token_metadata.hh"
 #include <seastar/core/coroutine.hh>
@@ -4287,6 +4288,11 @@ storage_proxy::mutate_with_triggers(utils::chunked_vector<mutation> mutations, d
     clock_type::time_point timeout,
     bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, coordinator_mutate_options options) {
     warn(unimplemented::cause::TRIGGERS);
+
+    for (const mutation& m : mutations) {
+        m.schema()->table().get_large_data_guardrail()->check_coordinator(*m.schema(), m.partition(), m.key());
+    }
+
     if (should_mutate_atomically) {
         SCYLLA_ASSERT(!raw_counters);
         return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), std::move(options));
