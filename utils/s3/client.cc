@@ -280,8 +280,11 @@ void client::group_client::register_metrics(std::string class_name, std::string 
          sm::make_counter("downloads_blocked_on_memory",
                           [this] { return downloads_blocked_on_memory; },
                           sm::description("Counts the number of times S3 client downloads were delayed due to insufficient memory availability"),
-                          {ep_label, sg_label})
-
+                          {ep_label, sg_label}),
+         sm::make_counter("integrated_request_queue_length",
+                          [this] { return http.integrated_requests_queued().integral(); },
+                          sm::description("The number of queued HTTP requests integrated over time (measured in request-seconds)"),
+                          {ep_label, sg_label}),
     });
 }
 
