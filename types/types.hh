@@ -10,8 +10,12 @@
 
 #include <optional>
 #include <boost/functional/hash.hpp>
+#include <cstddef>
+#include <cstring>
 #include <iosfwd>
 #include <initializer_list>
+#include <new>
+#include <type_traits>
 #include <unordered_set>
 
 #include <seastar/core/sstring.hh>
@@ -31,6 +35,7 @@
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/exceptions.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/assert.hh"
 #include "utils/bit_cast.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/lexicographical_compare.hh"
@@ -190,16 +195,83 @@ struct empty_type_representation {
 };
 
 class data_value {
-    void* _value;  // FIXME: use "small value optimization" for small types
-    data_type _type;
+public:
+    // Native values that are trivially copyable and trivially destructible and
+    // fit in this many bytes are stored inline, saving a heap allocation per
+    // value. This covers the common fixed-size scalars (bool, the integer and
+    // floating types, timestamps, UUID/timeuuid, duration). Larger or
+    // non-trivial natives (strings, bytes, collections, varint, decimal) stay
+    // on the heap.
+    static constexpr size_t internal_storage_size = 24;
+    static constexpr size_t internal_storage_align = alignof(void*);
 private:
-    data_value(void* value, data_type type) : _value(value), _type(std::move(type)) {}
+    // _value points at the stored native value, wherever it lives:
+    //   - nullptr           -> the null value (no stored native)
+    //   - &_internal        -> value stored inline in _internal
+    //   - any other pointer -> value stored on the heap (external)
+    // Keeping a single pointer (rather than a separate kind tag) makes _value
+    // branchless to read on the hot path; the inline-vs-external
+    // distinction is only needed on the cold copy/move/destroy paths, via
+    // stored_internally().
+    void* _value;
+    // Default-initialized so the inline buffer always holds defined bytes, even
+    // when the value lives on the heap (external) or is null and the buffer is
+    // unused. This lets the copy/move constructors memcpy it unconditionally
+    // (branchless, no indeterminate-byte reads for MemorySanitizer/Valgrind).
+    alignas(internal_storage_align) std::byte _internal[internal_storage_size]{};
+    data_type _type;
+
+    template <typename NativeType>
+    static constexpr bool fits_internal() {
+        return std::is_trivially_copyable_v<NativeType>
+                && std::is_trivially_destructible_v<NativeType>
+                && sizeof(NativeType) <= internal_storage_size
+                && alignof(NativeType) <= internal_storage_align;
+    }
+
+    // Whether the value is stored inline in _internal (as opposed to on the heap
+    // or being the null value).
+    bool stored_internally() const noexcept {
+        return _value == static_cast<const void*>(&_internal);
+    }
+
+    // Tag-dispatched private constructors, so there is no ambiguous void*-taking
+    // constructor where a null pointer silently means "the null value".
+    struct internal_tag {};
+    struct external_tag {};
+    struct null_tag {};
+    // _value points at _internal, but the native value is not constructed yet:
+    // the caller (make_from_native) must placement-construct it into _internal.
+    data_value(internal_tag, data_type type) noexcept
+        : _value(&_internal), _type(std::move(type)) {}
+    // Takes ownership of the heap-allocated native value `value` (must be non-null;
+    // a null value must use null_tag instead, so a null pointer here is a bug).
+    data_value(external_tag, void* value, data_type type) noexcept
+        : _value(value), _type(std::move(type)) { SCYLLA_ASSERT(value); }
+    data_value(null_tag, data_type type) noexcept
+        : _value(nullptr), _type(std::move(type)) {}
+
+    // make_new wraps a raw C++ value in maybe_empty<T> and forwards to make_from_native.
+    // make_from_native takes an already-wrapped native_type and decides inline vs heap.
     template <typename T>
     static data_value make_new(data_type type, T&& value);
+    // Constructs a data_value holding `value` (already a native_type), storing
+    // it inline when it is a small trivially-copyable type, otherwise on the heap.
+    template <typename NativeType>
+    static data_value make_from_native(data_type type, NativeType value);
+
+    template <typename NativeType, typename AbstractType> friend class concrete_type;
 public:
     ~data_value();
     data_value(const data_value&);
-    data_value(data_value&& x) noexcept : _value(x._value), _type(std::move(x._type)) {
+    data_value(data_value&& x) noexcept : _type(std::move(x._type)) {
+        // Copy the inline buffer unconditionally: it always holds defined bytes
+        // (value-initialized), so this is branchless and cheap, and harmless when
+        // x stored its value externally or is null. Then fix up _value: repoint
+        // it into our own buffer for an inline value, otherwise take x's pointer
+        // (external or null) as-is.
+        std::memcpy(static_cast<void*>(&_internal), static_cast<const void*>(&x._internal), internal_storage_size);
+        _value = x.stored_internally() ? &_internal : x._value;
         x._value = nullptr;
     }
     // common conversions from C++ types to database types
@@ -277,11 +349,14 @@ public:
     friend bool operator==(const data_value& x, const data_value& y);
     friend class abstract_type;
     static data_value make_null(data_type type) {
-        return data_value(nullptr, std::move(type));
+        return data_value(null_tag{}, std::move(type));
     }
+    // Low-level factory for non-trivial or oversized natives already heap-allocated
+    // by the caller. Inline-eligible types (trivially copyable/destructible, ≤24 B)
+    // never reach this path; they go through make_from_native's inline branch.
     template <typename T>
     static data_value make(data_type type, std::unique_ptr<T> value) {
-        return data_value(value.release(), std::move(type));
+        return data_value(external_tag{}, value.release(), std::move(type));
     }
     friend class empty_type_impl;
     template <typename T> friend const T& value_cast(const data_value&);
@@ -525,10 +600,31 @@ template <typename T>
 inline
 data_value
 data_value::make_new(data_type type, T&& v) {
-    maybe_empty<std::remove_reference_t<T>> value(std::forward<T>(v));
-    return data_value(type->native_value_clone(&value), type);
+    return make_from_native(std::move(type), maybe_empty<std::remove_reference_t<T>>(std::forward<T>(v)));
 }
 
+template <typename NativeType>
+inline
+data_value
+data_value::make_from_native(data_type type, NativeType value) {
+    if constexpr (fits_internal<NativeType>()) {
+        data_value dv(internal_tag{}, std::move(type));
+        ::new (static_cast<void*>(&dv._internal)) NativeType(std::move(value));
+        return dv;
+    } else {
+        // Non-trivial or oversized native (strings, bytes, collections, varint,
+        // decimal, …): heap-allocate as before. Inline-eligible types never
+        // reach this branch, so make() is heap-only.
+        return make(std::move(type), std::make_unique<NativeType>(std::move(value)));
+    }
+}
+
+// value_cast (and concrete_type::from_value) return a reference to the native
+// value stored inside the data_value. For inline (small-value-optimized) storage
+// that reference points into the data_value's own _internal buffer, and moving
+// the data_value repoints _value into the destination object. So a reference
+// obtained here must not be held across a move of the owning data_value: do not
+// move the owner while such a reference is live.
 template <typename T>
 const T& value_cast(const data_value& value) {
     return value_cast<T>(const_cast<data_value&&>(value));
@@ -563,11 +659,13 @@ public:
     using native_type = maybe_empty<NativeType>;
     using AbstractType::AbstractType;
 public:
+    // Used when the caller already holds a heap-allocated native (non-trivial types
+    // such as collections). Inline-eligible types use the by-value overload below.
     data_value make_value(std::unique_ptr<native_type> value) const {
         return data_value::make(this->shared_from_this(), std::move(value));
     }
     data_value make_value(native_type value) const {
-        return make_value(std::make_unique<native_type>(std::move(value)));
+        return data_value::make_from_native<native_type>(this->shared_from_this(), std::move(value));
     }
     data_value make_null() const {
         return data_value::make_null(this->shared_from_this());

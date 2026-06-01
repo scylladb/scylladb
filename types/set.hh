@@ -45,5 +45,5 @@ data_value make_set_value(data_type tuple_type, set_type_impl::native_type value
 
 template <typename NativeType>
 data_value::data_value(const std::unordered_set<NativeType>& v)
-    : data_value(new set_type_impl::native_type(v.begin(), v.end()), set_type_impl::get_instance(data_type_for<NativeType>(), true))
+    : data_value(external_tag{}, new set_type_impl::native_type(v.begin(), v.end()), set_type_impl::get_instance(data_type_for<NativeType>(), true))
 {}
