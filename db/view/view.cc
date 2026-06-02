@@ -1614,7 +1614,16 @@ future<view_update_builder> make_view_update_builder(
         return view_updates(std::move(v), base);
     }) | std::ranges::to<std::vector<view_updates>>();
     auto builder = view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
-    co_await builder.initialize();
+    std::exception_ptr ep;
+    try {
+        co_await builder.initialize();
+    } catch (...) {
+        ep = std::current_exception();
+    }
+    if (ep) {
+        co_await builder.close();
+        std::rethrow_exception(ep);
+    }
     co_return builder;
 }
 
