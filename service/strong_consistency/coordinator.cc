@@ -304,12 +304,12 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         //     method was triggered.
         // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
         // * timed_out_error: Can be thrown by the abort_on_expiry.
-        // * condition_variable_timed_out: Can be thrown by begin_mutate.
         // * raft::stopped_error: The raft server was aborted (e.g. table being dropped).
         //
         // We handle them collectively here.
-        if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
-                || try_catch<seastar::timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
+        if (try_catch<raft::request_aborted>(ex)
+                || try_catch<seastar::abort_requested_exception>(ex)
+                || try_catch<seastar::timed_out_error>(ex)
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
@@ -438,12 +438,12 @@ auto coordinator::query(schema_ptr schema,
         //     method was triggered.
         // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
         // * timed_out_error: Can be thrown by the abort_on_expiry.
-        // * seastar::condition_variable_timed_out: Can be thrown by begin_read's wait_for_leader.
         // * raft::stopped_error: The raft server was aborted (e.g. table being dropped).
         //
         // We handle them collectively here.
-        if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
-                || try_catch<timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
+        if (try_catch<raft::request_aborted>(ex)
+                || try_catch<seastar::abort_requested_exception>(ex)
+                || try_catch<timed_out_error>(ex)
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
