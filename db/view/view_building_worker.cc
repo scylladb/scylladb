@@ -208,6 +208,9 @@ future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstabl
 }
 
 future<> view_building_worker::run_staging_sstables_registrator() {
+    co_await utils::get_local_injector().inject("view_building_worker_pause_before_starting_staging_registrator",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
