@@ -335,13 +335,16 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
             co_await utils::get_local_injector().inject("sc_coordinator_wait_before_add_entry",
                 utils::wait_for_message(5min));
 
-            try {
-                co_await op.raft_server.server().add_entry(std::move(raft_cmd),
+            future<> add_entry_result = co_await coroutine::as_future(
+                op.raft_server.server().add_entry(std::move(raft_cmd),
                     raft::wait_type::committed,
-                    &aoe.abort_source());
+                    &aoe.abort_source()));
+
+            if (!add_entry_result.failed()) {
                 co_return std::monostate{};
-            } catch (...) {
-                auto ex = std::current_exception();
+            }
+
+            auto ex = std::move(add_entry_result).get_exception();
                 if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
                     logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, tablet {}, term {}",
                         ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
@@ -362,9 +365,8 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 }
 
                 // Let the outer code handle other errors.
-                throw;
+                std::rethrow_exception(std::move(ex));
             }
-        }
     } catch (...) {
         auto ex = std::current_exception();
         // Unfortunately, timeouts can materialize in different forms depending
