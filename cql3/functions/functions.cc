@@ -518,13 +518,14 @@ functions::try_get(data_dictionary::database db,
         return fun;
     }
 
+    std::vector<shared_ptr<function>> exact_matches;
     std::vector<shared_ptr<function>> compatibles;
     for (auto&& to_test : candidates) {
         auto r = match_arguments(db, keyspace, schema.get(), to_test, provided_args, receiver_ks, receiver_cf);
         switch (r) {
             case assignment_testable::test_result::EXACT_MATCH:
-                // We always favor exact matches
-                return to_test;
+                exact_matches.push_back(std::move(to_test));
+                break;
             case assignment_testable::test_result::WEAKLY_ASSIGNABLE:
                 compatibles.push_back(std::move(to_test));
                 break;
@@ -533,19 +534,24 @@ functions::try_get(data_dictionary::database db,
         };
     }
 
-    if (compatibles.empty()) {
+    // We favor exact matches over merely-assignable ones, but several exact matches - for
+    // example a native function and a user function of the same signature - are just as
+    // ambiguous as several assignable ones.
+    auto& matches = !exact_matches.empty() ? exact_matches : compatibles;
+
+    if (matches.empty()) {
         return resolution_failed(
                 seastar::format("Invalid call to function {}, none of its type signatures match (known type signatures: {})",
                                                         name, fmt::join(candidates, ", ")));
     }
 
-    if (compatibles.size() > 1) {
+    if (matches.size() > 1) {
         return resolution_failed(
                 seastar::format("Ambiguous call to function {} (can be matched by following signatures: {}): use type casts to disambiguate",
-                    name, fmt::join(compatibles, ", ")));
+                    name, fmt::join(matches, ", ")));
     }
 
-    return std::move(compatibles[0]);
+    return std::move(matches[0]);
 }
 
 template<typename F>

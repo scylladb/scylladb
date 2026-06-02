@@ -905,85 +905,6 @@ untyped_constant_parsed_value(const untyped_constant& uc, data_type validator)
 }
 
 static
-assignment_testable::test_result
-untyped_constant_test_assignment(const untyped_constant& uc, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver)
-{
-    bool uc_is_null = uc.partial_type == untyped_constant::type_class::null;
-    auto receiver_type = receiver.type->as_cql3_type();
-    if ((receiver_type.is_collection() || receiver_type.is_user_type() || receiver_type.is_vector()) && !uc_is_null) {
-        return assignment_testable::test_result::NOT_ASSIGNABLE;
-    }
-    if (!receiver_type.is_native()) {
-        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-    }
-    auto kind = receiver_type.get_kind();
-    switch (uc.partial_type) {
-        case untyped_constant::type_class::string:
-            if (cql3_type::kind_enum_set::frozen<
-                    cql3_type::kind::ASCII,
-                    cql3_type::kind::TEXT,
-                    cql3_type::kind::INET,
-                    cql3_type::kind::TIMESTAMP,
-                    cql3_type::kind::DATE,
-                    cql3_type::kind::TIME>::contains(kind)) {
-                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-            }
-            break;
-        case untyped_constant::type_class::integer:
-            if (cql3_type::kind_enum_set::frozen<
-                    cql3_type::kind::BIGINT,
-                    cql3_type::kind::COUNTER,
-                    cql3_type::kind::DECIMAL,
-                    cql3_type::kind::DOUBLE,
-                    cql3_type::kind::FLOAT,
-                    cql3_type::kind::INT,
-                    cql3_type::kind::SMALLINT,
-                    cql3_type::kind::TIMESTAMP,
-                    cql3_type::kind::DATE,
-                    cql3_type::kind::TINYINT,
-                    cql3_type::kind::VARINT>::contains(kind)) {
-                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-            }
-            break;
-        case untyped_constant::type_class::uuid:
-            if (cql3_type::kind_enum_set::frozen<
-                    cql3_type::kind::UUID,
-                    cql3_type::kind::TIMEUUID>::contains(kind)) {
-                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-            }
-            break;
-        case untyped_constant::type_class::floating_point:
-            if (cql3_type::kind_enum_set::frozen<
-                    cql3_type::kind::DECIMAL,
-                    cql3_type::kind::DOUBLE,
-                    cql3_type::kind::FLOAT>::contains(kind)) {
-                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-            }
-            break;
-        case untyped_constant::type_class::boolean:
-            if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::BOOLEAN>()) {
-                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-            }
-            break;
-        case untyped_constant::type_class::hex:
-            if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::BLOB>()) {
-                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-            }
-            break;
-        case untyped_constant::type_class::duration:
-            if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::DURATION>()) {
-                return assignment_testable::test_result::EXACT_MATCH;
-            }
-            break;
-        case untyped_constant::type_class::null:
-            return receiver.type->is_counter()
-                ? assignment_testable::test_result::NOT_ASSIGNABLE
-                : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-    }
-    return assignment_testable::test_result::NOT_ASSIGNABLE;
-}
-
-static
 std::optional<data_type>
 default_type_for_constant(const untyped_constant& uc) {
     switch (uc.partial_type) {
@@ -1006,6 +927,81 @@ default_type_for_constant(const untyped_constant& uc) {
             return varint_type;
     }
     on_internal_error(expr_logger, format("unexpected untyped_constant type_class: {}", static_cast<int>(uc.partial_type)));
+}
+
+static
+assignment_testable::test_result
+untyped_constant_test_assignment(const untyped_constant& uc, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver)
+{
+    bool uc_is_null = uc.partial_type == untyped_constant::type_class::null;
+    auto receiver_type = receiver.type->as_cql3_type();
+    if ((receiver_type.is_collection() || receiver_type.is_user_type() || receiver_type.is_vector()) && !uc_is_null) {
+        return assignment_testable::test_result::NOT_ASSIGNABLE;
+    }
+    if (!receiver_type.is_native()) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+    auto kind = receiver_type.get_kind();
+    bool compatible = false;
+    switch (uc.partial_type) {
+        case untyped_constant::type_class::string:
+            compatible = cql3_type::kind_enum_set::frozen<
+                    cql3_type::kind::ASCII,
+                    cql3_type::kind::TEXT,
+                    cql3_type::kind::INET,
+                    cql3_type::kind::TIMESTAMP,
+                    cql3_type::kind::DATE,
+                    cql3_type::kind::TIME>::contains(kind);
+            break;
+        case untyped_constant::type_class::integer:
+            compatible = cql3_type::kind_enum_set::frozen<
+                    cql3_type::kind::BIGINT,
+                    cql3_type::kind::COUNTER,
+                    cql3_type::kind::DECIMAL,
+                    cql3_type::kind::DOUBLE,
+                    cql3_type::kind::FLOAT,
+                    cql3_type::kind::INT,
+                    cql3_type::kind::SMALLINT,
+                    cql3_type::kind::TIMESTAMP,
+                    cql3_type::kind::DATE,
+                    cql3_type::kind::TINYINT,
+                    cql3_type::kind::VARINT>::contains(kind);
+            break;
+        case untyped_constant::type_class::uuid:
+            compatible = cql3_type::kind_enum_set::frozen<
+                    cql3_type::kind::UUID,
+                    cql3_type::kind::TIMEUUID>::contains(kind);
+            break;
+        case untyped_constant::type_class::floating_point:
+            compatible = cql3_type::kind_enum_set::frozen<
+                    cql3_type::kind::DECIMAL,
+                    cql3_type::kind::DOUBLE,
+                    cql3_type::kind::FLOAT>::contains(kind);
+            break;
+        case untyped_constant::type_class::boolean:
+            compatible = kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::BOOLEAN>();
+            break;
+        case untyped_constant::type_class::hex:
+            compatible = kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::BLOB>();
+            break;
+        case untyped_constant::type_class::duration:
+            if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::DURATION>()) {
+                return assignment_testable::test_result::EXACT_MATCH;
+            }
+            break;
+        case untyped_constant::type_class::null:
+            return receiver.type->is_counter()
+                ? assignment_testable::test_result::NOT_ASSIGNABLE
+                : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+    if (!compatible) {
+        return assignment_testable::test_result::NOT_ASSIGNABLE;
+    }
+    if (auto default_type = default_type_for_constant(uc);
+            default_type && (*default_type)->as_cql3_type().get_kind() == kind) {
+        return assignment_testable::test_result::EXACT_MATCH;
+    }
+    return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
 }
 
 static

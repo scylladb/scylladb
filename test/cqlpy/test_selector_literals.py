@@ -88,6 +88,23 @@ def test_count_literal_args(cql, test_keyspace, scylla_only):
         stmt = cql.prepare("SELECT count(:bindvar) AS cnt FROM system.local")
         cql.execute(stmt, {'bindvar': 1})
 
+# sum() and avg() each have several numeric overloads, so a literal argument used
+# to match an overload was rejected as "Ambiguous call". Inferring the literal's
+# default type lets overload resolution pick a single signature. system.local has
+# exactly one row, so the aggregate of a literal is just that literal.
+def test_select_aggregates_with_literal_args(cql, test_keyspace, scylla_only):
+    assert cql.execute("SELECT sum(5) AS v FROM system.local").one().v == 5
+    assert cql.execute("SELECT avg(5) AS v FROM system.local").one().v == 5
+    assert cql.execute("SELECT min(5) AS v FROM system.local").one().v == 5
+    assert cql.execute("SELECT max(5) AS v FROM system.local").one().v == 5
+    assert cql.execute("SELECT min('hello') AS v FROM system.local").one().v == 'hello'
+    assert cql.execute("SELECT max('hello') AS v FROM system.local").one().v == 'hello'
+    # Aggregates and scalar literals mixed in the same SELECT.
+    row = cql.execute("SELECT count(1) AS cnt, 42 AS num, min(10) AS mn FROM system.local").one()
+    assert row.cnt == 1
+    assert row.num == 42
+    assert row.mn == 10
+
 # Map literal {'a': 1} (inferred as map<text, int>) passed to a function
 # expecting map<text, bigint>.
 def test_map_literal_widening_direct_function_arg(cql, test_keyspace, scylla_only):

@@ -1478,6 +1478,94 @@ BOOST_AUTO_TEST_CASE(count_of_constant_is_a_count_reduction) {
     BOOST_REQUIRE_EQUAL(reductions.infos[0].column_names.size(), 1);
 }
 
+// An integer literal prefers its default type (int) when choosing between overloads,
+// so f(1) resolves to f(int) instead of being ambiguous between f(int) and f(bigint).
+// This also resolves the otherwise-ambiguous sibling case [f(1), <bigint literal>]:
+// f(1) becomes int, and the list widens int and bigint to list<bigint>.
+BOOST_AUTO_TEST_CASE(integer_literal_prefers_int_overload) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    auto make_overload = [] (data_type t) {
+        return functions::make_native_scalar_function<true>(
+                "expr_test_int_or_bigint", t, std::vector<data_type>{t},
+                [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+    };
+    auto restore = functions::change_batch();
+    {
+        auto batch = functions::change_batch();
+        batch.add_function(make_overload(int32_type));
+        batch.add_function(make_overload(long_type));
+        batch.commit();
+    }
+    auto cleanup = seastar::defer([&] () noexcept { restore.commit(); });
+
+    auto call_with = [&] (const char* literal) {
+        return function_call{
+            .func = functions::function_name::native_function("expr_test_int_or_bigint"),
+            .args = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = literal}},
+        };
+    };
+
+    // f(1): no longer ambiguous - resolves the int overload.
+    expression f1 = prepare_expression(call_with("1"), db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(type_of(f1)->as_cql3_type().to_string(), "int");
+
+    // A literal that does not fit int defaults to bigint, so f(10000000000) -> bigint.
+    expression fbig = prepare_expression(call_with("10000000000"), db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(type_of(fbig)->as_cql3_type().to_string(), "bigint");
+
+    // A collection of such calls is no longer ambiguous either: each f(<int literal>)
+    // resolves to the int overload, so [f(1), f(2)] infers list<int>.
+    expression list_literal = collection_constructor{
+        .style = collection_constructor::style_type::list_or_vector,
+        .elements = {call_with("1"), call_with("2")},
+    };
+    expression prepared = prepare_expression(list_literal, db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(type_of(prepared)->as_cql3_type().to_string(), "frozen<list<int>>");
+}
+
+// A numeric widening must convert the value, not just relabel its type: an int
+// widened to bigint must produce the 8-byte bigint representation, and a function
+// result widened inside a collection must be converted too. (Before the conversion
+// was wired up, these produced a value whose bytes did not match the declared type.)
+BOOST_AUTO_TEST_CASE(widening_converts_value) {
+    schema_ptr s = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(s);
+
+    // int constant against a bigint receiver -> the value is the 8-byte bigint.
+    expression p = prepare_expression(make_int_const(1234), db, "test_ks", s.get(), make_receiver(long_type));
+    BOOST_REQUIRE(type_of(p) == long_type);
+    BOOST_REQUIRE_EQUAL(evaluate(p, query_options::DEFAULT), make_bigint_raw(1234));
+
+    // A list mixing an int-returning function call and a bigint literal infers
+    // list<bigint>; the int result must be converted to bigint, not left as 4 bytes.
+    auto make_overload = [] (data_type t) {
+        return functions::make_native_scalar_function<true>(
+                "expr_test_iob", t, std::vector<data_type>{t},
+                [] (std::span<const bytes_opt> a) -> bytes_opt { return a[0]; });
+    };
+    auto restore = functions::change_batch();
+    {
+        auto b = functions::change_batch();
+        b.add_function(make_overload(int32_type));
+        b.add_function(make_overload(long_type));
+        b.commit();
+    }
+    auto cleanup = seastar::defer([&] () noexcept { restore.commit(); });
+    auto iob = [&] (const char* lit) {
+        return function_call{.func = functions::function_name::native_function("expr_test_iob"),
+            .args = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = lit}}};
+    };
+    expression lst = collection_constructor{.style = collection_constructor::style_type::list_or_vector,
+        .elements = {iob("1"),
+                     untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "10000000000"}}};
+    expression plst = prepare_expression(lst, db, "test_ks", s.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(type_of(plst)->as_cql3_type().to_string(), "frozen<list<bigint>>");
+    BOOST_REQUIRE_EQUAL(evaluate(plst, query_options::DEFAULT),
+                        make_list_raw({make_bigint_raw(1), make_bigint_raw(10000000000)}));
+}
+
 // prepare_expression for a column_value should do nothing
 BOOST_AUTO_TEST_CASE(prepare_column_value) {
     schema_ptr table_schema = make_simple_test_schema();
