@@ -32,7 +32,6 @@
 #include "tracing/trace_state.hh"
 #include "cdc/cdc_options.hh"
 
-
 namespace db {
     class system_distributed_keyspace;
     class system_keyspace;
@@ -109,18 +108,64 @@ class executor : public peering_sharded_service<executor> {
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);
 public:
     using client_state = service::client_state;
-    // request_return_type is the return type of the executor methods, which
-    // can be one of:
-    // 1. A string, which is the response body for the request.
+
+    // Controls whether Alternator returns a routing-hint response header when
+    // a request was sent to the "wrong" coordinator. The header, if returned,
+    // tells the driver the token range of the partition and which nodes in the
+    // local DC are the natural replicas for it.
+    //
+    // none        - no header is returned (default, current behavior)
+    // node_aware  - return header if this node is not one of the RF replicas;
+    //               works for both tablets and vnodes
+    // shard_aware - return header if this shard is not the right shard;
+    //               only meaningful for tablets (vnodes fall back to
+    //               node_aware behavior)
+    //
+    // This is currently a compile-time constant. In the future it may be
+    // configurable per port.
+    enum class node_awareness {
+        none,
+        node_aware,
+        shard_aware,
+    };
+
+    // request_return_type is the return type of the executor methods.
+    // It holds one of three response payloads:
+    // 1. A std::string, which is the response body for the request.
     // 2. A body_writer, an asynchronous function (returning future<>) that
     //    takes an output_stream and writes the response body into it.
-    // 3. An api_error, which is an error response that should be returned to
-    //    the client.
-    // The body_writer is used for streaming responses, where the response body
-    // is written in chunks to the output_stream. This allows for efficient
-    // handling of large responses without needing to allocate a large buffer
-    // in memory.
-    using request_return_type = std::variant<std::string, body_writer, api_error>;
+    //    This is used for streaming large responses without needing to
+    //    allocate a contiguous std::string for the entire response.
+    // 3. An api_error, which is an error response returned to the client.
+    // Additionally, extra_headers carries optional HTTP response headers
+    // that will be added to the reply (e.g., ROUTING_HEADER_NAME).
+    struct request_return_type {
+        std::variant<std::string, body_writer, api_error> response;
+        std::vector<std::pair<sstring, sstring>> extra_headers;
+        // Implicit conversion constructors that make it easy for functions
+        // that return a response (without extra headers) to just return a
+        // std::string, body_writer or api_error.
+        request_return_type(std::string s) : response(std::move(s)) {}
+        request_return_type(body_writer bw) : response(std::move(bw)) {}
+        request_return_type(api_error err) : response(std::move(err)) {}
+        // Default constructor: response holds a default-constructed std::string
+        // (the first variant alternative) and extra_headers is empty.
+        // This matches the behavior of the old bare std::variant default constructor.
+        request_return_type() = default;
+    };
+
+    // The current node-awareness mode. When not none, single-partition
+    // operations include a routing-hint header in the response when the
+    // request was sent to the wrong coordinator.
+    static constexpr node_awareness routing_awareness = node_awareness::node_aware;
+
+    // Name of the HTTP response header carrying the routing hint.
+    static constexpr std::string_view ROUTING_HEADER_NAME = "X-Scylla-Alternator-Routing-V1";
+
+    // If routing awareness is enabled and this node is not the right coordinator
+    // for the given schema and token, adds the routing-hint header to ret.
+    void add_routing_header_if_needed(request_return_type& ret, const schema_ptr& schema, const dht::token& token, const client_state& cs);
+
     stats _stats;
     // The metric_groups object holds this stat object's metrics registered
     // as long as the stats object is alive.
