@@ -1017,3 +1017,327 @@ async def test_all_good_on_node_restart(manager: ManagerClient):
     log = await manager.server_open_log(servers[0].server_id)
     warnings = await log.grep(expr="view_building_state_observer failed with")
     assert len(warnings) == 0, f"Found view building state observer warnings: {warnings}"
+<<<<<<< HEAD
+||||||| parent of 90840d22d0 (test/cluster/test_view_building_coordinator: add reproducer for the race)
+
+# The test verifies that the coordinator doesn't get stuck when waiting
+# for an event even if view building tasks finish almost immediately.
+# To achieve this, the test needs to make sure that:
+# - the view building task is started and sent to the worker
+# - the task is finished - this triggers the broadcast on the CV
+# - the task cleaning fiber removes the finished task - this indirectly triggers broadcast on the CV by commiting to group0
+# before unpausing the coordinator (`view_building_coordinator_wait_before_await_event`)
+# Reproduces scylladb/scylladb#27298
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_coordinator_misses_cv_broadcast(manager: ManagerClient):
+    node_count = 1
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+
+        log = await manager.server_open_log(servers[0].server_id)
+        mark = await log.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event_after_starting_tasks", one_shot=True)
+        # At this point, the coordinator is waiting on the CV. 
+        # It will be awaken by creating the MV and it will start the work. 
+        # When the coordinator will schedule the first task, `view_building_coordinator_wait_before_await_event_after_starting_tasks` error injection
+        # will enable another `view_building_coordinator_wait_before_await_event` error injection, which will block the coordinator before awaiting the CV.
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        # Make sure that the coordinator is waiting on the error injection
+        await log.wait_for("view_building_coordinator_wait_before_await_event: waiting for message", from_mark=mark, timeout=60)
+
+        # Make sure that the `finished_task_gc_fiber()` removed the finished task. Without this commited mutation
+        # will wake up the coordinator.
+        # The log message differs depending on whether there are other alive tasks or not - although there is only one task,
+        # the regex matches both cases for safety.
+        await log.wait_for("[Rr]emoving.*finished task", from_mark=mark, timeout=60)
+
+        # Unpause the coordinator. This won't trigger a CV broadcast, reproducing the issue.
+        await manager.api.disable_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event_after_starting_tasks")
+        await manager.api.message_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event")
+        await manager.api.disable_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event")
+
+        await wait_for_view(cql, 'mv_cf_view', node_count)
+
+# Test that in presence of view update hints, view building will not be marked as finished
+# Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_do_not_finish_view_building_with_hints(manager: ManagerClient):
+    node_count = 3
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, config={
+        "hinted_handoff_enabled": False,
+        "shadow_round_ms": 1000,
+    }, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+        await populate_base_table(cql, ks, "tab")
+
+        marks = await mark_all_servers(manager)
+        await pause_view_building_tasks(manager)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
+
+        # Stop two nodes while view building is paused
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await manager.server_stop_gracefully(servers[2].server_id)
+
+        # Unpause view building on the remaining node - it should not finish
+        # because it cannot replicate view updates to the down nodes.
+        await manager.api.message_injection(servers[0].ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK)
+        await manager.api.disable_injection(servers[0].ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK)
+
+        # Verifying view building does not finish while nodes are down
+        result = await cql.run_async(SimpleStatement(f"SELECT * FROM system_distributed.view_build_status WHERE keyspace_name = '{ks}' AND view_name = 'mv_cf_view'",
+            consistency_level=ConsistencyLevel.ONE))
+        for row in result:
+            assert row.status != 'SUCCESS', "View building should not finish while nodes are down"
+
+        # Restart the stopped nodes
+        await manager.server_start(servers[1].server_id)
+        await manager.server_start(servers[2].server_id)
+
+        # Wait for the view to be built and verify its content
+        await wait_for_view(cql, 'mv_cf_view', node_count)
+        await check_view_contents(cql, ks, "tab", "mv_cf_view")
+=======
+
+# The test verifies that the coordinator doesn't get stuck when waiting
+# for an event even if view building tasks finish almost immediately.
+# To achieve this, the test needs to make sure that:
+# - the view building task is started and sent to the worker
+# - the task is finished - this triggers the broadcast on the CV
+# - the task cleaning fiber removes the finished task - this indirectly triggers broadcast on the CV by commiting to group0
+# before unpausing the coordinator (`view_building_coordinator_wait_before_await_event`)
+# Reproduces scylladb/scylladb#27298
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_coordinator_misses_cv_broadcast(manager: ManagerClient):
+    node_count = 1
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+
+        log = await manager.server_open_log(servers[0].server_id)
+        mark = await log.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event_after_starting_tasks", one_shot=True)
+        # At this point, the coordinator is waiting on the CV. 
+        # It will be awaken by creating the MV and it will start the work. 
+        # When the coordinator will schedule the first task, `view_building_coordinator_wait_before_await_event_after_starting_tasks` error injection
+        # will enable another `view_building_coordinator_wait_before_await_event` error injection, which will block the coordinator before awaiting the CV.
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        # Make sure that the coordinator is waiting on the error injection
+        await log.wait_for("view_building_coordinator_wait_before_await_event: waiting for message", from_mark=mark, timeout=60)
+
+        # Make sure that the `finished_task_gc_fiber()` removed the finished task. Without this commited mutation
+        # will wake up the coordinator.
+        # The log message differs depending on whether there are other alive tasks or not - although there is only one task,
+        # the regex matches both cases for safety.
+        await log.wait_for("[Rr]emoving.*finished task", from_mark=mark, timeout=60)
+
+        # Unpause the coordinator. This won't trigger a CV broadcast, reproducing the issue.
+        await manager.api.disable_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event_after_starting_tasks")
+        await manager.api.message_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event")
+        await manager.api.disable_injection(servers[0].ip_addr, "view_building_coordinator_wait_before_await_event")
+
+        await wait_for_view(cql, 'mv_cf_view', node_count)
+
+# Test that in presence of view update hints, view building will not be marked as finished
+# Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_do_not_finish_view_building_with_hints(manager: ManagerClient):
+    node_count = 3
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, config={
+        "hinted_handoff_enabled": False,
+        "shadow_round_ms": 1000,
+    }, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+        await populate_base_table(cql, ks, "tab")
+
+        marks = await mark_all_servers(manager)
+        await pause_view_building_tasks(manager)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
+
+        # Stop two nodes while view building is paused
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await manager.server_stop_gracefully(servers[2].server_id)
+
+        # Unpause view building on the remaining node - it should not finish
+        # because it cannot replicate view updates to the down nodes.
+        await manager.api.message_injection(servers[0].ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK)
+        await manager.api.disable_injection(servers[0].ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK)
+
+        # Verifying view building does not finish while nodes are down
+        result = await cql.run_async(SimpleStatement(f"SELECT * FROM system_distributed.view_build_status WHERE keyspace_name = '{ks}' AND view_name = 'mv_cf_view'",
+            consistency_level=ConsistencyLevel.ONE))
+        for row in result:
+            assert row.status != 'SUCCESS', "View building should not finish while nodes are down"
+
+        # Restart the stopped nodes
+        await manager.server_start(servers[1].server_id)
+        await manager.server_start(servers[2].server_id)
+
+        # Wait for the view to be built and verify its content
+        await wait_for_view(cql, 'mv_cf_view', node_count)
+        await check_view_contents(cql, ks, "tab", "mv_cf_view")
+# Tablet migration cleanup races with view building worker staging SSTable handling,
+# causing infinite retry loop and stalled view builds.
+#
+# The race: when a staging sstable is in `_sstables_to_register` (pending group0 task creation),
+# `cleanup_staging_sstables()` (called by cleanup_tablet) doesn't remove it (only checks `_staging_sstables`).
+# After cleanup deletes the underlying files, the registrator moves the dangling reference into
+# `_staging_sstables` and creates a `process_staging` task. That task tries to link() the TOC file
+# which no longer exists, hitting ENOENT, and retries indefinitely.
+# Reproduces SCYLLADB-2312
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_staging_registration_race_with_tablet_migration(manager: ManagerClient):
+    node_count = 2
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key))")
+
+        # Populate the base table and build the MV to SUCCESS state
+        rows = 100
+        for i in range(rows):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, 1)")
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab "
+                        "WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key) ")
+        await wait_for_view(cql, 'mv', node_count)
+
+        # Flush on node0
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "tab")
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "mv")
+
+        # Delete sstables on node0 and restart to lose data
+        await delete_table_sstables(manager, servers[0], ks, "tab")
+        await delete_table_sstables(manager, servers[0], ks, "mv")
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30)
+
+        # Repair node0 with VUG injection to prevent processing of staging sstable.
+        # MV is SUCCESS, so repair uses `staging_directly_to_generator` path.
+        # The injection makes VUG fail to consume it, leaving it in staging on disk.
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "view_update_generator_consume_staging_sstable", one_shot=False)
+        await manager.api.repair(servers[0].ip_addr, ks, "tab")
+        await s0_log.wait_for(f"Finished user-requested repair for tablet keyspace={ks}", from_mark=s0_mark, timeout=60)
+
+        # Add node2 and migrate tablet from node0 to node2.
+        # File streaming will transfer the staging sstable to node2 where it gets registered
+        # to VBW via register_staging_sstable_tasks() (stream_blob.cc handles staging state).
+        # But first, enable the registrator pause injection on node2 so it doesn't process
+        # the sstable before we trigger the second migration.
+        node2 = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"}, config={
+            'error_injections_at_startup': ['view_building_worker_pause_before_starting_staging_registrator']
+        })
+
+        s0_host_id = await manager.get_host_id(servers[0].server_id)
+        n2_host_id = await manager.get_host_id(node2.server_id)
+        tablet_token = 0  # Doesn't matter since there is one tablet
+
+        async def get_replica_for_host(host_id):
+            replicas = await get_tablet_replicas(manager, servers[0], ks, "tab", tablet_token)
+            for r in replicas:
+                if r[0] == host_id:
+                    return r
+            return None
+
+        src_replica = await get_replica_for_host(s0_host_id)
+        assert src_replica is not None, "node0 is not a replica of the tablet"
+
+        n2_log = await manager.server_open_log(node2.server_id)
+        n2_mark = await n2_log.mark()
+
+        # First migration: node0 -> node2 (staging sstable arrives on node2 via file stream)
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "tab",
+                                      src_replica[0], src_replica[1],
+                                      n2_host_id, 0, tablet_token)
+
+        # Second migration: node2 -> node3.
+        # cleanup_tablet on node2 calls cleanup_staging_sstables which only checks _staging_sstables.
+        # Since the sstable is still in _sstables_to_register, cleanup misses it.
+        # But table.cleanup_tablet removes the tablet's storage group (normal directory).
+        node3 = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"})
+        n3_host_id = await manager.get_host_id(node3.server_id)
+
+        n2_replica = await get_replica_for_host(n2_host_id)
+        assert n2_replica is not None, "node2 is not a replica of the tablet"
+
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "tab",
+                                      n2_replica[0], n2_replica[1],
+                                      n3_host_id, 0, tablet_token)
+
+        # Wait for cleanup to complete on node2
+        await n2_log.wait_for("Cleaned up tablet .* successfully", from_mark=n2_mark, timeout=60)
+
+        # Now unpause the registrator on node2.
+        # It will move the dangling sstable ref into _staging_sstables and create a process_staging task.
+        await manager.api.message_injection(node2.ip_addr, "view_building_worker_pause_before_starting_staging_registrator")
+        await manager.api.disable_injection(node2.ip_addr, "view_building_worker_pause_before_starting_staging_registrator")
+
+        # The process_staging task is stuck in infinite retry, so view building cannot
+        # complete. The task remains in system.view_building_tasks because the worker
+        # never reports completion to the coordinator.
+        async def all_view_building_tasks_finished():
+            tasks = await cql.run_async("SELECT * FROM system.view_building_tasks")
+            # Empty `view_building_tasks` table may contain single row with only static column set, so we need to filter it out
+            filtered = [t for t in tasks if t.id is not None]
+            if len(filtered) > 0:
+                return None
+            return True
+        await wait_for(all_view_building_tasks_finished, time.time() + 60)
+
+        # Wait for view update backlog to drain on node3 to avoid a race between the VBW
+        # task completing and the view updates being fully written to the MV replicas.
+        async def view_updates_drained():
+            metrics = await manager.metrics.query(node3.ip_addr)
+            backlog = metrics.get("scylla_database_view_update_backlog")
+            return True if (backlog is None or backlog == 0) else None
+        await wait_for(view_updates_drained, deadline=time.time() + 30)
+
+        n3_hosts = await wait_for_cql_and_get_hosts(cql, [node3], time.time() + 30)
+        s1_hosts = await wait_for_cql_and_get_hosts(cql, [servers[1]], time.time() + 30)
+
+        # Shut down servers[1] and verify node3's MV replica directly.
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, n3_hosts[0], ks, "mv", rows)
+        await manager.server_start(servers[1].server_id)
+        await wait_for_cql_and_get_hosts(cql, [servers[1]], time.time() + 30)
+
+        # Shut down node3 and verify servers[1]'s MV replica directly.
+        await manager.server_stop_gracefully(node3.server_id)
+        await assert_row_count_on_host(cql, s1_hosts[0], ks, "mv", rows)
+        await manager.server_start(node3.server_id)
+        await wait_for_cql_and_get_hosts(cql, [node3], time.time() + 30)
+>>>>>>> 90840d22d0 (test/cluster/test_view_building_coordinator: add reproducer for the race)
