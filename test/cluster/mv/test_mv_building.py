@@ -73,14 +73,14 @@ async def test_view_building_scheduling_group(manager: ManagerClient):
 
 # A sanity check test ensures that starting and shutting down Scylla when view building is
 # disabled is conducted properly and we don't run into any issues.
+@pytest.mark.check_nodes_for_errors
 async def test_start_scylla_with_view_building_disabled(manager: ManagerClient):
     server = await manager.server_add(config={"view_building": "false"})
+    # The test framework will make sure no errors have been reported.
+    # We could simply grep the logs of the node, searching for "ERROR".
+    # However, some errors are expected and they could make the test flaky.
+    # That already happened in SCYLLA-2317.
     await manager.server_stop_gracefully(server_id=server.server_id)
-
-    # Make sure there have been no errors.
-    log = await manager.server_open_log(server.server_id)
-    res = await log.grep(r"ERROR.*\[shard [0-9]+:[a-z]+\]")
-    assert len(res) == 0
 
 # While view building is in progress, drop the index (which changes the schema
 # of the base table). The state of the view table corresponding to the index
