@@ -292,7 +292,6 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
     utils::latency_counter lc;
     lc.start();
     auto mark_write_latency = defer([this, &lc] { _stats.write.mark(lc.stop().latency()); });
-    bool commit_status_unknown_ex = false;
 
     try {
         auto op_result = co_await create_operation_ctx(*schema, token, aoe.abort_source(), true);
@@ -355,13 +354,7 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                         ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
 
                     ++_stats.write_errors_status_unknown;
-                    // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
-                    // FIXME: when a dedicated ERROR_CODE will be used,
-                    //        we can get rid of the boolean flag
-                    commit_status_unknown_ex = true;
-                    throw exceptions::server_exception(
-                        "The outcome of this statement is unknown. It may or may not have been applied. "
-                        "Retrying the statement may be necessary.");
+                    std::rethrow_exception(std::move(ex));
                 }
 
                 // Let the outer code handle other errors.
@@ -390,10 +383,14 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 ex, schema->ks_name(), schema->cf_name(), token);
             ++_stats.write_errors_timeout;
             throw write_timeout(schema->ks_name(), schema->cf_name());
+        } else if (try_catch<raft::commit_status_unknown>(ex)) {
+            // The exception is logged by the inner code.
+            // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
+            throw exceptions::server_exception(
+                "The outcome of this statement is unknown. It may or may not have been applied. "
+                "Retrying the statement may be necessary.");
         } else {
-            if (!commit_status_unknown_ex) {
-                ++_stats.write_errors_other;
-            }
+            ++_stats.write_errors_other;
             logger.trace("mutate(): unknown exception {}, table {}.{}, token {}",
                 ex, schema->ks_name(), schema->cf_name(), token);
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
