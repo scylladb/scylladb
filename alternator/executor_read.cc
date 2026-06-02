@@ -36,6 +36,10 @@
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
 #include "index/secondary_index.hh"
+#include "locator/tablets.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "replica/database.hh"
+#include "gms/gossiper.hh"
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/error_injection.hh"
@@ -1657,7 +1661,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
         // If vector search is requested, we have a separate code path.
         // IndexName must be given and must refer to a vector index - not
         // to a GSI or LSI as the code below assumes.
-        return query_vector(_proxy, _vsc, std::move(request), client_state, trace_state, std::move(permit),
+        co_return co_await query_vector(_proxy, _vsc, std::move(request), client_state, trace_state, std::move(permit),
                 _enforce_authorization, _warn_authorization, _stats, *_parsed_expression_cache);
     }
 
@@ -1670,13 +1674,13 @@ future<executor::request_return_type> executor::query(client_state& client_state
 
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
     if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
-        return make_ready_future<request_return_type>(api_error::validation(
-                "Consistent reads are not allowed on global indexes (GSI)"));
+        co_return api_error::validation(
+                "Consistent reads are not allowed on global indexes (GSI)");
     }
     rjson::value* limit_json = rjson::find(request, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
     if (limit <= 0) {
-        return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
+        co_return api_error::validation("Limit must be greater than 0");
     }
 
     const bool forward = get_bool_attribute(request, "ScanIndexForward", true);
@@ -1711,14 +1715,14 @@ future<executor::request_return_type> executor::query(client_state& client_state
     // A query is not allowed to filter on the partition key or the sort key.
     for (const column_definition& cdef : schema->partition_key_columns()) { // just one
         if (filter.filters_on(cdef.name_as_text())) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    format("QueryFilter can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text())));
+            co_return api_error::validation(
+                    format("QueryFilter can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text()));
         }
     }
     for (const column_definition& cdef : schema->clustering_key_columns()) {
         if (filter.filters_on(cdef.name_as_text())) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    format("QueryFilter can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text())));
+            co_return api_error::validation(
+                    format("QueryFilter can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text()));
         }
         // FIXME: this "break" can avoid listing some clustering key columns
         // we added for GSIs just because they existed in the base table -
@@ -1733,8 +1737,26 @@ future<executor::request_return_type> executor::query(client_state& client_state
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Query");
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
-    return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+
+    // Extract the partition token for the routing hint before partition_ranges
+    // is moved. For base tables, Query always has an equality condition on the
+    // partition key, so partition_ranges[0] is a singular range whose token we
+    // can retrieve here. Skip for GSI queries.
+    // FIXME: Eventually, we should support routing hints for GSIs as well. It
+    // will require checking replicas of the view table, and will require the
+    // driver being aware that is reading from a separate table and not the base
+    // table.
+    std::optional<dht::token> routing_token;
+    if (table_type == table_or_view_type::base) {
+        routing_token = partition_ranges[0].start()->value().token();
+    }
+
+    auto ret = co_await do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
             std::move(filter), opts, client_state, _stats, std::move(trace_state), std::move(permit), _enforce_authorization, _warn_authorization);
+    if (routing_token) {
+        add_routing_header_if_needed(ret, schema, *routing_token, client_state);
+    }
+    co_return ret;
 }
 
 // Converts a multi-row selection result to JSON compatible with DynamoDB.
@@ -1841,7 +1863,9 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     if (qr.query_result->row_count().value_or(0) > 0) {
         per_table_stats->operation_sizes.get_item_op_size_kb.add(bytes_to_kb_ceil(add_capacity._total_bytes));
     }
-    co_return rjson::print(std::move(res));
+    executor::request_return_type ret{rjson::print(std::move(res))};
+    add_routing_header_if_needed(ret, schema, dht::get_token(*schema, pk), client_state);
+    co_return ret;
 }
 
 future<executor::request_return_type> executor::batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {

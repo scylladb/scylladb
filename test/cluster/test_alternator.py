@@ -1513,3 +1513,80 @@ async def test_deferred_stream_enablement_on_tablets(manager: ManagerClient):
     finally:
         table.delete()
         table.meta.client.get_waiter('table_not_exists').wait(TableName=table.name)
+
+def execute_and_get_routing_header(ip, method_name, **op_kwargs):
+    """Execute the given boto3 client method - for example 'get_item' -
+    and return the routing hint header value, or None if this header was not
+    present in the response."""
+    routing_header = 'X-Scylla-Alternator-Routing-V1'
+    op_name = ''.join(word.capitalize() for word in method_name.split('_'))
+    headers = None
+    client = get_alternator(ip).meta.client
+    def capture(http_response, parsed, **kwargs):
+        nonlocal headers
+        headers = http_response.headers
+    client.meta.events.register(f'after-call.dynamodb.{op_name}', capture)
+    try:
+        getattr(client, method_name)(**op_kwargs)
+    finally:
+        client.meta.events.unregister(f'after-call.dynamodb.{op_name}', capture)
+    return headers.get(routing_header) if headers is not None else None
+
+async def test_routing_hint_header(manager: ManagerClient):
+    """Simple test for the routing hint response header (#24997).
+    Create a cluster with 3 ordinary nodes plus a zero-token node
+    (join_ring=False). The zero-token node holds no data, so single-partition
+    requests to it should return a routing hint header listing the 3 replica
+    addresses. The same single-partition request sent to one of the 3 data-
+    holding nodes should not return the header.
+    The requests we test are GetItem, PutItem, UpdateItem, DeleteItem and Query.
+    """
+    # Start 3 ordinary nodes; these will hold all the data (RF=3).
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
+    # Add a zero-token node: it participates in the cluster but holds no tablets.
+    zero_token_server = await manager.server_add(
+        config=alternator_config | {'join_ring': False},
+        property_file={'dc': 'dc1', 'rack': 'rack-zero-token'})
+
+    alternator = get_alternator(servers[0].ip_addr)
+    table = alternator.create_table(
+        TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    replica_ips = {s.ip_addr for s in servers}
+    non_replica_ip = zero_token_server.ip_addr
+
+    # The operations we test for routing hints. No pre-existing item is needed:
+    # routing is determined from the partition key alone, regardless of whether
+    # the item exists.
+    key = {'p': 'hello'}
+    ops = [
+        ('get_item',    {'TableName': table.name, 'Key': key, 'ConsistentRead': True}),
+        ('put_item',    {'TableName': table.name, 'Item': key}),
+        ('update_item', {'TableName': table.name, 'Key': key,
+                         'UpdateExpression': 'SET x = :v',
+                         'ExpressionAttributeValues': {':v': 'world'}}),
+        ('delete_item', {'TableName': table.name, 'Key': key}),
+        ('query',       {'TableName': table.name,
+                         'KeyConditionExpression': 'p = :pk',
+                         'ExpressionAttributeValues': {':pk': 'hello'}}),
+    ]
+
+    for op_name, op_kwargs in ops:
+        # Request to the zero-token (non-replica) node should return a routing hint header.
+        header = execute_and_get_routing_header(non_replica_ip, op_name, **op_kwargs)
+        assert header is not None, f'{op_name}: expected routing header from non-replica node'
+        # The header format is: <start_token>,<end_token>,<ip1>,<ip2>,<ip3>
+        # (node_aware mode, no shard suffix). With RF=3 and 3 nodes holding data,
+        # all 3 replica IPs should appear in the header: 2 tokens + 3 IPs = 5 parts.
+        parts = header.split(',')
+        assert len(parts) == 5, f'{op_name}: expected 5 parts in header, got: {header}'
+        assert set(parts[2:]) == replica_ips, f'{op_name}: unexpected replica IPs in header: {header}'
+
+        # The same request to a replica node should NOT return a routing hint header.
+        for replica_ip in replica_ips:
+            header = execute_and_get_routing_header(replica_ip, op_name, **op_kwargs)
+            assert header is None, f'{op_name}: unexpected routing header from replica {replica_ip}'
+
+    table.delete()

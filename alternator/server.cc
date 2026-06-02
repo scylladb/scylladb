@@ -84,7 +84,7 @@ static void handle_CORS(const request& req, reply& rep, bool preflight) {
         rep.add_header("Access-Control-Allow-Origin", "*");
         // This is the list that DynamoDB returns for expose headers. I am
         // not sure why not just return "*" here, what's the risk?
-        rep.add_header("Access-Control-Expose-Headers", "x-amzn-RequestId,x-amzn-ErrorType,x-amzn-ErrorMessage,Date");
+        rep.add_header("Access-Control-Expose-Headers", "x-amzn-RequestId,x-amzn-ErrorType,x-amzn-ErrorMessage,Date,X-Scylla-Alternator-Routing-V1");
         if (preflight) {
             sstring s = req.get_header("Access-Control-Request-Headers");
             if (!s.empty()) {
@@ -149,6 +149,9 @@ public:
                  return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
              }
              auto res = resf.get();
+             for (auto& [name, value] : res.extra_headers) {
+                 rep->add_header(name, value);
+             }
              return std::visit(overloaded_functor {
                 [&] (std::string&& str) {
                     return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
@@ -162,7 +165,7 @@ public:
                     generate_error_reply(*rep, err);
                     return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
                 }
-             }, std::move(res));
+             }, std::move(res.response));
          });
     }) { }
 
