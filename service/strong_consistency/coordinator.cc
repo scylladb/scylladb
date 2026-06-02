@@ -384,13 +384,12 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 || try_catch<seastar::timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
-                co_return coroutine::return_exception(
-                    replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
+                throw replica::no_such_column_family(schema->ks_name(), schema->cf_name());
             }
             logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}",
                 ex, schema->ks_name(), schema->cf_name(), token);
             ++_stats.write_errors_timeout;
-            co_return coroutine::return_exception(write_timeout(schema->ks_name(), schema->cf_name()));
+            throw write_timeout(schema->ks_name(), schema->cf_name());
         } else {
             if (!commit_status_unknown_ex) {
                 ++_stats.write_errors_other;
@@ -398,7 +397,7 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
             logger.trace("mutate(): unknown exception {}, table {}.{}, token {}",
                 ex, schema->ks_name(), schema->cf_name(), token);
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
-            throw;
+            std::rethrow_exception(std::move(ex));
         }
     }
 }
@@ -477,19 +476,18 @@ auto coordinator::query(schema_ptr schema,
                 || try_catch<timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
-                co_return coroutine::return_exception(
-                    replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
+                throw replica::no_such_column_family(schema->ks_name(), schema->cf_name());
             }
             logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_timeout;
-            co_return coroutine::return_exception(read_timeout(schema->ks_name(), schema->cf_name()));
+            throw read_timeout(schema->ks_name(), schema->cf_name());
         } else {
             logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_other;
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
-            throw;
+            std::rethrow_exception(std::move(ex));
         }
     }
 }
