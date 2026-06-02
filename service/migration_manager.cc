@@ -167,28 +167,6 @@ future<> migration_manager::uninit_messaging_service()
     co_await ser::migration_manager_rpc_verbs::unregister(&_messaging);
 }
 
-void migration_manager::register_feature_listeners() {
-    auto reload_schema_in_bg = [this] {
-        (void) with_gate(_background_tasks, [this] {
-            return reload_schema().handle_exception([] (std::exception_ptr ep) {
-                // Due to features being unordered, reload might fail because
-                // some tables still have the wrong version and looking up e.g.
-                // the base-table of a view will fail.
-                mlogger.debug("Failed to reload schema: {}", ep);
-            });
-        });
-    };
-    if (this_shard_id() == 0) {
-        for (const gms::feature& feature : {
-                std::cref(_feat.table_digest_insensitive_to_expiry)}) {
-            if (!feature) {
-                _feature_listeners.push_back(feature.when_enabled(reload_schema_in_bg));
-            }
-        }
-        _feature_listeners.push_back(_feat.in_memory_tables.when_enabled(reload_schema_in_bg));
-    }
-}
-
 void migration_notifier::register_listener(migration_listener* listener)
 {
     _listeners.add(listener);
@@ -275,16 +253,6 @@ future<> migration_manager::merge_schema_from(locator::host_id src, const utils:
         throw std::runtime_error(fmt::format("Error while applying schema mutations: {}", e));
     }
     co_await db::schema_tables::merge_schema(_sys_ks, proxy.container(), ss.get()->container(), std::move(mutations));
-}
-
-future<> migration_manager::reload_schema() {
-    mlogger.info("Reloading schema");
-    auto ss = _ss.get_permit();
-    if (!ss) {
-        co_return;
-    }
-    utils::chunked_vector<mutation> mutations;
-    co_await db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), ss.get()->container(), std::move(mutations), true);
 }
 
 future<> migration_notifier::on_schema_change(std::function<void(migration_listener*)> notify, std::function<std::string(std::exception_ptr)> describe_error) {

@@ -2096,10 +2096,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return db.recover_logstor();
             }).get();
 
-            // Depends on all keyspaces being initialized because after this call
-            // we can be reloading schema.
-            mm.local().register_feature_listeners();
-
             checkpoint(stop_signal, "starting commit log");
             auto cl = db.local().commitlog();
 

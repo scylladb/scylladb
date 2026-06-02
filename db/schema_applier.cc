@@ -213,36 +213,6 @@ static read_table_names_of_keyspace(sharded<service::storage_proxy>& proxy, cons
     }) | std::ranges::to<std::vector>();
 }
 
-// Applies deletion of the "version" column to system_schema.scylla_tables mutation rows
-// which weren't committed by group 0.
-static void maybe_delete_schema_version(mutation& m) {
-    if (m.column_family_id() != scylla_tables()->id()) {
-        return;
-    }
-    const column_definition& origin_col = *m.schema()->get_column_definition(to_bytes("committed_by_group0"));
-    const column_definition& version_col = *m.schema()->get_column_definition(to_bytes("version"));
-    for (auto&& row : m.partition().clustered_rows()) {
-        auto&& cells = row.row().cells();
-        if (auto&& origin_cell = cells.find_cell(origin_col.id); origin_cell) {
-            auto&& ac = origin_cell->as_atomic_cell(origin_col);
-            if (ac.is_live()) {
-                auto dv = origin_col.type->deserialize(managed_bytes_view(ac.value()));
-                auto committed_by_group0 = value_cast<bool>(dv);
-                if (committed_by_group0) {
-                    // Don't delete "version" for this entry.
-                    continue;
-                }
-            }
-        }
-        auto&& cell = cells.find_cell(version_col.id);
-        api::timestamp_type t = api::new_timestamp();
-        if (cell) {
-            t = std::max(t, cell->as_atomic_cell(version_col).timestamp());
-        }
-        cells.apply(version_col, atomic_cell::make_dead(t, gc_clock::now()));
-    }
-}
-
 future<> schema_applier::merge_keyspaces()
 {
     /*
@@ -486,7 +456,6 @@ enum class schema_diff_side {
 static schema_diff_per_shard diff_table_or_view(sharded<service::storage_proxy>& proxy,
     const std::map<table_id, schema_mutations>& before,
     const std::map<table_id, schema_mutations>& after,
-    bool reload,
     noncopyable_function<schema_ptr (schema_mutations sm, schema_diff_side)> create_schema)
 {
     schema_diff_per_shard d;
@@ -506,13 +475,6 @@ static schema_diff_per_shard diff_table_or_view(sharded<service::storage_proxy>&
         auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
         slogger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.altered.emplace_back(schema_diff_per_shard::altered_schema{s_before, s});
-    }
-    if (reload) {
-        for (auto&& key: diff.entries_in_common) {
-            auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
-            slogger.info("Reloading {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-            d.altered.emplace_back(schema_diff_per_shard::altered_schema {s, s});
-        }
     }
     return d;
 }
@@ -598,10 +560,10 @@ future<> schema_applier::merge_tables_and_views()
 
     // Create CDC tables before non-CDC base tables, because we want the base tables with CDC enabled
     // to point to their CDC tables.
-    local_cdc = diff_table_or_view(_proxy, _before.cdc, _after.cdc, _reload, [&] (schema_mutations sm, schema_diff_side) {
+    local_cdc = diff_table_or_view(_proxy, _before.cdc, _after.cdc, [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(_proxy, std::move(sm), user_types, nullptr);
     });
-    local_tables = diff_table_or_view(_proxy, _before.tables, _after.tables, _reload, [&] (schema_mutations sm, schema_diff_side side) {
+    local_tables = diff_table_or_view(_proxy, _before.tables, _after.tables, [&] (schema_mutations sm, schema_diff_side side) {
         // If the table has CDC enabled, find the CDC schema version and set it in the table schema.
         // If the table is created or altered with CDC enabled, then the CDC
         // table is also created or altered in the same operation, so we can
@@ -637,7 +599,7 @@ future<> schema_applier::merge_tables_and_views()
 
         return create_table_from_mutations(_proxy, std::move(sm), user_types, cdc_schema);
     });
-    local_views = diff_table_or_view(_proxy, _before.views, _after.views, _reload, [&] (schema_mutations sm, schema_diff_side side) {
+    local_views = diff_table_or_view(_proxy, _before.views, _after.views, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
         // If we don't do it we are leaving a window where write commands to this schema are illegal.
         // There are 3 possibilities:
@@ -888,15 +850,6 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
         _keyspaces.emplace(std::move(keyspace_name));
     }
 
-    if (_reload) {
-        for (auto&& ks : _proxy.local().get_db().local().get_non_system_keyspaces()) {
-            _keyspaces.emplace(ks);
-            table_selector sel;
-            sel.all_in_keyspace = true;
-            _affected_tables[ks] = sel;
-        }
-    }
-
     // Resolve sel.all_in_keyspace == true to the actual list of tables and views.
     for (auto&& [keyspace_name, sel] : _affected_tables) {
         if (sel.all_in_keyspace) {
@@ -913,12 +866,6 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
 
     _before = co_await get_schema_persisted_state();
 
-    for (auto& mut : muts) {
-        // We must force recalculation of schema version after the merge, since the resulting
-        // schema may be a mix of the old and new schemas, with the exception of entries
-        // that originate from group 0.
-        maybe_delete_schema_version(mut);
-    }
 }
 
 class pending_schema_getter : public service::schema_getter {
@@ -1261,10 +1208,10 @@ static future<> execute_do_merge_schema(sharded<service::storage_proxy>& proxy, 
     co_await ap.post_commit();
 }
 
-static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations, bool reload)
+static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations)
 {
     slogger.trace("do_merge_schema: {}", mutations);
-    schema_applier ap(proxy, ss, sys_ks, reload);
+    schema_applier ap(proxy, ss, sys_ks);
     co_await execute_do_merge_schema(proxy, ap, std::move(mutations)).finally([&ap]() {
         return ap.destroy();
     });
@@ -1279,17 +1226,17 @@ static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, utils::chunked_vector<mutation> mutations, bool reload)
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, utils::chunked_vector<mutation> mutations)
 {
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).
         co_await smp::submit_to(0, coroutine::lambda([&, fmuts = freeze(mutations)] () mutable -> future<> {
-            co_await merge_schema(sys_ks, proxy, ss, co_await unfreeze_gently(fmuts), reload);
+            co_await merge_schema(sys_ks, proxy, ss, co_await unfreeze_gently(fmuts));
         }));
         co_return;
     }
     co_await with_merge_lock([&] () mutable -> future<> {
-        co_await do_merge_schema(proxy, ss, sys_ks, std::move(mutations), reload);
+        co_await do_merge_schema(proxy, ss, sys_ks, std::move(mutations));
         auto version = co_await get_group0_schema_version(sys_ks.local());
         co_await update_schema_version_and_announce(sys_ks, proxy, version);
     });

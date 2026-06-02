@@ -1106,10 +1106,7 @@ rest_sample_key_range(std::unique_ptr<http::request> req) {
 static
 future<json::json_return_type>
 rest_reset_local_schema(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        // FIXME: We should truncate schema tables if more than one node in the cluster.
-        apilog.info("reset_local_schema");
-        co_await ss.local().reload_schema();
-        co_return json_void();
+        throw std::runtime_error("Schema version recalculation is no longer supported");
 }
 
 static

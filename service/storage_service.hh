@@ -764,9 +764,6 @@ public:
      */
     future<> drain();
 
-    // Recalculates schema digests on this node from contents of tables on disk.
-    future<> reload_schema();
-
     future<std::map<gms::inet_address, float>> get_ownership();
 
     future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name, sstring table_name);

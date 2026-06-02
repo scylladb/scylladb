@@ -54,7 +54,6 @@ class migration_manager : public seastar::async_sharded_service<migration_manage
 private:
     migration_notifier& _notifier;
 
-    std::vector<gms::feature::listener_registration> _feature_listeners;
     seastar::named_gate _background_tasks;
     gms::feature_service& _feat;
     netw::messaging_service& _messaging;
@@ -87,8 +86,6 @@ public:
 
     // Makes sure that this node knows about all schema changes known by "nodes" that were made prior to this call.
     future<> sync_schema(const replica::database& db, const std::vector<locator::host_id>& nodes);
-
-    future<> reload_schema();
 
     // Merge mutations received from src.
     // Keep mutations alive around whole async operation.
@@ -170,8 +167,6 @@ private:
     future<> announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
 
 public:
-    void register_feature_listeners();
-
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
     // The returned schema may not be synchronized. See schema::is_synced().
     // Intended to be used in the read path.

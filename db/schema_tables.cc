@@ -302,11 +302,8 @@ schema_ptr tables() {
 
 // Holds Scylla-specific table metadata.
 schema_ptr scylla_tables(schema_features features) {
-    static thread_local schema_ptr schemas[2]{};
+    static thread_local schema_ptr s;
 
-    bool has_in_memory = features.contains(schema_feature::IN_MEMORY_TABLES);
-
-    schema_ptr& s = schemas[has_in_memory];
     if (!s) {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
         auto sb = schema_builder(this_smp_shard_count(), NAME, SCYLLA_TABLES, std::make_optional(id))
@@ -319,9 +316,7 @@ schema_ptr scylla_tables(schema_features features) {
         // PER_TABLE_PARTITIONERS
         sb.with_column("partitioner", utf8_type);
 
-        if (has_in_memory) {
-            sb.with_column("in_memory", boolean_type);
-        }
+        sb.with_column("in_memory", boolean_type);
 
         // If true, this table's latest schema was committed by group 0.
         // In this case `version` column is non-null and will be used for `schema::version()` instead of calculating a hash.
@@ -850,7 +845,7 @@ read_keyspace_mutation(sharded<service::storage_proxy>& proxy, const sstring& ke
     co_return co_await query_partition_mutation(proxy.local(), std::move(s), std::move(cmd), std::move(key));
 }
 
-mutation compact_for_schema_digest(const mutation& m) {
+mutation compact_for_comparison(const mutation& m) {
     // Cassandra is skipping tombstones from digest calculation
     // to avoid disagreements due to tombstone GC.
     // See https://issues.apache.org/jira/browse/CASSANDRA-6862.
@@ -858,13 +853,6 @@ mutation compact_for_schema_digest(const mutation& m) {
     mutation m_compacted(m);
     m_compacted.partition().compact_for_compaction_drop_tombstones_unconditionally(*m.schema(), m.decorated_key());
     return m_compacted;
-}
-
-void feed_hash_for_schema_digest(hasher& h, const mutation& m, schema_features features) {
-    auto compacted = compact_for_schema_digest(m);
-    if (!features.contains<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>() || !compacted.partition().empty()) {
-        feed_hash(h, compacted);
-    }
 }
 
 /// Helper function which fills a given mutation with column information
@@ -2311,7 +2299,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     if (version) {
         builder.with_version(*version);
     } else {
-        builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
+        builder.with_version(sm.digest());
     }
 
     if (cdc_schema) {
@@ -2545,8 +2533,9 @@ static schema_builder prepare_view_schema_builder_from_mutations(const schema_ct
     if (version) {
         builder.with_version(*version);
     } else {
-        builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
+        builder.with_version(sm.digest());
     }
+
     return builder;
 }
 
