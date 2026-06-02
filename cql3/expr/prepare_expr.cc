@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include "build_mode.hh"
 #include "expression.hh"
 #include "expr-utils.hh"
 #include "evaluate.hh"
@@ -1120,17 +1121,33 @@ coerce_to(expression e, const data_type& target, data_dictionary::database db, c
     return e;
 }
 
+// One function argument, partially processed for overload resolution.
+//   testable - fed to functions::get() to choose the overload.
+//   prepared - the argument, if it could be prepared with no receiver. Reusing it
+//              (instead of preparing again for each candidate) keeps nested calls linear.
+struct partially_prepared_arg {
+    ::shared_ptr<assignment_testable> testable;
+    std::optional<expression> prepared;
+};
+
 static
-std::vector<::shared_ptr<assignment_testable>>
+std::vector<partially_prepared_arg>
 prepare_function_args_for_type_inference(std::span<const expression> args, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt) {
     // Prepare the arguments that can be prepared without a receiver.
     // Prepared expressions have a known type, which helps with finding the right function.
-    std::vector<shared_ptr<assignment_testable>> partially_prepared_args;
+    std::vector<partially_prepared_arg> partially_prepared_args;
+    partially_prepared_args.reserve(args.size());
     for (const expression& argument : args) {
+        // A nullopt means the argument can't be resolved without a receiver (e.g. a nested
+        // call that is ambiguous until the parameter type is known) - it stays a hole, to be
+        // probed against each candidate parameter type and re-prepared once one is chosen.
         std::optional<expression> prepared_arg_opt = try_prepare_expression(argument, db, keyspace, schema_opt, nullptr);
-        auto type = prepared_arg_opt ? std::optional(type_of(*prepared_arg_opt)) : std::nullopt;
-        auto expr = prepared_arg_opt ? std::move(*prepared_arg_opt) : argument;
-        partially_prepared_args.emplace_back(as_assignment_testable(std::move(expr), std::move(type)));
+        std::optional<data_type> type = prepared_arg_opt ? std::optional(type_of(*prepared_arg_opt)) : std::nullopt;
+        expression testable_expr = prepared_arg_opt ? *prepared_arg_opt : argument;
+        partially_prepared_args.push_back(partially_prepared_arg{
+            .testable = as_assignment_testable(std::move(testable_expr), std::move(type)),
+            .prepared = std::move(prepared_arg_opt),
+        });
     }
     return partially_prepared_args;
 }
@@ -1171,8 +1188,21 @@ try_prepare_count_rows(const expr::function_call& fc, data_dictionary::database 
     }, fc.func);
 }
 
+// Counts entries to prepare_function_call. Used by tests to guard against
+// re-introducing exponential preparation of nested function calls.
+static thread_local uint64_t g_prepare_function_call_count = 0;
+
+uint64_t prepare_function_call_count() {
+    return g_prepare_function_call_count;
+}
+
+void reset_prepare_function_call_count() {
+    g_prepare_function_call_count = 0;
+}
+
 std::optional<expression>
 prepare_function_call(const expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+    ++g_prepare_function_call_count;
     if (auto prepared = try_prepare_count_rows(fc, db, keyspace, schema_opt, receiver)) {
         return prepared;
     }
@@ -1192,18 +1222,35 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
     // Prepared expressions have a known type, which helps with finding the right function.
     auto partially_prepared_args = prepare_function_args_for_type_inference(fc.args, db, keyspace, schema_opt);
 
-    auto&& fun = std::visit(overloaded_functor{
-        [] (const shared_ptr<functions::function>& func) {
+    auto fun_opt = std::visit(overloaded_functor{
+        [] (const shared_ptr<functions::function>& func) -> std::optional<shared_ptr<functions::function>> {
             return func;
         },
-        [&] (const functions::function_name& name) {
-            auto fun = functions::instance().get(db, keyspace, name, partially_prepared_args, keyspace, cf_name, receiver.get());
-            if (!fun) {
-                throw exceptions::invalid_request_exception(format("Unknown function {} called", name));
+        [&] (const functions::function_name& name) -> std::optional<shared_ptr<functions::function>> {
+            auto resolution = functions::instance().try_get(db, keyspace, name,
+                    partially_prepared_args
+                            | std::views::transform(&partially_prepared_arg::testable)
+                            | std::ranges::to<std::vector>(),
+                    keyspace, cf_name, receiver.get());
+            // try_get yields the function (null if the name isn't declared) or the resolution
+            // error. During type inference (no receiver) any non-resolution is an expected hole;
+            // with a receiver it is surfaced.
+            if (resolution.has_value() && resolution.value()) {
+                return std::move(resolution).value();
             }
-            return fun;
+            if (!receiver) {
+                return std::nullopt;
+            }
+            if (resolution.has_error()) {
+                resolution.error().throw_me();
+            }
+            throw exceptions::invalid_request_exception(format("Unknown function {} called", name));
         },
     }, fc.func);
+    if (!fun_opt) {
+        return std::nullopt;
+    }
+    auto fun = std::move(*fun_opt);
 
     // Functions.get() will complain if no function "name" type check with the provided arguments.
     // Still validate the return type: accepted if value-compatible with the receiver or
@@ -1224,8 +1271,17 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
     parameters.reserve(partially_prepared_args.size());
     bool all_terminal = true;
     for (size_t i = 0; i < partially_prepared_args.size(); ++i) {
-        expr::expression e = prepare_expression(fc.args[i], db, keyspace, schema_opt,
-                                                functions::instance().make_arg_spec(keyspace, cf_name, *fun, i));
+        auto arg_spec = functions::instance().make_arg_spec(keyspace, cf_name, *fun, i);
+        // Both paths must yield arg_spec->type: prepare_expression tail-coerces; the
+        // reuse path coerces explicitly.
+        expr::expression e = [&] () -> expr::expression {
+            if (!partially_prepared_args[i].prepared) {
+                return prepare_expression(fc.args[i], db, keyspace, schema_opt, arg_spec);
+            } else {
+                expr::expression prepared = std::move(*partially_prepared_args[i].prepared);
+                return coerce_to(std::move(prepared), arg_spec->type, db, keyspace);
+            }
+        }();
         if (!expr::is<expr::constant>(e)) {
             all_terminal = false;
         }
@@ -1256,7 +1312,11 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
         auto&& fun = std::visit(overloaded_functor{
             [&] (const functions::function_name& name) {
                 auto args = prepare_function_args_for_type_inference(fc.args, db, keyspace, schema_opt);
-                return functions::instance().get(db, keyspace, name, args, receiver.ks_name, receiver.cf_name, &receiver);
+                return functions::instance().get(db, keyspace, name,
+                        args
+                                | std::views::transform(&partially_prepared_arg::testable)
+                                | std::ranges::to<std::vector>(),
+                        receiver.ks_name, receiver.cf_name, &receiver);
             },
             [] (const shared_ptr<functions::function>& func) {
                 return func;

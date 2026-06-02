@@ -1,6 +1,7 @@
 // Copyright (C) 2023-present ScyllaDB
 // SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
+#include "build_mode.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -28,6 +29,7 @@
 #include "cql3/expr/expr-utils.hh"
 #include "utils/big_decimal.hh"
 #include "utils/multiprecision_int.hh"
+#include "cql3/functions/functions.hh"
 
 using namespace cql3;
 using namespace cql3::expr;
@@ -1271,6 +1273,48 @@ BOOST_AUTO_TEST_CASE(prepare_static_column_unresolved_identifier) {
     expression expected = column_value(table_schema->get_column_definition("s"));
 
     BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+namespace cql3::expr {
+extern uint64_t prepare_function_call_count();
+extern void reset_prepare_function_call_count();
+}
+
+// Builds intasblob(blobasint(intasblob(... r ...))) of the given nesting depth.
+// Both are single-overload native functions, so every level resolves
+// unambiguously and bottom-up from a concrete (int) column reference.
+static expression make_nested_blob_conversions(const schema& s, unsigned depth) {
+    expression e = column_value(s.get_column_definition("r")); // int column
+    bool current_is_int = true;
+    for (unsigned i = 0; i < depth; ++i) {
+        const char* fname = current_is_int ? "intasblob" : "blobasint";
+        e = function_call{
+            .func = functions::function_name::native_function(fname),
+            .args = {std::move(e)},
+        };
+        current_is_int = !current_is_int;
+    }
+    return e;
+}
+
+// Preparing a chain of N nested function calls must invoke prepare_function_call
+// O(N) times, not O(2^N). Before the pass-A reuse fix this count doubles with each
+// extra level (exponential); after it the count is linear.
+BOOST_AUTO_TEST_CASE(prepare_nested_function_calls_is_not_exponential) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    for (unsigned depth : {1u, 2u, 4u, 8u, 12u, 16u}) {
+        cql3::expr::reset_prepare_function_call_count();
+        expression nested = make_nested_blob_conversions(*table_schema, depth);
+        prepare_expression(nested, db, "test_ks", table_schema.get(), nullptr);
+        uint64_t count = cql3::expr::prepare_function_call_count();
+        BOOST_TEST_MESSAGE(seastar::format("nested function depth={} prepare_function_call_count={}", depth, count));
+        // Linear bound: each level should cost a small constant number of
+        // prepare_function_call invocations. A generous ceiling of 8*depth still
+        // fails loudly for any exponential (2^depth) regression.
+        BOOST_CHECK_LE(count, uint64_t(8) * depth + 8);
+    }
 }
 
 // prepare_expression for a column_value should do nothing
