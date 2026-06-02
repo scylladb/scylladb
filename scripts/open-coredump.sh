@@ -20,7 +20,7 @@ set -e
 trap 'echo "error $? in $0 line $LINENO"' ERR
 
 SCRIPT_NAME=$(basename $0)
-SCYLLA_S3_RELOC_SERVER_DEFAULT_URL=https://api.backtrace.scylladb.com
+SCYLLA_S3_RELOC_SERVER_DEFAULT_URL=https://backtrace.scylladb.com
 
 function print_usage {
 cat << EOF
@@ -284,7 +284,7 @@ then
 
     log "Build id: ${BUILD_ID}"
 
-    # https://api.backtrace.scylladb.com/api/docs#/default/search_by_build_id_search_build_id_get
+    # https://backtrace.scylladb.com/api/docs#/default/search_by_build_id_search_build_id_get
     BUILD=$(curl "${SCYLLA_S3_RELOC_SERVER_URL}/api/search/build_id?build_id=${BUILD_ID}" -H 'accept: application/json')
 
     if [[ -z "$BUILD" ]]
