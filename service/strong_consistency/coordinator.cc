@@ -293,6 +293,43 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
     lc.start();
     auto mark_write_latency = defer([this, &lc] { _stats.write.mark(lc.stop().latency()); });
 
+    auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
+        // Unfortunately, timeouts can materialize in different forms depending
+        // on which statement throws the exception.
+        //
+        // * raft::request_aborted: If the abort source passed to a raft::server's
+        //     method was triggered.
+        // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
+        // * timed_out_error: Can be thrown by the abort_on_expiry.
+        // * condition_variable_timed_out: Can be thrown by begin_mutate.
+        // * raft::stopped_error: The raft server was aborted (e.g. table being dropped).
+        //
+        // We handle them collectively here.
+        if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
+                || try_catch<seastar::timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
+                || try_catch<raft::stopped_error>(ex)) {
+            if (!_db.column_family_exists(schema->id())) {
+                return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
+            }
+            logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}",
+                ex, schema->ks_name(), schema->cf_name(), token);
+            ++_stats.write_errors_timeout;
+            return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
+        } else if (try_catch<raft::commit_status_unknown>(ex)) {
+            // The exception is logged by the inner code.
+            // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
+            return std::make_exception_ptr(exceptions::server_exception(
+                "The outcome of this statement is unknown. It may or may not have been applied. "
+                "Retrying the statement may be necessary."));
+        } else {
+            ++_stats.write_errors_other;
+            logger.trace("mutate(): unknown exception {}, table {}.{}, token {}",
+                ex, schema->ks_name(), schema->cf_name(), token);
+            // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
+            return ex;
+        }
+    };
+
     try {
         auto op_result = co_await create_operation_ctx(*schema, token, aoe.abort_source(), true);
         if (auto* redirect = get_if<need_redirect>(&op_result)) {
@@ -361,41 +398,7 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 std::rethrow_exception(std::move(ex));
             }
     } catch (...) {
-        auto ex = std::current_exception();
-        // Unfortunately, timeouts can materialize in different forms depending
-        // on which statement throws the exception.
-        //
-        // * raft::request_aborted: If the abort source passed to a raft::server's
-        //     method was triggered.
-        // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
-        // * timed_out_error: Can be thrown by the abort_on_expiry.
-        // * condition_variable_timed_out: Can be thrown by begin_mutate.
-        // * raft::stopped_error: The raft server was aborted (e.g. table being dropped).
-        //
-        // We handle them collectively here.
-        if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
-                || try_catch<seastar::timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
-                || try_catch<raft::stopped_error>(ex)) {
-            if (!_db.column_family_exists(schema->id())) {
-                throw replica::no_such_column_family(schema->ks_name(), schema->cf_name());
-            }
-            logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}",
-                ex, schema->ks_name(), schema->cf_name(), token);
-            ++_stats.write_errors_timeout;
-            throw write_timeout(schema->ks_name(), schema->cf_name());
-        } else if (try_catch<raft::commit_status_unknown>(ex)) {
-            // The exception is logged by the inner code.
-            // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
-            throw exceptions::server_exception(
-                "The outcome of this statement is unknown. It may or may not have been applied. "
-                "Retrying the statement may be necessary.");
-        } else {
-            ++_stats.write_errors_other;
-            logger.trace("mutate(): unknown exception {}, table {}.{}, token {}",
-                ex, schema->ks_name(), schema->cf_name(), token);
-            // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
-            std::rethrow_exception(std::move(ex));
-        }
+        std::rethrow_exception(filter_error(std::current_exception()));
     }
 }
 
@@ -413,9 +416,41 @@ auto coordinator::query(schema_ptr schema,
 
     utils::latency_counter lc;
     lc.start();
+
     auto& read_stats = (rtype == read_type::linearizable)
         ? _stats.linearizable_read : _stats.non_linearizable_read;
     auto mark_read_latency = defer([&read_stats, &lc] () mutable { read_stats.mark(lc.stop().latency()); });
+
+    auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
+        // Unfortunately, timeouts can materialize in different forms depending
+        // on which statement throws the exception.
+        //
+        // * raft::request_aborted: If the abort source passed to a raft::server's
+        //     method was triggered.
+        // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
+        // * timed_out_error: Can be thrown by the abort_on_expiry.
+        // * seastar::condition_variable_timed_out: Can be thrown by begin_read's wait_for_leader.
+        // * raft::stopped_error: The raft server was aborted (e.g. table being dropped).
+        //
+        // We handle them collectively here.
+        if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
+                || try_catch<timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
+                || try_catch<raft::stopped_error>(ex)) {
+            if (!_db.column_family_exists(schema->id())) {
+                return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
+            }
+            logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
+                ex, schema->ks_name(), schema->cf_name(), cmd);
+            ++_stats.read_errors_timeout;
+            return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
+        } else {
+            logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
+                ex, schema->ks_name(), schema->cf_name(), cmd);
+            ++_stats.read_errors_other;
+            // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
+            return ex;
+        }
+    };
 
     try {
         auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token(), aoe.abort_source(), rtype == read_type::linearizable);
@@ -457,35 +492,7 @@ auto coordinator::query(schema_ptr schema,
 
         co_return std::move(result);
     } catch (...) {
-        auto ex = std::current_exception();
-        // Unfortunately, timeouts can materialize in different forms depending
-        // on which statement throws the exception.
-        //
-        // * raft::request_aborted: If the abort source passed to a raft::server's
-        //     method was triggered.
-        // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
-        // * timed_out_error: Can be thrown by the abort_on_expiry.
-        // * seastar::condition_variable_timed_out: Can be thrown by begin_read's wait_for_leader.
-        // * raft::stopped_error: The raft server was aborted (e.g. table being dropped).
-        //
-        // We handle them collectively here.
-        if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
-                || try_catch<timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)
-                || try_catch<raft::stopped_error>(ex)) {
-            if (!_db.column_family_exists(schema->id())) {
-                throw replica::no_such_column_family(schema->ks_name(), schema->cf_name());
-            }
-            logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
-                ex, schema->ks_name(), schema->cf_name(), cmd);
-            ++_stats.read_errors_timeout;
-            throw read_timeout(schema->ks_name(), schema->cf_name());
-        } else {
-            logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
-                ex, schema->ks_name(), schema->cf_name(), cmd);
-            ++_stats.read_errors_other;
-            // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
-            std::rethrow_exception(std::move(ex));
-        }
+        std::rethrow_exception(filter_error(std::current_exception()));
     }
 }
 
