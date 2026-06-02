@@ -36,6 +36,10 @@ static const column_value resolve_column(const unresolved_identifier& col_ident,
 static assignment_testable::test_result expression_test_assignment(const data_type& expr_type,
                                                                    const column_specification& receiver);
 
+static expression coerce_to(expression e, const data_type& target, data_dictionary::database db, const sstring& keyspace);
+
+static bool is_widenable_to(const data_type& from, const data_type& to);
+
 
 static
 lw_shared_ptr<column_specification>
@@ -871,7 +875,8 @@ cast_test_assignment(const cast& c, data_dictionary::database db, const sstring&
         data_type casted_type = cast_get_prepared_type(c, db, keyspace);
         if (receiver.type == casted_type) {
             return assignment_testable::test_result::EXACT_MATCH;
-        } else if (receiver.type->is_value_compatible_with(*casted_type)) {
+        } else if (receiver.type->is_value_compatible_with(*casted_type)
+                   || is_widenable_to(casted_type, receiver.type)) {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         } else {
             return assignment_testable::test_result::NOT_ASSIGNABLE;
@@ -883,10 +888,9 @@ cast_test_assignment(const cast& c, data_dictionary::database db, const sstring&
 
 // expr::cast shows up when the user uses a C-style cast with destination type in parenthesis.
 // For example: `(int)1242` or `(blob)(int)1337`.
-// Currently such casts are very limited. Casting using this syntax is only allowed when the
-// binary representation doesn't change during the cast. This means that it's legal to cast
-// an int to blob (the bytes don't change), but it's illegal to cast an int to bigint (4 bytes -> 8 bytes).
-// This limitation simplifies things - we can just reinterpret the value as the destination type.
+// A C-style cast represents its argument's value as the destination type when that is
+// lossless: a byte-compatible reinterpret (e.g. int -> blob, the bytes don't change) or a
+// numeric widening (e.g. int -> bigint, converted like CAST).
 static
 std::optional<expression>
 c_cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
@@ -902,30 +906,30 @@ c_cast_prepare_expression(const cast& c, data_dictionary::database db, const sst
     lw_shared_ptr<column_specification> cast_type_receiver = casted_spec_of(c, db, keyspace, *receiver);
 
     // First check if the casted expression can be assigned(converted) to the type specified in the cast.
-    // test_assignment uses is_value_compatible_with to check if the binary representation is compatible
-    // between the two types.
+    // test_assignment accepts a value-compatible binary representation or a lossless widening to c.type.
     if (!is_assignable(test_assignment(c.arg, db, keyspace, schema_opt, *cast_type_receiver))) {
         throw exceptions::invalid_request_exception(format("Cannot cast value {:user} to type {}", c.arg, cast_type->as_cql3_type()));
     }
-
-    // Then check if a value of type c.type can be assigned(converted) to the receiver type.
-    // cast_test_assignment also uses is_value_compatible_with to check binary representation compatibility.
-    if (!is_assignable(cast_test_assignment(c, db, keyspace, schema_opt, *receiver))) {
-        throw exceptions::invalid_request_exception(format("Cannot assign value {:user} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
-    }
-
-    // Now we know that c.arg is compatible with c.type, and c.type is compatible with receiver->type.
-    // This means that the cast is correct - we can take the binary representation of c.arg value and
-    // reinterpret it as a value of type receiver->type without any problems.
 
     // Prepare the argument using cast_type_receiver.
     // Using this receiver makes it possible to write things like: (blob)(int)1234
     // Using the original receiver wouldn't work in such cases - it would complain
     // that untyped_constant(1234) isn't a valid blob constant.
+    expression prepared_arg = prepare_expression(c.arg, db, keyspace, schema_opt, cast_type_receiver);
+
+    // Then check if a value of type c.type can be assigned(converted) to the receiver type.
+    // cast_test_assignment accepts a value-compatible representation or a lossless widening to it.
+    if (!is_assignable(cast_test_assignment(c, db, keyspace, schema_opt, *receiver))) {
+        throw exceptions::invalid_request_exception(format("Cannot assign value {:user} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
+    }
+
+    // Now we know c.arg is compatible with c.type, and c.type with receiver->type - by a binary
+    // reinterpret or a lossless widening. The cast node carries c.type; if receiver->type is wider,
+    // the consuming prepare_expression coerces the result to it.
     return cast{
         .style = cast::cast_style::c,
-        .arg = prepare_expression(c.arg, db, keyspace, schema_opt, cast_type_receiver),
-        .type = receiver->type,
+        .arg = std::move(prepared_arg),
+        .type = cast_type,
     };
 }
 
@@ -1034,6 +1038,88 @@ field_selection_test_assignment(const field_selection& fs, data_dictionary::data
     return expression_test_assignment(field_type, receiver);
 }
 
+// Widen two types within a shared lossless numeric chain, returning the wider one
+// (nullopt if they share none). Chains: byte < short < int32 < int64 < varint, and
+// float < double; cross-chain (e.g. int32 -> double) is not widenable.
+static
+std::optional<data_type>
+try_widen(const data_type& a, const data_type& b) {
+    using kind = abstract_type::kind;
+    static constexpr kind integer_chain[] = {
+        kind::byte, kind::short_kind, kind::int32, kind::long_kind, kind::varint
+    };
+    static constexpr kind float_chain[] = {
+        kind::float_kind, kind::double_kind
+    };
+    auto rank_in = [] (const kind chain[], size_t len, const data_type& t) -> std::optional<size_t> {
+        for (size_t i = 0; i < len; ++i) {
+            if (chain[i] == t->get_kind()) {
+                return i;
+            }
+        }
+        return std::nullopt;
+    };
+    auto kind_to_type = [] (kind k) -> data_type {
+        switch (k) {
+            case kind::byte: return byte_type;
+            case kind::short_kind: return short_type;
+            case kind::int32: return int32_type;
+            case kind::long_kind: return long_type;
+            case kind::varint: return varint_type;
+            case kind::float_kind: return float_type;
+            case kind::double_kind: return double_type;
+            default: on_internal_error(expr_logger, format("unexpected kind in numeric widening: {}", static_cast<int>(k)));
+        }
+    };
+    auto ra = rank_in(integer_chain, std::size(integer_chain), a);
+    auto rb = rank_in(integer_chain, std::size(integer_chain), b);
+    if (ra && rb) {
+        return kind_to_type(integer_chain[std::max(*ra, *rb)]);
+    }
+    ra = rank_in(float_chain, std::size(float_chain), a);
+    rb = rank_in(float_chain, std::size(float_chain), b);
+    if (ra && rb) {
+        return kind_to_type(float_chain[std::max(*ra, *rb)]);
+    }
+    return std::nullopt;
+}
+
+static
+bool is_widenable_to(const data_type& from, const data_type& to) {
+    auto widened = try_widen(from, to);
+    return widened && **widened == *to;
+}
+
+// Give `e` target's representation. Precondition: `e` is assignable to `target`.
+// Value-compatible types share bytes, so only a constant's label is updated; a
+// width-changing widening (e.g. int -> bigint) needs a real castas conversion,
+// folded immediately for a terminal constant.
+static
+expression
+coerce_to(expression e, const data_type& target, data_dictionary::database db, const sstring& keyspace) {
+    const data_type src = type_of(e);
+    if (src == target) {
+        return e;
+    }
+    // Only a width-changing widening needs conversion; every other assignable pair
+    // (value-compatible, widening to varint, counter -> bigint, reversed) is byte-safe.
+    if (is_widenable_to(src, target) && !target->is_value_compatible_with(*src)) {
+        const bool terminal = expr::is<constant>(e);
+        function_call conversion {
+            .func = functions::get_castas_fctn_as_cql3_function(target, src),
+            .args = {std::move(e)},
+        };
+        if (terminal) {
+            return constant(expr::evaluate(conversion, query_options::DEFAULT), target);
+        }
+        return conversion;
+    }
+    if (auto* c = expr::as_if<constant>(&e)) {
+        c->type = target;
+    }
+    return e;
+}
+
 static
 std::vector<::shared_ptr<assignment_testable>>
 prepare_function_args_for_type_inference(std::span<const expression> args, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt) {
@@ -1120,8 +1206,10 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
     }, fc.func);
 
     // Functions.get() will complain if no function "name" type check with the provided arguments.
-    // We still have to validate that the return type matches however
-    if (receiver && !receiver->type->is_value_compatible_with(*fun->return_type())) {
+    // Still validate the return type: accepted if value-compatible with the receiver or
+    // widenable to it (the caller then wraps the call via coerce_to).
+    if (receiver && !receiver->type->is_value_compatible_with(*fun->return_type())
+            && !is_widenable_to(fun->return_type(), receiver->type)) {
         throw exceptions::invalid_request_exception(format("Type error: cannot assign result of function {} (type {}) to {} (type {})",
                                                     fun->name(), fun->return_type()->as_cql3_type(),
                                                     receiver->name, receiver->type->as_cql3_type()));
@@ -1176,7 +1264,8 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
         }, fc.func);
         if (fun && receiver.type == fun->return_type()) {
             return assignment_testable::test_result::EXACT_MATCH;
-        } else if (!fun || receiver.type->is_value_compatible_with(*fun->return_type())) {
+        } else if (!fun || receiver.type->is_value_compatible_with(*fun->return_type())
+                        || is_widenable_to(fun->return_type(), receiver.type)) {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         } else {
             return assignment_testable::test_result::NOT_ASSIGNABLE;
@@ -1191,6 +1280,8 @@ static assignment_testable::test_result expression_test_assignment(const data_ty
     if (receiver.type->underlying_type() == expr_type->underlying_type() || (receiver.type == long_type && expr_type->is_counter())) {
         return assignment_testable::test_result::EXACT_MATCH;
     } else if (receiver.type->is_value_compatible_with(*expr_type)) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    } else if (is_widenable_to(expr_type, receiver.type)) {
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     } else {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
@@ -1320,13 +1411,10 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
                            value.type->as_cql3_type(), receiver->name, receiver->type->as_cql3_type()));
             }
 
-            constant result = value;
             if (receiver) {
-                // The receiver might have a different type from the constant, but this is allowed if the types are compatible.
-                // In such case the type is implicitly converted to receiver type.
-                result.type = receiver->type;
+                return coerce_to(value, receiver->type, db, keyspace);
             }
-            return result;
+            return value;
         },
         [&] (const binary_operator& binop) -> std::optional<expression> {
             if (receiver.get() != nullptr && &receiver->type->without_reversed() != boolean_type.get()) {
@@ -1636,11 +1724,15 @@ test_assignment_any_size_float_vector(const expression& expr) {
 
 expression
 prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
-    auto e_opt = try_prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver));
+    auto e_opt = try_prepare_expression(expr, db, keyspace, schema_opt, receiver);
     if (!e_opt) {
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", expr));
     }
-    return std::move(*e_opt);
+    expression result = std::move(*e_opt);
+    if (receiver) {
+        result = coerce_to(std::move(result), receiver->type, db, keyspace);
+    }
+    return result;
 }
 
 assignment_testable::test_result

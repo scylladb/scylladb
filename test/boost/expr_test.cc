@@ -1411,6 +1411,59 @@ BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
                         exceptions::invalid_request_exception);
 }
 
+BOOST_AUTO_TEST_CASE(cast_type_hint_lossless_widening) {
+    auto s = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(s);
+    auto raw = [] (data_type t) {
+        return cql3_type::raw::from(t);
+    };
+    auto cc = [&] (data_type t, expression arg) -> expression {
+        return cast{.arg = std::move(arg), .type = raw(t)};
+    };
+    auto i = [] (const char* x) {
+        return make_int_untyped(x);
+    };
+    auto f = [] (const char* x) -> expression {
+        return untyped_constant{.partial_type = untyped_constant::type_class::floating_point, .raw_text = x};
+    };
+    auto ok = [&] (expression e) {
+        BOOST_CHECK_NO_THROW(prepare_expression(e, db, "test_ks", s.get(), nullptr));
+    };
+    auto rej = [&] (expression e) {
+        BOOST_CHECK_THROW(prepare_expression(e, db, "test_ks", s.get(), nullptr), exceptions::invalid_request_exception);
+    };
+
+    // Integer-chain widenings (lossless) - accepted
+    ok(cc(short_type,  cc(byte_type,  i("1"))));    // (smallint)(tinyint)1
+    ok(cc(int32_type,  cc(byte_type,  i("1"))));    // (int)(tinyint)1
+    ok(cc(long_type,   cc(byte_type,  i("1"))));    // (bigint)(tinyint)1
+    ok(cc(int32_type,  cc(short_type, i("1"))));    // (int)(smallint)1
+    ok(cc(long_type,   cc(int32_type, i("1"))));    // (bigint)(int)1
+    ok(cc(varint_type, cc(int32_type, i("1"))));    // (varint)(int)1
+    ok(cc(varint_type, cc(long_type,  i("1"))));    // (varint)(bigint)1
+    // Float-chain widening - accepted
+    ok(cc(double_type, cc(float_type, f("1.5"))));  // (double)(float)1.5
+    // Value-compatible reinterpret - accepted
+    ok(cc(bytes_type,  cc(int32_type, i("1"))));    // (blob)(int)1
+
+    // Narrowing - rejected
+    rej(cc(byte_type,  cc(int32_type, i("1"))));    // (tinyint)(int)1
+    rej(cc(short_type, cc(int32_type, i("1"))));    // (smallint)(int)1
+    rej(cc(int32_type, cc(long_type,  i("1"))));    // (int)(bigint)1
+    rej(cc(float_type, cc(double_type, f("1.5")))); // (float)(double)1.5
+    // Cross-chain - rejected
+    rej(cc(double_type, cc(int32_type, i("1"))));   // (double)(int)1
+    rej(cc(int32_type,  cc(float_type, f("1.5")))); // (int)(float)1.5
+
+    // The hint's result, in turn, widens to a wider receiver (consumer coerces) ...
+    BOOST_CHECK_NO_THROW(prepare_expression(
+        cc(byte_type, i("1")), db, "test_ks", s.get(), make_receiver(long_type)));   // (tinyint)1 -> bigint
+    // ... but is not assignable to a narrower receiver.
+    BOOST_CHECK_THROW(prepare_expression(
+        cc(long_type, i("1")), db, "test_ks", s.get(), make_receiver(byte_type)),    // (bigint)1 -> tinyint
+        exceptions::invalid_request_exception);
+}
+
 BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
@@ -2608,9 +2661,12 @@ BOOST_AUTO_TEST_CASE(prepare_constant_with_receiver) {
 
     BOOST_REQUIRE_EQUAL(int_const, prepared_int_const);
 
-    // Preparing an int32 with int64 receiver fails
-    BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(long_type)),
-                        exceptions::invalid_request_exception);
+    // Preparing an int32 with an int64 receiver succeeds - int32 widens to int64.
+    // The value must be converted to the 8-byte bigint representation, not relabelled.
+    expression prepared_int_long =
+        prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(long_type));
+    BOOST_REQUIRE(expr::type_of(prepared_int_long) == long_type);
+    BOOST_REQUIRE_EQUAL(evaluate(prepared_int_long, query_options::DEFAULT), make_bigint_raw(1234));
 
     // Preparing an int32 with text receiver fails
     BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(utf8_type)),

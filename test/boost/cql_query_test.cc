@@ -6272,4 +6272,35 @@ SEASTAR_TEST_CASE(test_sstable_load_mixed_generation_type) {
     });
 }
 
+// A narrower (T) cast widening into a wider sink (clustering key, column, WHERE RHS) must be
+// converted to the sink's representation, not just relabelled.
+SEASTAR_TEST_CASE(test_widening_value_into_wider_sink) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE wide (pk int, ck bigint, d double, PRIMARY KEY (pk, ck))").get();
+
+        // INSERT sink: (int)5 widens to the bigint clustering key, (float)2.5 widens to
+        // the double column. A relabel would store 4 bytes; we require real conversion.
+        e.execute_cql("INSERT INTO wide (pk, ck, d) VALUES (1, (int)5, (float)2.5)").get();
+
+        auto msg = e.execute_cql("SELECT ck, d FROM wide WHERE pk = 1").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(5)), double_type->decompose(double(2.5))});
+
+        // WHERE RHS sink: (int)5 must be converted to bigint to match the clustering key.
+        // An unconverted 4-byte value would never compare equal to the stored bigint.
+        msg = e.execute_cql("SELECT ck, d FROM wide WHERE pk = 1 AND ck = (int)5").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(5)), double_type->decompose(double(2.5))});
+
+        // UPDATE sink + WHERE-key widening together.
+        e.execute_cql("UPDATE wide SET d = (float)3.5 WHERE pk = 1 AND ck = (int)5").get();
+        msg = e.execute_cql("SELECT d FROM wide WHERE pk = 1").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_row({double_type->decompose(double(3.5))});
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
