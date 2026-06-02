@@ -13,8 +13,12 @@
 #include <seastar/core/condition-variable.hh>
 #include "seastarx.hh"
 
+#include <memory>
+#include <unordered_set>
+
 #include "compaction/compaction_fwd.hh"
 #include "compaction/compaction_backlog_manager.hh"
+#include "sstables/shared_sstable.hh"
 #include "gc_clock.hh"
 
 namespace compaction {
@@ -47,9 +51,72 @@ struct compaction_state {
     // Signaled whenever a compaction task completes.
     condition_variable compaction_done;
 
-    // Used only with vnodes, will not work with tablets. Can be removed once vnodes are gone.
-    std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
-    compaction::owned_ranges_ptr owned_ranges_ptr;
+    // Cleanup tracking is used only with vnodes (never with tablets) and only
+    // while a cleanup is in progress. To avoid paying for it on every
+    // compaction_state -- there is one per compaction group, and they are
+    // long-lived -- it is held behind a lazily-allocated pointer that stays
+    // null until the first sstable is marked as requiring cleanup, and is
+    // released again once the set becomes empty.
+    //
+    // sizeof(cleanup_state) is ~64 bytes (an unordered_set plus an
+    // owned_ranges_ptr), so this keeps that out of the common case where no
+    // cleanup is running, shrinking compaction_state from 344 to 288 bytes.
+    struct cleanup_state {
+        // Set of sstables that still require cleanup.
+        std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
+        // Owned token ranges to keep while cleaning the above sstables.
+        compaction::owned_ranges_ptr owned_ranges_ptr;
+    };
+private:
+    std::unique_ptr<cleanup_state> _cleanup_state;
+
+public:
+    // Read-only view of the sstables requiring cleanup; empty when no cleanup
+    // is in progress.
+    //
+    // Lifetime: the returned reference aliases the lazily-allocated
+    // cleanup_state and is only valid until the next cleanup-state mutation.
+    // Erasing the last sstable (erase_sstable_requiring_cleanup) frees the
+    // cleanup_state, so a reference held across such a mutation dangles. All
+    // current callers consume it synchronously (iterate or copy out) before any
+    // mutation; do not retain it.
+    //
+    // Note: the accessors that construct/destroy the cleanup_state (and its
+    // unordered_set / owned_ranges_ptr) are defined out-of-line in
+    // compaction_manager.cc, next to the destructor, so that including this
+    // header does not require the complete sstable/dht::token types.
+    const std::unordered_set<sstables::shared_sstable>& sstables_requiring_cleanup() const;
+
+    // Whether any sstable currently requires cleanup.
+    bool has_sstables_requiring_cleanup() const {
+        return _cleanup_state && !_cleanup_state->sstables_requiring_cleanup.empty();
+    }
+
+    // Whether the given sstable currently requires cleanup.
+    bool requires_cleanup(const sstables::shared_sstable& sst) const;
+
+    // The owned ranges associated with the in-progress cleanup, or null when no
+    // cleanup is in progress.
+    //
+    // Returned by value (a cheap lw_shared_ptr refcount bump) rather than by
+    // reference: the underlying owned_ranges_ptr lives in the lazily-allocated
+    // cleanup_state, which is freed when the cleanup set drains. Handing out a
+    // copy keeps the ranges alive for the caller independently of that
+    // lifetime, so it cannot dangle.
+    compaction::owned_ranges_ptr cleanup_owned_ranges() const;
+
+    // Mark an sstable as requiring cleanup, allocating the cleanup state on
+    // demand.
+    void insert_sstable_requiring_cleanup(const sstables::shared_sstable& sst);
+
+    // Remove an sstable from the cleanup set if present, returning whether it
+    // was present. Releases the cleanup state (including the owned ranges) once
+    // the set becomes empty.
+    bool erase_sstable_requiring_cleanup(const sstables::shared_sstable& sst);
+
+    // Record the owned ranges to retain while cleaning up. Allocates the
+    // cleanup state on demand.
+    void set_cleanup_owned_ranges(compaction::owned_ranges_ptr ranges);
 
     gc_clock::time_point last_regular_compaction;
 
