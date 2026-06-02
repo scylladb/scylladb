@@ -187,7 +187,7 @@ struct repair_plan {
     dht::token_range range;
     dht::token last_token;
     db_clock::duration repair_time_diff;
-    bool is_user_reuqest;
+    bool is_user_request;
 };
 
 // Used to compare different migration choices in regard to impact on load imbalance.
@@ -481,7 +481,7 @@ struct fmt::formatter<service::repair_plan> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const service::repair_plan& p, FormatContext& ctx) const {
         auto diff_seconds = std::chrono::duration<float>(p.repair_time_diff).count();
-        fmt::format_to(ctx.out(), "{{tablet={} last_token={} is_user_req={} diff_seconds={}}}", p.gid, p.last_token, p.is_user_reuqest, diff_seconds);
+        fmt::format_to(ctx.out(), "{{tablet={} last_token={} is_user_req={} diff_seconds={}}}", p.gid, p.last_token, p.is_user_request, diff_seconds);
         return ctx.out();
     }
 };
@@ -1338,8 +1338,8 @@ public:
                 }
 
                 db_clock::duration diff;
-                auto is_user_reuqest = info.repair_task_info && info.repair_task_info->is_user_repair_request();
-                if (is_user_reuqest) {
+                auto is_user_request = info.repair_task_info && info.repair_task_info->is_user_repair_request();
+                if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
                     auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff, auto_repair_stats);
@@ -1349,7 +1349,7 @@ public:
                 }
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
-                plans.push_back(repair_plan{gid, info, range, last_token, diff, is_user_reuqest});
+                plans.push_back(repair_plan{gid, info, range, last_token, diff, is_user_request});
                 ++_stats.for_cluster().repairs_produced;
             });
         }
@@ -1361,8 +1361,8 @@ public:
         // picking which tablet to repair, e.g., higher repair priority
         // specified by user, tablet with higher purgeable tombstone ratio.
         std::sort(plans.begin(), plans.end(), [] (const repair_plan& x, const repair_plan& y) {
-            if (x.is_user_reuqest != y.is_user_reuqest) {
-                return x.is_user_reuqest > y.is_user_reuqest;
+            if (x.is_user_request != y.is_user_request) {
+                return x.is_user_request > y.is_user_request;
             }
             return x.repair_time_diff > y.repair_time_diff;
         });
