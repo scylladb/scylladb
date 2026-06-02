@@ -386,6 +386,7 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
         .format = cfg.sstable_format,
         .large_data_records_per_sstable = cfg.compaction_large_data_records_per_sstable,
         .ignore_component_digest_mismatch = cfg.ignore_component_digest_mismatch(),
+        .enable_dangerous_direct_import_of_cassandra_counters = cfg.enable_dangerous_direct_import_of_cassandra_counters(),
     };
 }
 
@@ -1607,7 +1608,6 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
     cfg.enable_cache = _config.enable_cache;
-    cfg.enable_dangerous_direct_import_of_cassandra_counters = _config.enable_dangerous_direct_import_of_cassandra_counters;
     cfg.compaction_enforce_min_threshold = _config.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = _config.dirty_memory_manager;
     cfg.streaming_read_concurrency_semaphore = _config.streaming_read_concurrency_semaphore;
@@ -2581,7 +2581,6 @@ database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_
         cfg.enable_commitlog = false;
         cfg.enable_cache = false;
     }
-    cfg.enable_dangerous_direct_import_of_cassandra_counters = _cfg.enable_dangerous_direct_import_of_cassandra_counters();
     cfg.compaction_enforce_min_threshold = _cfg.compaction_enforce_min_threshold;
     // don't make system or internal keyspace writes wait for user writes (if under pressure)
     if (is_system || extensions().is_extension_internal_keyspace(ksm.name())) {

@@ -222,7 +222,7 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
     schema_ptr s = sst->get_schema();
     if (s->is_counter() && !sst->has_scylla_component()) {
         sstring error = "Direct loading non-Scylla SSTables containing counters is not supported.";
-        if (flags.enable_dangerous_direct_import_of_cassandra_counters) {
+        if (_manager.get_config().enable_dangerous_direct_import_of_cassandra_counters) {
             dirlog.info("{} But trying to continue on user's request.", error);
         } else {
             dirlog.error("{} Use sstableloader instead.", error);

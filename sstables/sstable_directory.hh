@@ -80,7 +80,6 @@ public:
     struct process_flags {
         bool need_mutate_level = false;
         bool throw_on_missing_toc = false;
-        bool enable_dangerous_direct_import_of_cassandra_counters = false;
         bool allow_loading_materialized_view = false;
         bool sort_sstables_according_to_owner = true;
         bool garbage_collect = false;

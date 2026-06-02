@@ -184,7 +184,6 @@ distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<d
         lock_table(global_table, directory).get();
         sstables::sstable_directory::process_flags flags {
             .need_mutate_level = true,
-            .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
             .allow_loading_materialized_view = false,
         };
         process_sstable_dir(directory, flags).get();
@@ -264,7 +263,6 @@ distributed_loader::get_sstables_from(sharded<replica::database>& db, sstring ks
         lock_table(global_table, directory).get();
         sstables::sstable_directory::process_flags flags {
             .need_mutate_level = true,
-            .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
             .allow_loading_materialized_view = false,
             .sort_sstables_according_to_owner = false,
             .sstable_open_config = cfg,
@@ -383,7 +381,6 @@ future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& d
 
     sstables::sstable_directory::process_flags flags {
         .throw_on_missing_toc = true,
-        .enable_dangerous_direct_import_of_cassandra_counters = _db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
         .allow_loading_materialized_view = true,
         .garbage_collect = true,
     };
