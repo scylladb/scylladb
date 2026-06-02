@@ -349,6 +349,99 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_sub) {
     test_sub("+10.", "1.e+1", "0");
 }
 
+// Build a string of 'n' copies of digit 'd' (as char).
+static std::string repeat_digit(char d, int n) {
+    return std::string(n, d);
+}
+
+// Tests for add/subtract precision limiting (SCYLLADB-1576 / CASSANDRA-15232):
+// Results exceeding 10,000 significant digits are rounded using HALF_UP.
+BOOST_AUTO_TEST_CASE(test_big_decimal_add_precision) {
+    // Adding values whose sum fits within MAX_PRECISION (10000) digits: exact.
+    // 1e9999 + 1 = 1000...0001 (10000 digits, no rounding).
+    {
+        big_decimal a{"1e9999"};
+        big_decimal b{"1"};
+        big_decimal result = a + b;
+        BOOST_REQUIRE((result <=> big_decimal{"1" + repeat_digit('0', 9998) + "1"}) == std::strong_ordering::equal);
+    }
+    // 1e10000 + 1 would have 10001 significant digits so need to round one
+    // digit. The dropped digit is 1 (< 5), so HALF_UP rounds down: result
+    // equals 1e10000.
+    {
+        big_decimal a{"1e10000"};
+        big_decimal b{"1"};
+        big_decimal result = a + b;
+        BOOST_REQUIRE((result <=> a) == std::strong_ordering::equal);
+    }
+    // 1e10000 + 5: the dropped digit is 5, so HALF_UP rounds up to
+    // 10^10000 + 10.
+    {
+        big_decimal a{"1e10000"};
+        big_decimal b{"5"};
+        big_decimal result = a + b;
+        // Expected value: 10^10000 + 10 = "1" followed by 9998 zeros then "10".
+        BOOST_REQUIRE((result <=> big_decimal{"1" + repeat_digit('0', 9998) + "10"}) == std::strong_ordering::equal);
+    }
+    // For negative numbers, HALF_UP rounds away from zero (towards -inf).
+    // -1e10000 + (-5) = -(10^10000 + 5) rounds to -(10^10000 + 10).
+    {
+        big_decimal a{"-1e10000"};
+        big_decimal b{"-5"};
+        big_decimal result = a + b;
+        BOOST_REQUIRE((result <=> big_decimal{"-1" + repeat_digit('0', 9998) + "10"}) == std::strong_ordering::equal);
+    }
+    // Wildly different scales: 1e100000000 + 1.
+    // The 1 is so insignificant (100 million orders of magnitude smaller) that
+    // it cannot affect any of the 10000 significant digits of 1e100000000.
+    // Result is 1e100000000 unchanged, no error (fixes SCYLLADB-1576).
+    {
+        big_decimal a{"1e100000000"};
+        big_decimal b{"1"};
+        big_decimal result = a + b;
+        BOOST_REQUIRE((result <=> big_decimal{"1e100000000"}) == std::strong_ordering::equal);
+    }
+    // Carry case: rounding 9...95 (10001 digits: 10000 nines then 5) to
+    // MAX_PRECISION digits rounds up, causing a carry all the way through
+    // (9...9 + 1 = 10^10000). The result is always a power of 10, so its
+    // mathematical value is unaffected by the bug. What the bug gets wrong is
+    // the representation: without the fix, unscaled = 10^10000 has 10001 digits,
+    // violating the MAX_PRECISION cap. Only the digit count catches the bug.
+    {
+        big_decimal a{repeat_digit('9', 10000) + "0"};
+        big_decimal b{"5"};
+        big_decimal result = a + b;
+        boost::multiprecision::cpp_int abs_unscaled = boost::multiprecision::abs(result.unscaled_value());
+        BOOST_REQUIRE(abs_unscaled.str().size() <= 10000);
+    }
+}
+
+// Same precision tests for subtraction.
+BOOST_AUTO_TEST_CASE(test_big_decimal_sub_precision) {
+    // -1e10000 - 5: same as adding -5 to -1e10000, rounds away from zero.
+    // Result is -(10^10000 + 10).
+    {
+        big_decimal a{"-1e10000"};
+        big_decimal b{"5"};
+        big_decimal result = a - b;
+        BOOST_REQUIRE((result <=> big_decimal{"-1" + repeat_digit('0', 9998) + "10"}) == std::strong_ordering::equal);
+    }
+    // 1e100000000 - 1: the 1 is insignificant, result stays 1e100000000.
+    {
+        big_decimal a{"1e100000000"};
+        big_decimal b{"1"};
+        big_decimal result = a - b;
+        BOOST_REQUIRE((result <=> big_decimal{"1e100000000"}) == std::strong_ordering::equal);
+    }
+    // Carry case (negative): same reasoning as the add carry case above.
+    {
+        big_decimal a{"-" + repeat_digit('9', 10000) + "0"};
+        big_decimal b{"5"};
+        big_decimal result = a - b;
+        boost::multiprecision::cpp_int abs_unscaled = boost::multiprecision::abs(result.unscaled_value());
+        BOOST_REQUIRE(abs_unscaled.str().size() <= 10000);
+    }
+}
 
 BOOST_AUTO_TEST_CASE(test_boost_multiprecision_sign) {
     namespace bmp = boost::multiprecision;

@@ -1145,11 +1145,6 @@ static raw_value arithmetic_add(const expression& lhs_expr, const expression& rh
                     return serialized(l + r);
                 },
                 [&] (const decimal_type_impl& dtype) -> bytes {
-                    // NOTE: This addition is susceptible to SCYLLADB-1576 - adding
-                    // two decimals with wildly different scales (e.g. 1 and
-                    // 1e100000000) can cause huge allocations and CPU usage.
-                    // This case should be caught and rejected in big_decimal's
-                    // implementation, not here.
                     big_decimal l = value_cast<big_decimal>(dtype.deserialize(lhs_bv));
                     big_decimal r = value_cast<big_decimal>(dtype.deserialize(rhs_bv));
                     return serialized(l + r);
