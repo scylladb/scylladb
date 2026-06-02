@@ -4257,6 +4257,108 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_sticky_max_purgeable) {
     }
 }
 
+// Check that compaction_stats::live_partitions only counts partitions which
+// have at least one live row, not any non-empty partition.
+SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_live_partition_accounting) {
+    simple_schema ss;
+    auto s = ss.schema();
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+
+    const auto query_time = gc_clock::now();
+    const auto max_rows = std::numeric_limits<uint64_t>::max();
+    const auto max_partitions = std::numeric_limits<uint32_t>::max();
+
+    auto compact = [&] (utils::chunked_vector<mutation> muts) {
+        auto compaction_state = make_lw_shared<compact_for_query_state>(*s, query_time, s->full_slice(), max_rows, max_partitions,
+                tombstone_gc_state::no_gc());
+        auto reader = make_mutation_reader_from_mutations(s, permit, std::move(muts));
+        auto close_reader = deferred_close(reader);
+        reader.consume(compact_for_query<noop_compacted_fragments_consumer>(compaction_state, noop_compacted_fragments_consumer{})).get();
+        return compaction_state->stats();
+    };
+
+    struct test_case {
+        const char* name;
+        // Populates the partition with the data the case is about.
+        std::function<void(mutation&)> populate;
+        // Whether the resulting partition is expected to be accounted as live.
+        bool is_live;
+    };
+
+    // Deliberately interleaves live and dead partitions, so that the
+    // live-partition flag failing to be reset between partitions is detected.
+    const std::vector<test_case> test_cases{
+        {"live row", [&] (mutation& m) {
+            ss.add_row(m, ss.make_ckey(0), "v");
+        }, true},
+        {"partition tombstone only", [&] (mutation& m) {
+            m.partition().apply(ss.new_tombstone());
+        }, false},
+        {"live static row only", [&] (mutation& m) {
+            ss.add_static_row(m, "s");
+        }, true},
+        {"row tombstone only", [&] (mutation& m) {
+            m.partition().apply_delete(*s, ss.make_ckey(0), ss.new_tombstone());
+        }, false},
+        {"live row and partition tombstone", [&] (mutation& m) {
+            m.partition().apply(ss.new_tombstone());
+            ss.add_row(m, ss.make_ckey(0), "v");
+        }, true},
+        {"dead cell only", [&] (mutation& m) {
+            ss.add_row_with_dead_cell(m, ss.make_ckey(0));
+        }, false},
+        {"multiple live rows", [&] (mutation& m) {
+            ss.add_row(m, ss.make_ckey(0), "v0");
+            ss.add_row(m, ss.make_ckey(1), "v1");
+            ss.add_row(m, ss.make_ckey(2), "v2");
+        }, true},
+        {"range tombstone only", [&] (mutation& m) {
+            ss.delete_range(m, ss.make_ckey_range(0, 2));
+        }, false},
+        {"live and dead rows", [&] (mutation& m) {
+            ss.add_row(m, ss.make_ckey(0), "v0");
+            ss.add_row_with_dead_cell(m, ss.make_ckey(1));
+        }, true},
+        {"row shadowed by partition tombstone", [&] (mutation& m) {
+            ss.add_row(m, ss.make_ckey(0), "v");
+            m.partition().apply(ss.new_tombstone());
+        }, false},
+        {"live static row and dead row", [&] (mutation& m) {
+            ss.add_static_row(m, "s");
+            ss.add_row_with_dead_cell(m, ss.make_ckey(0));
+        }, true},
+    };
+
+    const auto pkeys = ss.make_pkeys(test_cases.size());
+
+    utils::chunked_vector<mutation> all_muts;
+    uint64_t expected_live_partitions = 0;
+
+    for (size_t i = 0; i < test_cases.size(); ++i) {
+        const auto& tc = test_cases[i];
+        testlog.info("Checking {}", tc.name);
+
+        mutation mut(s, pkeys[i]);
+        tc.populate(mut);
+
+        const auto stats = compact({mut});
+        BOOST_CHECK_EQUAL(stats.total_partitions, 1);
+        BOOST_CHECK_EQUAL(stats.live_partitions, uint64_t(tc.is_live));
+        BOOST_CHECK_EQUAL(stats.dead_partitions(), uint64_t(!tc.is_live));
+
+        all_muts.push_back(std::move(mut));
+        expected_live_partitions += tc.is_live;
+    }
+
+    testlog.info("Checking all partitions in a single stream");
+    const auto stats = compact(std::move(all_muts));
+    BOOST_REQUIRE_EQUAL(stats.total_partitions, test_cases.size());
+    BOOST_REQUIRE_EQUAL(stats.live_partitions, expected_live_partitions);
+    BOOST_REQUIRE_EQUAL(stats.dead_partitions(), test_cases.size() - expected_live_partitions);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_serialized_mutation_empty_and_nonfull_keys) {
     auto random_spec = tests::make_random_schema_specification(
             get_name(),
