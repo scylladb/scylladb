@@ -293,6 +293,9 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
     lc.start();
     auto mark_write_latency = defer([this, &lc] { _stats.write.mark(lc.stop().latency()); });
 
+    locator::tablet_id tid{-1};
+    raft::term_t term;
+
     auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
         // Unfortunately, timeouts can materialize in different forms depending
         // on which statement throws the exception.
@@ -316,7 +319,10 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
             ++_stats.write_errors_timeout;
             return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
         } else if (try_catch<raft::commit_status_unknown>(ex)) {
-            // The exception is logged by the inner code.
+            logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, tablet {}, term {}",
+                ex, schema->ks_name(), schema->cf_name(), tid, term);
+
+            ++_stats.write_errors_status_unknown;
             // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
             return std::make_exception_ptr(exceptions::server_exception(
                 "The outcome of this statement is unknown. It may or may not have been applied. "
@@ -367,7 +373,10 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 }
                 continue;
             }
-            const auto [ts, term] = get<raft_server::timestamp_with_term>(disposition);
+
+            api::timestamp_type ts;
+            auto disposition_result = get<raft_server::timestamp_with_term>(disposition);
+            std::tie(ts, term) = {disposition_result.timestamp, disposition_result.term};
 
             const raft_command command {
                 .mutation{mutation_gen(ts)}
@@ -396,12 +405,6 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                         ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
 
                     continue;
-                } else if (try_catch<raft::commit_status_unknown>(ex)) {
-                    logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, tablet {}, term {}",
-                        ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
-
-                    ++_stats.write_errors_status_unknown;
-                    co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
                 }
 
                 co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
