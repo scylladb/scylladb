@@ -416,9 +416,11 @@ struct table_stats {
     mutation_application_stats memtable_app_stats;
     utils::timed_rate_moving_average_summary_and_histogram reads{256};
     utils::timed_rate_moving_average_summary_and_histogram writes{256};
-    utils::timed_rate_moving_average_summary_and_histogram cas_prepare{256};
-    utils::timed_rate_moving_average_summary_and_histogram cas_accept{256};
-    utils::timed_rate_moving_average_summary_and_histogram cas_learn{256};
+    // cas_* REST emits a time_estimated_histogram (time_to_json_histogram), never
+    // ihistogram::sample, so this buffer is write-only. Size 0 saves 256*8 B.
+    utils::timed_rate_moving_average_summary_and_histogram cas_prepare{0};
+    utils::timed_rate_moving_average_summary_and_histogram cas_accept{0};
+    utils::timed_rate_moving_average_summary_and_histogram cas_learn{0};
     utils::estimated_histogram estimated_sstable_per_read{35};
     utils::timed_rate_moving_average_and_histogram tombstone_scanned;
     utils::timed_rate_moving_average_and_histogram live_scanned;
