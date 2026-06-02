@@ -37,6 +37,9 @@ SSTable Version Support
   set to ``ms``, ``mt`` files will be written.
 * The ``mt`` format is not superseded by ``mu``. If the ``sstable_format``
   parameter is set to ``mt``, ``mt`` files will be written.
+* If the ``sstable_format`` parameter is set to ``mu``, but the cluster does not
+  support ``mu`` yet (for example, during a rolling upgrade), ``mt`` files will
+  be written if the cluster supports ``mt``, and ``me`` files otherwise.
 * Note: The ``sstable_format`` parameter specifies the SSTable format used for
   **writes**. The legacy SSTable formats (``ka``, ``la``, ``mc``) remain
   supported for reads, which is essential for restoring clusters from existing
