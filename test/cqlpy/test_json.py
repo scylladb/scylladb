@@ -493,7 +493,10 @@ def test_fromjson_timestamp_submilli(cql, table1, cassandra_bug):
 # We need to skip this test because in debug mode memory allocation is not
 # bounded, and this test can hang or crash instead of failing immediately.
 # We also have a smaller xfailing test below, test_tojson_decimal_high_mantissa2.
-@pytest.mark.skip_bug(reason="issue #8002")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/8002",
+    reason="this test can hang or crash instead of failing immediately",
+)
 def test_tojson_decimal_high_mantissa(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"INSERT INTO {table1} (p, dec) VALUES ({p}, ?)")

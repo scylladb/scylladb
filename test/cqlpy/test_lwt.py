@@ -449,7 +449,10 @@ def test_lwt_counter_syntax_float_on_integer(cql, table1, scylla_only):
 # CPU and memory usage. Reproduces SCYLLADB-1576.
 # This test needs to be skipped while SCYLLADB-1576 is not fixed, otherwise
 # it will cause the test suite to hang or crash.
-@pytest.mark.skip_bug(reason="SCYLLADB-1576: hangs or OOMs instead of rejecting")
+@pytest.mark.skip_bug(
+    link="https://scylladb.atlassian.net/browse/SCYLLADB-1576",
+    reason="Hangs or OOMs instead of rejecting",
+)
 def test_lwt_counter_syntax_decimal_magnitude_difference(cql, test_keyspace, scylla_only):
     # 1e100000000 is stored compactly as (unscaled=1, scale=-100000000), but
     # adding 1 to it forces alignment of decimal points, potentially allocating

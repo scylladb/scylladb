@@ -254,7 +254,10 @@ async def test_mv_pairing_during_replace(manager: ManagerClient):
 # `rf_rack_valid_keyspaces` is enabled. On the other hand, materialized views in tablet-based keyspaces
 # require the configuration option to be used.
 # Hence, we need to rewrite this test.
-@pytest.mark.skip_bug(reason="scylladb/scylladb#26540")
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/26540",
+    reason="Test doesn't work with the configuration option rf_rack_valid_keyspaces",
+)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altered_dc: str):
     servers = []

@@ -11,7 +11,10 @@ project's ``conftest.py`` via :class:`SkipReasonPlugin`.
 
 Usage as decorator (after conftest.py registers the plugin)::
 
-    @pytest.mark.skip_bug(reason="scylladb/scylladb#12345")
+    @pytest.mark.skip_bug(
+        link="https://github.com/scylladb/scylladb/issues/12345",
+        reason="Known repair scheduler crash",
+    )
     @pytest.mark.skip_not_implemented(reason="no per tablet support yet")
 
 Usage at runtime (inside test body or fixture) — prefer the
@@ -21,7 +24,6 @@ convenience wrappers from :mod:`test.pylib.skip_types`::
     skip_env("need --runveryslow option")
 """
 
-from __future__ import annotations
 
 from collections.abc import Callable
 from enum import StrEnum
@@ -31,6 +33,7 @@ import pytest
 # StashKeys to carry skip metadata from collection to reporting.
 SKIP_TYPE_KEY = pytest.StashKey[str]()
 SKIP_REASON_KEY = pytest.StashKey[str]()
+SKIP_MARKER_ERROR_KEY = pytest.StashKey[str]()
 
 
 def skip(reason: str, skip_type: StrEnum):
@@ -61,7 +64,7 @@ class SkipReasonPlugin:
 
     Args:
         skip_types: A :class:`~enum.StrEnum` whose members define the
-            typed skip markers.  Each member's ``marker_name`` property
+            typed skip markers. Each member's ``marker_name`` property
             becomes the pytest marker name, and its value becomes the
             tag written to reports.
         report_callback: Optional callback invoked with
@@ -78,10 +81,24 @@ class SkipReasonPlugin:
         self._skip_types = skip_types
         self._report_callback = report_callback
 
-    @staticmethod
-    def _get_reason(mark: pytest.Mark) -> str:
-        """Extract reason from a marker (keyword or positional)."""
-        return mark.kwargs.get("reason") or (mark.args[0] if mark.args else "")
+    def _get_reason(
+        self,
+        mark: pytest.Mark,
+        *,
+        marker_name: str,
+        nodeid: str,
+    ) -> str:
+        """Extract normalized skip reason from a marker.
+        Delegates marker-specific validation to the skip type definition.
+        """
+        context = f"Marker @pytest.mark.{marker_name} on {nodeid}"
+        skip_types = self._skip_types
+        handler = getattr(skip_types, f"get_reason_{marker_name}", None)
+        if handler is None:
+            handler = getattr(skip_types, "get_reason_default", None)
+        if handler is None:
+            return mark.kwargs.get("reason") or (mark.args[0] if mark.args else "")
+        return handler(mark, context)
 
     @staticmethod
     def _parse_skip_type(longrepr) -> tuple[str, str] | None:
@@ -96,6 +113,23 @@ class SkipReasonPlugin:
             return tag, reason.lstrip()
         return None
 
+    @staticmethod
+    def _is_xdist_worker(config: pytest.Config) -> bool:
+        """Return True when running inside an xdist worker process."""
+        return hasattr(config, "workerinput")
+
+    def _handle_collection_error(self, item: pytest.Item, error: pytest.UsageError) -> None:
+        """Raise collection errors normally, but downgrade on xdist workers.
+
+        Worker-side UsageError/collection exceptions can crash xdist workers and
+        surface as INTERNALERROR in the controller. Under xdist workers, stash
+        the validation message and fail the test in setup instead.
+        """
+        message = str(error)
+        if not self._is_xdist_worker(item.config):
+            raise error
+        item.stash[SKIP_MARKER_ERROR_KEY] = message
+
     @pytest.hookimpl(trylast=True)
     def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
         """Apply typed markers and warn on bare skips."""
@@ -103,12 +137,17 @@ class SkipReasonPlugin:
             # Convert typed skip markers to real pytest.mark.skip.
             for st in self._skip_types:
                 for mark in item.iter_markers(st.marker_name):
-                    reason = self._get_reason(mark)
+                    try:
+                        reason = self._get_reason(mark, marker_name=st.marker_name, nodeid=item.nodeid)
+                    except pytest.UsageError as exc:
+                        self._handle_collection_error(item, exc)
+                        continue
                     if not reason:
-                        raise pytest.UsageError(
+                        self._handle_collection_error(item, pytest.UsageError(
                             f"Marker @pytest.mark.{st.marker_name} on {item.nodeid} "
                             f"requires a 'reason' argument."
-                        )
+                        ))
+                        continue
                     item.add_marker(pytest.mark.skip(reason=f"[{st}] {reason}"))
                     item.stash[SKIP_TYPE_KEY] = str(st)
                     item.stash[SKIP_REASON_KEY] = reason
@@ -116,14 +155,20 @@ class SkipReasonPlugin:
             # Reject bare pytest.mark.skip not added by typed markers.
             # skip_mode sets SKIP_TYPE_KEY before this hook runs (trylast).
             if SKIP_TYPE_KEY not in item.stash:
-                bare = [self._get_reason(m) for m in item.iter_markers("skip")]
+                bare = [self._get_reason(m, marker_name="skip", nodeid=item.nodeid) for m in item.iter_markers("skip")]
                 if bare:
                     alternatives = ", ".join(
                         f"@pytest.mark.{st.marker_name}" for st in self._skip_types)
-                    raise pytest.UsageError(
+                    self._handle_collection_error(item, pytest.UsageError(
                         f"Untyped skip on {item.nodeid}: {'; '.join(bare)}. "
                         f"Use {alternatives} instead.",
-                    )
+                    ))
+
+    def pytest_runtest_setup(self, item: pytest.Item) -> None:
+        """Fail invalid marker definitions as regular test failures on xdist workers."""
+        marker_error = item.stash.get(SKIP_MARKER_ERROR_KEY, None)
+        if marker_error:
+            pytest.fail(marker_error, pytrace=False)
 
     @pytest.hookimpl(hookwrapper=True)
     def pytest_runtest_makereport(self, item: pytest.Item):
