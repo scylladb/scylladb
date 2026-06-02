@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <boost/circular_buffer.hpp>
 #include "latency.hh"
 #include <cmath>
 #include <seastar/core/timer.hh>
@@ -74,11 +73,12 @@ public:
     double mean;
     double variance;
     int64_t sample_mask;
-    boost::circular_buffer<int64_t> sample;
-    basic_ihistogram(size_t size = 1024, int64_t _sample_mask = 0x80)
+    // The `size` parameter is retained for source compatibility with existing
+    // call sites; it previously sized a per-sample circular buffer that was
+    // never read and has been removed to save memory.
+    basic_ihistogram([[maybe_unused]] size_t size = 1024, int64_t _sample_mask = 0x80)
             : count(0), total(0), min(0), max(0), sum(0), started(0), mean(0), variance(0),
-              sample_mask(_sample_mask), sample(
-                    size) {
+              sample_mask(_sample_mask) {
     }
 
     template <typename Rep, typename Ratio>
@@ -103,7 +103,6 @@ public:
         sum += value;
         total++;
         count++;
-        sample.push_back(value);
     }
 
     void mark(latency_counter& lc) {
@@ -177,9 +176,6 @@ public:
             mean = m;
             count += o.count;
             total += o.total;
-            for (auto i : o.sample) {
-                sample.push_back(i);
-            }
         }
         return *this;
     }
