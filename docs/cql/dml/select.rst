@@ -85,13 +85,46 @@ A :token:`selector` can be one of the following:
 - A casting, which allows you to convert a nested selector to a (compatible) type.
 - A function call, where the arguments are selector themselves.
 - A call to the :ref:`COUNT function <count-function>`, which counts all non-null results.
-- A literal value (constant).
+- A literal value: a constant, or a collection or tuple literal.
 - A bind variable (`?` or `:name`).
 
-Note that due to a quirk of the type system, literals and bind markers cannot be
-used as top-level selectors, as the parser cannot infer their type. However, they can be used
-when nested inside functions, as the function formal parameter types provide the
-necessary context.
+Literals can be used as top-level selectors. Their type is inferred automatically.
+The default inferred type depends on the literal kind:
+
+- Whole numbers: the smallest of ``int``, ``bigint``, or ``varint`` that fits the
+  value. For example, ``1`` is inferred as ``int``, ``10000000000`` as ``bigint``,
+  and very large integers as ``varint``. Note that ``tinyint`` and ``smallint`` are
+  never inferred — use a cast (``CAST(1 AS tinyint)`` or the ``(tinyint)1`` type hint)
+  to obtain them.
+- Decimal or scientific-notation numbers (e.g. ``3.14``, ``1e6``): always ``double``.
+  ``float`` and ``decimal`` are never inferred.
+- Strings: ``text``.
+- Booleans: ``boolean``.
+- UUIDs: ``uuid``.
+- Hex literals (e.g. ``0xCAFE``): ``blob``.
+- Durations: ``duration``.
+
+Collection and tuple literals are supported, with element types inferred recursively.
+When collection elements have different sizes within the same numeric family, they are
+widened to the largest type within two lossless chains:
+
+- Integer: ``tinyint`` < ``smallint`` < ``int`` < ``bigint`` < ``varint``
+- Floating-point: ``float`` < ``double``
+
+Cross-family widening (e.g. ``int`` and ``double``) is not supported and requires an
+explicit ``CAST``.
+
+Bind markers (``?`` and ``:name``) cannot be used as *top-level* selectors, since their
+type cannot be inferred without context; they can be used nested inside a function
+call, where the parameter type provides it.
+
+Examples::
+
+    SELECT 1, 'hello', true FROM t;            -- int, text, boolean
+    SELECT [1, 2, 3] FROM t;                   -- frozen<list<int>>
+    SELECT {'a': 1, 'b': 2} FROM t;            -- frozen<map<text, int>>
+    SELECT [1, 10000000000] FROM t;            -- frozen<list<bigint>>, widened from int + bigint
+    SELECT CAST(1 AS bigint) FROM t;           -- bigint via explicit cast
 
 Aliases
 ```````

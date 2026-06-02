@@ -147,8 +147,11 @@ A term is thus one of:
 - A :ref:`constant <constants>`.
 - A literal for either :ref:`a collection <collections>` (including usage of list_or_vector_literal 
   for :ref:`a vector <vectors>`), a user-defined type or a tuple (see the linked sections for details).
-- An arithmetic operation between terms. 
-- A *type hint*
+- An arithmetic operation between terms.
+- A *type hint* ``(T)x``, which represents ``x`` as type ``T`` when that is lossless — a
+  reinterpret between byte-compatible types (e.g. ``(blob)int_value``) or a numeric widening
+  (e.g. ``(bigint)int_value``). A lossy (narrowing), cross-family, or unrelated conversion is
+  rejected; use ``CAST(x AS T)`` for those.
 - A bind marker, which denotes a variable to be bound at execution time. See the section on :ref:`prepared-statements`
   for details. A bind marker can be either anonymous (``?``) or named (``:some_name``). The latter form provides a more
   convenient way to refer to the variable for binding it and should generally be preferred.
