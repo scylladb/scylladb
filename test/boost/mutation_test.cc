@@ -4334,6 +4334,268 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_sticky_max_purgeable) {
     }
 }
 
+// Check that compaction_stats::live_partitions only counts partitions which
+// have at least one live row, not any non-empty partition.
+SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_live_partition_accounting) {
+    simple_schema ss;
+    auto s = ss.schema();
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+
+    const auto query_time = gc_clock::now();
+    const auto max_rows = std::numeric_limits<uint64_t>::max();
+    const auto max_partitions = std::numeric_limits<uint32_t>::max();
+
+    auto compact = [&] (utils::chunked_vector<mutation> muts) {
+        auto compaction_state = make_lw_shared<compact_for_query_state>(*s, query_time, s->full_slice(), max_rows, max_partitions,
+                tombstone_gc_state::no_gc());
+        auto reader = make_mutation_reader_from_mutations(s, permit, std::move(muts));
+        auto close_reader = deferred_close(reader);
+        reader.consume(compact_for_query<noop_compacted_fragments_consumer>(compaction_state, noop_compacted_fragments_consumer{})).get();
+        return compaction_state->stats();
+    };
+
+    struct test_case {
+        const char* name;
+        // Populates the partition with the data the case is about.
+        std::function<void(mutation&)> populate;
+        // Whether the resulting partition is expected to be accounted as live.
+        bool is_live;
+    };
+
+    // Deliberately interleaves live and dead partitions, so that the
+    // live-partition flag failing to be reset between partitions is detected.
+    const std::vector<test_case> test_cases{
+        {"live row", [&] (mutation& m) {
+            ss.add_row(m, ss.make_ckey(0), "v");
+        }, true},
+        {"partition tombstone only", [&] (mutation& m) {
+            m.partition().apply(ss.new_tombstone());
+        }, false},
+        {"live static row only", [&] (mutation& m) {
+            ss.add_static_row(m, "s");
+        }, true},
+        {"row tombstone only", [&] (mutation& m) {
+            m.partition().apply_delete(*s, ss.make_ckey(0), ss.new_tombstone());
+        }, false},
+        {"live row and partition tombstone", [&] (mutation& m) {
+            m.partition().apply(ss.new_tombstone());
+            ss.add_row(m, ss.make_ckey(0), "v");
+        }, true},
+        {"dead cell only", [&] (mutation& m) {
+            ss.add_row_with_dead_cell(m, ss.make_ckey(0));
+        }, false},
+        {"multiple live rows", [&] (mutation& m) {
+            ss.add_row(m, ss.make_ckey(0), "v0");
+            ss.add_row(m, ss.make_ckey(1), "v1");
+            ss.add_row(m, ss.make_ckey(2), "v2");
+        }, true},
+        {"range tombstone only", [&] (mutation& m) {
+            ss.delete_range(m, ss.make_ckey_range(0, 2));
+        }, false},
+        {"live and dead rows", [&] (mutation& m) {
+            ss.add_row(m, ss.make_ckey(0), "v0");
+            ss.add_row_with_dead_cell(m, ss.make_ckey(1));
+        }, true},
+        {"row shadowed by partition tombstone", [&] (mutation& m) {
+            ss.add_row(m, ss.make_ckey(0), "v");
+            m.partition().apply(ss.new_tombstone());
+        }, false},
+        {"live static row and dead row", [&] (mutation& m) {
+            ss.add_static_row(m, "s");
+            ss.add_row_with_dead_cell(m, ss.make_ckey(0));
+        }, true},
+    };
+
+    const auto pkeys = ss.make_pkeys(test_cases.size());
+
+    utils::chunked_vector<mutation> all_muts;
+    uint64_t expected_live_partitions = 0;
+
+    for (size_t i = 0; i < test_cases.size(); ++i) {
+        const auto& tc = test_cases[i];
+        testlog.info("Checking {}", tc.name);
+
+        mutation mut(s, pkeys[i]);
+        tc.populate(mut);
+
+        const auto stats = compact({mut});
+        BOOST_CHECK_EQUAL(stats.total_partitions, 1);
+        BOOST_CHECK_EQUAL(stats.live_partitions, uint64_t(tc.is_live));
+        BOOST_CHECK_EQUAL(stats.dead_partitions(), uint64_t(!tc.is_live));
+
+        all_muts.push_back(std::move(mut));
+        expected_live_partitions += tc.is_live;
+    }
+
+    testlog.info("Checking all partitions in a single stream");
+    const auto stats = compact(std::move(all_muts));
+    BOOST_REQUIRE_EQUAL(stats.total_partitions, test_cases.size());
+    BOOST_REQUIRE_EQUAL(stats.live_partitions, expected_live_partitions);
+    BOOST_REQUIRE_EQUAL(stats.dead_partitions(), test_cases.size() - expected_live_partitions);
+}
+
+// Check that compaction_stats::live_partitions is accounted correctly when the
+// compaction is paged, that is, it is stopped by the consumer and later resumed
+// with start_new_page(). Each page has its own stats, so a partition spanning
+// multiple pages has to be accounted as live on each page it has live rows on.
+SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_live_partition_accounting_paged) {
+    simple_schema ss;
+    auto s = ss.schema();
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+
+    const auto query_time = gc_clock::now();
+    const auto max_rows = std::numeric_limits<uint64_t>::max();
+    const auto max_partitions = std::numeric_limits<uint32_t>::max();
+
+    struct partition_desc {
+        const char* name;
+        // Populates the partition with the data the case is about.
+        std::function<void(mutation&)> populate;
+        // Whether the partition is expected to be accounted as live on at
+        // least one page.
+        bool is_live;
+    };
+
+    // Each partition has enough rows to span multiple pages. Live and dead
+    // partitions are interleaved, so that the live-partition flag failing to
+    // be reset across pages and partitions is detected.
+    const std::vector<partition_desc> partition_descs{
+        {"live rows", [&] (mutation& m) {
+            for (uint32_t ck = 0; ck < 5; ++ck) {
+                ss.add_row(m, ss.make_ckey(ck), format("v{}", ck));
+            }
+        }, true},
+        {"dead rows", [&] (mutation& m) {
+            for (uint32_t ck = 0; ck < 5; ++ck) {
+                ss.add_row_with_dead_cell(m, ss.make_ckey(ck));
+            }
+        }, false},
+        // The static row is re-emitted on each page of the partition, so the
+        // partition is live on all of them.
+        {"live static row and dead rows", [&] (mutation& m) {
+            ss.add_static_row(m, "s");
+            for (uint32_t ck = 0; ck < 5; ++ck) {
+                ss.add_row_with_dead_cell(m, ss.make_ckey(ck));
+            }
+        }, true},
+        // The single live row is in the middle, so the partition is dead on
+        // the first and last pages of it.
+        {"live row among dead rows", [&] (mutation& m) {
+            for (uint32_t ck = 0; ck < 5; ++ck) {
+                if (ck == 2) {
+                    ss.add_row(m, ss.make_ckey(ck), "v");
+                } else {
+                    ss.add_row_with_dead_cell(m, ss.make_ckey(ck));
+                }
+            }
+        }, true},
+    };
+
+    const auto pkeys = ss.make_pkeys(partition_descs.size());
+
+    utils::chunked_vector<mutation> muts;
+    for (size_t i = 0; i < partition_descs.size(); ++i) {
+        mutation mut(s, pkeys[i]);
+        partition_descs[i].populate(mut);
+        muts.push_back(std::move(mut));
+    }
+
+    // What the consumer saw on the current page, to check the compactor's own
+    // accounting against.
+    struct page {
+        uint64_t rows = 0;
+        uint64_t live_partitions = 0;
+        std::optional<dht::decorated_key> current_dk;
+        bool current_partition_is_live = false;
+        std::vector<dht::decorated_key> live_dks;
+    };
+
+    // Stops the compaction after `row_limit` rows, simulating the page filling
+    // up.
+    struct page_consumer {
+        page& p;
+        uint64_t row_limit;
+
+        void consume_new_partition(const dht::decorated_key& dk) {
+            p.current_dk = dk;
+            p.current_partition_is_live = false;
+        }
+        void consume(const tombstone&) { }
+        stop_iteration consume(static_row&&, tombstone, bool is_live) {
+            return consume_row(is_live);
+        }
+        stop_iteration consume(clustering_row&&, row_tombstone, bool is_live) {
+            return consume_row(is_live);
+        }
+        stop_iteration consume(range_tombstone_change&&) {
+            return stop_iteration::no;
+        }
+        // Has to stop the read too when the page is full, otherwise the
+        // reader just skips to the next partition and the read continues.
+        stop_iteration consume_end_of_partition() {
+            return stop_iteration(p.rows >= row_limit);
+        }
+        void consume_end_of_stream() { }
+
+        stop_iteration consume_row(bool is_live) {
+            if (is_live && !std::exchange(p.current_partition_is_live, true)) {
+                ++p.live_partitions;
+                p.live_dks.push_back(*p.current_dk);
+            }
+            return stop_iteration(++p.rows >= row_limit);
+        }
+    };
+
+    const uint64_t rows_per_page = 2;
+
+    auto compaction_state = make_lw_shared<compact_for_query_state>(*s, query_time, s->full_slice(), max_rows, max_partitions,
+            tombstone_gc_state::no_gc());
+    auto reader = make_mutation_reader_from_mutations(s, permit, std::move(muts));
+    auto close_reader = deferred_close(reader);
+
+    std::vector<bool> seen_live(partition_descs.size(), false);
+    unsigned pages = 0;
+
+    while (!reader.is_buffer_empty() || !reader.is_end_of_stream()) {
+        page p;
+        page_consumer c{p, rows_per_page};
+
+        compaction_state->start_new_page(max_rows, max_partitions, query_time, reader.peek().get()->position().region(), c);
+        reader.consume(compact_for_query<page_consumer>(compaction_state, c)).get();
+
+        const auto& stats = compaction_state->stats();
+        testlog.info("page {}: {} partition(s) ({} live, {} dead), {} row(s) consumed from {} live partition(s)", pages,
+                stats.total_partitions, stats.live_partitions, stats.dead_partitions(), p.rows, p.live_partitions);
+
+        // The compactor has to account exactly those partitions as live, which
+        // the consumer saw live rows of on this page, regardless of whether
+        // the partition was started on this page or on an earlier one.
+        BOOST_REQUIRE_EQUAL(stats.live_partitions, p.live_partitions);
+        // A partition can never be live without being counted in the total.
+        BOOST_REQUIRE_LE(stats.live_partitions, stats.total_partitions);
+
+        for (const auto& dk : p.live_dks) {
+            const auto it = std::find_if(pkeys.begin(), pkeys.end(), [&] (const dht::decorated_key& pk) { return pk.equal(*s, dk); });
+            BOOST_REQUIRE(it != pkeys.end());
+            seen_live[std::distance(pkeys.begin(), it)] = true;
+        }
+
+        ++pages;
+    }
+
+    // Make sure the compaction was really paged.
+    BOOST_REQUIRE_GT(pages, partition_descs.size());
+
+    for (size_t i = 0; i < partition_descs.size(); ++i) {
+        testlog.info("Checking {}", partition_descs[i].name);
+        BOOST_CHECK_EQUAL(seen_live[i], partition_descs[i].is_live);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_serialized_mutation_empty_and_nonfull_keys) {
     auto random_spec = tests::make_random_schema_specification(
             get_name(),
