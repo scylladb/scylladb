@@ -58,10 +58,17 @@ raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder h
 // This is a temporary workaround until we extend the interface.
 // See: scylladb/seastar#3292.
 static future<> wait_with_abort_source(condition_variable& cv, abort_source& as) {
-    as.check();
-    const auto _ = as.subscribe([&cv] noexcept { cv.broadcast(); });
-    co_await cv.wait();
-    as.check();
+    if (as.abort_requested()) {
+        return make_exception_future<>(as.abort_requested_exception_ptr());
+    }
+
+    auto sub = as.subscribe([&cv] noexcept { cv.broadcast(); });
+
+    return cv.wait().then([&as, sub = std::move(sub)] {
+        return as.abort_requested()
+            ? make_exception_future<>(as.abort_requested_exception_ptr())
+            : make_ready_future();
+    });
 }
 
 auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
