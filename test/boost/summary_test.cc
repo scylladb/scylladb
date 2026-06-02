@@ -59,3 +59,20 @@ BOOST_AUTO_TEST_CASE(test_summary_calculation) {
     summary.update();
     BOOST_CHECK_EQUAL(vector_to_string(summary.summary()), vector_to_string({0,0,0}));
 }
+
+// A capacity-0 sample buffer must accept mark()'s push_back as a no-op while
+// still maintaining the scalar stats. ihistogram has no timer (unlike the
+// timed_rate_* wrappers), so it can be exercised in a plain unit test.
+BOOST_AUTO_TEST_CASE(test_minimal_sample_buffer) {
+    for (size_t cap : {size_t(0), size_t(1)}) {
+        utils::ihistogram h(cap);
+        BOOST_CHECK_EQUAL(h.sample.capacity(), cap);
+        for (int i = 1; i <= 1000; i++) {
+            h.mark(std::chrono::microseconds(i));
+        }
+        BOOST_CHECK_EQUAL(h.sample.size(), cap); // never exceeds capacity
+        BOOST_CHECK_EQUAL(h.count, 1000);
+        BOOST_CHECK_EQUAL(h.min, 1);
+        BOOST_CHECK_EQUAL(h.max, 1000);
+    }
+}
