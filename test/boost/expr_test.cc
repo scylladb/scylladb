@@ -1396,6 +1396,45 @@ BOOST_AUTO_TEST_CASE(prepare_nested_overloaded_function_probing_is_not_exponenti
     cql3::expr::set_prepare_memo_enabled(true);
 }
 
+// Default-type inference for a receiver-less collection must keep integer literals
+// untyped through overload resolution, so a function whose only overload takes tinyint
+// stays reachable: the raw literals are fit-checked against the parameter type rather
+// than pinned to their default int type first (int is not assignable to tinyint).
+BOOST_AUTO_TEST_CASE(infer_collection_of_function_calls_keeps_narrow_overload) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    auto narrow_fn = functions::make_native_scalar_function<true>(
+            "expr_test_narrow_identity", byte_type, std::vector<data_type>{byte_type, byte_type},
+            [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+    auto restore = functions::change_batch();
+    {
+        auto batch = functions::change_batch();
+        batch.add_function(narrow_fn);
+        batch.commit();
+    }
+    auto cleanup = seastar::defer([&] () noexcept { restore.commit(); });
+
+    // [f(1, 2)] with no receiver. f has only a tinyint overload, so the literals must
+    // be typed as tinyint and the inferred list element type must be tinyint.
+    expression call = function_call{
+        .func = functions::function_name::native_function("expr_test_narrow_identity"),
+        .args = {
+            untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1"},
+            untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "2"},
+        },
+    };
+    expression list_literal = collection_constructor{
+        .style = collection_constructor::style_type::list_or_vector,
+        .elements = {std::move(call)},
+    };
+
+    expression prepared = prepare_expression(list_literal, db, "test_ks", table_schema.get(), nullptr);
+    // Inferred collections are frozen; the key point is the element type is tinyint
+    // (the narrow overload), not int (the literal default).
+    BOOST_REQUIRE_EQUAL(type_of(prepared)->as_cql3_type().to_string(), "frozen<list<tinyint>>");
+}
+
 // prepare_expression for a column_value should do nothing
 BOOST_AUTO_TEST_CASE(prepare_column_value) {
     schema_ptr table_schema = make_simple_test_schema();
@@ -1784,9 +1823,9 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_no_receiver) {
 
     expression untyped = make_int_untyped("1337");
 
-    // Can't infer type
-    BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE(expr::type_of(prepared) == int32_type);
+    BOOST_REQUIRE_EQUAL(prepared, make_int_const(1337));
 }
 
 BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bool) {
@@ -1875,7 +1914,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bad_int) {
                         exceptions::invalid_request_exception);
 }
 
-BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver_fails) {
+BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
@@ -1888,8 +1927,9 @@ BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver_fails) {
             },
         .type = nullptr};
 
-    BOOST_REQUIRE_THROW(prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = tuple_type_impl::get_instance({int32_type, int32_type, utf8_type});
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_tuple_constructor) {
@@ -2029,10 +2069,9 @@ BOOST_AUTO_TEST_CASE(prepare_list_or_vector_collection_constructor_no_receiver) 
             },
         .type = nullptr};
 
-    data_type list_type = list_type_impl::get_instance(long_type, true);
-
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = list_type_impl::get_instance(int32_type, false);
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_bind_var) {
@@ -2208,8 +2247,9 @@ BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_no_receiver) {
             },
         .type = nullptr};
 
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = set_type_impl::get_instance(int32_type, false);
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_with_bind_var) {
@@ -2364,8 +2404,9 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_no_receiver) {
                 },
             .type = nullptr};
 
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = map_type_impl::get_instance(int32_type, int32_type, false);
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_with_bind_var_key) {
