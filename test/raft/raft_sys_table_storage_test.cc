@@ -511,6 +511,37 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_index) {
         auto snp4 = co_await storage.load_snapshot_descriptor();
         BOOST_CHECK_EQUAL(snp4.idx, raft::index_t(20));
         BOOST_CHECK_EQUAL(snp4.term, raft::term_t(4));
+
+        // Advance to 30 with a configuration — verify config is persisted
+        raft::server_id srv1 = raft::server_id::create_random_id();
+        raft::server_id srv2 = raft::server_id::create_random_id();
+        raft::configuration cfg;
+        cfg.current.insert(raft::config_member{raft::server_address{srv1, {}}, raft::is_voter::yes});
+        cfg.current.insert(raft::config_member{raft::server_address{srv2, {}}, raft::is_voter::no});
+
+        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
+            .idx = raft::index_t(30),
+            .term = raft::term_t(5),
+            .config = cfg,
+            .id = raft::snapshot_id(utils::make_random_uuid()),
+        });
+
+        auto snp5 = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK_EQUAL(snp5.idx, raft::index_t(30));
+        BOOST_CHECK_EQUAL(snp5.term, raft::term_t(5));
+        BOOST_CHECK_EQUAL(snp5.config.current.size(), 2);
+
+        // Advance to 40 without config — config from previous snapshot should remain
+        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
+            .idx = raft::index_t(40),
+            .term = raft::term_t(6),
+            .id = raft::snapshot_id(utils::make_random_uuid()),
+        });
+
+        auto snp6 = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK_EQUAL(snp6.idx, raft::index_t(40));
+        BOOST_CHECK_EQUAL(snp6.term, raft::term_t(6));
+        BOOST_CHECK_EQUAL(snp6.config.current.size(), 2);  // config preserved from idx=30
     });
 }
 
