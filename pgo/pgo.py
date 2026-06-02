@@ -647,11 +647,12 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
         await asyncio.sleep(5) # FIXME: artificial gossip sleep, get rid of it.
 
         workloads = [
-            ["write", 250_000],
-            ["read", 250_000],
-            ["scan", 1_000],
-            ["write_gsi", 250_000],
-            ["write_rmw", 250_000],
+            # [workload, ops_per_shard, concurrency]
+            ["write",     250_000, 100],
+            ["read",      250_000, 100],
+            ["scan",        1_000, 100],
+            ["write_gsi", 250_000, 100],
+            ["write_rmw", 250_000,  32],   # LWT/Paxos: keep in-flight LSA state bounded
         ]
         for workload in workloads:
             # the tool doesn't yet support load balancing so we
@@ -664,6 +665,7 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
                 # we reuse cluster data so don't need to pre-populate
                 "--prepopulate-partitions", "0",
                 "--operations-per-shard", f"{workload[1]}",
+                "--concurrency", f"{workload[2]}",
                 "--cpuset", f'{CS_CPUSET.get()}',
                 "--remote-host", addr,
             ]) for addr in addrs])
