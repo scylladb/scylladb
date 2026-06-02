@@ -1184,6 +1184,10 @@ SEASTAR_TEST_CASE(test_digest_persistence_data_compressed) {
     return test_component_digest_persistence(component_type::Data, sstable::version_types::me, compress_sstable::yes);
 }
 
+SEASTAR_TEST_CASE(test_digest_persistence_data_compressed_mu) {
+    return test_component_digest_persistence(component_type::Data, sstable::version_types::mu, compress_sstable::yes);
+}
+
 static future<> test_component_digest_validation(component_type component, sstable::version_types version, sstring expected_message, compress_sstable compress = compress_sstable::no) {
     return test_env::do_with_async([component, version, expected_message = std::move(expected_message), compress] (test_env& env) mutable {
         sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
