@@ -464,7 +464,6 @@ public:
         bool enable_commitlog = true;
         bool enable_incremental_backups = false;
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
-        bool enable_dangerous_direct_import_of_cassandra_counters = false;
         replica::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         reader_concurrency_semaphore* compaction_concurrency_semaphore;
@@ -1476,7 +1475,6 @@ public:
         bool enable_cache = true;
         bool enable_incremental_backups = false;
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
-        bool enable_dangerous_direct_import_of_cassandra_counters = false;
         replica::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         reader_concurrency_semaphore* compaction_concurrency_semaphore;
