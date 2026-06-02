@@ -849,7 +849,8 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
         auto make_hint = [&] (std::initializer_list<std::pair<table_id, std::vector<token>>> tablets) {
             locator::tablet_metadata_change_hint hint;
             for (const auto& [tid, tokens] : tablets) {
-                hint.tables.emplace(tid, locator::tablet_metadata_change_hint::table_hint{.table_id = tid, .tokens = tokens});
+                hint.tables.emplace(tid, locator::tablet_metadata_change_hint::table_hint{
+                    .table_id = tid, .tokens = tokens, .full_read = tokens.empty()});
             }
             return hint;
         };
@@ -976,6 +977,58 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
         });
     }, tablet_cql_test_config());
 }
+
+// Regression test: when a partition tombstone or static row is in the first
+// split mutation, subsequent split mutations (rows-only) must not re-add tokens
+// to the hint, undoing the full-partition-read decision.
+SEASTAR_TEST_CASE(test_tablet_metadata_hint_split_with_tombstone) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = add_table(e).get();
+
+        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        auto ts = current_timestamp(e);
+
+        const auto& tmap = tm.get_tablet_map(table1);
+        auto tokens = tmap.get_sorted_tokens().get();
+        BOOST_REQUIRE_GE(tokens.size(), 2);
+
+        // Simulate what partition_split_builder does: first mutation has a
+        // partition tombstone (or static row) but no clustered rows; subsequent
+        // mutations have only clustered rows.
+        auto s = db::system_keyspace::tablets();
+
+        // First split chunk: partition tombstone only
+        mutation mut1(s, partition_key::from_single_value(*s,
+                data_value(table1.uuid()).serialize_nonnull()));
+        mut1.partition().apply(tombstone(ts++, gc_clock::now()));
+
+        // Second split chunk: rows only (no tombstone, no static row)
+        replica::tablet_mutation_builder builder(ts++, table1);
+        builder.set_replicas(tokens[0],
+            tablet_replica_set {
+                tablet_replica {h2, 0},
+            }
+        );
+        builder.set_replicas(tokens[1],
+            tablet_replica_set {
+                tablet_replica {h2, 1},
+            }
+        );
+        auto mut2 = builder.build();
+
+        // Build hint incrementally, as schema_applier::prepare() does
+        locator::tablet_metadata_change_hint hint;
+        replica::update_tablet_metadata_change_hint(hint, mut1);
+        replica::update_tablet_metadata_change_hint(hint, mut2);
+
+        BOOST_REQUIRE(hint.tables.contains(table1));
+        BOOST_REQUIRE(hint.tables.at(table1).tokens.empty());
+        BOOST_REQUIRE(hint.tables.at(table1).full_read);
+    }, tablet_cql_test_config());
+}
+
 
 SEASTAR_TEST_CASE(test_get_shard) {
     return do_with_cql_env_thread([] (cql_test_env& e) {

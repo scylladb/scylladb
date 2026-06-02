@@ -486,13 +486,23 @@ static void do_update_tablet_metadata_change_hint(locator::tablet_metadata_chang
     auto it = hint.tables.try_emplace(table_id, locator::tablet_metadata_change_hint::table_hint{table_id, {}}).first;
 
     const auto& mp = m.partition();
-    auto& tokens = it->second.tokens;
+    auto& tbl_hint = it->second;
+
+    // Once a full partition read is decided, don't re-add tokens from
+    // subsequent mutations for the same table. This can happen when
+    // partition_split_builder splits a partition into multiple mutations:
+    // the first one gets the partition tombstone/static row (triggering
+    // full_read), while later ones contain only clustered rows.
+    if (tbl_hint.full_read) {
+        return;
+    }
 
     if (mp.partition_tombstone() || !mp.row_tombstones().empty() || !mp.static_row().empty()) {
         // If there is a partition tombstone, range tombstone or static row,
         // update the entire partition. Also clear any row hints that might be
         // present to force a full read of the partition.
-        tokens.clear();
+        tbl_hint.tokens.clear();
+        tbl_hint.full_read = true;
         return;
     }
 
@@ -500,10 +510,11 @@ static void do_update_tablet_metadata_change_hint(locator::tablet_metadata_chang
         // TODO: we do not handle deletions yet, will revisit when tablet count
         // reduction is worked out.
         if (row.row().deleted_at()) {
-            tokens.clear();
+            tbl_hint.tokens.clear();
+            tbl_hint.full_read = true;
             return;
         }
-        tokens.push_back(to_tablet_metadata_row_key(s, row.key()));
+        tbl_hint.tokens.push_back(to_tablet_metadata_row_key(s, row.key()));
     }
 }
 
@@ -870,7 +881,7 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
 
     try {
         for (const auto& [_, table_hint] : hint.tables) {
-            if (table_hint.tokens.empty()) {
+            if (table_hint.full_read || table_hint.tokens.empty() || !tm.has_tablet_map(table_hint.table_id)) {
                 co_await do_update_tablet_metadata_partition(qp, tm, table_hint, builder);
             } else {
                 co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (tablet_map& tmap) -> future<> {
