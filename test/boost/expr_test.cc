@@ -30,6 +30,9 @@
 #include "utils/big_decimal.hh"
 #include "utils/multiprecision_int.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/native_scalar_function.hh"
+#include "exceptions/exceptions.hh"
+#include <seastar/util/defer.hh>
 
 using namespace cql3;
 using namespace cql3::expr;
@@ -1278,6 +1281,9 @@ BOOST_AUTO_TEST_CASE(prepare_static_column_unresolved_identifier) {
 namespace cql3::expr {
 extern uint64_t prepare_function_call_count();
 extern void reset_prepare_function_call_count();
+extern uint64_t test_assignment_function_call_count();
+extern void reset_test_assignment_function_call_count();
+extern void set_prepare_memo_enabled(bool enabled);
 }
 
 // Builds intasblob(blobasint(intasblob(... r ...))) of the given nesting depth.
@@ -1315,6 +1321,79 @@ BOOST_AUTO_TEST_CASE(prepare_nested_function_calls_is_not_exponential) {
         // fails loudly for any exponential (2^depth) regression.
         BOOST_CHECK_LE(count, uint64_t(8) * depth + 8);
     }
+}
+
+// Builds f(f(f(... ? ...))) of the given depth, where f is a function with both
+// f(int) and f(bigint) overloads. A bind marker is assignable to both and never gets a
+// default type, so every nested call stays ambiguous - an unresolved "hole" - and
+// overload resolution must probe it against both candidate parameter types at each level.
+static expression make_nested_overloaded_calls(const char* fname, unsigned depth) {
+    expression e = bind_variable{
+        .bind_index = 0,
+        .receiver = nullptr,
+    };
+    for (unsigned i = 0; i < depth; ++i) {
+        e = function_call{
+            .func = functions::function_name::native_function(fname),
+            .args = {std::move(e)},
+        };
+    }
+    return e;
+}
+
+// Probing a nested hole under a multi-overload function is recursive: without
+// memoization it re-resolves each nested hole once per candidate parameter type at
+// every level, which is exponential in the nesting depth. The per-prepare memo
+// collapses that to linear. This test measures both, to confirm the difference.
+BOOST_AUTO_TEST_CASE(prepare_nested_overloaded_function_probing_is_not_exponential) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    const char* overloaded_test_fn = "expr_test_overloaded_identity";
+    auto make_overload = [&] (data_type t) {
+        return functions::make_native_scalar_function<true>(
+                overloaded_test_fn, t, std::vector<data_type>{t},
+                [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+    };
+    // Snapshot the original registry, then install our two overloads. On scope exit we
+    // commit the original snapshot back, so we do not leak them into other tests sharing
+    // this binary.
+    auto original_batch = functions::change_batch();
+    {
+        auto custom_batch = functions::change_batch();
+        custom_batch.add_function(make_overload(int32_type));
+        custom_batch.add_function(make_overload(long_type));
+        custom_batch.commit();
+    }
+    auto cleanup = seastar::defer([&] () noexcept { original_batch.commit(); });
+
+    auto count_probes = [&] (const expression& e, bool memo_enabled) -> uint64_t {
+        cql3::expr::set_prepare_memo_enabled(memo_enabled);
+        cql3::expr::reset_test_assignment_function_call_count();
+        try {
+            // The expression is intentionally ambiguous, so preparation throws; we
+            // only care about how much probing happened on the way to the failure.
+            prepare_expression(e, db, "test_ks", table_schema.get(), nullptr);
+        } catch (const exceptions::invalid_request_exception&) {
+        }
+        return cql3::expr::test_assignment_function_call_count();
+    };
+
+    for (unsigned depth : {2u, 4u, 6u, 8u}) {
+        expression nested = make_nested_overloaded_calls(overloaded_test_fn, depth);
+        uint64_t without_memo = count_probes(nested, false);
+        uint64_t with_memo = count_probes(nested, true);
+        BOOST_TEST_MESSAGE(seastar::format(
+                "overloaded depth={} test_assignment_function_call_count without_memo={} with_memo={}",
+                depth, without_memo, with_memo));
+        // Linear in nesting depth: ~2 probes per level (one per candidate overload),
+        // with headroom so a benign change to that per-level constant won't fail here.
+        BOOST_CHECK_LE(with_memo, uint64_t(4) * depth);
+        if (depth >= 4) {
+            BOOST_CHECK_LT(with_memo, without_memo);
+        }
+    }
+    cql3::expr::set_prepare_memo_enabled(true);
 }
 
 // prepare_expression for a column_value should do nothing
