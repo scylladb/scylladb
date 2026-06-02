@@ -1304,9 +1304,9 @@ class ScyllaCluster:
             await handle_join_failure()
             raise
         finally:
-            # server_stop() may have already removed the starting server
-            # if it interrupted this add_server() operation.
-            self.starting.pop(server.server_id, None)
+            # add_server() is the sole owner of self.starting entries.
+            # server_stop() only kills the process without touching this dict.
+            del self.starting[server.server_id]
 
         if expected_error:
             await handle_join_failure()
@@ -1445,21 +1445,25 @@ class ScyllaCluster:
         self.is_dirty = True
         if server_id in self.running:
             server = self.running[server_id]
-        else:
-            server = self.starting[server_id]
-        # Remove the server from `running` only after we successfully stop it.
-        # Stopping may fail and if we removed it from `running` now it might leak.
-        if gracefully:
-            await server.stop_gracefully()
-        else:
-            await server.stop()
-        if server_id in self.running:
+            # Remove the server from `running` only after we successfully stop it.
+            # Stopping may fail and if we removed it from `running` now it might leak.
+            if gracefully:
+                await server.stop_gracefully()
+            else:
+                await server.stop()
             self.running.pop(server_id)
             self.stopped[server_id] = server
         else:
-            # Starting servers are removed from self.starting by add_server()
-            # in its cleanup path. This is a fallback if server_stop() wins the race.
-            self.starting.pop(server_id, None)
+            # Server is still being bootstrapped by add_server(). Only kill the
+            # process — don't manipulate self.starting. add_server() is the sole
+            # owner of self.starting entries: it will observe the process death,
+            # move the server to self.stopped via handle_join_failure(), and
+            # remove it from self.starting in its finally block.
+            server = self.starting[server_id]
+            if gracefully:
+                await server.stop_gracefully()
+            else:
+                await server.stop()
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
         """Mark server as removed."""
