@@ -172,6 +172,9 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
         // Track the term of the last committed entry to update the snapshot descriptor.
         std::optional<raft::term_t> last_committed_term;
+        // Track the latest committed configuration entry, so we can persist it
+        // alongside the snapshot index (required by load_snapshot_descriptor).
+        raft::configuration last_committed_config;
 
         for (auto& entry : filtered.entries) {
             // Apply committed command entries to the memtables. It is safe not to append them
@@ -189,6 +192,9 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
             if (entry->idx <= commit_idx) {
                 last_committed_term = entry->term;
+                if (std::holds_alternative<raft::configuration>(entry->data)) {
+                    last_committed_config = std::get<raft::configuration>(entry->data);
+                }
             }
 
             // Rewrite uncommitted entries to the new commitlog to obtain rp_handles
@@ -225,6 +231,7 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
                     qp, group_id, this_shard_id(), raft::snapshot_descriptor{
                         .idx = commit_idx,
                         .term = *last_committed_term,
+                        .config = last_committed_config,
                         .id = raft::snapshot_id(utils::make_random_uuid()),
                     });
             logger.debug("group {}: advanced snapshot to idx={}, term={}", group_id, commit_idx, *last_committed_term);
