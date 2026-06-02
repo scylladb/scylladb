@@ -336,79 +336,79 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         }
     };
 
-        auto op_result_future = co_await coroutine::as_future(
-                create_operation_ctx(*schema, token, aoe.abort_source(), true));
+    auto op_result_future = co_await coroutine::as_future(
+            create_operation_ctx(*schema, token, aoe.abort_source(), true));
 
-        if (op_result_future.failed()) {
-            co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+    if (op_result_future.failed()) {
+        co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+    }
+
+    auto op_result = std::move(op_result_future).get();
+
+    if (auto* redirect = get_if<need_redirect>(&op_result)) {
+        co_return std::move(*redirect);
+    }
+    auto& op = get<operation_ctx>(op_result);
+
+    while (true) {
+        co_await utils::get_local_injector().inject("sc_coordinator_wait_before_begin_mutate",
+            utils::wait_for_message(5min));
+
+        auto disposition = op.raft_server.begin_mutate(aoe.abort_source());
+        if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
+            const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
+            const auto* target = find_replica(op.tablet_info, leader_host_id);
+            if (!target) {
+                on_internal_error(logger,
+                    ::format("table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
+                        schema->ks_name(), schema->cf_name(), op.tablet_id,
+                        leader_host_id, op.tablet_info.replicas));
+            }
+            co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
+        }
+        if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+            auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
+            if (f.failed()) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+            }
+            continue;
         }
 
-        auto op_result = std::move(op_result_future).get();
+        api::timestamp_type ts;
+        auto disposition_result = get<raft_server::timestamp_with_term>(disposition);
+        std::tie(ts, term) = {disposition_result.timestamp, disposition_result.term};
 
-        if (auto* redirect = get_if<need_redirect>(&op_result)) {
-            co_return std::move(*redirect);
+        const raft_command command {
+            .mutation{mutation_gen(ts)}
+        };
+        raft::command raft_cmd;
+        ser::serialize(raft_cmd, command);
+
+        logger.debug("mutate(): add_entry({}), term {}",
+            command.mutation.pretty_printer(schema), term);
+
+        co_await utils::get_local_injector().inject("sc_coordinator_wait_before_add_entry",
+            utils::wait_for_message(5min));
+
+        future<> add_entry_result = co_await coroutine::as_future(
+            op.raft_server.server().add_entry(std::move(raft_cmd),
+                raft::wait_type::committed,
+                &aoe.abort_source()));
+
+        if (!add_entry_result.failed()) {
+            co_return std::monostate{};
         }
-        auto& op = get<operation_ctx>(op_result);
 
-        while (true) {
-            co_await utils::get_local_injector().inject("sc_coordinator_wait_before_begin_mutate",
-                utils::wait_for_message(5min));
+        auto ex = std::move(add_entry_result).get_exception();
+        if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
+            logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, tablet {}, term {}",
+                ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
 
-            auto disposition = op.raft_server.begin_mutate(aoe.abort_source());
-            if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
-                const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
-                const auto* target = find_replica(op.tablet_info, leader_host_id);
-                if (!target) {
-                    on_internal_error(logger,
-                        ::format("table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
-                            schema->ks_name(), schema->cf_name(), op.tablet_id,
-                            leader_host_id, op.tablet_info.replicas));
-                }
-                co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
-            }
-            if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
-                auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
-                if (f.failed()) {
-                    co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
-                }
-                continue;
-            }
+            continue;
+        }
 
-            api::timestamp_type ts;
-            auto disposition_result = get<raft_server::timestamp_with_term>(disposition);
-            std::tie(ts, term) = {disposition_result.timestamp, disposition_result.term};
-
-            const raft_command command {
-                .mutation{mutation_gen(ts)}
-            };
-            raft::command raft_cmd;
-            ser::serialize(raft_cmd, command);
-
-            logger.debug("mutate(): add_entry({}), term {}",
-                command.mutation.pretty_printer(schema), term);
-
-            co_await utils::get_local_injector().inject("sc_coordinator_wait_before_add_entry",
-                utils::wait_for_message(5min));
-
-            future<> add_entry_result = co_await coroutine::as_future(
-                op.raft_server.server().add_entry(std::move(raft_cmd),
-                    raft::wait_type::committed,
-                    &aoe.abort_source()));
-
-            if (!add_entry_result.failed()) {
-                co_return std::monostate{};
-            }
-
-            auto ex = std::move(add_entry_result).get_exception();
-                if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
-                    logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, tablet {}, term {}",
-                        ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
-
-                    continue;
-                }
-
-                co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
-            }
+        co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
+    }
 }
 
 auto coordinator::query(schema_ptr schema,
@@ -461,66 +461,66 @@ auto coordinator::query(schema_ptr schema,
         }
     };
 
-        auto op_result_future = co_await coroutine::as_future(create_operation_ctx(
-            *schema,
-            ranges[0].start()->value().token(),
-            aoe.abort_source(),
-            rtype == read_type::linearizable));
+    auto op_result_future = co_await coroutine::as_future(create_operation_ctx(
+        *schema,
+        ranges[0].start()->value().token(),
+        aoe.abort_source(),
+        rtype == read_type::linearizable));
 
-        if (op_result_future.failed()) {
-            co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
-        }
+    if (op_result_future.failed()) {
+        co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+    }
 
-        auto op_result = std::move(op_result_future).get();
+    auto op_result = std::move(op_result_future).get();
 
-        if (auto* redirect = get_if<need_redirect>(&op_result)) {
-            co_return std::move(*redirect);
-        }
-        auto& op = get<operation_ctx>(op_result);
+    if (auto* redirect = get_if<need_redirect>(&op_result)) {
+        co_return std::move(*redirect);
+    }
+    auto& op = get<operation_ctx>(op_result);
 
-        if (rtype == read_type::linearizable) {
-            // For linearizable reads we may need to forward to the raft leader.
-            while (true) {
-                auto disposition = op.raft_server.begin_read(aoe.abort_source());
-                if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
-                    const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
-                    const auto* target = find_replica(op.tablet_info, leader_host_id);
-                    if (!target) {
-                        on_internal_error(logger,
-                            ::format("query(): table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
-                                schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.tablet_info.replicas));
-                    }
-                    co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
+    if (rtype == read_type::linearizable) {
+        // For linearizable reads we may need to forward to the raft leader.
+        while (true) {
+            auto disposition = op.raft_server.begin_read(aoe.abort_source());
+            if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
+                const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
+                const auto* target = find_replica(op.tablet_info, leader_host_id);
+                if (!target) {
+                    on_internal_error(logger,
+                        ::format("query(): table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
+                            schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.tablet_info.replicas));
                 }
-                if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
-                    future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
-                    if (f.failed()) {
-                        co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
-                    }
-                    continue;
+                co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
+            }
+            if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+                future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
+                if (f.failed()) {
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
                 }
-                break;
+                continue;
             }
-
-            co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
-                utils::wait_for_message(5min));
-
-            future<> f = co_await coroutine::as_future(op.raft_server.server().read_barrier(&aoe.abort_source()));
-            if (f.failed()) {
-                co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
-            }
+            break;
         }
 
-        // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
-        auto query_future = co_await coroutine::as_future(_db.query(schema, cmd,
-            query::result_options::only_result(), ranges, trace_state, timeout));
+        co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
+            utils::wait_for_message(5min));
 
-        if (query_future.failed()) {
-            co_await coroutine::return_exception_ptr(filter_error(std::move(query_future).get_exception()));
+        future<> f = co_await coroutine::as_future(op.raft_server.server().read_barrier(&aoe.abort_source()));
+        if (f.failed()) {
+            co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
         }
+    }
 
-        auto [result, cache_temp] = std::move(query_future).get();
-        co_return std::move(result);
+    // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
+    auto query_future = co_await coroutine::as_future(_db.query(schema, cmd,
+        query::result_options::only_result(), ranges, trace_state, timeout));
+
+    if (query_future.failed()) {
+        co_await coroutine::return_exception_ptr(filter_error(std::move(query_future).get_exception()));
+    }
+
+    auto [result, cache_temp] = std::move(query_future).get();
+    co_return std::move(result);
 }
 
 future<> coordinator::wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout) {
