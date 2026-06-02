@@ -37,6 +37,7 @@ static const column_value resolve_column(const unresolved_identifier& col_ident,
 static assignment_testable::test_result expression_test_assignment(const data_type& expr_type,
                                                                    const column_specification& receiver);
 
+static std::optional<data_type> try_widen(const data_type& a, const data_type& b);
 static expression coerce_to(expression e, const data_type& target, data_dictionary::database db, const sstring& keyspace);
 
 static bool is_widenable_to(const data_type& from, const data_type& to);
@@ -90,11 +91,74 @@ struct prepare_memo {
 // Memo-threaded overloads of the public entry points. The public (memo-less) functions
 // create a prepare_memo on the stack and delegate here; the recursive prepare passes the
 // same memo by reference, so it is never global.
-static std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo, bool allow_unresolved = false);
+static std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo, bool allow_unresolved = false);
 static assignment_testable::test_result test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo);
 static expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo);
 static assignment_testable::test_result test_assignment_all(const std::vector<expression>& to_test, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo);
 static ::shared_ptr<assignment_testable> as_assignment_testable(expression e, std::optional<data_type> type_opt, prepare_memo& memo);
+
+struct inferred_elements {
+    data_type element_type;
+    std::vector<expression> prepared;
+};
+
+template <typename Project>
+static std::optional<inferred_elements>
+prepare_and_infer_collection_elements(std::span<const expression> elements,
+        data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, Project&& project, prepare_memo& memo) {
+    std::optional<data_type> result;
+    std::vector<expression> prepared;
+    prepared.reserve(elements.size());
+    for (const expression& e : elements) {
+        std::optional<expression> p = try_prepare_expression(project(e), db, keyspace, schema_opt, nullptr, /*infer_default=*/true, memo);
+        if (!p) {
+            return std::nullopt;
+        }
+        data_type t = type_of(*p);
+        if (!result) {
+            result = t;
+        } else if (**result != *t) {
+            auto widened = try_widen(*result, t);
+            if (!widened) {
+                return std::nullopt;
+            }
+            result = std::move(widened);
+        }
+        prepared.push_back(std::move(*p));
+    }
+    if (!result) {
+        return std::nullopt;
+    }
+    return inferred_elements{std::move(*result), std::move(prepared)};
+}
+
+// Build a collection literal from elements that were already prepared (by
+// prepare_and_infer_collection_elements), coercing each to the collection's element type
+// rather than preparing it again. Folds to a terminal constant when every element is.
+static expression
+build_collection_from_prepared(collection_constructor::style_type style, data_type collection_type,
+        data_type element_type, std::vector<expression> prepared,
+        data_dictionary::database db, const sstring& keyspace) {
+    std::vector<expression> values;
+    values.reserve(prepared.size());
+    bool all_terminal = true;
+    for (auto& p : prepared) {
+        expression elem = coerce_to(std::move(p), element_type, db, keyspace);
+        if (!is<constant>(elem)) {
+            all_terminal = false;
+        }
+        values.push_back(std::move(elem));
+    }
+    collection_constructor value {
+        .style = style,
+        .elements = std::move(values),
+        .type = std::move(collection_type),
+    };
+    if (all_terminal) {
+        return constant(evaluate(value, query_options::DEFAULT), value.type);
+    }
+    return value;
+}
 
 
 static
@@ -306,10 +370,43 @@ map_test_assignment(const collection_constructor& c, data_dictionary::database d
 
 static
 std::optional<expression>
-map_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo) {
+map_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo) {
     if (!receiver) {
-        // TODO: It is possible to infer the type of a map from the types of the key/value pairs
-        return std::nullopt;
+        if (!infer_default) {
+            return std::nullopt;
+        }
+        auto key_of = [] (const expression& e) -> const expression& { return expr::as<tuple_constructor>(e).elements[0]; };
+        auto value_of = [] (const expression& e) -> const expression& { return expr::as<tuple_constructor>(e).elements[1]; };
+        auto keys = prepare_and_infer_collection_elements(c.elements, db, keyspace, schema_opt, key_of, memo);
+        auto values = prepare_and_infer_collection_elements(c.elements, db, keyspace, schema_opt, value_of, memo);
+        if (!keys || !values) {
+            return std::nullopt;
+        }
+        data_type map_type = map_type_impl::get_instance(keys->element_type, values->element_type, false);
+        data_type entry_tuple_type = tuple_type_impl::get_instance({keys->element_type, values->element_type});
+        std::vector<expression> entries;
+        entries.reserve(c.elements.size());
+        bool all_terminal = true;
+        for (size_t i = 0; i < c.elements.size(); ++i) {
+            expression k = coerce_to(std::move(keys->prepared[i]), keys->element_type, db, keyspace);
+            expression v = coerce_to(std::move(values->prepared[i]), values->element_type, db, keyspace);
+            if (!is<constant>(k) || !is<constant>(v)) {
+                all_terminal = false;
+            }
+            entries.emplace_back(tuple_constructor {
+                .elements = {std::move(k), std::move(v)},
+                .type = entry_tuple_type,
+            });
+        }
+        collection_constructor map_value {
+            .style = collection_constructor::style_type::map,
+            .elements = std::move(entries),
+            .type = map_type,
+        };
+        if (all_terminal) {
+            return constant(evaluate(map_value, query_options::DEFAULT), map_value.type);
+        }
+        return map_value;
     }
     map_validate_assignable_to(c, db, keyspace, schema_opt, *receiver, memo);
 
@@ -416,10 +513,19 @@ set_test_assignment(const collection_constructor& c, data_dictionary::database d
 
 static
 std::optional<expression>
-set_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo) {
+set_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo) {
     if (!receiver) {
-        // TODO: It is possible to infer the type of a set from the types of the values
-        return std::nullopt;
+        if (!infer_default) {
+            return std::nullopt;
+        }
+        auto identity = [] (const expression& e) -> const expression& { return e; };
+        auto inferred = prepare_and_infer_collection_elements(c.elements, db, keyspace, schema_opt, identity, memo);
+        if (!inferred) {
+            return std::nullopt;
+        }
+        return build_collection_from_prepared(collection_constructor::style_type::set,
+                set_type_impl::get_instance(inferred->element_type, false),
+                inferred->element_type, std::move(inferred->prepared), db, keyspace);
     }
     set_validate_assignable_to(c, db, keyspace, schema_opt, *receiver, memo);
 
@@ -640,10 +746,22 @@ list_or_vector_test_assignment(const collection_constructor& c, data_dictionary:
 
 static
 std::optional<expression>
-list_or_vector_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo) {
+list_or_vector_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo) {
     if (!receiver) {
-        // TODO: It is possible to infer the type of a list or vector from the types of the key/value pairs
-        return std::nullopt;
+        if (!infer_default) {
+            return std::nullopt;
+        }
+        // With no receiver we cannot know a vector's dimension, so a bare list/vector
+        // literal is inferred as a list, built directly from the elements prepared
+        // during inference rather than preparing them a second time.
+        auto identity = [] (const expression& e) -> const expression& { return e; };
+        auto inferred = prepare_and_infer_collection_elements(c.elements, db, keyspace, schema_opt, identity, memo);
+        if (!inferred) {
+            return std::nullopt;
+        }
+        return build_collection_from_prepared(collection_constructor::style_type::list_or_vector,
+                list_type_impl::get_instance(inferred->element_type, false),
+                inferred->element_type, std::move(inferred->prepared), db, keyspace);
     }
 
     // We do not check if the receiver is a list because it is checked later in the list_prepare_expression.
@@ -698,7 +816,7 @@ tuple_constructor_test_assignment(const tuple_constructor& tc, data_dictionary::
 
 static
 std::optional<expression>
-tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo) {
+tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo) {
     if (receiver) {
         tuple_constructor_validate_assignable_to(tc, db, keyspace, schema_opt, *receiver, memo);
     }
@@ -709,7 +827,7 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary:
         if (receiver) {
             component_receiver = component_spec_of(*receiver, i);
         }
-        std::optional<expression> value_opt = try_prepare_expression(tc.elements[i], db, keyspace, schema_opt, component_receiver, memo);
+        std::optional<expression> value_opt = try_prepare_expression(tc.elements[i], db, keyspace, schema_opt, component_receiver, infer_default && !receiver, memo);
         if (!value_opt) {
             return std::nullopt;
         }
@@ -866,11 +984,41 @@ untyped_constant_test_assignment(const untyped_constant& uc, data_dictionary::da
 }
 
 static
+std::optional<data_type>
+default_type_for_constant(const untyped_constant& uc) {
+    switch (uc.partial_type) {
+        case untyped_constant::type_class::string:          return utf8_type;
+        case untyped_constant::type_class::boolean:         return boolean_type;
+        case untyped_constant::type_class::floating_point:  return double_type;
+        case untyped_constant::type_class::duration:        return duration_type;
+        case untyped_constant::type_class::uuid:            return uuid_type;
+        case untyped_constant::type_class::hex:             return bytes_type;
+        case untyped_constant::type_class::null:            return std::nullopt;
+        case untyped_constant::type_class::integer:
+            try {
+                int32_type->from_string(uc.raw_text);
+                return int32_type;
+            } catch (const marshal_exception&) {}
+            try {
+                long_type->from_string(uc.raw_text);
+                return long_type;
+            } catch (const marshal_exception&) {}
+            return varint_type;
+    }
+    on_internal_error(expr_logger, format("unexpected untyped_constant type_class: {}", static_cast<int>(uc.partial_type)));
+}
+
+static
 std::optional<expression>
-untyped_constant_prepare_expression(const untyped_constant& uc, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver)
+untyped_constant_prepare_expression(const untyped_constant& uc, data_dictionary::database db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver, bool infer_default)
 {
     if (!receiver) {
-        // TODO: It is possible to infer the type of a constant by looking at the value and selecting the smallest fit
+        if (infer_default) {
+            if (auto default_type = default_type_for_constant(uc)) {
+                raw_value raw_val = cql3::raw_value::make_value(untyped_constant_parsed_value(uc, *default_type));
+                return constant(std::move(raw_val), std::move(*default_type));
+            }
+        }
         return std::nullopt;
     }
     if (!is_assignable(untyped_constant_test_assignment(uc, db, keyspace, *receiver))) {
@@ -1006,23 +1154,20 @@ sql_cast_prepare_expression(const cast& c, data_dictionary::database db, const s
             keyspace, "unknown_cf", ::make_shared<column_identifier>(receiver_name, true), cast_type);
     }
 
-    auto prepared_arg = try_prepare_expression(c.arg, db, keyspace, schema_opt, nullptr, memo);
-    if (!prepared_arg) {
-        throw exceptions::invalid_request_exception(fmt::format("Could not infer type of cast argument {}", c.arg));
-    }
+    auto prepared_arg = prepare_expression(c.arg, db, keyspace, schema_opt, nullptr, memo);
 
     // cast to the same type should be omitted
-    if (cast_type == type_of(*prepared_arg)) {
+    if (cast_type == type_of(prepared_arg)) {
         return prepared_arg;
     }
 
     // This will throw if a cast is impossible
-    auto fun = functions::get_castas_fctn_as_cql3_function(cast_type, type_of(*prepared_arg));
+    auto fun = functions::get_castas_fctn_as_cql3_function(cast_type, type_of(prepared_arg));
 
     // We implement the cast to a function_call.
     return function_call{
         .func = std::move(fun),
-        .args = std::vector({*prepared_arg}),
+        .args = std::vector({std::move(prepared_arg)}),
     };
 }
 
@@ -1040,7 +1185,7 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
 std::optional<expression>
 field_selection_prepare_expression(const field_selection& fs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo) {
     // We can't infer the type of the user defined type from the field being selected
-    auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, nullptr, memo);
+    auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, nullptr, /*infer_default=*/false, memo);
     if (!prepared_structure) {
         throw exceptions::invalid_request_exception(fmt::format("Cannot infer type of {}", fs.structure));
     }
@@ -1074,7 +1219,7 @@ field_selection_prepare_expression(const field_selection& fs, data_dictionary::d
 assignment_testable::test_result
 field_selection_test_assignment(const field_selection& fs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo) {
     // We can't infer the type of the user defined type from the field being selected
-    auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, nullptr, memo);
+    auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, nullptr, /*infer_default=*/false, memo);
     if (!prepared_structure) {
         throw exceptions::invalid_request_exception(fmt::format("Cannot infer type of {}", fs.structure));
     }
@@ -1202,8 +1347,22 @@ prepare_function_args_for_type_inference(std::span<const expression> args, data_
         // A nullopt means the argument can't be resolved without a receiver (e.g. a nested
         // call that is ambiguous until the parameter type is known) - it stays a hole, to be
         // probed against each candidate parameter type and re-prepared once one is chosen.
-        std::optional<expression> prepared_arg_opt = try_prepare_expression(argument, db, keyspace, schema_opt, nullptr, memo, /*allow_unresolved=*/true);
-        std::optional<data_type> type = prepared_arg_opt ? std::optional(type_of(*prepared_arg_opt)) : std::nullopt;
+        std::optional<expression> prepared_arg_opt = try_prepare_expression(argument, db, keyspace, schema_opt, nullptr, /*infer_default=*/false, memo, /*allow_unresolved=*/true);
+        std::optional<data_type> type;
+        if (prepared_arg_opt) {
+            type = type_of(*prepared_arg_opt);
+        } else {
+            // Hole: keep the raw expression as the testable (so overload resolution
+            // still fit-checks untyped constants against narrow parameter types), but
+            // attach a default-type hint for functions that need to know the argument
+            // type up front, such as count() and toJson(). The hint is derived from the
+            // same default inference used elsewhere; the defaulted form itself is not
+            // reused as the prepared argument, so it does not pin a literal to its
+            // default type before the real parameter type is known.
+            if (auto defaulted = try_prepare_expression(argument, db, keyspace, schema_opt, nullptr, /*infer_default=*/true, memo, /*allow_unresolved=*/true)) {
+                type = type_of(*defaulted);
+            }
+        }
         expression testable_expr = prepared_arg_opt ? *prepared_arg_opt : argument;
         partially_prepared_args.push_back(partially_prepared_arg{
             .testable = as_assignment_testable(std::move(testable_expr), std::move(type), memo),
@@ -1481,7 +1640,7 @@ std::optional<expression> prepare_conjunction(const conjunction& conj,
     bool all_terminal = true;
     for (const expression& child : conj.children) {
         std::optional<expression> prepared_child =
-            try_prepare_expression(child, db, keyspace, schema_opt, child_receiver, memo);
+            try_prepare_expression(child, db, keyspace, schema_opt, child_receiver, /*infer_default=*/false, memo);
         if (!prepared_child.has_value()) {
             throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", child));
         }
@@ -1566,13 +1725,13 @@ prepare_column_mutation_attribute(
 }
 
 std::optional<expression>
-try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default) {
     prepare_memo memo;
-    return try_prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver), memo);
+    return try_prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver), infer_default, memo);
 }
 
 static std::optional<expression>
-try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo, bool allow_unresolved) {
+try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default, prepare_memo& memo, bool allow_unresolved) {
     return expr::visit(overloaded_functor{
         [&] (const constant& value) -> std::optional<expression> {
             if (receiver && !is_assignable(expression_test_assignment(value.type, *receiver))) {
@@ -1628,7 +1787,7 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             }
             auto& schema = *schema_opt;
 
-            auto sub_col_opt = try_prepare_expression(sub.val, db, keyspace, schema_opt, receiver, memo);
+            auto sub_col_opt = try_prepare_expression(sub.val, db, keyspace, schema_opt, receiver, /*infer_default=*/false, memo);
             if (!sub_col_opt) {
                 return std::nullopt;
             }
@@ -1679,16 +1838,16 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             return bind_variable_prepare_expression(bv, db, keyspace, receiver);
         },
         [&] (const untyped_constant& uc) -> std::optional<expression> {
-            return untyped_constant_prepare_expression(uc, db, keyspace, receiver);
+            return untyped_constant_prepare_expression(uc, db, keyspace, receiver, infer_default);
         },
         [&] (const tuple_constructor& tc) -> std::optional<expression> {
-            return tuple_constructor_prepare_nontuple(tc, db, keyspace, schema_opt, receiver, memo);
+            return tuple_constructor_prepare_nontuple(tc, db, keyspace, schema_opt, receiver, infer_default, memo);
         },
         [&] (const collection_constructor& c) -> std::optional<expression> {
             switch (c.style) {
-            case collection_constructor::style_type::list_or_vector: return list_or_vector_prepare_expression(c, db, keyspace, schema_opt, receiver, memo);
-            case collection_constructor::style_type::set: return set_prepare_expression(c, db, keyspace, schema_opt, receiver, memo);
-            case collection_constructor::style_type::map: return map_prepare_expression(c, db, keyspace, schema_opt, receiver, memo);
+            case collection_constructor::style_type::list_or_vector: return list_or_vector_prepare_expression(c, db, keyspace, schema_opt, receiver, infer_default, memo);
+            case collection_constructor::style_type::set: return set_prepare_expression(c, db, keyspace, schema_opt, receiver, infer_default, memo);
+            case collection_constructor::style_type::map: return map_prepare_expression(c, db, keyspace, schema_opt, receiver, infer_default, memo);
             case collection_constructor::style_type::vector:
                 on_internal_error(expr_logger, "vector style type found during prepare, should have been introduced post-prepare");
             }
@@ -1906,7 +2065,15 @@ prepare_expression(const expression& expr, data_dictionary::database db, const s
 
 static expression
 prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, prepare_memo& memo) {
-    auto e_opt = try_prepare_expression(expr, db, keyspace, schema_opt, receiver, memo);
+    // Pass 1: contextual typing. Expressions without a type (untyped constants,
+    // collection literals) yield nullopt when no receiver constrains them.
+    auto e_opt = try_prepare_expression(expr, db, keyspace, schema_opt, receiver, /*infer_default=*/false, memo);
+    // Pass 2: default-type inference. The same prepare is retried with infer_default
+    // enabled, so untyped constants and collection literals fall back to a default
+    // type at the point where no receiver is available.
+    if (!e_opt) {
+        e_opt = try_prepare_expression(expr, db, keyspace, schema_opt, receiver, /*infer_default=*/true, memo);
+    }
     if (!e_opt) {
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", expr));
     }

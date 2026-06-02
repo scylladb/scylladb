@@ -191,7 +191,7 @@ extern expression search_and_replace(const expression& e,
 expression adjust_for_collection_as_maps(const expression& e);
 
 extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
-std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
+std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, bool infer_default = false);
 
 // Check that a prepared expression has no aggregate functions. Throws on error.
 void verify_no_aggregate_functions(const expression& expr, std::string_view context_for_errors);
