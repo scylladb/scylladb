@@ -47,6 +47,27 @@ void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare com
     }
 }
 
+// Similar to std::merge but it does not stall. Must run inside a seastar
+// thread. It merges items from list2 into list1 by splicing nodes, so the
+// element type only needs to be movable (not copyable) and no per-element
+// allocation/copy is performed. list2 is left empty on return.
+template<class T, class Compare>
+requires LessComparable<T, T, Compare>
+void merge_to_gently(std::list<T>& list1, std::list<T>&& list2, Compare comp) {
+    auto first1 = list1.begin();
+    auto last1 = list1.end();
+    while (!list2.empty()) {
+        seastar::thread::maybe_yield();
+        auto first2 = list2.begin();
+        if (first1 == last1 || comp(*first2, *first1)) {
+            // Move (splice) the next list2 node in front of first1.
+            list1.splice(first1, list2, first2);
+        } else {
+            ++first1;
+        }
+    }
+}
+
 // The clear_gently functions are meant for
 // gently destroying the contents of containers and smart pointers.
 // The containers can be reused after clear_gently

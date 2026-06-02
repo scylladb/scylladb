@@ -346,9 +346,9 @@ SEASTAR_TEST_CASE(repair_rows_size_considers_external_memory) {
         repair_row row_with_mf{frozen_mf, std::nullopt, nullptr, std::nullopt, is_dirty_on_master::no, mf};
         BOOST_REQUIRE_EQUAL(row_with_mf.size(), fmf_size + mf->memory_usage() + sizeof(repair_row));
 
-        // Test that boundary memory is counted.
+        // Test that boundary memory is counted, including its heap node.
         repair_row row_with_boundary{frozen_mf, pos, dk_ptr, std::nullopt, is_dirty_on_master::no, nullptr};
-        BOOST_REQUIRE_EQUAL(row_with_boundary.size(), fmf_size + boundary.pk.external_memory_usage() + boundary.position.external_memory_usage() + sizeof(repair_row));
+        BOOST_REQUIRE_EQUAL(row_with_boundary.size(), fmf_size + sizeof(repair_sync_boundary) + boundary.pk.external_memory_usage() + boundary.position.external_memory_usage() + sizeof(repair_row));
     });
 }
 

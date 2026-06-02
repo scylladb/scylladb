@@ -7,9 +7,12 @@
  */
 
 #include <compare>
+#include <list>
+#include <memory>
 #include <random>
 #include <set>
 #include <unordered_set>
+#include <vector>
 
 #include <seastar/util/later.hh>
 
@@ -51,6 +54,61 @@ SEASTAR_THREAD_TEST_CASE(test_merge4) {
     std::list<int> expected{1};
     utils::merge_to_gently(l1, l2, std::less<int>());
     BOOST_CHECK(l1 == expected);
+}
+
+// Exercise the move/splice overload of merge_to_gently with a move-only
+// element type. It must merge in sorted order, leave the source list empty,
+// and never copy the elements.
+namespace {
+auto deref_less = [] (const std::unique_ptr<int>& a, const std::unique_ptr<int>& b) {
+    return *a < *b;
+};
+std::list<std::unique_ptr<int>> make_ptr_list(std::initializer_list<int> vals) {
+    std::list<std::unique_ptr<int>> l;
+    for (int v : vals) {
+        l.push_back(std::make_unique<int>(v));
+    }
+    return l;
+}
+std::vector<int> deref_all(const std::list<std::unique_ptr<int>>& l) {
+    std::vector<int> out;
+    for (const auto& p : l) {
+        out.push_back(*p);
+    }
+    return out;
+}
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merge_move_interleaved) {
+    auto l1 = make_ptr_list({1, 2, 5, 8});
+    auto l2 = make_ptr_list({3});
+    utils::merge_to_gently(l1, std::move(l2), deref_less);
+    BOOST_CHECK((deref_all(l1) == std::vector<int>{1, 2, 3, 5, 8}));
+    BOOST_CHECK(l2.empty());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merge_move_tail) {
+    auto l1 = make_ptr_list({1});
+    auto l2 = make_ptr_list({3, 5, 6});
+    utils::merge_to_gently(l1, std::move(l2), deref_less);
+    BOOST_CHECK((deref_all(l1) == std::vector<int>{1, 3, 5, 6}));
+    BOOST_CHECK(l2.empty());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merge_move_into_empty) {
+    std::list<std::unique_ptr<int>> l1;
+    auto l2 = make_ptr_list({3, 5, 6});
+    utils::merge_to_gently(l1, std::move(l2), deref_less);
+    BOOST_CHECK((deref_all(l1) == std::vector<int>{3, 5, 6}));
+    BOOST_CHECK(l2.empty());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merge_move_empty_source) {
+    auto l1 = make_ptr_list({1, 4});
+    std::list<std::unique_ptr<int>> l2;
+    utils::merge_to_gently(l1, std::move(l2), deref_less);
+    BOOST_CHECK((deref_all(l1) == std::vector<int>{1, 4}));
+    BOOST_CHECK(l2.empty());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_string) {
