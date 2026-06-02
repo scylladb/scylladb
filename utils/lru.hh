@@ -12,6 +12,7 @@
 #include "utils/count_min_sketch.hh"
 #include <boost/intrusive/list.hpp>
 #include <seastar/core/memory.hh>
+#include <seastar/core/preempt.hh>
 #include <algorithm>
 #include <cmath>
 
@@ -356,6 +357,9 @@ private:
             evictable& victim = _protected.front();
             remove_from_segment(victim);
             add_to_segment(victim, lru_segment::probation);
+            if (seastar::need_preempt()) {
+                break;
+            }
         }
     }
 
@@ -410,6 +414,9 @@ private:
                     }
                 }
                 drained_any = true;
+                if (seastar::need_preempt()) {
+                    break;
+                }
                 continue;
             }
 
