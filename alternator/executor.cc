@@ -36,6 +36,7 @@
 #include "cql3/result_set.hh"
 #include "bytes.hh"
 #include "service/pager/query_pagers.hh"
+#include <algorithm>
 #include <functional>
 #include "error.hh"
 #include "serialization.hh"
@@ -182,6 +183,9 @@ void executor::maybe_audit(
 
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type,
         const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode);
+
+static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, sstring>& tags_map,
+    const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode);
 
 static const column_definition& attrs_column(const schema& schema) {
     const column_definition* cdef = schema.get_column_definition(bytes(executor::ATTRS_COLUMN_NAME));
@@ -1313,25 +1317,30 @@ static future<> mark_view_schemas_as_built(utils::chunked_vector<mutation>& out,
     }
 }
 
-// When Alternator Streams are requested on a tablet table, convert the
-// already-configured enabled=true CDC options into a deferred state:
+// When Alternator Streams are requested on a tablet table, update the
+// already-configured enabled=true CDC options:
+// - tablet_merge_blocked=true: suppress tablet merges that would produce
+//   2-parent shards incompatible with the DynamoDB Streams API
+//
+// If defer_enablement is true, also convert the options into a deferred state:
 // - enabled=false: don't create the CDC log table yet
 // - enable_requested=true: persist the user's intent for the topology
 //   coordinator to finalize later
-// - tablet_merge_blocked=true: suppress tablet merges that would produce
-//   2-parent shards incompatible with the DynamoDB Streams API
-// The topology coordinator will finalize enablement once all pending merges
-// complete (see maybe_finalize_pending_stream_enables in cdc/generation.cc).
+//
+// The topology coordinator will finalize deferred enablement once all pending
+// merges complete (see maybe_finalize_pending_stream_enables in cdc/generation.cc).
 //
 // Callers must ensure the builder already has CDC options with enabled=true.
-static void defer_enabling_streams_block_tablet_merges(schema_builder& builder) {
+static void block_tablet_merges_for_alternator_streams(schema_builder& builder, bool defer_enablement) {
     auto& exts = builder.get_extensions();
     auto ext = get_schema_extension<cdc::cdc_extension>(exts, cdc::cdc_extension::NAME);
     throwing_assert(ext);
     auto opts = ext->get_options();
     throwing_assert(opts.enabled());
-    opts.enabled(false);
-    opts.enable_requested(true);
+    if (defer_enablement) {
+        opts.enabled(false);
+        opts.enable_requested(true);
+    }
     opts.tablet_merge_blocked(true);
     builder.with_cdc_options(opts);
 }
@@ -1671,8 +1680,10 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     }
 
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
+    bool stream_enabled = false;
     if (stream_specification && stream_specification->IsObject()) {
         if (executor::add_stream_options(*stream_specification, builder, _proxy)) {
+            stream_enabled = true;
             validate_cdc_log_name_length(builder.cf_name());
         }
     }
@@ -1692,6 +1703,18 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
     co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
+
+    if (stream_enabled) {
+        const bool uses_tablets = get_initial_tablet_count(tags_map, _proxy.features(), tablets_mode).has_value();
+        if (uses_tablets) {
+            if (!_proxy.features().cdc_block_tablet_merges_for_alternator_streams) {
+                co_return api_error::validation(
+                        "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
+                        "support blocking tablet merges for Alternator Streams");
+            }
+            block_tablet_merges_for_alternator_streams(builder, /*defer_enablement=*/false);
+        }
+    }
 
     schema_ptr schema = builder.build();
     for (auto& view_builder : view_builders) {
@@ -1920,11 +1943,14 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 empty_request = false;
                 if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
                     validate_cdc_log_name_length(builder.cf_name());
-                    // On tablet tables, defer stream enablement and block
-                    // tablet merges (see defer_enabling_streams_block_tablet_merges).
                     bool uses_tablets = p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets();
                     if (uses_tablets) {
-                        defer_enabling_streams_block_tablet_merges(builder);
+                        if (!p.local().features().cdc_block_tablet_merges_for_alternator_streams) {
+                            co_return api_error::validation(
+                                    "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
+                                    "support blocking tablet merges for Alternator Streams");
+                        }
+                        block_tablet_merges_for_alternator_streams(builder, /*defer_enablement=*/true);
                     }
                 }
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
@@ -4519,14 +4545,8 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     co_return rjson::print(std::move(response));
 }
 
-// Create the metadata for the keyspace in which we put the alternator
-// table if it doesn't already exist.
-// Currently, we automatically configure the keyspace based on the number
-// of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
-// A smaller cluster (presumably, a test only), gets RF=1. The user may
-// manually create the keyspace to override this predefined behavior.
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
-            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
+static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, sstring>& tags_map,
+        const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
     // Whether to use tablets for the table (actually for the keyspace of the
     // table) is determined by tablets_mode (taken from the configuration
     // option "tablets_mode_for_new_keyspaces"), as well as the presence and
@@ -4537,31 +4557,50 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     // an automatic selection of the best number of tablets).
     // Setting this tag to any non-numeric value (e.g., an empty string or the
     // word "none") will ask to disable tablets.
-    // When vnodes are asked for by the tag value, but tablets are enforced by config,
-    // throw an exception to the client.
-    std::optional<unsigned> initial_tablets;
+    if (!feat.tablets) {
+        return std::nullopt;
+    }
+    auto it = tags_map.find(INITIAL_TABLETS_TAG_KEY);
+    if (it != tags_map.end()) {
+        // Tag set. If it's a valid number, use it. If not - e.g., it's
+        // empty or a word like "none", disable tablets by setting
+        // initial_tablets to a disengaged optional.
+        try {
+            auto value = std::stol(it->second);
+            return static_cast<unsigned>(std::max(0L, value));
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    else if (tablets_mode == db::tablets_mode_t::mode::enabled || tablets_mode == db::tablets_mode_t::mode::enforced) {
+        return 0;
+    }
+    return std::nullopt;
+}
+
+// Create the metadata for the keyspace in which we put the alternator
+// table if it doesn't already exist.
+// Currently, we automatically configure the keyspace based on the number
+// of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
+// A smaller cluster (presumably, a test only), gets RF=1. The user may
+// manually create the keyspace to override this predefined behavior.
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
+            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
+    auto initial_tablets = get_initial_tablet_count(tags_map, feat, tablets_mode);
     if (feat.tablets) {
-        auto it = tags_map.find(INITIAL_TABLETS_TAG_KEY);
-        if (it != tags_map.end()) {
-            // Tag set. If it's a valid number, use it. If not - e.g., it's
-            // empty or a word like "none", disable tablets by setting
-            // initial_tablets to a disengaged optional.
-            try {
-                initial_tablets = std::stol(tags_map.at(INITIAL_TABLETS_TAG_KEY));
-            } catch (...) {
+        if (tags_map.contains(INITIAL_TABLETS_TAG_KEY)) {
+            if (!initial_tablets) {
                 if (tablets_mode == db::tablets_mode_t::mode::enforced) {
+                    // When vnodes are asked for by the tag value, but tablets are enforced by config, throw an exception to the client.
                     throw api_error::validation(format("Tag {} containing non-numerical value requests vnodes, but vnodes are forbidden by configuration option `tablets_mode_for_new_keyspaces: enforced`", INITIAL_TABLETS_TAG_KEY));
                 }
-                initial_tablets = std::nullopt;
                 elogger.trace("Following {} tag containing non-numerical value, Alternator will attempt to create a keyspace {} with vnodes.", INITIAL_TABLETS_TAG_KEY, keyspace_name);
             }
         } else {
             // No per-table tag present, use the value from config
-            if (tablets_mode == db::tablets_mode_t::mode::enabled || tablets_mode == db::tablets_mode_t::mode::enforced) {
-                initial_tablets = 0;
+            if (initial_tablets) {
                 elogger.trace("Following the `tablets_mode_for_new_keyspaces` flag from the settings, Alternator will attempt to create a keyspace {} with tablets.", keyspace_name);
             } else {
-                initial_tablets = std::nullopt;
                 elogger.trace("Following the `tablets_mode_for_new_keyspaces` flag from the settings, Alternator will attempt to create a keyspace {} with vnodes.", keyspace_name);
             }
         }
