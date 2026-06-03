@@ -128,4 +128,13 @@ public:
     }
 };
 
+// copy() and size() enumerate repair_row's members by hand (copy() because the
+// type is move-only, size() to account for the out-of-line sync boundary). This
+// guard fires if the layout changes - e.g. a member is added - so both are
+// revisited rather than silently mishandling the new field. Update the expected
+// size deliberately together with copy()/size() when the layout legitimately
+// changes.
+static_assert(sizeof(repair_row) == 80,
+        "repair_row layout changed: revisit copy() and size() member-by-member handling");
+
 
