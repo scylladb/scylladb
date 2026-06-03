@@ -534,6 +534,18 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
                 .server = ci.server,
                 .conn_id = ci.conn_id,
             });
+            // Test-only: pause processing of a CLIENT_ID from a specific
+            // broadcast_address so that a newer CLIENT_ID can overtake it.
+            // The "target_addr" parameter restricts which CLIENT_ID is paused.
+            if (utils::get_local_injector().is_enabled("delay_client_id_before_map_update")) {
+                auto target = utils::get_local_injector().inject_parameter<std::string_view>(
+                    "delay_client_id_before_map_update", "target_addr");
+                if (!target || *target == fmt::format("{}", broadcast_address)) {
+                    co_await utils::get_local_injector().inject(
+                        "delay_client_id_before_map_update", utils::wait_for_message(60s));
+                }
+            }
+
             // Detect IP changes and evict stale cached RPC connections.
             // We rely on address_map's generation check to determine whether
             // the announced address is newer or stale:
