@@ -937,8 +937,16 @@ bool compaction::compaction_state::erase_sstable_requiring_cleanup(const sstable
 }
 
 void compaction::compaction_state::set_cleanup_owned_ranges(compaction::owned_ranges_ptr ranges) {
-    if (!_cleanup_state) {
-        _cleanup_state = std::make_unique<cleanup_state>();
+    // Owned ranges are only meaningful while there are sstables requiring
+    // cleanup: they are released together with the cleanup_state once the
+    // sstable set drains (see erase_sstable_requiring_cleanup). Storing ranges
+    // with no such sstables would create a cleanup_state that never drains,
+    // leaking the ranges and defeating the lazy-allocation memory saving. The
+    // sole caller already guards this with has_sstables_requiring_cleanup();
+    // report it so a future unguarded caller is caught rather than silently
+    // resurrecting that footgun.
+    if (!has_sstables_requiring_cleanup()) {
+        on_internal_error(cmlog, "set_cleanup_owned_ranges() called with no sstables requiring cleanup");
     }
     _cleanup_state->owned_ranges_ptr = std::move(ranges);
 }
