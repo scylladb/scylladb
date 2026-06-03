@@ -316,6 +316,7 @@ def run_scylla_cmd(pid, dir):
         # test/alternator/run.
         '--experimental-features=udf',
         '--experimental-features=views-with-tablets',
+        '--experimental-features=logstor',
         '--enable-tablets=true',
         '--enable-user-defined-functions', '1',
         # Views with tablets refuse to work if this option is not on :-(
