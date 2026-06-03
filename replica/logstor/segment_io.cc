@@ -7,6 +7,7 @@
  */
 
 #include "replica/logstor/segment_io.hh"
+#include "replica/logstor/logstor.hh"
 
 #include <seastar/core/align.hh>
 #include <seastar/core/simple-stream.hh>
@@ -210,6 +211,86 @@ future<> scan_segment(seastar::input_stream<char>& in,
             current_position += bytes_to_skip;
         }
     }
+}
+
+streamed_segment_rewriter::streamed_segment_rewriter(log_segment_id target_segment, segment_sequence target_seq, streamed_buffer_consumer on_buffer)
+    : _target_segment(target_segment)
+    , _target_seq(target_seq)
+    , _on_buffer(std::move(on_buffer)) {
+}
+
+ondisk::buffer_header streamed_segment_rewriter::read_buffer_header() const {
+    simple_memory_input_stream bh_stream(_pending_data.data(), ondisk::buffer_header_size);
+    return ser::deserialize(bh_stream, std::type_identity<ondisk::buffer_header>{});
+}
+
+void streamed_segment_rewriter::maybe_parse_initial_header() {
+    if (_initial_header_size || _pending_data.size() < ondisk::buffer_header_size) {
+        return;
+    }
+
+    auto bh = read_buffer_header();
+    if (!ondisk::validate_header(bh)) {
+        throw std::runtime_error("Invalid streamed logstor buffer header");
+    }
+
+    size_t header_size = ondisk::buffer_header_size;
+    if (bh.kind == segment_kind::full) {
+        header_size += ondisk::segment_header_size;
+    }
+    _initial_header_size = header_size;
+}
+
+void streamed_segment_rewriter::rewrite_buffer_header() {
+    auto bh = read_buffer_header();
+
+    logstor_logger.trace("Rewriting buffer header for segment {} seq {} with seq {}", _target_segment, bh.segment_seq, _target_seq);
+
+    bh.segment_seq = _target_seq;
+    bh.crc = bh.calculate_crc();
+
+    simple_memory_output_stream bh_stream(_pending_data.data(), ondisk::buffer_header_size);
+    ser::serialize<ondisk::buffer_header>(bh_stream, bh);
+}
+
+future<> streamed_segment_rewriter::flush_pending_data() {
+    if (_pending_data.empty()) {
+        co_return;
+    }
+    co_await _on_buffer(bytes_view(reinterpret_cast<const int8_t*>(_pending_data.data()), _pending_data.size()));
+    _pending_data.clear();
+}
+
+future<> streamed_segment_rewriter::put(std::span<temporary_buffer<char>> data) {
+    for (auto& buf : data) {
+        if (buf.empty()) {
+            continue;
+        }
+
+        if (_header_rewritten) {
+            co_await _on_buffer(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), buf.size()));
+            continue;
+        }
+
+        _pending_data.insert(_pending_data.end(), buf.get(), buf.get() + buf.size());
+        maybe_parse_initial_header();
+        if (_initial_header_size && _pending_data.size() >= *_initial_header_size) {
+            rewrite_buffer_header();
+            _header_rewritten = true;
+            co_await flush_pending_data();
+        }
+    }
+}
+
+future<> streamed_segment_rewriter::close() {
+    if (!_header_rewritten && !_pending_data.empty()) {
+        throw std::runtime_error("Truncated streamed logstor segment header");
+    }
+    co_return;
+}
+
+size_t streamed_segment_rewriter::buffer_size() const noexcept {
+    return 128 * 1024;
 }
 
 }

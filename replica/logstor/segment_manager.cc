@@ -2019,86 +2019,25 @@ future<> segment_manager::await_pending_writes() {
 
 class segment_data_sink_impl : public data_sink_impl {
     seg_ptr _segment;
-    std::vector<char> _pending_data;
-    std::optional<size_t> _initial_header_size;
-    bool _header_rewritten = false;
-
-    ondisk::buffer_header read_buffer_header() const {
-        simple_memory_input_stream bh_stream(_pending_data.data(), ondisk::buffer_header_size);
-        return ser::deserialize(bh_stream, std::type_identity<ondisk::buffer_header>{});
-    }
-
-    void maybe_parse_initial_header() {
-        if (_initial_header_size || _pending_data.size() < ondisk::buffer_header_size) {
-            return;
-        }
-
-        auto bh = read_buffer_header();
-        if (!ondisk::validate_header(bh)) {
-            throw std::runtime_error("Invalid streamed logstor buffer header");
-        }
-
-        size_t header_size = ondisk::buffer_header_size;
-        if (bh.kind == segment_kind::full) {
-            header_size += ondisk::segment_header_size;
-        }
-        _initial_header_size = header_size;
-    }
-
-    void rewrite_buffer_header() {
-        auto bh = read_buffer_header();
-
-        logstor_logger.trace("Rewriting buffer header for segment {} seq {} with seq {}", _segment->id(), bh.segment_seq, _segment->seq_num());
-
-        bh.segment_seq = _segment->seq_num();
-        bh.crc = bh.calculate_crc();
-
-        simple_memory_output_stream bh_stream(_pending_data.data(), ondisk::buffer_header_size);
-        ser::serialize<ondisk::buffer_header>(bh_stream, bh);
-    }
-
-    future<> flush_pending_data() {
-        if (_pending_data.empty()) {
-            co_return;
-        }
-        co_await _segment->append(bytes_view(reinterpret_cast<const int8_t*>(_pending_data.data()), _pending_data.size()));
-        _pending_data.clear();
-    }
+    streamed_segment_rewriter _rewriter;
 public:
     segment_data_sink_impl(seg_ptr segment)
         : _segment(std::move(segment))
+        , _rewriter(_segment->id(), _segment->seq_num(), [segment = _segment] (bytes_view data) {
+            return segment->append(data).discard_result();
+        })
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
-        for (auto& buf : data) {
-            if (buf.empty()) {
-                continue;
-            }
-
-            if (_header_rewritten) {
-                co_await _segment->append(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), buf.size()));
-                continue;
-            }
-
-            _pending_data.insert(_pending_data.end(), buf.get(), buf.get() + buf.size());
-            maybe_parse_initial_header();
-            if (_initial_header_size && _pending_data.size() >= *_initial_header_size) {
-                rewrite_buffer_header();
-                _header_rewritten = true;
-                co_await flush_pending_data();
-            }
-        }
+        co_await _rewriter.put(data);
     }
 
     virtual future<> close() override {
-        if (!_header_rewritten && !_pending_data.empty()) {
-            throw std::runtime_error("Truncated streamed logstor segment header");
-        }
-        co_return;
+        co_await _rewriter.close();
     }
 
     virtual size_t buffer_size() const noexcept override {
-        return 128 * 1024;
+        return _rewriter.buffer_size();
     }
 };
 

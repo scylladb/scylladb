@@ -10,7 +10,12 @@
 
 #include <functional>
 #include <optional>
+#include <span>
+#include <vector>
+
 #include <seastar/core/fstream.hh>
+#include <seastar/core/temporary_buffer.hh>
+
 #include "replica/logstor/ondisk.hh"
 
 namespace replica::logstor {
@@ -34,6 +39,7 @@ using want_data = seastar::bool_class<class want_data_tag>;
 using record_header_consumer = std::function<want_data(log_location, const log_record_header&)>;
 using record_consumer = std::function<future<>(log_location, log_record)>;
 using segment_header_consumer = std::function<future<>(const segment_header&)>;
+using streamed_buffer_consumer = std::function<future<>(bytes_view)>;
 
 future<std::optional<segment_header>> read_segment_header(seastar::input_stream<char>& in);
 
@@ -46,5 +52,30 @@ future<> scan_segment(seastar::input_stream<char>& in,
         segment_header_consumer on_segment_header,
         record_header_consumer on_record_header,
         record_consumer on_record);
+
+// Rewrites the initial streamed logstor buffer header to the local segment sequence and
+// forwards subsequent bytes unchanged. This preserves the current branch's streaming
+// behavior, which only rewrites the first streamed buffer header.
+class streamed_segment_rewriter {
+    log_segment_id _target_segment;
+    segment_sequence _target_seq;
+    streamed_buffer_consumer _on_buffer;
+    std::vector<char> _pending_data;
+    std::optional<size_t> _initial_header_size;
+    bool _header_rewritten = false;
+
+    ondisk::buffer_header read_buffer_header() const;
+    void maybe_parse_initial_header();
+    void rewrite_buffer_header();
+    future<> flush_pending_data();
+
+public:
+    streamed_segment_rewriter(log_segment_id target_segment, segment_sequence target_seq, streamed_buffer_consumer on_buffer);
+
+    future<> put(std::span<temporary_buffer<char>> data);
+    future<> close();
+
+    size_t buffer_size() const noexcept;
+};
 
 }
