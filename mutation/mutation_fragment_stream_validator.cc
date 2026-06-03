@@ -63,9 +63,9 @@ mutation_fragment_stream_validator::validate(dht::token t, const partition_key* 
     if (_prev_partition_key.token() == t && pkey && _prev_partition_key.key().legacy_tri_compare(_schema, *pkey) >= 0) {
         return ooo_key_result(_schema, t, pkey, _prev_partition_key);
     }
-    // t is normally a key-kind partition token; route it through raw_token(const token&) so a stray
-    // after_all_keys token (which raw() would silently fold onto token::last()) trips the DEBUG kind==key
-    // assertion, while before_all_keys is stored losslessly as a disengaged raw_token (as before).
+    if (t.is_maximum()) {
+        return validation_result::invalid(format("unexpected after-all-keys token: {}", t));
+    }
     _prev_partition_key._token = t.is_minimum() ? dht::raw_token() : dht::raw_token(t);
     if (pkey) {
         _prev_partition_key._key = *pkey;
