@@ -386,6 +386,12 @@ public:
     // be replayed on the next reboot.
     replay_position min_position() const;
 
+    // For testing only. Returns the active segments current position
+    // (ignoring chunk overhead etc)
+    replay_position current_position() const;
+    // Gets sector overhead for size in given segment
+    size_t sector_overhead(segment_id_type, size_t) const;
+
     // (Re-)set data mix lifetime.
     void update_max_data_lifetime(std::optional<uint64_t> commitlog_data_max_lifetime_in_seconds);
 

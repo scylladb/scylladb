@@ -340,7 +340,9 @@ public:
 
     future<> oversized_allocation(entry_writer&, db::timeout_clock::time_point timeout);
 
-    replay_position min_position();
+    replay_position min_position() const;
+    replay_position current_position() const;
+    size_t sector_overhead(segment_id_type, size_t) const;
 
     template<typename T>
     struct byte_flow {
@@ -1508,12 +1510,30 @@ public:
     }
 };
 
-db::replay_position db::commitlog::segment_manager::min_position() {
+db::replay_position db::commitlog::segment_manager::min_position() const {
     if (_segments.empty()) {
         return {_ids, 0};
     } else {
         return {_segments.front()->_desc.id, 0};
     }
+}
+
+db::replay_position db::commitlog::segment_manager::current_position() const {
+    if (_segments.empty()) {
+        return {_ids, 0};
+    } else {
+        auto s = _segments.front();
+        return {s->_desc.id, s->position()};
+    }
+}
+
+size_t db::commitlog::segment_manager::sector_overhead(segment_id_type id, size_t size) const {
+    for (auto& s : _segments) {
+        if (s->_desc.id == id) {
+            return s->sector_overhead(size);
+        }
+    }
+    return 0;
 }
 
 template<typename T, typename R>
@@ -1777,7 +1797,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                 }
                 // bytes not counting overhead
                 auto pos = s->position();
-                auto max = std::max<size_t>(pos, max_size);
+                auto max = std::min<size_t>(pos, max_size);
                 auto buf_rem = std::min(max_size - max, s->_buffer_ostream.size());
 
                 size_t avail;
@@ -1791,8 +1811,8 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                 } else {
                     co_await s->cycle();
                     auto pos = s->position();
-                    auto max = std::max<size_t>(pos, max_size);
-                    auto file_rem = max - pos;
+                    auto max = std::min<size_t>(pos, max_size);
+                    auto file_rem = max_size - max;
 
                     if (file_rem < align) {
                         co_await s->close();
@@ -3965,6 +3985,14 @@ gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id, const db::
 
 db::replay_position db::commitlog::min_position() const {
     return _segment_manager->min_position();
+}
+
+db::replay_position db::commitlog::current_position() const {
+    return _segment_manager->current_position();
+}
+
+size_t db::commitlog::sector_overhead(segment_id_type id, size_t size) const {
+    return _segment_manager->sector_overhead(id, size);
 }
 
 void db::commitlog::update_max_data_lifetime(std::optional<uint64_t> commitlog_data_max_lifetime_in_seconds) {
