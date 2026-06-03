@@ -236,9 +236,11 @@ private:
     position_in_partition _next_position_in_partition = position_in_partition::for_partition_start();
     // These are used when the reader has to be recreated (after having been
     // evicted while paused) and the range and/or slice it is recreated with
-    // differs from the original ones.
-    std::optional<dht::partition_range> _range_override;
-    std::optional<query::partition_slice> _slice_override;
+    // differs from the original ones. Held behind unique_ptr since this only
+    // happens on the rare reader-recreation path, keeping the common-case
+    // reader smaller.
+    std::unique_ptr<dht::partition_range> _range_override;
+    std::unique_ptr<query::partition_slice> _slice_override;
 
     mutation_reader_opt _reader;
 
@@ -347,7 +349,7 @@ void evictable_reader::update_next_position() {
 }
 
 void evictable_reader::adjust_partition_slice() {
-    _slice_override = _ps;
+    _slice_override = std::make_unique<query::partition_slice>(_ps);
 
     auto ranges = _slice_override->default_row_ranges();
     query::trim_clustering_row_ranges_to(*_schema, ranges, _next_position_in_partition);
@@ -392,7 +394,7 @@ mutation_reader evictable_reader::recreate_reader() {
             return make_empty_mutation_reader(_schema, _permit);
         }
 
-        _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end());
+        _range_override = std::make_unique<dht::partition_range>(dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end()));
         range = &*_range_override;
 
         _reader_recreated = true;
