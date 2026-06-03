@@ -661,8 +661,9 @@ private:
     // with linking or moving the sstable between directories.
     mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
     std::unique_ptr<sstring> _cloned_to_sstable_filename;
-    // Used only for writing sstable.
-    scylla_metadata::components_digests _components_digests;
+    // Digest (CRC32) of the TOC component. Computed when the TOC is written
+    // (write path) or read (read path), and validated against the on-disk
+    // Scylla metadata's ComponentsDigests on load.
     uint32_t _toc_digest{};
 public:
     bool has_component(component_type f) const;
@@ -723,19 +724,22 @@ private:
     void open_sstable(const sstring& origin);
 
     future<> read_compression();
-    void write_compression();
+    // Writes the CompressionInfo component (if present) and returns its digest.
+    std::optional<uint32_t> write_compression();
 
     future<> read_scylla_metadata() noexcept;
 
     void write_scylla_metadata(shard_id shard,
                                run_identifier identifier,
+                               scylla_metadata::components_digests components_digests,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
                                std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
 
     future<> read_filter(sstable_open_config cfg = {});
 
-    void write_filter();
+    // Writes the Filter component (if present) and returns its digest.
+    std::optional<uint32_t> write_filter();
     // Rebuild a bloom filter from the index with the given number of
     // partitions, if the partition estimate provided during bloom
     // filter initialisation was not good.
@@ -749,9 +753,10 @@ private:
     future<> read_toc(sstable_open_config cfg = {}) noexcept;
     future<> read_summary() noexcept;
 
-    void write_summary() {
-        auto digest = write_simple_with_digest<component_type::Summary>(_components->summary);
-        _components_digests.map[component_type::Summary] = digest;
+    // Writes the Summary component and returns its digest, to be recorded by
+    // the writer in the ComponentsDigests map.
+    uint32_t write_summary() {
+        return write_simple_with_digest<component_type::Summary>(_components->summary);
     }
 
     // To be called when we try to load an SSTable that lacks a Summary. Could
@@ -761,7 +766,8 @@ private:
     future<> read_partitions_db_footer();
 
     future<> read_statistics();
-    void write_statistics();
+    // Writes the Statistics component and returns its digest.
+    uint32_t write_statistics();
     // Validate metadata that's used to optimize reads when user specifies
     // a clustering key range. If this specific metadata is incorrect, then
     // it should be cleared. Otherwise, it could lead to bad decisions.
@@ -804,8 +810,8 @@ private:
     void disable_component_memory_reload();
 
     static bool is_component_rewrite_supported(component_type type);
-    // Must be called in a seastar thread
-    void write_component(component_type type);
+    // Must be called in a seastar thread. Returns the component's digest.
+    uint32_t write_component(component_type type);
 public:
     // Finds first position_in_partition in a given partition.
     // If reversed is false, then the first position is actually the first row (can be the static one).
@@ -1074,11 +1080,6 @@ public:
 
     std::optional<uint32_t> get_digest() const {
         return _components->digest;
-    }
-
-    // Used only for writing sstable.
-    scylla_metadata::components_digests& get_components_digests() {
-        return _components_digests;
     }
 
     std::optional<uint32_t> get_component_digest(component_type c) const;

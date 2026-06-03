@@ -1063,7 +1063,9 @@ void sstable::write_toc(std::unique_ptr<crc32_digest_file_writer> w) {
         });
     });
 
-    _components_digests.map[component_type::TOC] = w->full_checksum();
+    // The TOC digest is also computed on read (read_toc); the writer records it
+    // in the Scylla metadata's ComponentsDigests map via _toc_digest.
+    _toc_digest = w->full_checksum();
 }
 
 void sstable::write_crc(const checksum& c) {
@@ -1080,7 +1082,6 @@ void sstable::write_digest(uint32_t full_checksum) {
         auto digest = to_sstring<bytes>(full_checksum);
         write(v, w, digest);
     }, buffer_size);
-    _components_digests.map[component_type::Data] = full_checksum;
 }
 
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
@@ -1235,13 +1236,12 @@ future<> sstable::read_compression() {
     _components->compression.discard_hidden_options();
 }
 
-void sstable::write_compression() {
+std::optional<uint32_t> sstable::write_compression() {
     if (!has_component(component_type::CompressionInfo)) {
-        return;
+        return std::nullopt;
     }
 
-    auto digest = write_simple_with_digest<component_type::CompressionInfo>(_components->compression);
-    _components_digests.map[component_type::CompressionInfo] = digest;
+    return write_simple_with_digest<component_type::CompressionInfo>(_components->compression);
 }
 
 void sstable::validate_partitioner() {
@@ -1520,9 +1520,8 @@ future<> sstable::read_partitions_db_footer() {
     }
 }
 
-void sstable::write_statistics() {
-    auto digest = write_simple_with_digest<component_type::Statistics>(_components->statistics);
-    _components_digests.map[component_type::Statistics] = digest;
+uint32_t sstable::write_statistics() {
+    return write_simple_with_digest<component_type::Statistics>(_components->statistics);
 }
 
 void sstable::mark_as_being_repaired(const service::session_id& id) {
@@ -1632,8 +1631,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
 // Rewrites a single SSTable component along with updated Scylla metadata.
 // This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
-// 1. Write the component file (e.g., Statistics-*.db)
-//    - This calculates and stores the component's digest in _components_digests.map[type]
+// 1. Write the component file (e.g., Statistics-*.db) and obtain its digest
 // 2. Update the Scylla metadata's ComponentsDigests map with the new component digest
 // 3. Calculate the Scylla metadata's own digest based on its updated data
 // 4. Write the Scylla metadata component file
@@ -1643,9 +1641,9 @@ void sstable::write_component_with_metadata(component_type type, scylla_metadata
         on_internal_error(sstlog, "Only Statistics component can be rewritten.");
     }
 
-    write_component(type);
+    auto digest = write_component(type);
 
-    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    metadata.get_or_create_components_digests().map[type] = digest;
     metadata.digest = serialized_checksum(_version, metadata.data);
 
     write_simple<component_type::Scylla>(metadata);
@@ -1837,17 +1835,16 @@ future<> sstable::read_filter(sstable_open_config cfg) {
     });
 }
 
-void sstable::write_filter() {
+std::optional<uint32_t> sstable::write_filter() {
     if (!has_component(component_type::Filter)) {
-        return;
+        return std::nullopt;
     }
 
     auto f = downcast_ptr<utils::filter::murmur3_bloom_filter>(_components->filter.get());
 
     auto&& bs = f->bits();
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
-    auto digest = write_simple_with_digest<component_type::Filter>(filter_ref);
-    _components_digests.map[component_type::Filter] = digest;
+    return write_simple_with_digest<component_type::Filter>(filter_ref);
 }
 
 void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
@@ -2040,11 +2037,10 @@ bool sstable::is_component_rewrite_supported(component_type type) {
     }
 }
 
-void sstable::write_component(component_type type) {
+uint32_t sstable::write_component(component_type type) {
     switch (type) {
     case component_type::Statistics:
-        write_statistics();
-        break;
+        return write_statistics();
     default:
         on_internal_error(sstlog, fmt::format("Writing component {} is not supported.", component_name(*this, type)));
     }
@@ -2348,6 +2344,7 @@ static sstable_column_kind to_sstable_column_kind(column_kind k) {
 
 void
 sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
+        scylla_metadata::components_digests components_digests,
         std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
         std::optional<scylla_metadata::large_data_records> ld_records) {
     auto&& first_key = get_first_decorated_key();
@@ -2425,7 +2422,7 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         sstable_schema.columns.elements.push_back(sstable_column_description{to_sstable_column_kind(col.kind), {col.name()}, {to_bytes(col.type->name())}});
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
-    _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(scylla_metadata::components_digests{_components_digests});
+    _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(std::move(components_digests));
 
     _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
