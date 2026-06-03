@@ -12,7 +12,10 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <unordered_set>
+
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -25,6 +28,8 @@
 #include "replica/schema_describe_helper.hh"
 #include "sstables/sstables_manager.hh"
 #include "service/storage_proxy.hh"
+
+using namespace std::chrono_literals;
 
 logging::logger snap_log("snapshots");
 
@@ -39,6 +44,10 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::stor
     , _storage_manager(sstm)
 {
     tm.register_module("snapshot", _task_manager_module);
+    // FIXME: scan existing snapshots on disk and schedule expiration for those with ttl.
+    if (this_shard_id() == 0) {
+        _delete_expired_snapshots = delete_expired_snapshots();
+    }
 }
 
 future<> snapshot_ctl::stop() {
@@ -53,6 +62,9 @@ future<> snapshot_ctl::disable_all_operations() {
         }
         co_await _ops.close();
     }
+    // Wake up the expiration task and await for it to finish.
+    _expiration_cond.signal();
+    co_await std::exchange(_delete_expired_snapshots, make_ready_future<>());
 }
 
 future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter) {
@@ -183,10 +195,17 @@ future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vect
         t = resolve_table_name(ks_name, t);
     }
     co_await check_snapshot_not_exist(ks_name, tag, tables);
+    snap_log.debug("take_snapshot: tag={} keyspace={} tables={}: skip_flush={} created_at={} expires_at={}",
+            tag, ks_name, fmt::join(tables, ","),
+            opts.skip_flush, opts.created_at, opts.expires_at.value_or(gc_clock::time_point::min()));
     co_await replica::database::snapshot_tables_on_all_shards(_db, ks_name, std::move(tables), std::move(tag), opts);
 }
 
 future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
+    snap_log.debug("clear_snapshot: tag={} keyspaces={} table={}", tag, fmt::join(keyspace_names, ","), cf_name);
+    co_await container().invoke_on(0, [&] (auto& sc) {
+        return sc.cancel_expiration(tag, keyspace_names, cf_name);
+    });
     co_return co_await run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] (this auto) -> future<> {
         // clear_snapshot enumerates keyspace_names and uses cf_name as a
         // filter in each. When cf_name needs resolution (e.g. logical index
@@ -262,6 +281,7 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
     if (!storage_options.is_local_type()) {
         throw std::invalid_argument("not able to backup a non-local table");
     }
+    cancel_expiration(snapshot_name, {keyspace}, table);
     auto& local_storage_options = std::get<data_dictionary::storage_options::local>(storage_options.value);
     //
     // The keyspace data directories and their snapshots are arranged as follows:
@@ -299,4 +319,79 @@ future<int64_t> snapshot_ctl::true_snapshots_size(sstring ks, sstring cf) {
     }));
 }
 
+future<> snapshot_ctl::delete_expired_snapshots() {
+    auto delete_expired_snapshot = [this](expiration_info info) {
+        snap_log.info("Deleting expired snapshot {} of table {}.{}", info.tag, info.ks_name, info.table_name);
+        // Awaited indirectly using the `_ops` gate
+        (void)run_snapshot_modify_operation([this, info = std::move(info)]() mutable {
+            return _db.local().clear_snapshot(info.tag, {info.ks_name}, info.table_name).handle_exception([info = std::move(info)](std::exception_ptr ep) {
+                snap_log.warn("Failed to delete expired snapshot {} of table {}.{}: {}: Ignored", info.tag, info.ks_name, info.table_name, ep);
+            });
+        });
+    };
+    auto expiration_timer = timer([this] {
+        snap_log.debug("Expiration timer fired: queued={}", _expiration_queue.size());
+        _expiration_cond.signal();
+    });
+    while (!_ops.is_closed()) {
+        if (!_expiration_queue.empty()) {
+            auto now = gc_clock::now();
+            if (_expiration_queue.front().expires_at <= now) {
+                // FIXME: do not delete expired snapshots during backup
+                auto info = _expiration_queue.front();
+                std::ranges::pop_heap(_expiration_queue, std::greater{}, &expiration_info::expires_at);
+                _expiration_queue.resize(_expiration_queue.size() - 1);
+                delete_expired_snapshot(std::move(info));
+                continue;
+            } else {
+                auto wait_duration = _expiration_queue.front().expires_at - now;
+                snap_log.debug("Expiration waiting for {}: queued={}", wait_duration, _expiration_queue.size());
+                expiration_timer.rearm(timer<>::clock::now() + wait_duration);
+            }
+        } else {
+            snap_log.debug("Expiration waiting indefinitely: queue is empty");
+        }
+        co_await _expiration_cond.wait();
+    }
 }
+
+void snapshot_ctl::schedule_expiration(gc_clock::time_point when, sstring ks_name, sstring table_name, sstring tag) {
+    if (this_shard_id() != 0) {
+        on_internal_error(snap_log, "schedule_expiration must be called on shard 0");
+    }
+    if (!_ops.is_closed()) {
+        snap_log.info("Scheduling expiration of snapshot {} of table {}.{} at {}", tag, ks_name, table_name, when);
+        _expiration_queue.emplace_back(expiration_info{
+            .expires_at = when,
+            .ks_name = std::move(ks_name),
+            .table_name = std::move(table_name),
+            .tag = std::move(tag)
+        });
+        std::ranges::push_heap(_expiration_queue, std::greater{}, &expiration_info::expires_at);
+        _expiration_cond.signal();
+    }
+}
+
+void snapshot_ctl::cancel_expiration(sstring tag, std::vector<sstring> ks_names, sstring table_name) {
+    if (this_shard_id() != 0) {
+        on_internal_error(snap_log, "cancel_expiration must be called on shard 0");
+    }
+    snap_log.debug("Cancel expiration of snapshots with tag='{}' in keyspaces={} table={}", tag, fmt::join(ks_names, ","), table_name);
+    std::unordered_set<sstring> keyspaces;
+    std::ranges::move(ks_names, std::inserter(keyspaces, keyspaces.end()));
+    _expiration_queue.erase(std::remove_if(_expiration_queue.begin(), _expiration_queue.end(), [&] (const expiration_info& info) {
+        if (!tag.empty() && info.tag != tag) {
+            return false;
+        }
+        if (!keyspaces.empty() && !keyspaces.contains(info.ks_name)) {
+            return false;
+        }
+        if (!table_name.empty() && info.table_name != table_name) {
+            return false;
+        }
+        return true;
+    }), _expiration_queue.end());
+    std::ranges::make_heap(_expiration_queue, std::greater{}, &expiration_info::expires_at);
+}
+
+} // namespace db

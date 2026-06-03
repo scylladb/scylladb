@@ -24,6 +24,8 @@
 #include <functional>
 #include <iterator>
 #include <chrono>
+#include <boost/regex.hpp>
+#include <string>
 #include <boost/algorithm/string/trim_all.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/functional/hash.hpp>
@@ -143,6 +145,37 @@ std::pair<sstring, std::vector<table_info>> parse_table_infos(const http_context
     auto keyspace = validate_keyspace(ctx, req);
     auto tis = parse_table_infos(keyspace, ctx, req.get_query_param(cf_param_name));
     return std::make_pair(std::move(keyspace), std::move(tis));
+}
+
+std::optional<std::chrono::seconds> validate_ttl(const std::string& value) {
+    if (value.empty()) {
+        return std::nullopt;
+    }
+
+    // Match an integer, optional whitespace, and an optional single-character suffix
+    static const boost::regex re(R"((\d+)\s*([smhd])?)", boost::regex_constants::icase);
+    boost::smatch match;
+    if (!boost::regex_match(value, match, re)) {
+        throw bad_param_exception(fmt::format("TTL value '{}' is not valid, expected a non-negative integer with an optional suffix [smhd]", value));
+    }
+
+    int res;
+    try {
+        res = std::stoi(match[1].str());
+    } catch (...) {
+        throw bad_param_exception(fmt::format("Parsing TTL value '{}' failed: {}", value, std::current_exception()));
+    }
+
+    auto suffix = match[2].str();
+    auto c = suffix.empty() ? 's' : std::tolower(suffix[0]);
+    switch (c) {
+    case 's': return std::chrono::seconds(res);
+    case 'm': return std::chrono::minutes(res);
+    case 'h': return std::chrono::hours(res);
+    case 'd': return std::chrono::days(res);
+    }
+
+    std::unreachable();
 }
 
 static ss::token_range token_range_endpoints_to_json(const dht::token_range_endpoints& d) {
@@ -2132,6 +2165,10 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         db::snapshot_options opts = {
             .skip_flush = strcasecmp(sfopt.c_str(), "true") == 0,
         };
+        auto ttl = validate_ttl(req->get_query_param("ttl"));
+        if (ttl && *ttl > 0s) {
+            opts.expires_at = opts.created_at + std::chrono::seconds(*ttl);
+        }
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
         try {

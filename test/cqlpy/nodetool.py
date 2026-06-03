@@ -21,6 +21,9 @@ import subprocess
 import shutil
 import pytest
 import re
+from collections import defaultdict
+from datetime import datetime
+
 
 # For a "cql" object connected to one node, find the REST API URL
 # with the same node and port 10000.
@@ -54,14 +57,17 @@ def nodetool_cmd():
     if nodetool_cmd.cmd:
         return nodetool_cmd.cmd
     if not nodetool_cmd.failed:
-        nodetool_cmd.conf = os.getenv('NODETOOL') or 'nodetool'
-        nodetool_cmd.cmd = shutil.which(nodetool_cmd.conf)
+        nodetool_cmd.conf = os.getenv('NODETOOL').split() or ['nodetool']
+        nodetool_cmd.cmd = shutil.which(nodetool_cmd.conf[0])
         if nodetool_cmd.cmd is None:
             nodetool_cmd.failed = True
+        elif len(nodetool_cmd.conf) > 1:
+            nodetool_cmd.args = nodetool_cmd.conf[1:]
     if nodetool_cmd.failed:
         pytest.fail(f"Error: Can't find {nodetool_cmd.conf}. Please set the NODETOOL environment variable to the path of the nodetool utility.", pytrace=False)
     return nodetool_cmd.cmd
 nodetool_cmd.cmd = None
+nodetool_cmd.args = []
 nodetool_cmd.failed = False
 nodetool_cmd.conf = False
 
@@ -71,7 +77,10 @@ def run_nodetool(cql, *args, **subprocess_kwargs):
     # TODO: We may need to change this function or its callers to add proper
     # support for testing on multi-node clusters.
     host = cql.cluster.contact_points[0]
-    return subprocess.run([nodetool_cmd(), '-h', host, *args], **subprocess_kwargs)
+    cmd = [nodetool_cmd()]
+    cmd.extend(nodetool_cmd.args)
+    cmd.extend(['-h', host, *args])
+    return subprocess.run(cmd, **subprocess_kwargs)
 
 def flush(cql, table):
     ks, cf = table.split('.')
@@ -115,14 +124,19 @@ def compact_keyspace(cql, ks, flush_memtables=True):
         args.extend([ks])
         run_nodetool(cql, "compact", *args)
 
-def take_snapshot(cql, table, tag, skip_flush):
+def take_snapshot(cql, table, tag, skip_flush = None, ttl = None):
     ks, cf = table.split('.')
     if has_rest_api(cql):
-        requests.post(f'{rest_api_url(cql)}/storage_service/snapshots/', params={'kn': ks, 'cf' : cf, 'tag': tag, 'sf': skip_flush})
+        params = {'kn': ks, 'cf' : cf, 'tag': tag, 'sf': skip_flush}
+        if ttl is not None:
+            params['ttl'] = str(ttl)
+        requests.post(f'{rest_api_url(cql)}/storage_service/snapshots/', params=params)
     else:
         args = ['--tag', tag, '--table', cf]
         if skip_flush:
             args.append('--skip-flush')
+        if ttl is not None:
+            args.extend(['--ttl', str(ttl)])
         args.append(ks)
         run_nodetool(cql, "snapshot", *args)
 
@@ -137,6 +151,54 @@ def del_snapshot(cql, tag:str, keyspaces:list[str] = []):
         if keyspaces:
             args.extend(keyspaces)
         run_nodetool(cql, "clearsnapshot", *args)
+
+def list_snapshots(cql):
+    if has_rest_api(cql):
+        api_res = requests.get(f'{rest_api_url(cql)}/storage_service/snapshots/')
+        api_res.raise_for_status()
+        return api_res.json()
+    else:
+        nodetool_res = run_nodetool(cql, "listsnapshots", capture_output=True, text=True)
+        if nodetool_res.returncode != 0:
+            raise RuntimeError(f"nodetool listsnapshots failed: {nodetool_res.stderr}")
+
+        def with_units(value, units) -> int:
+            mult = 1
+            if units:
+                if units.upper()[0] == 'B':
+                    mult = 1
+                elif units.upper()[0] == 'K':
+                    mult = 1024
+                elif units.upper()[0] == 'M':
+                    mult = 1024*1024
+                elif units.upper()[0] == 'G':
+                    mult = 1024*1024*1024
+                elif units.upper()[0] == 'T':
+                    mult = 1024*1024*1024*1024
+                else:
+                    raise RuntimeError(f"nodetool listsnapshots has unrecognized {units=} for {value=}")
+            return int(float(value) * mult)
+
+        def ts_fromisoformat(value):
+            return datetime.fromisoformat(value).timestamp()
+
+        res = defaultdict(list)
+        for line in nodetool_res.stdout.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped == "There are no snapshots":
+                continue
+            parts = stripped.split()
+            if parts[0] == "Snapshot" or parts[0] == "Total":
+                continue
+            res[parts[0]].append({
+                'ks': parts[1],
+                'cf': parts[2],
+                'live': with_units(parts[3], parts[4]) if len(parts) > 4 else 0,
+                'total': with_units(parts[5], parts[6]) if len(parts) > 6 else 0,
+                'created_at': ts_fromisoformat(parts[7]) if len(parts) > 7 else None,
+                'expires_at': ts_fromisoformat(parts[8]) if len(parts) > 8 else None,
+            })
+        return [{'key': k, 'value': v} for k, v in res.items()]
 
 def refreshsizeestimates(cql):
     if has_rest_api(cql):

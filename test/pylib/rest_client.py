@@ -433,11 +433,13 @@ class ScyllaRESTAPIClient:
         ]
         return await self.client.post_json(f"/storage_service/tablets/restore", host=node_ip, params=params, json=backup_location)
 
-    async def take_snapshot(self, node_ip: str, ks: str, tag: str, tables: list[str] = None) -> None:
+    async def take_snapshot(self, node_ip: str, ks: str, tag: str, tables: list[str] = None, ttl: Optional[str] = None) -> None:
         """Take keyspace snapshot"""
         params = { 'kn': ks, 'tag': tag }
         if tables:
             params['cf'] = ','.join(tables)
+        if ttl is not None:
+            params['ttl'] = ttl
         await self.client.post(f"/storage_service/snapshots", host=node_ip, params=params)
 
     async def take_cluster_snapshot(self, node_ip: str, ks: str, tag: str, tables: list[str] = None) -> None:
