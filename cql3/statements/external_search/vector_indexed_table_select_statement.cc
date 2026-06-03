@@ -85,6 +85,16 @@ auto wrap_result_to_error_message(C&& c) {
     return result_to_error_message_wrapper<C>{std::move(c)};
 }
 
+std::vector<float> get_ann_ordering_vector(const select_statement::prepared_ann_ordering_type& prepared_ann_ordering, const query_options& options) {
+    auto const& [ann_column, ann_vector_expr] = prepared_ann_ordering;
+    auto expr_value = expr::evaluate(ann_vector_expr, options);
+    if (expr_value.is_null()) {
+        throw exceptions::invalid_request_exception(fmt::format("Unsupported null value for column {}", ann_column->name_as_text()));
+    }
+    auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(std::move(expr_value).to_bytes()));
+    return util::to_vector<float>(values);
+}
+
 } // anonymous namespace
 
 std::optional<ann_ordering_info> get_ann_ordering_info(
@@ -250,8 +260,8 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         auto aoe = abort_on_expiry(timeout);
         auto filter_json = _prepared_filter.to_json(options);
         uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
-        auto pkeys = co_await qp.vector_store_client().ann(
-                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), fetch, filter_json, aoe.abort_source());
+        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema,
+                get_ann_ordering_vector(_prepared_ann_ordering, options), fetch, filter_json, aoe.abort_source());
         if (!pkeys.has_value()) {
             co_await coroutine::return_exception(
                     exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
@@ -284,16 +294,6 @@ lw_shared_ptr<query::read_command> vector_indexed_table_select_statement::prepar
             query::row_limit(get_inner_loop_limit(fetch_limit, _selection->is_aggregate())), query::partition_limit(query::max_partitions),
             _query_start_time_point, tracing::make_trace_info(state.get_trace_state()), query_id::create_null_id(), query::is_first_page::no,
             options.get_timestamp(state));
-}
-
-std::vector<float> vector_indexed_table_select_statement::get_ann_ordering_vector(const query_options& options) const {
-    auto [ann_column, ann_vector_expr] = _prepared_ann_ordering;
-    auto expr_value = expr::evaluate(ann_vector_expr, options);
-    if (expr_value.is_null()) {
-        throw exceptions::invalid_request_exception(fmt::format("Unsupported null value for column {}", _prepared_ann_ordering.first->name_as_text()));
-    }
-    auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(std::move(expr_value).to_bytes()));
-    return util::to_vector<float>(values);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
