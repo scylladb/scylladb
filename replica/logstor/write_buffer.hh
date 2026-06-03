@@ -29,6 +29,11 @@ class compaction_group;
 
 namespace logstor {
 
+enum class segment_kind : uint8_t {
+    mixed = 0,
+    full = 1,
+};
+
 class segment_manager;
 
 // Writer for log records that handles serialization and size computation
@@ -76,11 +81,6 @@ public:
 };
 
 using log_location_with_holder = std::tuple<log_location, seastar::gate::holder>;
-
-enum class segment_kind : uint8_t {
-    mixed = 0,
-    full = 1,
-};
 
 // Manages a single aligned buffer for accumulating records and writing
 // them to the segment manager.
