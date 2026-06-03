@@ -224,6 +224,24 @@
                "parameters":[]
             }
          ]
+      },
+      {
+         "path":"/system/shard_to_numa_node_mapping",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the shard-to-NUMA-node mapping. The nth element is the NUMA node ID of the nth shard.",
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "nickname":"get_shard_to_numa_node_mapping",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
       }
    ]
 }
