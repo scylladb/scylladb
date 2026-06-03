@@ -1122,6 +1122,7 @@ private:
 
             if (!group0_service.maintenance_mode() && _sys_ks.local().bootstrap_complete()) {
                 group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
+                group0_service.enable_group0_state_machine().get();
             }
             _groups_manager.invoke_on_all([](service::strong_consistency::groups_manager& m) {
                 return m.start();

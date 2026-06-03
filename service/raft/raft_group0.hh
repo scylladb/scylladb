@@ -27,6 +27,7 @@ namespace service {
 extern const char* const raft_upgrade_doc;
 
 class migration_manager;
+class group0_state_machine;
 class raft_group0_client;
 class storage_service;
 
@@ -105,6 +106,7 @@ class raft_group0 {
     gms::feature_service& _feat;
     raft_group0_client& _client;
     seastar::scheduling_group _sg;
+    group0_state_machine* _group0_sm = nullptr;
 
     // Status of leader discovery. Initially there is no group 0,
     // and the variant contains no state. During initial cluster
@@ -197,6 +199,14 @@ public:
     // Cannot be called twice.
     //
     future<> setup_group0_if_exist(db::system_keyspace&, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
+
+    // Enable the in-memory state machine for group 0.
+    // This loads the persisted state (topology, schema, etc.) into memory.
+    // Must be called after all dependencies of reload_state() are initialized
+    // (e.g. CDC generation service, non-system keyspace schemas).
+    //
+    // Precondition: joined_group0().
+    future<> enable_group0_state_machine();
 
     // Check whether the given Raft server is a member of group 0 configuration
     // according to our current knowledge.
