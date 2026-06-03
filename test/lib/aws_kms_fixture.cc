@@ -40,7 +40,7 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_kms_server(const 
             }
             return tp::service_parse_state::cont;
         }
-        , { "-v", seed.string() + ":/init/seed.yaml", } // docker args. need to set seed
+        , { "-v", seed.string() + ":/init/seed.yaml:z", } // docker args. need to set seed (":z" relabels for SELinux hosts; ignored elsewhere)
         , {}
         , 8080
     );
