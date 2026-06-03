@@ -8,6 +8,7 @@
 
 #include "utils/log.hh"
 #include <atomic>
+#include <bit>
 #include <concepts>
 #include <cstdlib>
 #include <vector>
@@ -985,12 +986,8 @@ void sstable::generate_toc() {
 
 future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_components() const {
     std::unordered_map<component_type, file> files;
-    auto bits = _recognized_components;
-    while (bits) {
-        auto idx = __builtin_ctz(bits);
-        auto c = static_cast<component_type>(idx);
+    for (auto c : _recognized_components) {
         files.emplace(c, co_await open_file(c, open_flags::ro));
-        bits &= bits - 1;
     }
     co_return std::move(files);
 }
@@ -2744,7 +2741,7 @@ uint64_t sstable::filter_size() const {
 }
 
 bool sstable::has_component(component_type f) const {
-    return (_recognized_components & component_mask(f)) != 0;
+    return _recognized_components.contains(f);
 }
 
 std::optional<bool> sstable::originated_on_this_node() const {
@@ -2843,7 +2840,7 @@ sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
     std::vector<std::pair<component_type, sstring>> all;
     size_t unrecognized_size = _unrecognized_components ? _unrecognized_components->size() : 0;
-    all.reserve(__builtin_popcount(_recognized_components) + unrecognized_size);
+    all.reserve(std::popcount(_recognized_components.mask()) + unrecognized_size);
     for_each_component([&] (component_type c) {
         all.push_back(std::make_pair(c, sstable_version_constants::get_component_map(_version).at(c)));
     });
