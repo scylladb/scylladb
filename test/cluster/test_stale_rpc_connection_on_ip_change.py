@@ -57,6 +57,79 @@ class BlackholeServer:
             await srv.wait_closed()
         logger.info(f"Blackhole server on {self.ip} stopped")
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.asyncio
+async def test_stale_client_id_evicted(manager: ManagerClient):
+    """Tests the case where a stale CLIENT_ID (old IP, low generation) is
+    processed AFTER the address_map already has a newer IP. The handler
+    should detect that the map rejected the stale update and evict the
+    stale connection (evict_ip == broadcast_address).
+
+    Uses error injection to pause CLIENT_ID processing at the beginning of
+    the handler. By the time the paused handler resumes, the map already has
+    a newer IP from a subsequent CLIENT_ID, so the paused one is stale.
+    """
+
+    # Phase 1: Start 2-node cluster normally, then stop both.
+    logger.info("Starting a 2-node cluster")
+    servers = await manager.servers_add(1)
+    servers += await manager.servers_add(1, seeds=[servers[0].ip_addr])
+    ip_a = servers[1].ip_addr
+    logger.info(f"Node 1 IP_A: {ip_a}")
+
+    logger.info("Stopping both nodes")
+    for srv in servers:
+        await manager.server_stop_gracefully(srv.server_id)
+
+    # Phase 2: Start node 0, enable injection, start node 1 at same IP_A.
+    # The injection pauses CLIENT_ID at the beginning of the handler,
+    # BEFORE reading old_ip from the address map.
+    logger.info("Starting node 0")
+    await manager.server_start(servers[0].server_id)
+
+    logger.info("Enabling one-shot delay_client_id_before_map_update injection")
+    await manager.api.enable_injection(servers[0].ip_addr, "delay_client_id_before_map_update",
+                                       one_shot=True, parameters={"target_addr": ip_a})
+
+    logger.info("Starting node 1 at IP_A (its CLIENT_ID will be paused)")
+    await manager.server_start(servers[1].server_id)
+
+    # Phase 3: Stop node 1, change to IP_B, restart.
+    # CLIENT_ID(IP_B, G3) will NOT be paused (injection was one-shot).
+    # It updates the map to IP_B/G3.
+    logger.info("Stopping node 1")
+    await manager.server_stop_gracefully(servers[1].server_id)
+
+    ip_b = await manager.server_change_ip(servers[1].server_id)
+    logger.info(f"Node 1 IP_B: {ip_b}")
+
+    logger.info("Starting node 1 at IP_B")
+    await manager.server_start(servers[1].server_id)
+    servers[1] = servers[1]._replace(ip_addr=ip_b, rpc_address=ip_b)
+
+    # Wait for node 0 to see node 1 alive at IP_B (map has IP_B/G3)
+    await manager.server_sees_other_server(servers[0].ip_addr, ip_b, interval=60)
+    logger.info("Node 0 sees node 1 at IP_B")
+
+    # Mark log AFTER all normal evictions have happened, so only the
+    # released paused CLIENT_ID can produce the eviction log below.
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    # Phase 4: Release the paused CLIENT_ID(IP_A, G2).
+    # The handler now reads old_ip = IP_B (current map state),
+    # broadcast_address = IP_A (from the paused message).
+    # ip_changed = (IP_B != IP_A) = true
+    # invoke_on(0): add_or_update_entry(IP_A, G2) → rejected (G2 < G3)
+    # current_ip = IP_B != IP_A = broadcast_address → evict_ip = IP_A (stale case!)
+    logger.info("Releasing paused stale CLIENT_ID")
+    await manager.api.message_injection(servers[0].ip_addr, "delay_client_id_before_map_update")
+
+    # Verify stale eviction: should evict IP_A (the stale broadcast_address)
+    await log.wait_for(f"CLIENT_ID:.*evicting stale RPC connections to {ip_a}",
+                       from_mark=mark, timeout=60)
+    logger.info("Stale CLIENT_ID eviction of IP_A confirmed!")
+
 
 @pytest.mark.asyncio
 async def test_direct_fd_recovers_after_ip_change(manager: ManagerClient):
