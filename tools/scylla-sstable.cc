@@ -13,7 +13,7 @@
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/units.hh>
-#include <seastar/http/short_streams.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/util/closeable.hh>
 
 #include "init.hh"

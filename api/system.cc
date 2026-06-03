@@ -19,7 +19,7 @@
 #include <seastar/core/relabel_config.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/short_streams.hh>
-#include <seastar/http/short_streams.hh>
+#include <seastar/util/short_streams.hh>
 
 #include "utils/log.hh"
 

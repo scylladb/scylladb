@@ -13,7 +13,7 @@
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/rjson.hh"
 #include <seastar/http/request.hh>
-#include <seastar/http/short_streams.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/net/socket_defs.hh>
 #include <seastar/net/api.hh>
 #include <seastar/coroutine/as_future.hh>
