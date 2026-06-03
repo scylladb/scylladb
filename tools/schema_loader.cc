@@ -476,7 +476,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
 
     auto user_type_storage = std::make_shared<single_keyspace_user_types_storage>(std::move(utm));
     gms::feature_service features({get_disabled_features_from_db_config(dbcfg)});
-    db::schema_ctxt ctxt(dbcfg, user_type_storage, features);
+    db::schema_ctxt ctxt(dbcfg.extensions(), dbcfg.murmur3_partitioner_ignore_msb_bits(), user_type_storage, features);
 
     if (empty(tables)) {
         tables = std::move(views);

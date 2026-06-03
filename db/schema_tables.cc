@@ -46,7 +46,6 @@
 #include "replica/tablets.hh"
 
 #include "db/marshal/type_parser.hh"
-#include "db/config.hh"
 #include "db/extensions.hh"
 #include "utils/hashers.hh"
 
@@ -109,25 +108,14 @@ namespace {
         });
 }
 
-schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts,
+schema_ctxt::schema_ctxt(const db::extensions& extensions, unsigned murmur3_partitioner_ignore_msb_bits,
+                         std::shared_ptr<data_dictionary::user_types_storage> uts,
                          const gms::feature_service& features, replica::database* db)
     : _db(db)
     , _features(features)
-    , _extensions(cfg.extensions())
-    , _murmur3_partitioner_ignore_msb_bits(cfg.murmur3_partitioner_ignore_msb_bits())
+    , _extensions(extensions)
+    , _murmur3_partitioner_ignore_msb_bits(murmur3_partitioner_ignore_msb_bits)
     , _user_types(std::move(uts))
-{}
-
-schema_ctxt::schema_ctxt(replica::database& db)
-    : schema_ctxt(db.get_config(), db.as_user_types_storage(), db.features(), &db)
-{}
-
-schema_ctxt::schema_ctxt(sharded<replica::database>& db)
-    : schema_ctxt(db.local())
-{}
-
-schema_ctxt::schema_ctxt(sharded<service::storage_proxy>& proxy)
-    : schema_ctxt(proxy.local().get_db())
 {}
 
 namespace schema_tables {
@@ -2018,7 +2006,8 @@ future<schema_ptr> create_table_from_name(sharded<service::storage_proxy>& proxy
     if (!sm.live()) {
         co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
-    const schema_ctxt& ctxt = proxy;
+    auto& db = proxy.local().local_db();
+    auto ctxt = db.get_schema_ctxt();
     // The CDC schema is set to nullptr because we don't have it yet, but we will
     // check and update it soon if needed in create_tables_from_tables_partition.
     co_return create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), nullptr);
@@ -2592,7 +2581,8 @@ static future<view_ptr> create_view_from_table_row(sharded<service::storage_prox
     if (!sm.live()) {
         co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
-    const schema_ctxt& ctxt = proxy;
+    auto& db = proxy.local().local_db();
+    auto ctxt = db.get_schema_ctxt();
     co_return create_view_from_mutations(ctxt, std::move(sm), ctxt.user_types());
 }
 

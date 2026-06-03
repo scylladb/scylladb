@@ -551,6 +551,7 @@ in_progress_types_storage_per_shard& in_progress_types_storage::local() {
 future<> schema_applier::merge_tables_and_views()
 {
     auto& user_types = _types_storage.local();
+    auto ctxt = _proxy.local().local_db().get_schema_ctxt();
     co_await _affected_tables_and_views.tables_and_views.start();
 
     // diffs bound to current shard
@@ -561,7 +562,7 @@ future<> schema_applier::merge_tables_and_views()
     // Create CDC tables before non-CDC base tables, because we want the base tables with CDC enabled
     // to point to their CDC tables.
     local_cdc = diff_table_or_view(_proxy, _before.cdc, _after.cdc, [&] (schema_mutations sm, schema_diff_side) {
-        return create_table_from_mutations(_proxy, std::move(sm), user_types, nullptr);
+        return create_table_from_mutations(ctxt, std::move(sm), user_types, nullptr);
     });
     local_tables = diff_table_or_view(_proxy, _before.tables, _after.tables, [&] (schema_mutations sm, schema_diff_side side) {
         // If the table has CDC enabled, find the CDC schema version and set it in the table schema.
@@ -597,7 +598,7 @@ future<> schema_applier::merge_tables_and_views()
             }
         }
 
-        return create_table_from_mutations(_proxy, std::move(sm), user_types, cdc_schema);
+        return create_table_from_mutations(ctxt, std::move(sm), user_types, cdc_schema);
     });
     local_views = diff_table_or_view(_proxy, _before.views, _after.views, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
@@ -633,7 +634,7 @@ future<> schema_applier::merge_tables_and_views()
         if (!base_schema) {
             base_schema = _proxy.local().local_db().find_schema(ks_name, base_name);
         }
-        view_ptr vp = create_view_from_mutations(_proxy, std::move(sm), user_types, base_schema);
+        view_ptr vp = create_view_from_mutations(ctxt, std::move(sm), user_types, base_schema);
 
         // Now when we have a referenced base - sanity check that we're not registering an old view
         // (this could happen when we skip multiple major versions in upgrade, which is unsupported.)
@@ -696,8 +697,8 @@ future<frozen_schema_diff> schema_diff_per_shard::freeze() const {
 
 future<schema_diff_per_shard> schema_diff_per_shard::copy_from(replica::database& db, in_progress_types_storage& types_storage, const frozen_schema_diff& oth) {
     auto uts = std::make_shared<in_progress_types_storage_per_shard>(types_storage.local());
-    schema_ctxt ctxt(db.get_config(), uts, db.features(), &db);
-    schema_ctxt commited_ctxt(db.get_config(), uts->committed_storage(), db.features(), &db);
+    schema_ctxt ctxt(db.extensions(), db.get_config().murmur3_partitioner_ignore_msb_bits(), uts, db.features(), &db);
+    schema_ctxt commited_ctxt(db.extensions(), db.get_config().murmur3_partitioner_ignore_msb_bits(), uts->committed_storage(), db.features(), &db);
     schema_diff_per_shard result;
 
     for (const auto& c : oth.created) {
