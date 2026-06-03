@@ -114,8 +114,10 @@ public:
     // the set becomes empty.
     bool erase_sstable_requiring_cleanup(const sstables::shared_sstable& sst);
 
-    // Record the owned ranges to retain while cleaning up. Allocates the
-    // cleanup state on demand.
+    // Record the owned ranges to retain while cleaning up. Precondition:
+    // has_sstables_requiring_cleanup() -- the ranges are released together with
+    // the cleanup state once the sstable set drains, so they must not be set
+    // without sstables to drain them.
     void set_cleanup_owned_ranges(compaction::owned_ranges_ptr ranges);
 
     gc_clock::time_point last_regular_compaction;
