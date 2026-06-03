@@ -12,6 +12,8 @@
 #include <vector>
 #include <algorithm>
 #include <memory>
+#include <iostream>
+#include <iomanip>
 
 #include "utils/count_min_sketch.hh"
 #include "utils/lru.hh"
@@ -1121,4 +1123,191 @@ BOOST_AUTO_TEST_CASE(test_mvcc_same_frequency_preserves_lru_order) {
     for (int i = 0; i < N; ++i) {
         if (entries[i]->is_linked()) l.remove(*entries[i]);
     }
+}
+
+// ---------------------------------------------------------------------------
+// False-rejection amplification test for multi-row partitions
+// ---------------------------------------------------------------------------
+
+// Measures how W-TinyLFU's per-row frequency gating amplifies false
+// rejections when partitions contain multiple rows.  If any single row
+// from a partition is rejected, the partition is "incomplete" in cache.
+//
+// Avi Kivity's concern: a 1% per-row false-rejection rate becomes 63%
+// per-partition miss rate for 100-row partitions.  We test this by
+// running a round-robin full-partition-read workload under eviction
+// pressure and measuring how many partitions remain complete in cache.
+//
+// Output: a comparison table of W-TinyLFU vs LRU across partition sizes.
+//
+// Measures false-rejection amplification for multi-row partitions.
+//
+// Workload: a mix of hot single-row partitions (accessed frequently)
+// and multi-row partitions (accessed as whole partitions, less frequently).
+// The hot partitions build high frequency in the sketch.  When a
+// multi-row partition's row is evicted and re-inserted, it enters the
+// window with freq=1 and duels a hot partition's row at freq=15 in
+// probation — it loses and is rejected.  If any row from the multi-row
+// partition is rejected, the partition is incomplete.
+//
+// This tests Avi Kivity's concern: per-row false rejection at the
+// admission gate is amplified by the number of rows per partition.
+//
+BOOST_AUTO_TEST_CASE(test_multi_row_false_rejection_amplification) {
+    auto make_key = [](int partition, int row) -> uint64_t {
+        uint64_t h = static_cast<uint64_t>(partition) * 0x9e3779b97f4a7c15ULL;
+        h ^= static_cast<uint64_t>(row) * 0xd6e8feb86659fd93ULL;
+        h ^= h >> 32;
+        return h;
+    };
+
+    struct config {
+        int rows_per_partition;
+        int num_multi_row_partitions;
+    };
+
+    // Hot single-row partitions saturate sketch frequency.
+    // Multi-row partitions compete for remaining cache space but
+    // there are MORE multi-row entries than cache slots, forcing
+    // continuous eviction and re-insertion through the admission gate.
+    //
+    // Cache = 2000.  Hot = 800 (always in cache).
+    // Remaining cache slots = 1200.
+    // Multi-row working set = 4000 entries (3.3× the available slots).
+    // This forces ~2/3 of multi-row rows to be evicted each round.
+    // On re-insert, they enter window with freq=1 and duel hot
+    // partition rows in probation with freq=15.
+    static constexpr int HOT_PARTITIONS = 800;
+    static constexpr int CACHE_TARGET = 2000;
+    static constexpr int HOT_TOUCHES_PER_ROUND = 50;
+    static constexpr int MULTI_ROW_TOTAL = 4000;
+
+    std::vector<config> configs = {
+        {1,   MULTI_ROW_TOTAL},           // 4000 single-row
+        {10,  MULTI_ROW_TOTAL / 10},      // 400 × 10
+        {50,  MULTI_ROW_TOTAL / 50},      // 80 × 50
+        {100, MULTI_ROW_TOTAL / 100},     // 40 × 100
+    };
+
+    std::cout << "\n=== False-Rejection Amplification (Skewed Frequency) ===" << std::endl;
+    std::cout << "Hot partitions: " << HOT_PARTITIONS << " (single-row, "
+              << HOT_TOUCHES_PER_ROUND << "x/round)" << std::endl;
+    std::cout << "Cache target: " << CACHE_TARGET << " entries" << std::endl;
+    std::cout << std::endl;
+    std::cout << std::setw(10) << "Rows/Part"
+              << std::setw(14) << "MultiRowParts"
+              << std::setw(22) << "TinyLFU complete%"
+              << std::setw(22) << "LRU complete%"
+              << std::setw(22) << "TinyLFU row-hit%"
+              << std::setw(22) << "LRU row-hit%"
+              << std::endl;
+    std::cout << std::string(112, '-') << std::endl;
+
+    for (auto& cfg : configs) {
+        int R = cfg.rows_per_partition;
+        int MR = cfg.num_multi_row_partitions;
+        int total_multi_rows = MR * R;
+
+        double results[2][2] = {};
+
+        for (int mode = 0; mode < 2; ++mode) {
+            lru l;
+            l.set_window_fraction(mode == 0 ? 0.01 : 0.99);
+
+            // Hot single-row partitions
+            std::vector<std::unique_ptr<test_evictable>> hot(HOT_PARTITIONS);
+            for (int i = 0; i < HOT_PARTITIONS; ++i) {
+                hot[i] = std::make_unique<test_evictable>(i);
+                hot[i]->set_sketch_key(make_key(10000 + i, 0));
+                l.add(*hot[i]);
+            }
+
+            // Multi-row partitions
+            std::vector<std::vector<std::unique_ptr<test_evictable>>> multi(MR);
+            for (int p = 0; p < MR; ++p) {
+                multi[p].resize(R);
+                for (int r = 0; r < R; ++r) {
+                    multi[p][r] = std::make_unique<test_evictable>(HOT_PARTITIONS + p * R + r);
+                    multi[p][r]->set_sketch_key(make_key(p, r));
+                    l.add(*multi[p][r]);
+                }
+            }
+
+            // Initial eviction to reach cache target
+            int total = HOT_PARTITIONS + total_multi_rows;
+            for (int i = 0; i < std::max(0, total - CACHE_TARGET); ++i) {
+                l.evict();
+            }
+
+            // Steady-state: 10 rounds
+            for (int round = 0; round < 10; ++round) {
+                // Touch hot partitions many times (build high frequency)
+                for (int t = 0; t < HOT_TOUCHES_PER_ROUND; ++t) {
+                    for (int i = 0; i < HOT_PARTITIONS; ++i) {
+                        if (hot[i]->is_linked()) {
+                            l.touch(*hot[i]);
+                        } else {
+                            hot[i]->was_evicted = false;
+                            hot[i]->set_sketch_key(make_key(10000 + i, 0));
+                            l.add(*hot[i]);
+                        }
+                    }
+                }
+
+                // Read each multi-row partition once (all rows)
+                for (int p = 0; p < MR; ++p) {
+                    for (int r = 0; r < R; ++r) {
+                        auto& e = *multi[p][r];
+                        if (e.is_linked()) {
+                            l.touch(e);
+                        } else {
+                            e.was_evicted = false;
+                            e.set_sketch_key(make_key(p, r));
+                            l.add(e);
+                        }
+                    }
+                }
+
+                // Evict back to target
+                size_t sz = l.window_size() + l.probation_size() + l.protected_size();
+                while (sz > static_cast<size_t>(CACHE_TARGET)) {
+                    if (l.evict() == seastar::memory::reclaiming_result::reclaimed_nothing) break;
+                    sz = l.window_size() + l.probation_size() + l.protected_size();
+                }
+            }
+
+            // Measure multi-row partition completeness
+            int complete = 0, rows_present = 0;
+            for (int p = 0; p < MR; ++p) {
+                int pr = 0;
+                for (int r = 0; r < R; ++r) {
+                    if (multi[p][r]->is_linked()) ++pr;
+                }
+                rows_present += pr;
+                if (pr == R) ++complete;
+            }
+
+            results[mode][0] = 100.0 * complete / MR;
+            results[mode][1] = 100.0 * rows_present / total_multi_rows;
+
+            // Cleanup
+            for (int i = 0; i < HOT_PARTITIONS; ++i) {
+                if (hot[i]->is_linked()) l.remove(*hot[i]);
+            }
+            for (int p = 0; p < MR; ++p) {
+                for (int r = 0; r < R; ++r) {
+                    if (multi[p][r]->is_linked()) l.remove(*multi[p][r]);
+                }
+            }
+        }
+
+        std::cout << std::setw(10) << R
+                  << std::setw(14) << MR
+                  << std::setw(21) << std::fixed << std::setprecision(1) << results[0][0] << "%"
+                  << std::setw(21) << results[1][0] << "%"
+                  << std::setw(21) << results[0][1] << "%"
+                  << std::setw(21) << results[1][1] << "%"
+                  << std::endl;
+    }
+    std::cout << std::endl;
 }
