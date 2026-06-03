@@ -2606,9 +2606,15 @@ future<repair_update_system_table_response> repair_service::repair_update_system
     if (!is_valid_range) {
         throw std::runtime_error(format("repair[{}]: range {} is not in the format of (start, end]", req.repair_uuid, req.range));
     }
-    co_await db.invoke_on_all([&req] (replica::database& local_db) {
+    co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
+        db::replay_position high_rp;
+        auto t = local_db.get_tables_metadata().get_table_if_exists(req.table_uuid);
+        if (t) {
+            high_rp = t->highest_flushed_replay_position();
+            co_await _sys_ks.local().save_commitlog_cleanup_record(req.table_uuid, req.range, high_rp);
+        }
         auto& gc_state = local_db.get_compaction_manager().get_shared_tombstone_gc_state();
-        return gc_state.update_repair_time(req.table_uuid, req.range, req.repair_time);
+        co_return gc_state.update_repair_time(req.table_uuid, req.range, req.repair_time, high_rp);
     });
     db::system_keyspace::repair_history_entry ent;
     ent.id = req.repair_uuid;

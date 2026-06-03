@@ -2332,7 +2332,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     });
     co_await change.destroy();
     co_await _db.local().get_compaction_manager().get_shared_tombstone_gc_state().
-            flush_pending_repair_time_update(_db.local());
+            flush_pending_repair_time_update(_db, _sys_ks);
 }
 
 future<> storage_service::stop() {

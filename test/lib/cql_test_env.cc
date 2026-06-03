@@ -1031,21 +1031,16 @@ private:
             });
 
             _cm.invoke_on_all([&](compaction::compaction_manager& cm) {
-                auto cl = _db.local().commitlog();
-                auto scl = _db.local().schema_commitlog();
-                if (cl && scl) {
-                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl, scl](const table_id& id) {
-                        return std::min(cl->min_gc_time(id), scl->min_gc_time(id));
-                    });
-                } else if (cl) {
-                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl](const table_id& id) {
-                        return cl->min_gc_time(id);
-                    });
-                } else if (scl) {
-                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([scl](const table_id& id) {
-                        return scl->min_gc_time(id);
-                    });
-                }
+                cm.get_shared_tombstone_gc_state().set_gc_time_min_source([this](const table_id& id, const db::replay_position& rp) {
+                    auto t = _db.local().get_tables_metadata().get_table_if_exists(id);
+                    if (t && t->ready_for_writes()) {
+                        auto* cl = t->commitlog();
+                        if (cl) {
+                            return cl->min_gc_time(id, rp);
+                        }
+                    }
+                    return gc_clock::time_point::max();
+                });
             }).get();
 
             replica::distributed_loader::init_non_system_keyspaces(_db, _proxy, _sys_ks).get();
