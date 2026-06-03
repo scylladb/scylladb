@@ -422,8 +422,10 @@ struct table_stats {
     utils::timed_rate_moving_average_summary_and_histogram cas_accept{0};
     utils::timed_rate_moving_average_summary_and_histogram cas_learn{0};
     utils::estimated_histogram estimated_sstable_per_read{35};
-    utils::timed_rate_moving_average_and_histogram tombstone_scanned;
-    utils::timed_rate_moving_average_and_histogram live_scanned;
+    // {tombstone,live}_scanned REST emits the full ihistogram (to_json), but its
+    // "sample" array is unused. Size 0 leaves it empty, saving 1024*8 B.
+    utils::timed_rate_moving_average_and_histogram tombstone_scanned{0};
+    utils::timed_rate_moving_average_and_histogram live_scanned{0};
     utils::estimated_histogram estimated_coordinator_read;
     shared_ptr<alternator::table_stats> alternator_stats;
 };
