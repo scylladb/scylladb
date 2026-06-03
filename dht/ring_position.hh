@@ -201,10 +201,10 @@ public:
         return ring_position_view(max_token, after_all_keys_weight);
     }
 
+    // Both minimum_token() and maximum_token() have raw() == INT64_MIN
+    // (disengaged raw_token).  after_all_keys_weight distinguishes max.
     bool is_min() const noexcept {
-        // The minimum (before all keys) token is the only one whose raw value
-        // is INT64_MIN; real keys are normalized away from it.
-        return _token.value == std::numeric_limits<int64_t>::min();
+        return !_token && _weight != after_all_keys_weight;
     }
 
     bool is_max() const noexcept {
