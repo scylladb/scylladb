@@ -2843,19 +2843,19 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
 }
 
 future<> sstable::snapshot(const sstring& name) const {
-    auto lock = co_await get_units(mutate_sem(), 1);
+    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->snapshot(*this, format("{}/{}", sstables::snapshots_dir, name));
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
-    auto lock = co_await get_units(mutate_sem(), 1);
+    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->change_state(*this, to, _generation, delay_commit);
     _state = to;
 }
 
 future<> sstable::pick_up_from_upload(sstable_state to, generation_type new_generation) {
     // just in case, not really needed as the sstable is not yet in use while in the upload dir
-    auto lock = co_await get_units(mutate_sem(), 1);
+    auto lock = co_await get_units(_mutate_sem, 1);
     co_await _storage->change_state(*this, to, new_generation, nullptr);
     _generation = std::move(new_generation);
     _state = to;
@@ -3776,7 +3776,7 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 future<>
 sstable::unlink(storage::sync_dir sync) noexcept {
     // Serialize with other calls to unlink or potentially ongoing mutations.
-    auto lock = co_await get_units(mutate_sem(), 1);
+    auto lock = co_await get_units(_mutate_sem, 1);
     if (_unlinked) {
         co_return;
     }
