@@ -4281,8 +4281,7 @@ public:
     {}
 private:
     future<> load_metadata() const {
-        auto metafile = _sst->filename(sstables::component_type::Scylla);
-        if (!co_await file_exists(fmt::to_string(metafile))) {
+        if (!co_await _sst->_storage->exists(*_sst, component_type::Scylla)) {
             // for compatibility with streaming a non-scylla table (no scylla component)
             co_return;
         }
@@ -4318,15 +4317,18 @@ public:
         if (load_save_meta) {
             co_await load_metadata();
         }
-        // now we can open the component file. any extensions applied should write info into metadata
-        auto f = co_await _sst->open_file(_type, open_flags::wo | open_flags::create, foptions);
+        // now we can open the component sink. any extensions applied should write info into metadata.
+        // We use make_component_sink rather than open_file + make_file_output_stream because
+        // object storage (S3) backends only support writing through upload sinks, not through
+        // file::write_dma (readable_file is read-only).
+        auto sink = co_await _sst->_storage->make_component_sink(*_sst, _type, open_flags::wo | open_flags::create, stream_options);
 
         // Save back to disk.
         if (load_save_meta) {
             co_await save_metadata();
         }
 
-        co_return co_await make_file_output_stream(std::move(f), stream_options);
+        co_return output_stream<char>(std::move(sink));
     }
     future<shared_sstable> close() override {
         if (_last_component) {

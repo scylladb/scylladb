@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
 from test.pylib.runner import PHASE_REPORT_KEY
+from test.cluster.object_store.conftest import make_object_storage
 from test.pylib.random_tables import RandomTables
 from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
@@ -27,7 +28,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster import ScyllaClusterManager, ScyllaVersionDescription, get_scylla_2025_1_description
 from test.pylib.suite.base import get_testpy_test
-from test.pylib.suite.python import add_cql_connection_options
+from test.pylib.suite.python import add_cql_connection_options, add_s3_options
 from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
 import logging
 import pytest
@@ -79,6 +80,7 @@ def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store',
                      help='Manager unix socket path')
     add_cql_connection_options(parser)
+    add_s3_options(parser)
     parser.addoption('--skip-internet-dependent-tests', action='store_true', default=False,
                      help='Skip tests which depend on artifacts from the internet')
     parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
@@ -382,3 +384,17 @@ async def key_provider(request, tmpdir, scylla_binary):
 @pytest.fixture(scope="function")
 def failure_detector_timeout(build_mode):
     return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
+
+@pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
+async def storage(request, pytestconfig, tmpdir):
+    """Parametrize tests over local / S3 / GCS storage.
+
+    When storage is None the test runs with local (filesystem) storage.
+    Otherwise the fixture yields an object-storage server handle.
+    """
+    if request.param is None:
+        yield None
+        return
+
+    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name) as server:
+        yield server
