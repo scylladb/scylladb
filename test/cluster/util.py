@@ -488,31 +488,40 @@ async def new_test_keyspace(manager: ManagerClient, opts, host=None):
         await manager.get_cql().run_async("DROP KEYSPACE IF EXISTS " + keyspace, host=host)
 
 previously_used_table_names = []
-@asynccontextmanager
-async def new_test_table(manager: ManagerClient, keyspace, schema, extra="", host=None, reuse_tables=True):
+async def create_new_test_table(manager: ManagerClient, keyspace, schema, extra="", host=None, reuse_tables=True, table_name=None):
     """
     A utility function for creating a new temporary table with a given schema.
     Because Scylla becomes slower when a huge number of uniquely-named tables
     are created and deleted (see https://github.com/scylladb/scylla/issues/7620)
     we keep here a list of previously used but now deleted table names, and
     reuse one of these names when possible.
-    This function can be used in a "async with", as:
-       async with create_table(cql, test_keyspace, '...') as table:
     """
     global previously_used_table_names
-    if reuse_tables:
-        if not previously_used_table_names:
-            previously_used_table_names.append(unique_name())
-        table_name = previously_used_table_names.pop()
-    else:
-        table_name = unique_name()
+    if not table_name:
+        if reuse_tables:
+            if not previously_used_table_names:
+                previously_used_table_names.append(unique_name())
+            table_name = previously_used_table_names.pop()
+        else:
+            table_name = unique_name()
     table = keyspace + "." + table_name
-    await manager.get_cql().run_async("CREATE TABLE " + table + "(" + schema + ")" + extra, host=host)
+    await manager.get_cql().run_async(f"CREATE TABLE IF NOT EXISTS " + table + "(" + schema + ")" + extra, host=host)
+    return table
+
+@asynccontextmanager
+async def new_test_table(manager: ManagerClient, keyspace, schema, extra="", host=None, reuse_tables=True):
+    """
+    A utility function for yielding a new temporary table with a given schema.
+    This function can be used in a "async with", as:
+       async with new_test_table(cql, test_keyspace, '...') as table:
+    """
+    table = await create_new_test_table(manager, keyspace, schema, extra, host, reuse_tables)
     try:
         yield table
     finally:
-        await manager.get_cql().run_async("DROP TABLE " + table, host=host)
+        await manager.get_cql().run_async("DROP TABLE IF EXISTS " + table, host=host)
         if reuse_tables:
+            table_name = table.split('.')[1]
             previously_used_table_names.append(table_name)
 
 @asynccontextmanager
