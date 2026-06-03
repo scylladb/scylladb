@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
- #include <seastar/http/short_streams.hh>
+ #include <seastar/util/short_streams.hh>
 
 #include "client_routes.hh"
 #include "api/api.hh"
