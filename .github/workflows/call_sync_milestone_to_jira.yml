@@ -2,7 +2,7 @@ name: Call Jira release creation for new milestone
 
 on:
   milestone:
-    types: [created, closed]
+    types: [created, edited, closed]
 
 permissions: {}
 
