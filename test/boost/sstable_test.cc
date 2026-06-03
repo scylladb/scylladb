@@ -1029,6 +1029,35 @@ SEASTAR_TEST_CASE(test_digest_persistence_data_compressed) {
     return test_component_digest_persistence(component_type::Data, sstable::version_types::me, compress_sstable::yes);
 }
 
+static void corrupt_sstable(sstables::shared_sstable sst, component_type component) {
+    auto path = sstables::test(sst).filename(component).native();
+    auto size = seastar::file_size(path).get();
+    auto f = open_file_dma(path, open_flags::rw).get();
+    auto close_f = deferred_close(f);
+    const auto mem_align = f.memory_dma_alignment();
+    const auto dma_align = f.disk_write_dma_alignment();
+    // For most components we corrupt the last byte. The TOC is special: it is a
+    // newline-separated list of component names, and its last byte is the trailing
+    // newline of the last entry. write_toc() emits entries via for_each_component(),
+    // i.e. in ascending component_type order, so for me-format sstables the last
+    // entry is always "Scylla.db". Flipping its trailing newline turns it into an
+    // unrecognized entry and drops the Scylla component, and read_scylla_metadata()
+    // then skips TOC digest validation altogether (it is gated on
+    // has_component(Scylla)) -- so the corruption would go undetected.
+    // Corrupt the first byte instead: that renames the first entry (the lowest
+    // component_type, never Scylla, and only needed after TOC validation) while
+    // keeping the Scylla component recognized, so the TOC digest mismatch is caught.
+    const auto corrupt_offset = component == component_type::TOC ? uint64_t(0) : size - 1;
+    const auto block_offset = align_down(corrupt_offset, uint64_t(dma_align));
+    auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
+    f.dma_read(block_offset, buf.get_write(), dma_align).get();
+    // Increment one byte to corrupt the file minimally. Keeping the change small
+    // avoids creating values that overflow during parsing.
+    buf.get_write()[corrupt_offset - block_offset] += 1;
+    f.dma_write(block_offset, buf.get(), dma_align).get();
+    f.truncate(size).get();
+}
+
 static future<> test_component_digest_validation(component_type component, sstable::version_types version, sstring expected_message, compress_sstable compress = compress_sstable::no) {
     return test_env::do_with_async([component, version, expected_message = std::move(expected_message), compress] (test_env& env) mutable {
         sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
