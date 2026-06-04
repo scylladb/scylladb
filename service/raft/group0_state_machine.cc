@@ -314,7 +314,15 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     co_await std::visit(make_visitor(
     [&] (schema_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
-        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        if (_in_memory_state_machine_enabled) {
+            co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        } else {
+            // Just write the mutations to system_schema tables without
+            // creating in-memory keyspace/table representations.
+            // This is used during early raft log replay before non-system
+            // keyspaces are loaded.
+            co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
+        }
     },
     [&] (broadcast_table_query& query) -> future<> {
         auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
@@ -328,7 +336,11 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     [&] (mixed_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
         topology_state_change_hint.emplace();
-        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        if (_in_memory_state_machine_enabled) {
+            co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        } else {
+            co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
+        }
     },
     [&] (write_mutations& muts) -> future<> {
         modules_to_reload = get_modules_to_reload(muts.mutations);
@@ -559,7 +571,11 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
 
-    co_await _mm.merge_schema_from(hid, std::move(*cm));
+    if (_in_memory_state_machine_enabled) {
+        co_await _mm.merge_schema_from(hid, std::move(*cm));
+    } else {
+        co_await write_mutations_to_database(_ss, _sp, gms::inet_address{}, std::move(*cm));
+    }
 
     if (topology_snp && !topology_snp->mutations.empty()) {
         co_await _ss.merge_topology_snapshot(std::move(*topology_snp));
