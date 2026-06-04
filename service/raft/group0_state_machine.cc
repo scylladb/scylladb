@@ -598,10 +598,6 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         co_await mutate_locally(std::move(raft_snp->mutations), _sp);
     }
 
-    co_await _ss.auth_cache().load_all();
-
-    co_await sync_audit_known_entities();
-
     co_await notify_client_route_change_if_needed(_ss, client_routes_update);
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
