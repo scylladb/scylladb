@@ -22,6 +22,11 @@ class bucket_writer {
 private:
     bucket_writer(schema_ptr schema, std::pair<mutation_reader, queue_reader_handle> queue_reader, mutation_reader_consumer& consumer);
 
+    // Called when the handle is found to be terminated (reader closed or aborted).
+    // Awaits _consume_fut to surface the root-cause error from the consumer side,
+    // then rethrows it.
+    future<> propagate_consumer_error();
+
 public:
     bucket_writer(schema_ptr schema, reader_permit permit, mutation_reader_consumer& consumer);
 
