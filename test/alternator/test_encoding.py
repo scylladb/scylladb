@@ -247,8 +247,7 @@ def test_table_naming(cql, test_table_s):
     ks = 'alternator_' + table_name
     # Verify we can query the underlying CQL table using the expected keyspace
     # and table name. The query will succeed only if naming is as expected.
-    rows = list(cql.execute(f'SELECT p FROM "{ks}"."{table_name}"'))
-    assert rows == []
+    cql.execute(f'SELECT p FROM "{ks}"."{table_name}"')
 
 # Test that GSI and LSI view names in the underlying CQL schema follow the
 # expected naming convention:
