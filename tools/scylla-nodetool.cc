@@ -4940,6 +4940,39 @@ For more information, see: {}
                 "scrub",
                 "Scrub the SSTable files in the specified keyspace or table(s)",
 fmt::format(R"(
+The main use-case of scrub is to find corrupt sstables.
+
+This can be achieved with `nodetool scrub --mode=VALIDATE`. Validate is also the
+default mode.
+
+Validate-mode scrub does not rewrite sstables like the other scrub modes. The
+following are validated:
+* Checksums and digests for data component and any other component if available.
+* Partition, row and mutation-fragment kind order.
+* index<->data consistency (only for sstable formats mc to me).
+
+Any problem found during validating an sstable are logged by ScyllaDB via the
+compaction logger (error level).
+
+If validate completed successfully, nodetool will exit with exit code 0. If
+nodetool completed successfully but found invalid sstables, it exits with exit
+code 3 (and a message about invalid sstables).
+
+By default, validate-mode scrub quarantines invalid sstables. Quarantined
+sstables are handled distinctly:
+* They participate in reads.
+* They participate in streaming and tablet migration (file streaming).
+* They participate in repair.
+* They do not participate in compaction, but participate in overlap checks for
+  the purpose of tombstone-gc.
+
+The purpose of the quarantine is to keep corrupt sstables out of compaction,
+which can spread the compaction or can get in a fail-retry loop. It also makes
+corrupt sstables easy to find and retrieve for investigation.
+
+It is possible to opt-out from quarantining sstables by passing
+--quarantine-invalid-sstables=false to scrub.
+
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/scrub.html")),
                 {
