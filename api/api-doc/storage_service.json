@@ -1229,6 +1229,14 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"quarantine_invalid_sstables",
+                     "description":"Controls whether invalid sstable identified by scrub (validate-mode) should be quarantined (default true)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
                      "name":"keyspace",
                      "description":"The keyspace to query about",
                      "required":true,
