@@ -662,7 +662,6 @@ class segment_manager_impl {
     stats _stats;
     seastar::metrics::metric_groups _metrics;
 
-    static constexpr size_t trigger_compaction_threshold = 10; // percentage of max segments
     static constexpr size_t segment_pool_size = 128;
 
     std::vector<segment_descriptor> _segment_descs;
@@ -1237,7 +1236,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
             co_return co_await make_segment(seg_id);
         }
 
-        if (_free_segments.size() < _max_segments.configured * trigger_compaction_threshold / 100) {
+        if (_free_segments.size() < _max_segments.configured * _cfg.trigger_compaction_threshold_percent / 100.0f) {
             trigger_compaction();
         }
 
