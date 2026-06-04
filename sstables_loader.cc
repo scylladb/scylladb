@@ -885,6 +885,7 @@ sstables_loader::sstables_loader(sharded<replica::database>& db,
         tasks::task_manager& tm,
         sstables::storage_manager& sstm,
         db::system_distributed_keyspace& sys_dist_ks,
+        cql3::query_processor& qp,
         seastar::scheduling_group sg)
     : _db(db)
     , _ss(ss)
@@ -894,6 +895,7 @@ sstables_loader::sstables_loader(sharded<replica::database>& db,
     , _task_manager_module(make_shared<task_manager_module>(tm))
     , _storage_manager(sstm)
     , _sys_dist_ks(sys_dist_ks)
+    , _qp(qp)
     , _sched_group(std::move(sg))
 {
     tm.register_module("sstables_loader", _task_manager_module);
