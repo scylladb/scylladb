@@ -7,6 +7,7 @@
  */
 
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/cql_assertions.hh"
 #include "streaming/stream_blob.hh"
 #include "message/messaging_service.hh"
 #include "test/lib/log.hh"
@@ -74,6 +75,23 @@ future<> write_random_content_to_file(const sstring& filename, size_t content_si
 }
 
 using namespace streaming;
+
+// Build a cql_test_config whose db::config is set up for the given object-storage
+// backend (S3 or GCS).  The caller is responsible for setting ms_listen when needed.
+static cql_test_config make_object_storage_test_config(const data_dictionary::storage_options& so) {
+    cql_test_config cfg;
+    cfg.db_config = make_shared<db::config>();
+    cfg.db_config->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
+    cfg.db_config->object_storage_endpoints(sstables::make_storage_options_config(so));
+    return cfg;
+}
+
+// Build the CQL STORAGE = {...} map literal for a CREATE KEYSPACE statement.
+static sstring make_storage_clause(const data_dictionary::storage_options& so) {
+    auto m = so.to_map();
+    return fmt::format("STORAGE = {{'type': '{}', 'endpoint': '{}', 'bucket': '{}'}}",
+            so.type_string(), m.at("endpoint"), m.at("bucket"));
+}
 
 static future<bool>
 do_test_file_stream(replica::database& db, netw::messaging_service& ms, std::vector<sstring> filelist, const std::string& suffix, bool inject_error, bool unsupported_file_ops = false) {
@@ -173,7 +191,7 @@ static future<> corrupt_data_component(sstables::shared_sstable sst) {
 
 using compress_sstable = bool_class<struct compress_sstable_tag>;
 static future<>
-do_test_sstable_stream(cql_test_env& env, compress_sstable compress, std::function<future<>(shared_sstable)> corruption_fn = nullptr, const sstring& expected_error_msg = "") {
+do_test_sstable_stream(cql_test_env& env, compress_sstable compress, std::function<future<>(shared_sstable)> corruption_fn = nullptr, const sstring& expected_error_msg = "", sstring storage_clause = "") {
     sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
     bool verb_register = false;
     auto ops_id = file_stream_id::create_random_id();
@@ -209,7 +227,11 @@ do_test_sstable_stream(cql_test_env& env, compress_sstable compress, std::functi
             }
             verb_register = true;
 
-            co_await env.execute_cql("CREATE KEYSPACE ks_test WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};");
+            sstring ks_stmt = "CREATE KEYSPACE ks_test WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}";
+            if (!storage_clause.empty()) {
+                ks_stmt += " AND " + storage_clause;
+            }
+            co_await env.execute_cql(ks_stmt + ";");
             if (compress) {
                 co_await env.execute_cql("CREATE TABLE ks_test.cf (pk text PRIMARY KEY, v int);");
             } else {
@@ -511,11 +533,11 @@ SEASTAR_THREAD_TEST_CASE(test_sink_wrapper_iovec) {
     BOOST_REQUIRE(std::equal(lin.begin(), lin.begin() + final_len, src.begin()));
 }
 
-static void test_sstable_stream(compress_sstable compress, std::function<future<>(shared_sstable)> corruption_fn = nullptr, const sstring& expected_error_msg = "") {
-    cql_test_config cfg;
+static void test_sstable_stream(compress_sstable compress, std::function<future<>(shared_sstable)> corruption_fn = nullptr, const sstring& expected_error_msg = "",
+    cql_test_config cfg = {}, sstring storage_clause = "") {
     cfg.ms_listen = true;
     do_with_cql_env_thread([&](cql_test_env& env) {
-        do_test_sstable_stream(env, compress, corruption_fn, expected_error_msg).get();
+        do_test_sstable_stream(env, compress, corruption_fn, expected_error_msg, storage_clause).get();
     }, cfg).get();
 }
 
@@ -593,4 +615,153 @@ SEASTAR_TEST_CASE(test_stream_sink_write_s3, *boost::unit_test::precondition(tes
 
 SEASTAR_FIXTURE_TEST_CASE(test_stream_sink_write_gs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_stream_sink_write(sstables::test_env_config{ .storage = make_test_object_storage_options("GS") });
+}
+
+// S3 variants: exercise reading SSTables from object storage.  Corruption
+// tests are omitted because the corruption helpers use local-filesystem I/O.
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_compressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    auto so = make_test_object_storage_options("S3");
+    test_sstable_stream(compress_sstable::yes, nullptr, "", make_object_storage_test_config(so), make_storage_clause(so));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_uncompressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    auto so = make_test_object_storage_options("S3");
+    test_sstable_stream(compress_sstable::no, nullptr, "", make_object_storage_test_config(so), make_storage_clause(so));
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_sstable_stream_compressed_gcs, gcs_fixture,
+        *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    auto so = make_test_object_storage_options("GS");
+    auto cfg = make_object_storage_test_config(so);
+    cfg.ms_listen = true;
+    return do_with_cql_env([so = std::move(so)](cql_test_env& env) {
+        return do_test_sstable_stream(env, compress_sstable::yes, nullptr, "", make_storage_clause(so));
+    }, cfg);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_sstable_stream_uncompressed_gcs, gcs_fixture,
+        *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    auto so = make_test_object_storage_options("GS");
+    auto cfg = make_object_storage_test_config(so);
+    cfg.ms_listen = true;
+    return do_with_cql_env([so = std::move(so)](cql_test_env& env) {
+        return do_test_sstable_stream(env, compress_sstable::no, nullptr, "", make_storage_clause(so));
+    }, cfg);
+}
+
+// Exercise the clone-based object-storage streaming path.
+// This verifies that tablet_stream_files_handler correctly detects the
+// object-storage table and sends per-SSTable CLONE_SSTABLE RPCs (via
+// the clone_sstable_handler) instead of byte-streaming via STREAM_BLOB.
+static future<>
+do_test_clone_path_stream(cql_test_env& env, compress_sstable compress, sstring storage_clause) {
+    auto& db = env.local_db();
+    auto& ms = env.get_messaging_service().local();
+    auto& sharded_vbw = env.view_building_worker();
+
+    // Create keyspace with tablets + object storage.
+    sstring ks_stmt = format(
+            "CREATE KEYSPACE ks_clone WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+            "AND tablets = {{'initial': 1}} AND {}", storage_clause);
+    co_await env.execute_cql(ks_stmt + ";");
+    if (compress) {
+        co_await env.execute_cql("CREATE TABLE ks_clone.cf (pk text PRIMARY KEY, v int);");
+    } else {
+        co_await env.execute_cql("CREATE TABLE ks_clone.cf (pk text PRIMARY KEY, v int) WITH compression = { 'sstable_compression' : '' };");
+    }
+
+    for (int i = 0; i < 10; i++) {
+        co_await env.execute_cql(format("INSERT INTO ks_clone.cf (pk, v) VALUES ('key_{}', {});", i, i * 10));
+    }
+
+    auto& table = db.find_column_family("ks_clone", "cf");
+    co_await table.flush();
+    auto schema = table.schema();
+
+    // Verify the table uses object storage and tablets.
+    BOOST_REQUIRE(table.get_storage_options().is_object_storage_type());
+    BOOST_REQUIRE(table.uses_tablets());
+
+    // Get the tablet map and derive a token range for the first tablet.
+    auto& tmap = table.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(schema->id());
+    BOOST_REQUIRE_GT(tmap.tablet_count(), 0);
+    auto tid = tmap.first_tablet();
+    auto range = tmap.get_token_range(tid);
+
+    // Build a stream_files_request — tablet_stream_files_handler will
+    // detect the object-storage table and use the clone path.
+    auto hostid = db.get_token_metadata().get_my_id();
+    auto ops_id = streaming::file_stream_id::create_random_id();
+
+    streaming::stream_files_request req;
+    req.ops_id = ops_id;
+    req.keyspace_name = schema->ks_name();
+    req.table_name = schema->cf_name();
+    req.table = schema->id();
+    req.range = range;
+    req.targets = {streaming::node_and_shard{hostid, 0}};
+    req.topo_guard = service::null_topology_guard;
+
+    co_await streaming::mark_tablet_stream_start(ops_id);
+    auto resp = co_await streaming::tablet_stream_files_handler(db, sharded_vbw.local(), ms, std::move(req));
+    co_await streaming::mark_tablet_stream_done(ops_id);
+
+    // In clone mode zero payload bytes are transferred over the wire;
+    // only server-side copies are performed on the destination.
+    testlog.info("do_test_clone_path_stream[{}] stream_bytes={}", ops_id, resp.stream_bytes);
+    BOOST_REQUIRE_EQUAL(resp.stream_bytes, 0);
+
+    // Verify the cloned data is actually readable on the destination.
+    auto result = co_await env.execute_cql("SELECT COUNT(*) FROM ks_clone.cf;");
+    assert_that(result).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(10))}});
+}
+
+// S3 clone-path test (compressed)
+SEASTAR_THREAD_TEST_CASE(test_clone_path_stream_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    auto so = make_test_object_storage_options("S3");
+    auto cfg = make_object_storage_test_config(so);
+    cfg.ms_listen = true;
+    cfg.initial_tablets = 1;
+    do_with_cql_env_thread([so = std::move(so)](cql_test_env& env) {
+        do_test_clone_path_stream(env, compress_sstable::yes, make_storage_clause(so)).get();
+    }, cfg).get();
+}
+
+// S3 clone-path test (uncompressed)
+SEASTAR_THREAD_TEST_CASE(test_clone_path_stream_uncompressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    auto so = make_test_object_storage_options("S3");
+    auto cfg = make_object_storage_test_config(so);
+    cfg.ms_listen = true;
+    cfg.initial_tablets = 1;
+    do_with_cql_env_thread([so = std::move(so)](cql_test_env& env) {
+        do_test_clone_path_stream(env, compress_sstable::no, make_storage_clause(so)).get();
+    }, cfg).get();
+}
+
+// GCS clone-path test (compressed)
+// Note: GCS tests use SEASTAR_FIXTURE_TEST_CASE (async coroutine) because
+// gcs_fixture requires it, while S3 tests use SEASTAR_THREAD_TEST_CASE
+// (threaded).  This is a consequence of the fixture, not a deliberate
+// semantic distinction — both exercise the same streaming code paths.
+SEASTAR_FIXTURE_TEST_CASE(test_clone_path_stream_gcs, gcs_fixture,
+        *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    auto so = make_test_object_storage_options("GS");
+    auto cfg = make_object_storage_test_config(so);
+    cfg.ms_listen = true;
+    cfg.initial_tablets = 1;
+    return do_with_cql_env([so = std::move(so)](cql_test_env& env) {
+        return do_test_clone_path_stream(env, compress_sstable::yes, make_storage_clause(so));
+    }, cfg);
+}
+
+// GCS clone-path test (uncompressed)
+SEASTAR_FIXTURE_TEST_CASE(test_clone_path_stream_uncompressed_gcs, gcs_fixture,
+        *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    auto so = make_test_object_storage_options("GS");
+    auto cfg = make_object_storage_test_config(so);
+    cfg.ms_listen = true;
+    cfg.initial_tablets = 1;
+    return do_with_cql_env([so = std::move(so)](cql_test_env& env) {
+        return do_test_clone_path_stream(env, compress_sstable::no, make_storage_clause(so));
+    }, cfg);
 }
