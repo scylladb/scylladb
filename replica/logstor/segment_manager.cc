@@ -571,7 +571,6 @@ public:
 class segment_manager_impl {
 
     struct stats {
-        uint64_t segments_in_use{0};
         std::array<uint64_t, write_source_count> bytes_written{0};
         std::array<uint64_t, write_source_count> data_bytes_written{0};
         uint64_t bytes_read{0};
@@ -713,6 +712,10 @@ public:
     future<seastar::input_stream<char>> create_segment_input_stream(log_segment_id segment_id, const seastar::file_input_stream_options& opts);
     future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(replica::database&);
 
+    size_t available_segment_count() const noexcept {
+        return _free_segments.size() + _segment_pool.size() + (_max_segments - _next_new_segment_id);
+    }
+
 private:
 
     future<> replenish_reserve();
@@ -763,7 +766,6 @@ private:
     future<seg_ptr> get_segment(write_source src) {
         seg_ptr seg = co_await _segment_pool.get_segment(src);
         seg->start(make_segment_ref(seg->id()), allocate_segment_seq());
-        _stats.segments_in_use++;
         co_return seg;
     }
 
@@ -854,9 +856,9 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     namespace sm = seastar::metrics;
 
     _metrics.add_group("logstor_sm", {
-        sm::make_gauge("segments_in_use", _stats.segments_in_use,
+        sm::make_gauge("segments_in_use", [this] { return _max_segments - available_segment_count(); },
                        sm::description("Counts number of segments currently in use.")),
-        sm::make_gauge("free_segments", [this] { return _free_segments.size(); },
+        sm::make_gauge("free_segments", [this] { return available_segment_count(); },
                        sm::description("Counts number of free segments currently available.")),
         sm::make_gauge("segment_pool_size", [this] { return _segment_pool.size(); },
                        sm::description("Counts number of segments in the segment pool.")),
@@ -1183,7 +1185,6 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
     _segment_freed_cv.signal();
 
     _stats.segments_freed++;
-    _stats.segments_in_use--;
 }
 
 future<> segment_manager_impl::discard_segments(segment_set& ss) {
@@ -1827,7 +1828,6 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
                 logstor_logger.info("Recovering used segments: {}%", 100 * recovered_used_segment_count / used_segment_count);
             }
             co_await add_segment_to_compaction_group(db, desc);
-            _stats.segments_in_use++;
             recovered_used_segment_count++;
         }
     }
