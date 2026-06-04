@@ -1261,6 +1261,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.compaction_scheduling_group = create_scheduling_group("compaction", "comp", 1000).get();
             dbcfg.maintenance_compaction_scheduling_group = create_scheduling_group("maintenance_compaction", "manc", 200, maintenance_supergroup).get();
             dbcfg.memory_compaction_scheduling_group = create_scheduling_group("mem_compaction", "mcmp", 1000).get();
+            dbcfg.logstor_compaction_scheduling_group = create_scheduling_group("logstor_compaction", "lcmp", 1000).get();
             dbcfg.streaming_scheduling_group = create_scheduling_group("streaming", "strm", 200, maintenance_supergroup).get();
             debug::streaming_scheduling_group = dbcfg.streaming_scheduling_group;
             dbcfg.maintenance_scheduling_group = maintenance_scheduling_group;
