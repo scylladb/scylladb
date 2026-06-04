@@ -1192,7 +1192,58 @@ def test_cf_read_write_latency_metrics(test_table_s, metrics):
         with test_table_s.batch_writer() as batch:
             batch.put_item(Item={'p': p})
 
+# Test that the reads_before_write and write_using_lwt metrics are incremented
+# for Alternator conditional-write operations.
+#
+# reads_before_write is incremented whenever a write operation must first
+# perform a read (e.g., conditional writes using ConditionExpression).
+#
+# write_using_lwt is incremented when a write uses LWT (Lightweight
+# Transactions). With the default 'only_rmw_uses_lwt' write isolation policy,
+# this happens for conditional writes. With 'always_use_lwt', it also happens
+# for unconditional writes.
+#
+# Global metrics are checked for increase only (not exact count) to avoid
+# spurious failures from concurrent Alternator traffic on other tables.
+# Per-table metrics allow exact assertions because they are filtered by table.
+def test_reads_before_write_and_write_using_lwt_metrics(dynamodb, test_table_s, metrics):
+    global_rbw = 'scylla_alternator_reads_before_write'
+    global_lwt = 'scylla_alternator_write_using_lwt'
+    table_rbw = 'scylla_alternator_table_reads_before_write'
+    table_lwt = 'scylla_alternator_table_write_using_lwt'
+    p = random_string()
+    cf = {'cf': test_table_s.name}
+    # Conditional PutItem: must read before write, and uses LWT.
+    with check_increases_metric(metrics, [global_rbw, global_lwt]):
+        with check_increases_metric_exact(metrics, table_rbw, [[1, cf]]):
+            with check_increases_metric_exact(metrics, table_lwt, [[1, cf]]):
+                test_table_s.put_item(Item={'p': p},
+                    ConditionExpression='attribute_not_exists(p)')
+    # Conditional UpdateItem: must read before write, and uses LWT.
+    with check_increases_metric(metrics, [global_rbw, global_lwt]):
+        with check_increases_metric_exact(metrics, table_rbw, [[1, cf]]):
+            with check_increases_metric_exact(metrics, table_lwt, [[1, cf]]):
+                test_table_s.update_item(Key={'p': p},
+                    ConditionExpression='attribute_exists(p)')
+    # Conditional DeleteItem: must read before write, and uses LWT.
+    with check_increases_metric(metrics, [global_rbw, global_lwt]):
+        with check_increases_metric_exact(metrics, table_rbw, [[1, cf]]):
+            with check_increases_metric_exact(metrics, table_lwt, [[1, cf]]):
+                test_table_s.delete_item(Key={'p': p},
+                    ConditionExpression='attribute_exists(p)')
+    # With the 'always_use_lwt' write isolation policy, even unconditional
+    # writes use LWT, so write_using_lwt is incremented but reads_before_write
+    # is not. Create a temporary table with that policy and verify.
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            Tags=[{'Key': 'system:write_isolation', 'Value': 'always_use_lwt'}]) as lwt_table:
+        lwt_cf = {'cf': lwt_table.name}
+        # Unconditional PutItem: no read before write, but still uses LWT.
+        with check_increases_metric_exact(metrics, table_rbw, [[0, lwt_cf]]):
+            with check_increases_metric_exact(metrics, table_lwt, [[1, lwt_cf]]):
+                lwt_table.put_item(Item={'p': p})
+
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
-# reads_before_write, write_using_lwt, shard_bounce_for_lwt,
-# requests_blocked_memory, requests_shed
+# shard_bounce_for_lwt, requests_blocked_memory, requests_shed
