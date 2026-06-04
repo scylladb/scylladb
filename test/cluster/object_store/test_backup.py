@@ -654,11 +654,18 @@ class SSTablesOnObjectStorage:
         topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
         topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
         topo(rf = 1, nodes = 4, racks = 2, dcs = 1),
-        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
-        topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
     ])
 async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerClient, object_storage, topology):
     '''Check that restoring of a cluster with stream scopes works'''
+    await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnObjectStorage(object_storage))
+
+
+@pytest.mark.parametrize("topology", [
+        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
+        topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
+    ])
+async def test_restore_with_streaming_scopes_heavy(build_mode: str, manager: ManagerClient, object_storage, topology, heavy):
+    '''Check that restoring of a cluster with stream scopes works (heavy topology)'''
     await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnObjectStorage(object_storage))
 
 
