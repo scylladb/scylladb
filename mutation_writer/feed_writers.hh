@@ -27,7 +27,7 @@ public:
 
     future<> consume(mutation_fragment_v2 mf);
 
-    void consume_end_of_stream();
+    future<> consume_end_of_stream();
 
     void abort(std::exception_ptr ep) noexcept;
 
@@ -57,7 +57,7 @@ future<> feed_writer(mutation_reader&& rd_ref, Writer wr) {
         if (ex) {
             wr.abort(ex);
         } else {
-            wr.consume_end_of_stream();
+            co_await wr.consume_end_of_stream();
         }
     } catch (...) {
         if (!ex) {

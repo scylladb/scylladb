@@ -39,7 +39,7 @@ private:
     // Keeps the previous writer alive while closed
     // and then allocates a new write, if needed.
     future<> do_switch_to_new_writer() {
-        _current_writer->consume_end_of_stream();
+        co_await _current_writer->consume_end_of_stream();
         // reset _current_writer while closing the previous one
         // to prevent race with close() after abort()
         auto wr = std::exchange(_current_writer, std::nullopt);
@@ -94,10 +94,11 @@ public:
         return write(mutation_fragment_v2(*_schema, _permit, std::move(pe)));
     }
 
-    void consume_end_of_stream() {
+    future<> consume_end_of_stream() {
         if (_current_writer) {
-            _current_writer->consume_end_of_stream();
+            return _current_writer->consume_end_of_stream();
         }
+        return make_ready_future<>();
     }
     void abort(std::exception_ptr ep) {
         if (_current_writer) {
