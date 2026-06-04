@@ -15,6 +15,7 @@
 
 #include "data_dictionary/storage_options.hh"
 #include "db/large_data_handler.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "db/corrupt_data_handler.hh"
 #include "sstables/version.hh"
 #include "sstables/sstable_directory.hh"
@@ -102,6 +103,7 @@ struct test_env_config {
 };
 
 data_dictionary::storage_options make_test_object_storage_options(std::string_view type);
+std::vector<db::object_storage_endpoint_param> make_storage_options_config(const data_dictionary::storage_options& so);
 
 class test_env {
     struct impl;
