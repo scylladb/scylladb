@@ -1206,7 +1206,16 @@ public:
 protected:
     virtual future<> run() override {
         auto& loader = _loader.local();
-        co_await loader._ss.local().restore_tablets(_tid, _snap_name, _endpoint, _bucket);
+
+        std::exception_ptr eptr;
+        try {
+            co_await loader._ss.local().restore_tablets(_tid, _snap_name, _endpoint, _bucket);
+        } catch (...) {
+            llog.error("Failed to restore tablets for table_id {}. Error: {}", _tid, std::current_exception());
+            eptr = std::current_exception();
+        }
+
+        llog.info("Restoring table with tid {} to the original schema", _tid);
 
         // Get table schema from snapshot_cql_tables table and
         // call alter_table_with_tablet_hints to restore the table schema to its original form
@@ -1220,6 +1229,10 @@ protected:
         auto max_tablet_count = original_schema->tablet_options().max_tablet_count;
         // Use the current_schema object and set the tablet hints on it that we got from the original schema
         co_await loader._ss.local().alter_table_with_tablet_hints(current_schema, min_tablet_count, max_tablet_count, false);
+
+        if (eptr) {
+            std::rethrow_exception(eptr);
+        }
 
         auto& db = loader._db.local();
         auto s = db.find_schema(_tid);
