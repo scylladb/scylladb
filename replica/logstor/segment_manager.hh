@@ -47,6 +47,7 @@ struct segment_manager_config {
     size_t disk_size;
     bool compaction_enabled = true;
     size_t max_segments_per_compaction = 8;
+    uint32_t trigger_compaction_threshold_percent = 20;
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;
     seastar::scheduling_group separator_sg;

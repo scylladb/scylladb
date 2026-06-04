@@ -959,6 +959,7 @@ database::init_logstor() {
             .base_dir = std::filesystem::path(_cfg.logstor_directory()),
             .file_size = _cfg.logstor_file_size_in_mb() * 1024ull * 1024ull,
             .disk_size = _cfg.logstor_disk_size_in_mb() * 1024ull * 1024ull,
+            .trigger_compaction_threshold_percent = _cfg.logstor_compaction_trigger_threshold_percent(),
             .compaction_sg = _dbcfg.compaction_scheduling_group,
             .compaction_static_shares = _cfg.compaction_static_shares,
             .separator_sg = _dbcfg.memtable_scheduling_group,
