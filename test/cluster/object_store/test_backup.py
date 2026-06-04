@@ -468,12 +468,11 @@ async def create_cluster(topology, manager, logger, object_storage=None):
         cfg['object_storage_endpoints'] = objconf
 
     cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:http=debug:api=info' ]
-    servers = []
-    host_ids = {}
 
+    property_files = []
     cur_dc = 0
     cur_rack = 0
-    for s in range(topology.nodes):
+    for i in range(topology.nodes):
         dc = f"dc{cur_dc}"
         rack = f"rack{cur_rack}"
         cur_dc += 1
@@ -482,10 +481,21 @@ async def create_cluster(topology, manager, logger, object_storage=None):
             cur_rack += 1
             if cur_rack >= topology.racks:
                 cur_rack = 0
-        s = await manager.server_add(config=cfg, cmdline=cmd, property_file={'dc': dc, 'rack': rack})
-        logger.info(f'Created node {s.ip_addr} in {dc}.{rack}')
-        servers.append(s)
-        host_ids[s.server_id] = await manager.get_host_id(s.server_id)
+        property_files.append({'dc': dc, 'rack': rack})
+
+    servers = await manager.servers_add(
+        servers_num=topology.nodes,
+        config=cfg,
+        cmdline=cmd,
+        property_file=property_files
+    )
+
+    host_id_results = await asyncio.gather(*(manager.get_host_id(s.server_id) for s in servers))
+
+    host_ids = {}
+    for s, host_id in zip(servers, host_id_results):
+        host_ids[s.server_id] = host_id
+        logger.info(f'Created node {s.ip_addr} in {s.datacenter}.{s.rack}')
 
     return servers,host_ids
 
