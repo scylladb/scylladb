@@ -178,6 +178,13 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
         logger.info(f"=== Run 1: target={target_server} (non-coordinator) ===")
         new_server = await do_test(target_server)
 
+        # Wait for all peers to see the restarted target_server as alive before
+        # starting decommission. Without this wait, the restarted node's gossip
+        # on_restart event may arrive at new_server mid-stream, causing
+        # stream_manager::fail_sessions to tear down the in-flight session and
+        # roll back the decommission (SCYLLADB-2417).
+        await manager.servers_see_each_other(await manager.running_servers())
+
         # Restore the cluster to its original state: decommission the added
         # node. do_test already restarted the target. This keeps 2 nodes with
         # RF=2, so both are replicas for every partition — same as run 1.
