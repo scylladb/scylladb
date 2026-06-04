@@ -105,7 +105,6 @@ private:
     segment_manager_impl& get_impl() noexcept;
     const segment_manager_impl& get_impl() const noexcept;
 public:
-    static constexpr size_t block_alignment = 4096;
 
     explicit segment_manager(segment_manager_config config);
     ~segment_manager();

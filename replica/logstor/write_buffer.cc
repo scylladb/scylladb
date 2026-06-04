@@ -53,9 +53,9 @@ write_buffer::write_buffer(size_t buffer_size, segment_kind kind)
 
 void write_buffer::reset() {
     _stream = seastar::simple_memory_output_stream(_buffer.get(), _buffer_size);
-    _header_stream = _stream.write_substream(buffer_header_size);
+    _header_stream = _stream.write_substream(ondisk::buffer_header_size);
     if (with_segment_header()) {
-        _segment_header_stream = _stream.write_substream(segment_header_size);
+        _segment_header_stream = _stream.write_substream(ondisk::segment_header_size);
     }
     _buffer_header = {};
     _net_data_size = 0;
@@ -74,13 +74,13 @@ future<> write_buffer::close() {
 }
 
 size_t write_buffer::get_max_write_size() const noexcept {
-    return _buffer_size - (header_size() + record_header_size);
+    return _buffer_size - (header_size() + ondisk::record_header_size);
 }
 
 bool write_buffer::can_fit(size_t data_size) const noexcept {
     // Calculate total space needed including header, data, and alignment padding
-    auto total_size = record_header_size + data_size;
-    auto aligned_size = align_up(total_size, record_alignment);
+    auto total_size = ondisk::record_header_size + data_size;
+    auto aligned_size = align_up(total_size, ondisk::record_alignment);
     return aligned_size <= _stream.size();
 }
 
@@ -99,7 +99,7 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, c
     }
 
     size_t record_header_offset = offset_in_buffer();
-    auto rh = record_header {
+    auto rh = ondisk::record_header {
         .header_size = static_cast<uint32_t>(writer.header_size()),
         .data_size = static_cast<uint32_t>(writer.data_size())
     };
@@ -109,7 +109,7 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, c
     auto data_out = _stream.write_substream(content_size);
     writer.write(data_out);
 
-    const size_t total_size = record_header_size + content_size;
+    const size_t total_size = ondisk::record_header_size + content_size;
 
     _net_data_size += total_size;
     _record_count++;
@@ -121,7 +121,7 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, c
     }
 
     // Add padding to align record
-    pad_to_alignment(record_alignment);
+    pad_to_alignment(ondisk::record_alignment);
 
     auto record_location = [record_header_offset, total_size] (log_location base_location) {
         return log_location {
@@ -165,49 +165,25 @@ void write_buffer::finalize(size_t alignment) {
 }
 
 void write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table) {
-    _buffer_header.magic = buffer_header_magic;
+    _buffer_header.magic = ondisk::buffer_header_magic;
     _buffer_header.kind = _segment_kind;
-    _buffer_header.version = current_version;
+    _buffer_header.version = ondisk::current_version;
     _buffer_header.reserved = 0;
     _buffer_header.segment_seq = segment_seq;
 
     _buffer_header.crc = _buffer_header.calculate_crc();
 
-    ser::serialize<buffer_header>(_header_stream, _buffer_header);
+    ser::serialize<ondisk::buffer_header>(_header_stream, _buffer_header);
 
     if (_segment_kind == segment_kind::full) {
-        segment_header seg_hdr {
+        ondisk::segment_header seg_hdr {
             .table = table.value(),
             .first_token = _min_token.value_or(dht::minimum_token()),
             .last_token = _max_token.value_or(dht::minimum_token()),
         };
 
-        ser::serialize<segment_header>(_segment_header_stream, seg_hdr);
+        ser::serialize<ondisk::segment_header>(_segment_header_stream, seg_hdr);
     }
-}
-
-bool write_buffer::validate_header(const write_buffer::buffer_header& bh) {
-    if (bh.magic != write_buffer::buffer_header_magic) {
-        return false;
-    }
-
-    switch (bh.kind) {
-    case segment_kind::mixed:
-    case segment_kind::full:
-        break;
-    default:
-        return false;
-    }
-
-    if (bh.version != current_version) {
-        return false;
-    }
-
-    if (bh.calculate_crc() != bh.crc) {
-        return false;
-    }
-
-    return true;
 }
 
 future<> write_buffer::complete_writes(log_location base_location) {
@@ -241,7 +217,7 @@ size_t write_buffer::estimate_required_segments(size_t net_data_size, size_t rec
 
 }
 
-uint32_t write_buffer::buffer_header::calculate_crc() const {
+uint32_t ondisk::buffer_header::calculate_crc() const {
     utils::crc32 c;
     c.process_le(magic);
     c.process_le(static_cast<uint8_t>(kind));
@@ -250,6 +226,30 @@ uint32_t write_buffer::buffer_header::calculate_crc() const {
     c.process_le(segment_seq.value);
     c.process_le(data_size);
     return c.get();
+}
+
+bool ondisk::validate_header(const ondisk::buffer_header& bh) {
+    if (bh.magic != ondisk::buffer_header_magic) {
+        return false;
+    }
+
+    switch (bh.kind) {
+    case segment_kind::mixed:
+    case segment_kind::full:
+        break;
+    default:
+        return false;
+    }
+
+    if (bh.version != ondisk::current_version) {
+        return false;
+    }
+
+    return bh.calculate_crc() == bh.crc;
+}
+
+bool ondisk::validate_record_header(const ondisk::record_header& rh) {
+    return rh.header_size != 0;
 }
 
 // buffered_writer

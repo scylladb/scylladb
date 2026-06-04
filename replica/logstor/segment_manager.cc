@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/ondisk.hh"
 #include "replica/logstor/segment_io.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
@@ -608,7 +609,7 @@ class segment_manager_impl {
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
 public:
-    static constexpr size_t block_alignment = segment_manager::block_alignment;
+    static constexpr size_t block_alignment = ondisk::block_alignment;
 
     explicit segment_manager_impl(segment_manager_config);
 
@@ -2024,24 +2025,24 @@ class segment_data_sink_impl : public data_sink_impl {
     std::optional<size_t> _initial_header_size;
     bool _header_rewritten = false;
 
-    write_buffer::buffer_header read_buffer_header() const {
-        simple_memory_input_stream bh_stream(_pending_data.data(), write_buffer::buffer_header_size);
-        return ser::deserialize(bh_stream, std::type_identity<write_buffer::buffer_header>{});
+    ondisk::buffer_header read_buffer_header() const {
+        simple_memory_input_stream bh_stream(_pending_data.data(), ondisk::buffer_header_size);
+        return ser::deserialize(bh_stream, std::type_identity<ondisk::buffer_header>{});
     }
 
     void maybe_parse_initial_header() {
-        if (_initial_header_size || _pending_data.size() < write_buffer::buffer_header_size) {
+        if (_initial_header_size || _pending_data.size() < ondisk::buffer_header_size) {
             return;
         }
 
         auto bh = read_buffer_header();
-        if (!write_buffer::validate_header(bh)) {
+        if (!ondisk::validate_header(bh)) {
             throw std::runtime_error("Invalid streamed logstor buffer header");
         }
 
-        size_t header_size = write_buffer::buffer_header_size;
+        size_t header_size = ondisk::buffer_header_size;
         if (bh.kind == segment_kind::full) {
-            header_size += write_buffer::segment_header_size;
+            header_size += ondisk::segment_header_size;
         }
         _initial_header_size = header_size;
     }
@@ -2054,8 +2055,8 @@ class segment_data_sink_impl : public data_sink_impl {
         bh.segment_seq = _segment->seq_num();
         bh.crc = bh.calculate_crc();
 
-        simple_memory_output_stream bh_stream(_pending_data.data(), write_buffer::buffer_header_size);
-        ser::serialize<write_buffer::buffer_header>(bh_stream, bh);
+        simple_memory_output_stream bh_stream(_pending_data.data(), ondisk::buffer_header_size);
+        ser::serialize<ondisk::buffer_header>(bh_stream, bh);
     }
 
     future<> flush_pending_data() {

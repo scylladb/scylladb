@@ -17,22 +17,16 @@
 #include <seastar/core/queue.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/shared_future.hh>
+
+#include "replica/logstor/ondisk.hh"
 #include "schema/schema_fwd.hh"
 #include "types.hh"
-#include "serializer.hh"
-#include "idl/uuid.dist.hh"
-#include "idl/uuid.dist.impl.hh"
 
 namespace replica {
 
 class compaction_group;
 
 namespace logstor {
-
-enum class segment_kind : uint8_t {
-    mixed = 0,
-    full = 1,
-};
 
 class segment_manager;
 
@@ -108,47 +102,6 @@ public:
     // they have explicit sizes and serialization below
     // segment_header exists when the segment_kind is segment_kind::full.
 
-    static constexpr uint32_t buffer_header_magic = 0x4c475342;
-    static constexpr size_t record_alignment = 8;
-    static constexpr uint8_t current_version = 1;
-
-    struct buffer_header {
-        uint32_t magic;
-        segment_kind kind;
-        uint8_t version;
-        uint16_t reserved;
-        segment_sequence segment_seq;
-        uint32_t data_size; // size of all records data following the header(s)
-        uint32_t crc;
-
-        uint32_t calculate_crc() const;
-    };
-    static constexpr size_t buffer_header_size =
-        sizeof(uint32_t)
-        + sizeof(std::underlying_type_t<segment_kind>)
-        + sizeof(uint8_t)
-        + sizeof(uint16_t)
-        + sizeof(segment_sequence)
-        + sizeof(uint32_t)
-        + sizeof(uint32_t);
-    static_assert(buffer_header_size % record_alignment == 0, "Buffer header size must be aligned by record_alignment");
-
-    struct segment_header {
-        table_id table;
-        dht::token first_token;
-        dht::token last_token;
-    };
-    static constexpr size_t segment_header_size =
-        sizeof(table_id)
-        + 2 * sizeof(int64_t);
-    static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
-
-    struct record_header {
-        uint32_t header_size; // size of the serialized log_record_header
-        uint32_t data_size;   // size of the serialized canonical_mutation
-    };
-    static constexpr size_t record_header_size = 2 * sizeof(uint32_t);
-
 private:
 
     using aligned_buffer_type = std::unique_ptr<char[], free_deleter>;
@@ -157,7 +110,7 @@ private:
     aligned_buffer_type _buffer;
     segment_kind _segment_kind;
     seastar::simple_memory_output_stream _stream;
-    buffer_header _buffer_header;
+    ondisk::buffer_header _buffer_header;
     seastar::simple_memory_output_stream _header_stream;
     seastar::simple_memory_output_stream _segment_header_stream;
 
@@ -230,14 +183,16 @@ public:
     }
 
     size_t header_size() const noexcept {
-        size_t s = buffer_header_size;
+        size_t s = ondisk::buffer_header_size;
         if (with_segment_header()) {
-            s += segment_header_size;
+            s += ondisk::segment_header_size;
         }
         return s;
     }
 
-    static bool validate_header(const buffer_header& bh);
+    static bool validate_header(const ondisk::buffer_header& bh) {
+        return ondisk::validate_header(bh);
+    }
 
 private:
 
@@ -322,87 +277,3 @@ private:
 
 }
 }
-
-namespace ser {
-
-template <>
-struct serializer<replica::logstor::write_buffer::buffer_header> {
-    template <typename Output>
-    static void write(Output& out, const replica::logstor::write_buffer::buffer_header& h) {
-        serializer<uint32_t>::write(out, h.magic);
-        serializer<uint8_t>::write(out, static_cast<uint8_t>(h.kind));
-        serializer<uint8_t>::write(out, h.version);
-        serializer<uint16_t>::write(out, h.reserved);
-        serializer<uint64_t>::write(out, h.segment_seq.value);
-        serializer<uint32_t>::write(out, h.data_size);
-        serializer<uint32_t>::write(out, h.crc);
-    }
-    template <typename Input>
-    static replica::logstor::write_buffer::buffer_header read(Input& in) {
-        replica::logstor::write_buffer::buffer_header h;
-        h.magic = serializer<uint32_t>::read(in);
-        h.kind = static_cast<replica::logstor::segment_kind>(serializer<uint8_t>::read(in));
-        h.version = serializer<uint8_t>::read(in);
-        h.reserved = serializer<uint16_t>::read(in);
-        h.segment_seq = replica::logstor::segment_sequence{serializer<uint64_t>::read(in)};
-        h.data_size = serializer<uint32_t>::read(in);
-        h.crc = serializer<uint32_t>::read(in);
-        return h;
-    }
-    template <typename Input>
-    static void skip(Input& in) {
-        serializer<uint32_t>::skip(in);
-        serializer<uint8_t>::skip(in);
-        serializer<uint8_t>::skip(in);
-        serializer<uint16_t>::skip(in);
-        serializer<uint64_t>::skip(in);
-        serializer<uint32_t>::skip(in);
-        serializer<uint32_t>::skip(in);
-    }
-};
-
-template <>
-struct serializer<replica::logstor::write_buffer::segment_header> {
-    template <typename Output>
-    static void write(Output& out, const replica::logstor::write_buffer::segment_header& h) {
-        serializer<table_id>::write(out, h.table);
-        serializer<int64_t>::write(out, h.first_token.raw());
-        serializer<int64_t>::write(out, h.last_token.raw());
-    }
-    template <typename Input>
-    static replica::logstor::write_buffer::segment_header read(Input& in) {
-        replica::logstor::write_buffer::segment_header h;
-        h.table = serializer<table_id>::read(in);
-        h.first_token = dht::token::from_int64(serializer<int64_t>::read(in));
-        h.last_token = dht::token::from_int64(serializer<int64_t>::read(in));
-        return h;
-    }
-    template <typename Input>
-    static void skip(Input& in) {
-        serializer<table_id>::skip(in);
-        serializer<int64_t>::skip(in);
-        serializer<int64_t>::skip(in);
-    }
-};
-
-template <>
-struct serializer<replica::logstor::write_buffer::record_header> {
-    template <typename Output>
-    static void write(Output& out, const replica::logstor::write_buffer::record_header& h) {
-        serializer<uint32_t>::write(out, h.header_size);
-        serializer<uint32_t>::write(out, h.data_size);
-    }
-    template <typename Input>
-    static replica::logstor::write_buffer::record_header read(Input& in) {
-        replica::logstor::write_buffer::record_header h;
-        h.header_size = serializer<uint32_t>::read(in);
-        h.data_size = serializer<uint32_t>::read(in);
-        return h;
-    }
-    template <typename Input>
-    static void skip(Input& in) {
-        serializer<uint32_t>::skip(in);
-        serializer<uint32_t>::skip(in);
-    }
-};
-} // namespace ser

@@ -11,7 +11,7 @@
 #include <functional>
 #include <optional>
 #include <seastar/core/fstream.hh>
-#include "replica/logstor/write_buffer.hh"
+#include "replica/logstor/ondisk.hh"
 
 namespace replica::logstor {
 

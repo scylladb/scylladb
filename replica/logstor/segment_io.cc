@@ -19,9 +19,7 @@ namespace replica::logstor {
 
 extern seastar::logger logstor_logger;
 
-static constexpr size_t block_alignment = 4096;
-
-segment_header make_segment_header(const write_buffer::buffer_header& bh, std::optional<write_buffer::segment_header> sh) {
+segment_header make_segment_header(const ondisk::buffer_header& bh, std::optional<ondisk::segment_header> sh) {
     segment_header seg_hdr {
         .kind = bh.kind,
         .segment_seq = bh.segment_seq,
@@ -46,31 +44,31 @@ segment_header make_segment_header(const write_buffer::buffer_header& bh, std::o
 }
 
 future<std::optional<segment_header>> read_segment_header(seastar::input_stream<char>& in) {
-    auto bh_buf = co_await in.read_exactly(write_buffer::buffer_header_size);
-    if (bh_buf.size() < write_buffer::buffer_header_size) {
+    auto bh_buf = co_await in.read_exactly(ondisk::buffer_header_size);
+    if (bh_buf.size() < ondisk::buffer_header_size) {
         co_return std::nullopt;
     }
-    auto bh = ser::deserialize_from_buffer(bh_buf, std::type_identity<write_buffer::buffer_header>{});
+    auto bh = ser::deserialize_from_buffer(bh_buf, std::type_identity<ondisk::buffer_header>{});
 
-    if (!write_buffer::validate_header(bh)) {
+    if (!ondisk::validate_header(bh)) {
         co_return std::nullopt;
     }
 
-    std::optional<write_buffer::segment_header> sh;
+    std::optional<ondisk::segment_header> sh;
     if (bh.kind == segment_kind::full) {
-        auto sh_buf = co_await in.read_exactly(write_buffer::segment_header_size);
-        if (sh_buf.size() < write_buffer::segment_header_size) {
+        auto sh_buf = co_await in.read_exactly(ondisk::segment_header_size);
+        if (sh_buf.size() < ondisk::segment_header_size) {
             co_return std::nullopt;
         }
-        sh = ser::deserialize_from_buffer(sh_buf, std::type_identity<write_buffer::segment_header>{});
+        sh = ser::deserialize_from_buffer(sh_buf, std::type_identity<ondisk::segment_header>{});
     }
 
     co_return make_segment_header(bh, sh);
 }
 
 log_record deserialize_log_record(simple_memory_input_stream buf_stream) {
-    auto rh_stream = buf_stream.read_substream(write_buffer::record_header_size);
-    auto rh = ser::deserialize(rh_stream, std::type_identity<write_buffer::record_header>{});
+    auto rh_stream = buf_stream.read_substream(ondisk::record_header_size);
+    auto rh = ser::deserialize(rh_stream, std::type_identity<ondisk::record_header>{});
     auto header_stream = buf_stream.read_substream(rh.header_size);
     auto data_stream = buf_stream.read_substream(rh.data_size);
 
@@ -101,7 +99,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
 
     while (current_position < segment_size) {
         // Align to block boundary
-        auto skip_bytes = align_up(current_position, block_alignment) - current_position;
+        auto skip_bytes = align_up(current_position, ondisk::block_alignment) - current_position;
         if (skip_bytes > 0) {
             co_await in.skip(skip_bytes);
             current_position += skip_bytes;
@@ -112,15 +110,15 @@ future<> scan_segment(seastar::input_stream<char>& in,
         }
 
         // read buffer header
-        auto buffer_header_buf = co_await in.read_exactly(write_buffer::buffer_header_size);
-        current_position += write_buffer::buffer_header_size;
-        if (buffer_header_buf.size() < write_buffer::buffer_header_size) {
+        auto buffer_header_buf = co_await in.read_exactly(ondisk::buffer_header_size);
+        current_position += ondisk::buffer_header_size;
+        if (buffer_header_buf.size() < ondisk::buffer_header_size) {
             break;
         }
-        auto bh = ser::deserialize_from_buffer(buffer_header_buf, std::type_identity<write_buffer::buffer_header>{});
+        auto bh = ser::deserialize_from_buffer(buffer_header_buf, std::type_identity<ondisk::buffer_header>{});
 
         // if the buffer is invalid then skip the rest of the segment - buffer writes are sequential and serialized.
-        if (!write_buffer::validate_header(bh)) {
+        if (!ondisk::validate_header(bh)) {
             break;
         }
 
@@ -130,15 +128,15 @@ future<> scan_segment(seastar::input_stream<char>& in,
             break;
         }
 
-        std::optional<write_buffer::segment_header> sh;
+        std::optional<ondisk::segment_header> sh;
         if (bh.kind == segment_kind::full) {
             // read segment header
-            auto segment_header_buf = co_await in.read_exactly(write_buffer::segment_header_size);
-            current_position += write_buffer::segment_header_size;
-            if (segment_header_buf.size() < write_buffer::segment_header_size) {
+            auto segment_header_buf = co_await in.read_exactly(ondisk::segment_header_size);
+            current_position += ondisk::segment_header_size;
+            if (segment_header_buf.size() < ondisk::segment_header_size) {
                 break;
             }
-            sh = ser::deserialize_from_buffer(segment_header_buf, std::type_identity<write_buffer::segment_header>{});
+            sh = ser::deserialize_from_buffer(segment_header_buf, std::type_identity<ondisk::segment_header>{});
         }
 
         auto seg_hdr = make_segment_header(bh, sh);
@@ -150,12 +148,12 @@ future<> scan_segment(seastar::input_stream<char>& in,
         while (current_position < buffer_data_end_position) {
             // Read record header
             const auto record_offset = current_position;
-            auto size_buf = co_await in.read_exactly(write_buffer::record_header_size);
-            current_position += write_buffer::record_header_size;
-            if (size_buf.size() < write_buffer::record_header_size) {
+            auto size_buf = co_await in.read_exactly(ondisk::record_header_size);
+            current_position += ondisk::record_header_size;
+            if (size_buf.size() < ondisk::record_header_size) {
                 break;
             }
-            auto rh = ser::deserialize_from_buffer(size_buf, std::type_identity<write_buffer::record_header>{});
+            auto rh = ser::deserialize_from_buffer(size_buf, std::type_identity<ondisk::record_header>{});
             if (rh.header_size == 0 || rh.header_size + rh.data_size > buffer_data_end_position - current_position) {
                 // invalid record size
                 break;
@@ -175,7 +173,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
             log_location loc {
                 .segment = segment_id,
                 .offset = static_cast<uint32_t>(record_offset),
-                .size = static_cast<uint32_t>(write_buffer::record_header_size + rh.header_size + rh.data_size)
+                .size = static_cast<uint32_t>(ondisk::record_header_size + rh.header_size + rh.data_size)
             };
 
             if (on_record_header(loc, record_header) == want_data::yes) {
@@ -193,7 +191,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
             }
 
             // align up to next record
-            auto padding = align_up(current_position, write_buffer::record_alignment) - current_position;
+            auto padding = align_up(current_position, ondisk::record_alignment) - current_position;
             if (padding > 0) {
                 co_await in.skip(padding);
                 current_position += padding;
