@@ -967,7 +967,7 @@ database::init_logstor() {
             .disk_size = _cfg.logstor_disk_size_in_mb() * 1024ull * 1024ull,
             .format_on_startup = _cfg.logstor_format_on_startup(),
             .trigger_compaction_threshold = _cfg.logstor_compaction_trigger_threshold,
-            .compaction_sg = _dbcfg.compaction_scheduling_group,
+            .compaction_sg = _dbcfg.logstor_compaction_scheduling_group,
             .compaction_static_shares = _cfg.compaction_static_shares,
             .separator_sg = _dbcfg.memtable_scheduling_group,
             .separator_delay_limit_ms = _cfg.logstor_separator_delay_limit_ms(),
