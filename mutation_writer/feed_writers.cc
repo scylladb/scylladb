@@ -38,8 +38,9 @@ future<> bucket_writer::consume(mutation_fragment_v2 mf) {
     return _handle.push(std::move(mf));
 }
 
-void bucket_writer::consume_end_of_stream() {
+future<> bucket_writer::consume_end_of_stream() {
     _handle.push_end_of_stream();
+    return make_ready_future<>();
 }
 
 void bucket_writer::abort(std::exception_ptr ep) noexcept {
