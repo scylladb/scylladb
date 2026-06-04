@@ -942,18 +942,16 @@ future<> segment_manager_impl::write(write_buffer& wb) {
     write_source source = write_source::normal_write;
     auto holder = _async_gate.hold();
 
-    wb.finalize(block_alignment);
+    const auto sealed_size = wb.sealed_size(block_alignment);
 
-    bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.offset_in_buffer());
-
-    if (data.size() > _cfg.segment_size) {
-        throw std::runtime_error(fmt::format( "Write size {} exceeds segment size {}", data.size(), _cfg.segment_size));
+    if (sealed_size > _cfg.segment_size) {
+        throw std::runtime_error(fmt::format( "Write size {} exceeds segment size {}", sealed_size, _cfg.segment_size));
     }
 
     {
         auto sem_units = co_await get_units(_active_segment_write_sem, 1);
 
-        while (!_active_segment || !_active_segment->can_fit(data.size())) {
+        while (!_active_segment || !_active_segment->can_fit(sealed_size)) {
             co_await request_segment_switch();
         }
 
@@ -971,15 +969,16 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
 
-        wb.write_header(seq_num, std::nullopt);
+        wb.seal(seq_num, std::nullopt, block_alignment);
+        bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.serialized_size());
 
         auto loc = co_await seg->append(data);
         sem_units.return_all();
 
-        desc.on_write(wb.get_net_data_size(), wb.get_record_count());
+        desc.on_write(wb.net_data_size(), wb.record_count());
 
         _stats.bytes_written[static_cast<size_t>(source)] += data.size();
-        _stats.data_bytes_written[static_cast<size_t>(source)] += wb.get_net_data_size();
+        _stats.data_bytes_written[static_cast<size_t>(source)] += wb.net_data_size();
 
         // complete all buffered writes with their individual locations and wait
         // for them to be updated in the index.
@@ -1000,12 +999,10 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 future<> segment_manager_impl::write_full_segment(write_buffer& wb, compaction_group& cg, write_source source) {
     auto holder = _async_gate.hold();
 
-    wb.finalize(block_alignment);
+    const auto sealed_size = wb.sealed_size(block_alignment);
 
-    bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.offset_in_buffer());
-
-    if (data.size() > _cfg.segment_size) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds segment size {}", data.size(), _cfg.segment_size));
+    if (sealed_size > _cfg.segment_size) {
+        throw std::runtime_error(fmt::format("Write size {} exceeds segment size {}", sealed_size, _cfg.segment_size));
     }
 
     auto seg = co_await get_segment(source);
@@ -1013,14 +1010,15 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, compaction_g
 
     logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
 
-    wb.write_header(seg->seq_num(), cg.schema()->id());
+    wb.seal(seg->seq_num(), cg.schema()->id(), block_alignment);
+    bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.serialized_size());
 
     auto loc = co_await seg->append(data);
 
-    desc.on_write(wb.get_net_data_size(), wb.get_record_count());
+    desc.on_write(wb.net_data_size(), wb.record_count());
 
     _stats.bytes_written[static_cast<size_t>(source)] += data.size();
-    _stats.data_bytes_written[static_cast<size_t>(source)] += wb.get_net_data_size();
+    _stats.data_bytes_written[static_cast<size_t>(source)] += wb.net_data_size();
 
     co_await wb.complete_writes(loc);
     co_await seg->stop();
@@ -1317,7 +1315,7 @@ std::vector<log_segment_id> compaction_manager_impl::select_segments_for_compact
         accum_net_data_size += desc.net_data_size(segment_size);
         accum_record_count += desc.record_count;
 
-        auto required_segments = write_buffer::estimate_required_segments(
+        auto required_segments = raw_write_buffer::estimate_required_segments(
             accum_net_data_size, accum_record_count, segment_size);
 
         logstor_logger.trace("Evaluating compaction candidate {} with net data size {} accumulated {} required segments {}",
@@ -1394,7 +1392,7 @@ struct compaction_buffer {
         if (buf->has_data()) {
             flush_count++;
             co_await sm.write_full_segment(*buf, cg, write_source::compaction);
-            logstor_logger.trace("Compaction buffer flushed with {} bytes", buf->get_net_data_size());
+            logstor_logger.trace("Compaction buffer flushed with {} bytes", buf->net_data_size());
         }
         co_await when_all_succeed(pending_updates.begin(), pending_updates.end());
         co_await buf->close();
@@ -1606,7 +1604,7 @@ separator_buffer compaction_manager_impl::allocate_separator_buffer() {
 }
 
 future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref seg_ref, segment_sequence segment_seq_num) {
-    for (auto&& w : wb.records()) {
+    for (auto&& w : wb.records_for_separator()) {
         co_await coroutine::maybe_yield();
 
         auto key = w.writer.record().header.key;

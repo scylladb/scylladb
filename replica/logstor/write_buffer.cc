@@ -38,20 +38,17 @@ void log_record_writer::write(ostream& out) const {
     ser::serialize(out, _record.mut);
 }
 
-// write_buffer
+// raw_write_buffer
 
-write_buffer::write_buffer(size_t buffer_size, segment_kind kind)
+raw_write_buffer::raw_write_buffer(size_t buffer_size, segment_kind kind)
         : _buffer_size(buffer_size)
         , _buffer(seastar::allocate_aligned_buffer<char>(buffer_size, 4096))
         , _segment_kind(kind)
 {
-    if (with_record_copy()) {
-        _records_copy.reserve(_buffer_size / 100);
-    }
     reset();
 }
 
-void write_buffer::reset() {
+void raw_write_buffer::reset() {
     _stream = seastar::simple_memory_output_stream(_buffer.get(), _buffer_size);
     _header_stream = _stream.write_substream(ondisk::buffer_header_size);
     if (with_segment_header()) {
@@ -62,33 +59,25 @@ void write_buffer::reset() {
     _record_count = 0;
     _min_token = std::nullopt;
     _max_token = std::nullopt;
-    _written = {};
-    _records_copy.clear();
-    _write_gate = {};
+    _sealed = false;
 }
 
-future<> write_buffer::close() {
-    if (!_write_gate.is_closed()) {
-        co_await _write_gate.close();
-    }
-}
-
-size_t write_buffer::get_max_write_size() const noexcept {
+size_t raw_write_buffer::max_record_size() const noexcept {
     return _buffer_size - (header_size() + ondisk::record_header_size);
 }
 
-bool write_buffer::can_fit(size_t data_size) const noexcept {
+bool raw_write_buffer::can_fit(size_t data_size) const noexcept {
     // Calculate total space needed including header, data, and alignment padding
     auto total_size = ondisk::record_header_size + data_size;
     auto aligned_size = align_up(total_size, ondisk::record_alignment);
     return aligned_size <= _stream.size();
 }
 
-bool write_buffer::has_data() const noexcept {
+bool raw_write_buffer::has_data() const noexcept {
     return offset_in_buffer() > header_size();
 }
 
-future<log_location_with_holder> write_buffer::write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder) {
+raw_write_buffer::append_result raw_write_buffer::append(const log_record_writer& writer) {
     const auto content_size = writer.size();
 
     if (!can_fit(content_size)) {
@@ -123,34 +112,18 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, c
     // Add padding to align record
     pad_to_alignment(ondisk::record_alignment);
 
-    auto record_location = [record_header_offset, total_size] (log_location base_location) {
-        return log_location {
-            .segment = base_location.segment,
-            .offset = static_cast<uint32_t>(base_location.offset + record_header_offset),
-            .size = static_cast<uint32_t>(total_size)
-        };
+    return append_result {
+        .record_header_offset = record_header_offset,
+        .total_size = total_size,
     };
-
-    if (with_record_copy()) {
-        _records_copy.push_back(record_in_buffer {
-            .writer = std::move(writer),
-            .loc = _written.get_shared_future().then(record_location),
-            .cg = cg,
-            .cg_holder = std::move(cg_holder)
-        });
-    }
-
-    // hold the write buffer until the write is complete, and pass the holder to the
-    // caller for follow-up operations that should continue holding the buffer, such
-    // as index updates.
-    auto op = _write_gate.hold();
-
-    return _written.get_shared_future().then([record_location, op = std::move(op)] (log_location base_location) mutable {
-        return std::make_tuple(record_location(base_location), std::move(op));
-    });
 }
 
-void write_buffer::pad_to_alignment(size_t alignment) {
+size_t raw_write_buffer::sealed_size(size_t alignment) const noexcept {
+    auto size = offset_in_buffer();
+    return align_up(size, alignment);
+}
+
+void raw_write_buffer::pad_to_alignment(size_t alignment) {
     auto current_pos = offset_in_buffer();
     auto next_pos = align_up(current_pos, alignment);
     auto padding = next_pos - current_pos;
@@ -159,12 +132,21 @@ void write_buffer::pad_to_alignment(size_t alignment) {
     }
 }
 
-void write_buffer::finalize(size_t alignment) {
+void raw_write_buffer::finalize(size_t alignment) {
     _buffer_header.data_size = static_cast<uint32_t>(offset_in_buffer() - header_size());
     pad_to_alignment(alignment);
 }
 
-void write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table) {
+void raw_write_buffer::seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment) {
+    if (_sealed) {
+        throw std::runtime_error("Cannot seal write buffer more than once");
+    }
+    finalize(alignment);
+    write_header(segment_seq, table);
+    _sealed = true;
+}
+
+void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table) {
     _buffer_header.magic = ondisk::buffer_header_magic;
     _buffer_header.kind = _segment_kind;
     _buffer_header.version = ondisk::current_version;
@@ -198,14 +180,67 @@ future<> write_buffer::abort_writes(std::exception_ptr ex) {
     co_await close();
 }
 
-std::vector<write_buffer::record_in_buffer>& write_buffer::records() {
+// write_buffer
+
+write_buffer::write_buffer(size_t buffer_size, segment_kind kind)
+        : _raw(buffer_size, kind)
+{
+    if (with_record_copy()) {
+        _records_copy.reserve(_raw.get_buffer_size() / 100);
+    }
+}
+
+void write_buffer::reset() {
+    _raw.reset();
+    _written = {};
+    _records_copy.clear();
+    _write_gate = {};
+}
+
+future<> write_buffer::close() {
+    if (!_write_gate.is_closed()) {
+        co_await _write_gate.close();
+    }
+}
+
+future<log_location_with_holder> write_buffer::write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder) {
+    auto append_result = _raw.append(writer);
+
+    auto record_location = [record_header_offset = append_result.record_header_offset, total_size = append_result.total_size] (log_location base_location) {
+        return log_location {
+            .segment = base_location.segment,
+            .offset = static_cast<uint32_t>(base_location.offset + record_header_offset),
+            .size = static_cast<uint32_t>(total_size)
+        };
+    };
+
+    if (with_record_copy()) {
+        _records_copy.push_back(record_in_buffer {
+            .writer = std::move(writer),
+            .loc = _written.get_shared_future().then(record_location),
+            .cg = cg,
+            .cg_holder = std::move(cg_holder)
+        });
+    }
+
+    // hold the write buffer until the write is complete, and pass the holder to the
+    // caller for follow-up operations that should continue holding the buffer, such
+    // as index updates.
+    auto op = _write_gate.hold();
+
+    return _written.get_shared_future().then([record_location, op = std::move(op)] (log_location base_location) mutable {
+        return std::make_tuple(record_location(base_location), std::move(op));
+    });
+}
+
+std::vector<write_buffer::record_in_buffer>& write_buffer::records_for_separator() {
     if (!with_record_copy()) {
         on_internal_error(logstor_logger, "requesting records but the write buffer has no record copy enabled");
     }
     return _records_copy;
 }
 
-size_t write_buffer::estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size) {
+size_t raw_write_buffer::estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size) {
     // Calculate total size needed including headers and alignment padding.
     // net_data_size includes record headers.
     size_t total_size = net_data_size;
@@ -293,8 +328,8 @@ future<log_location_with_holder> buffered_writer::write(log_record record, compa
 
     log_record_writer writer(std::move(record));
 
-    if (writer.size() > head_buf().get_max_write_size()) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), head_buf().get_max_write_size()));
+    if (writer.size() > head_buf().max_record_size()) {
+        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), head_buf().max_record_size()));
     }
 
     // Wait until the head buffer can fit this write.
