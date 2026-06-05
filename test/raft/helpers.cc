@@ -79,7 +79,7 @@ bool deliver(raft_routing_map& routes, raft::server_id from,
     return true;
 }
 
-void deliver(raft_routing_map& routes, raft::server_id from, std::vector<std::pair<raft::server_id, raft::rpc_message>> msgs) {
+void deliver(raft_routing_map& routes, raft::server_id from, utils::chunked_vector<std::pair<raft::server_id, raft::rpc_message>> msgs) {
     for (auto& m: msgs) {
         deliver(routes, from, std::move(m));
     }
