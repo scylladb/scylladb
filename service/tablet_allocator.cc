@@ -2185,6 +2185,14 @@ public:
         std::unordered_map<table_id, table_sizing> tables;
     };
 
+    struct new_table_info {
+        schema_ptr schema;
+        const tablet_aware_replication_strategy* rs;
+        // Externally-known data size, if available.
+        // When set, used instead of load_stats_for_table().
+        std::optional<uint64_t> size_in_bytes;
+    };
+
     struct tablet_count_and_reason {
         size_t tablet_count = 0;
         sstring reason;
@@ -2307,7 +2315,7 @@ public:
         };
     }
 
-    future<sizing_plan> make_sizing_plan(schema_ptr new_table = nullptr, const tablet_aware_replication_strategy* new_rs = nullptr) {
+    future<sizing_plan> make_sizing_plan(std::vector<new_table_info> new_tables = {}) {
         std::unordered_map<table_id, const tablet_aware_replication_strategy*> rs_by_table;
         sizing_plan plan;
 
@@ -2322,7 +2330,7 @@ public:
             }
         });
 
-        auto process_table = [&] (table_id table, const locator::table_group_set& tables, schema_ptr s, db::tablet_options tablet_options, const tablet_aware_replication_strategy* rs, size_t tablet_count) {
+        auto process_table = [&] (table_id table, const locator::table_group_set& tables, schema_ptr s, db::tablet_options tablet_options, const tablet_aware_replication_strategy* rs, size_t tablet_count, std::optional<uint64_t> expected_size_opt = std::nullopt) {
             table_sizing& table_plan = plan.tables[table];
             table_plan.current_tablet_count = tablet_count;
             table_plan.pow2_count = tablet_options.pow2_count.value_or(
@@ -2386,7 +2394,11 @@ public:
                 return total_size;
             });
 
-            if (total_size_opt) {
+            if (expected_size_opt) {
+                auto total_size = *expected_size_opt;
+                auto tablet_count_from_size = total_size / target_tablet_size;
+                maybe_apply({tablet_count_from_size, format("new table with size={}", total_size)});
+            } else if (total_size_opt) {
                 auto total_size = *total_size_opt;
 
                 auto cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
@@ -2458,8 +2470,8 @@ public:
             co_await coroutine::maybe_yield();
         }
 
-        if (new_table) {
-            process_table(new_table->id(), {new_table->id()}, new_table, new_table->tablet_options(), new_rs, 0);
+        for (const auto& nt : new_tables) {
+            process_table(nt.schema->id(), {nt.schema->id()}, nt.schema, nt.schema->tablet_options(), nt.rs, 0, nt.size_in_bytes);
         }
 
         // Below section ensures we respect the _tablets_per_shard_goal.
@@ -4551,7 +4563,7 @@ public:
     tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
         auto tm = _db.get_shared_token_metadata().get();
         auto lb = make_load_balancer(tm, nullptr, nullptr, nullptr, {});
-        auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
+        auto plan = lb.make_sizing_plan({{s.shared_from_this(), tablet_rs}}).get();
         auto& table_plan = plan.tables[s.id()];
         auto tablet_count = table_plan.target_tablet_count_aligned;
         auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
