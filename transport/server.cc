@@ -1165,9 +1165,11 @@ client_data cql_server::connection::make_client_data() const {
     cd.scheduling_group_name = _current_scheduling_group.name();
     cd.client_options = _client_state.get_client_options();
 
-    cd.ssl_enabled = _ssl_enabled;
-    cd.ssl_protocol = _ssl_protocol;
-    cd.ssl_cipher_suite = _ssl_cipher_suite;
+    cd.ssl_enabled = bool(_ssl_info);
+    if (_ssl_info) {
+        cd.ssl_protocol = _ssl_info->protocol;
+        cd.ssl_cipher_suite = _ssl_info->cipher_suite;
+    }
 
     return cd;
 }
@@ -1482,7 +1484,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     if (auto& a = client_state.get_auth_service()->underlying_authenticator(); a.require_authentication()) {
         _authenticating = true;
         auth::session_dn_func dn_func;
-        if (_ssl_enabled) {
+        if (_ssl_info) {
             dn_func = [this]() -> future<std::optional<auth::certificate_info>> {
                 auto dn_info = co_await tls::get_dn_information(this->_fd);
                 if (dn_info) {
