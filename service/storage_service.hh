@@ -367,7 +367,8 @@ private:
     future<> snitch_reconfigured();
 
     locator::tablet_map build_tablet_map_for_migration(const locator::token_metadata& tm,
-            const locator::static_effective_replication_map_ptr& erm) const;
+            const locator::static_effective_replication_map_ptr& erm,
+            size_t target_pow2 = 0) const;
     future<std::unordered_map<table_id, uint64_t>> collect_table_sizes_for_migration(
         const locator::token_metadata& tm,
         const locator::tablet_aware_replication_strategy* trs,

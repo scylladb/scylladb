@@ -27,6 +27,7 @@
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include <bit>
 #include <iterator>
 #include <ranges>
 #include <utility>

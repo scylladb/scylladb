@@ -62,18 +62,18 @@ def get_sstable_token_ranges(scylla_path: str, scylla_yaml: str, sstable_data_fi
     return ranges
 
 
-def sstable_range_within_vnode(first_token: int, last_token: int, vnode_boundaries: list[int]) -> bool:
-    """Check whether an SSTable's token range falls entirely within a single vnode range.
+def sstable_within_single_range(first_token: int, last_token: int, boundaries: list[int]) -> bool:
+    """Check whether an SSTable's token range falls entirely within a single range.
 
     Args:
         first_token: The first token in the SSTable.
         last_token: The last token in the SSTable.
-        vnode_boundaries: Sorted list of vnode token boundaries.
+        boundaries: Sorted list of token boundaries (e.g., vnode or tablet boundaries).
 
     Returns:
-        True if both first_token and last_token fall within the same vnode range.
+        True if both first_token and last_token fall within the same range.
     """
-    for token in vnode_boundaries:
+    for token in boundaries:
         if first_token < token <= last_token:
             return False
     return True
@@ -104,6 +104,61 @@ async def verify_data_integrity(cql, ks, table, num_keys, cl=ConsistencyLevel.QU
         extra = data.keys() - expected.keys()
         wrong = {k: (data[k], expected[k]) for k in data.keys() & expected.keys() if data[k] != expected[k]}
         assert False, f"Data mismatch: missing keys {missing}, extra keys {extra}, wrong values {wrong}"
+
+
+def compute_pow2_boundaries(target_pow2: int) -> list[int]:
+    """Compute pow2 tablet boundaries.
+
+    Mirrors the C++ dht::get_uniform_tokens() function:
+        for i in [1, count]: n = i * UINT64_MAX / count; bias(n)
+    where bias(n) converts from unsigned to signed by subtracting 2^63.
+    """
+    UINT64_MAX = (1 << 64) - 1
+    INT64_MIN = -(1 << 63)
+    return [(i * UINT64_MAX) // target_pow2 + INT64_MIN for i in range(1, target_pow2 + 1)]
+
+
+async def get_target_pow2_tablet_count(manager: ManagerClient, server: ServerInfo, ks: str, table_name: str) -> int:
+    """Read target_pow2_tablet_count from system.tablets for a given table."""
+    host = manager.get_cql().cluster.metadata.get_host(server.ip_addr)
+    await read_barrier(manager.api, server.ip_addr)
+    table_id = await manager.get_table_or_view_id(ks, table_name)
+    rows = await manager.get_cql().run_async(
+        f"SELECT DISTINCT target_pow2_tablet_count FROM system.tablets WHERE table_id = {table_id}",
+        host=host)
+    assert len(rows) > 0, f"No rows found in system.tablets for table {ks}.{table_name}"
+    return rows[0].target_pow2_tablet_count
+
+
+async def verify_tablet_map_boundaries(manager: ManagerClient, server: ServerInfo,
+                                       ks: str, table_name: str,
+                                       vnode_boundaries: list[int]) -> list:
+    """Verify the initial tablet map contains exactly the union of vnode boundaries, max token, and pow2 boundaries.
+
+    Returns the tablet_replicas list for further checks by the caller.
+    """
+    tablet_replicas = await get_all_tablet_replicas(manager, server, ks, table_name)
+    tablet_tokens = set(tr.last_token for tr in tablet_replicas)
+
+    vnode_set = set(vnode_boundaries)
+    missing_vnodes = vnode_set - tablet_tokens
+    assert not missing_vnodes, f"Vnode boundaries missing from tablet map: {sorted(missing_vnodes)}"
+
+    assert MAX_TOKEN in tablet_tokens, "MAX_TOKEN missing from tablet map"
+
+    target_pow2 = await get_target_pow2_tablet_count(manager, server, ks, table_name)
+    assert target_pow2 and target_pow2 & (target_pow2 - 1) == 0, \
+        f"target_pow2_tablet_count {target_pow2} is not a power of two"
+
+    pow2_set = set(compute_pow2_boundaries(target_pow2))
+    missing_pow2 = pow2_set - tablet_tokens
+    assert not missing_pow2, f"Pow2 boundaries missing from tablet map: {sorted(missing_pow2)}"
+
+    expected_all = vnode_set | pow2_set | {MAX_TOKEN}
+    extra = tablet_tokens - expected_all
+    assert not extra, f"Unexpected boundaries in tablet map: {sorted(extra)}"
+
+    return tablet_replicas
 
 
 async def verify_migration_status(manager: ManagerClient, server: ServerInfo,
@@ -201,7 +256,7 @@ async def test_migration(manager: ManagerClient):
         assert len(pre_migration_sstables) == num_shards * num_flushes
         pre_migration_ranges = get_sstable_token_ranges(scylla_path, scylla_yaml, pre_migration_sstables)
         cross_vnode_count = sum(1 for first, last in pre_migration_ranges
-                                if not sstable_range_within_vnode(first, last, vnode_boundaries))
+                                if not sstable_within_single_range(first, last, vnode_boundaries))
         logger.info(f"Pre-migration: {cross_vnode_count}/{len(pre_migration_ranges)} SSTables span multiple vnodes")
 
         logger.info("Verifying migration status before starting migration")
@@ -216,20 +271,8 @@ async def test_migration(manager: ManagerClient):
             expected_node_statuses={host_id: ('vnodes', 'vnodes')})
 
         logger.info("Verifying that the tablet map was created")
-        expected_tablet_tokens = vnode_boundaries if vnode_boundaries[-1] == MAX_TOKEN else vnode_boundaries + [MAX_TOKEN]
-        expected_tablet_count = len(expected_tablet_tokens)
-        tablet_count = await get_tablet_count(manager, server, ks, 'test')
-        assert tablet_count == expected_tablet_count, \
-            f"Expected {expected_tablet_count} tablet(s), got {tablet_count}"
-
-        tablet_replicas = await get_all_tablet_replicas(manager, server, ks, 'test')
-        assert len(tablet_replicas) == expected_tablet_count, \
-            f"Expected {expected_tablet_count} tablet replica entries, got {len(tablet_replicas)}"
-
-        logger.info("Verifying that tablet tokens match vnode tokens plus max token")
-        tablet_tokens = sorted([tr.last_token for tr in tablet_replicas])
-        assert tablet_tokens == expected_tablet_tokens, \
-            f"Tablet tokens {tablet_tokens} do not match expected {expected_tablet_tokens}"
+        tablet_replicas = await verify_tablet_map_boundaries(manager, server, ks, 'test', vnode_boundaries)
+        tablet_boundaries = sorted([tr.last_token for tr in tablet_replicas])
 
         logger.info("Verifying data integrity after building tablet map and before resharding")
         await verify_data_integrity(cql, ks, "test", num_keys)
@@ -257,14 +300,14 @@ async def test_migration(manager: ManagerClient):
         post_restart_ranges = get_sstable_token_ranges(scylla_path, scylla_yaml, post_restart_sstables)
         logger.info(f"Post-restart SSTable token ranges:")
         for i, (first, last) in enumerate(post_restart_ranges):
-            within = sstable_range_within_vnode(first, last, vnode_boundaries)
-            logger.info(f"  SSTable {i}: tokens [{first}, {last}], within single vnode: {within}")
+            within = sstable_within_single_range(first, last, tablet_boundaries)
+            logger.info(f"  SSTable {i}: tokens [{first}, {last}], within single tablet: {within}")
 
-        logger.info("Verifying that every post-restart SSTable falls within a single vnode range")
+        logger.info("Verifying that every post-restart SSTable falls within a single tablet range")
         for i, (first, last) in enumerate(post_restart_ranges):
-            assert sstable_range_within_vnode(first, last, vnode_boundaries), \
+            assert sstable_within_single_range(first, last, tablet_boundaries), \
                 f"Post-restart SSTable {i} with token range [{first}, {last}] " \
-                f"spans multiple vnode ranges (boundaries: {vnode_boundaries})"
+                f"spans multiple tablet ranges (boundaries: {tablet_boundaries})"
 
         logger.info("Verifying data integrity after restart")
         await verify_data_integrity(cql, ks, "test", num_keys)
@@ -338,10 +381,7 @@ async def test_migration_rollback(manager: ManagerClient):
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
 
         logger.info("Verifying that the tablet map was created")
-        expected_tablet_count = len(vnode_boundaries) if vnode_boundaries[-1] == MAX_TOKEN else len(vnode_boundaries) + 1
-        tablet_count = await get_tablet_count(manager, server, ks, 'test')
-        assert tablet_count == expected_tablet_count, \
-            f"Expected {expected_tablet_count} tablet(s), got {tablet_count}"
+        await verify_tablet_map_boundaries(manager, server, ks, 'test', vnode_boundaries)
 
         logger.info("Marking node for tablets migration")
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
@@ -461,15 +501,7 @@ async def test_migration_multinode(manager: ManagerClient):
             expected_node_statuses={host_id: ('vnodes', 'vnodes') for host_id in host_ids})
 
         logger.info("Verifying tablet map")
-        expected_tablet_tokens = all_vnode_tokens if all_vnode_tokens[-1] == MAX_TOKEN else all_vnode_tokens + [MAX_TOKEN]
-        expected_tablet_count = len(expected_tablet_tokens)
-        tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
-        assert len(tablet_replicas) == expected_tablet_count, \
-            f"Expected {expected_tablet_count} tablets, got {len(tablet_replicas)}"
-
-        tablet_tokens = sorted([tr.last_token for tr in tablet_replicas])
-        assert tablet_tokens == expected_tablet_tokens, \
-            f"Tablet tokens do not match expected tokens"
+        tablet_replicas = await verify_tablet_map_boundaries(manager, servers[0], ks, 'test', all_vnode_tokens)
 
         for tr in tablet_replicas:
             replica_hosts = set(r[0] for r in tr.replicas)

@@ -66,6 +66,7 @@
 #include "gms/feature_service.hh"
 #include <seastar/core/thread.hh>
 #include <algorithm>
+#include <bit>
 #include "locator/local_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/user_provided_param.hh"
@@ -3975,21 +3976,31 @@ future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_
 
 locator::tablet_map storage_service::build_tablet_map_for_migration(
         const locator::token_metadata& tm,
-        const locator::static_effective_replication_map_ptr& erm) const {
+        const locator::static_effective_replication_map_ptr& erm,
+        size_t target_pow2) const {
     const auto& sorted_tokens = tm.sorted_tokens();
 
+    // Construct token boundaries: union of vnode tokens + optional pow2 boundaries.
+    // target_pow2 == 0 means no pow2 convergence target and only wrap-around pre-split.
     utils::chunked_vector<dht::raw_token> last_tokens;
-    size_t tablet_count = sorted_tokens.size();
-    last_tokens.reserve(tablet_count + 1); // +1 for possible wrapping tablet
-    for (const auto& t : sorted_tokens) {
-        last_tokens.emplace_back(t);
+    auto presplit_pow2 = std::max<size_t>(target_pow2, 1);
+    auto log2count = std::bit_width(presplit_pow2) - 1;
+    last_tokens.reserve(sorted_tokens.size() + presplit_pow2);
+
+    auto vnode_view = sorted_tokens
+        | std::views::transform([] (const auto& t) { return dht::raw_token(t); });
+    auto pow2_view = std::views::iota(size_t{0}, presplit_pow2)
+        | std::views::transform([&] (size_t i) { return dht::raw_token(dht::last_token_of_compaction_group(log2count, i)); });
+
+    std::ranges::set_union(vnode_view, pow2_view, std::back_inserter(last_tokens));
+
+    if (last_tokens.empty() || last_tokens.back() != dht::raw_token(dht::last_token())) {
+        on_internal_error(slogger, "build_migrating_tablet_map: token list does not end with the maximum token");
     }
-    // Add an extra tablet for the wrapping range if needed.
-    auto needs_wrapping_tablet = sorted_tokens.back() != dht::token::last();
-    if (needs_wrapping_tablet) {
-        last_tokens.emplace_back(dht::token::last());
-        tablet_count++;
-    }
+
+    // Construct tablet map and assign replicas.
+    locator::tablet_map tmap(std::move(last_tokens));
+    auto tablet_count = tmap.tablet_count();
 
     // Stateful lambdas for round-robin shard assignment per node.
     std::unordered_map<locator::host_id, std::function<shard_id()>> next_shard_for;
@@ -4000,16 +4011,26 @@ locator::tablet_map storage_service::build_tablet_map_for_migration(
         };
     });
 
-    locator::tablet_map tmap(std::move(last_tokens));
+    size_t vnode_idx = 0;
     for (size_t i = 0; i < tablet_count; ++i) {
         auto tablet = locator::tablet_id(i);
-        auto vnode_token = needs_wrapping_tablet && i == tablet_count - 1 ? tmap.get_last_token(locator::tablet_id{0}) : tmap.get_last_token(tablet);
+        auto tablet_last = dht::raw_token(tmap.get_last_token(tablet));
+        while (vnode_idx < sorted_tokens.size() && dht::raw_token(sorted_tokens[vnode_idx]) < tablet_last) {
+            ++vnode_idx;
+        }
+        auto vnode_token = (vnode_idx < sorted_tokens.size())
+            ? sorted_tokens[vnode_idx]
+            : sorted_tokens[0]; // wrap-around vnode
         auto vnode_replica_hosts = erm->get_natural_replicas(vnode_token, true);
         locator::tablet_replica_set tablet_replicas;
         for (auto host : vnode_replica_hosts) {
             tablet_replicas.push_back(locator::tablet_replica{host, next_shard_for[host]()});
         }
         tmap.set_tablet(tablet, locator::tablet_info(std::move(tablet_replicas)));
+    }
+
+    if (target_pow2 && tablet_count != target_pow2) {
+        tmap.set_target_pow2_tablet_count(target_pow2);
     }
 
     return tmap;
@@ -4102,23 +4123,69 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
 
         // Build a tablet_map from vnode token boundaries.
         //
-        // The map contains one tablet per vnode, plus one extra tablet for the
-        // wrap-around range (last_vnode_token, MAX_TOKEN] when
-        // last_vnode_token != MAX_TOKEN. Each tablet has the same replicas as
-        // the corresponding vnode. Shards are assigned in round-robin fashion
-        // per node so that tablets are evenly distributed within each node.
-        // (FIXME: we should consider tablet sizes as well)
+        // Each vnode token becomes a tablet boundary, giving one tablet per
+        // vnode range. If the last vnode token is not MAX_TOKEN, an additional
+        // tablet is created to cover the wrap-around range
+        // (last_vnode_token, MAX_TOKEN].
+        // Tablets inherit their replica hosts from their corresponding vnode
+        // and shards are assigned in round-robin fashion per node so that
+        // tablets are evenly distributed within each node.
         //
-        // This map will serve as a template for per-table tablet map mutations.
-        // Each table in the keyspace receives its own tablet map, but all maps
-        // have identical tablet boundaries and replica placement.
+        // However, this direct 1:1 mapping is not sufficient in terms of
+        // performance because vnode token ranges vary in size, producing
+        // unevenly sized tablets that are harder to balance across the cluster.
+        // When the TABLET_POW2_CONVERGENCE feature is enabled, we additionally
+        // inject artificial power-of-two boundary tokens into the tablet map,
+        // a process referred to as "pre-splitting". These tokens define the
+        // target uniform tablet layout and subdivide the vnode-based tablets
+        // into smaller tablets. After migration, selective merges remove the
+        // vnode boundaries, gradually converging the tablet map toward the
+        // power-of-two layout without needing any additional splits.
+        //
+        // Here is an illustrative example:
+        //
+        // Before (4 vnodes, uneven):
+        //
+        //   V4               V1       V2        V3                V4
+        //   |----------------|------|-----------|-----------------|
+        //
+        // Power-of-two boundaries (P=4, evenly spaced):
+        //
+        //  min           P1            P2            P3          max
+        //   |------------|-------------|-------------|------------|
+        //
+        // After set_union (7 tablets):
+        //
+        //   0            P1 V1      V2 P2       V3   P3          max
+        //   |------------|--|-------|--|--------|----|------------|
+        //
+        // Post-migration merges eliminate V1, V2, V3 boundaries by merging
+        // tablets with IDs (1, 2, 3) and (4, 5):
+        //
+        //  min           P1            P2            P3          max
+        //   |------------|-------------|-------------|------------|
+
         const auto& tm = get_token_metadata();
+
+        // Estimate table sizes when pow2 convergence is enabled.
+        // The estimates are used by the tablet allocator to determine the
+        // target pow2 tablet count per table.
+        auto& rs = ks.get_replication_strategy();
+        const auto* trs = dynamic_cast<const locator::tablet_aware_replication_strategy*>(&rs);
+        if (!trs) {
+            throw std::runtime_error(fmt::format(
+                "Keyspace '{}' uses a replication strategy that does not support tablets. Please convert to NetworkTopologyStrategy first.",
+                ks_name));
+        }
+
+        target_pow2_per_table_map target_pow2s;
+        bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
+        if (use_pow2_presplit) {
+            auto estimated_sizes = co_await collect_table_sizes_for_migration(tm, trs, tables_to_migrate);
+            target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
+        }
+
         auto erm = ks.get_static_effective_replication_map();
-
-        auto tmap = build_tablet_map_for_migration(tm, erm);
-        const auto tablet_count = tmap.tablet_count();
-
-        slogger.info("Built tablet map for tables in keyspace {} with {} tablet(s)", ks_name, tablet_count);
 
         // Build tablet map mutations for all tables and persist them to group0 (system.tablets)
         // in a single command.
@@ -4129,7 +4196,11 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // (e.g., finalization) and prevent failures from group0 conflicts, we
         // should turn this into a topology request.
         utils::chunked_vector<canonical_mutation> updates;
-        for (const auto& [tid, cf_name] : tables_to_migrate) {
+
+        auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
+            slogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
+                         ks_name, cf_name, tmap.tablet_count(), target_pow2);
+
             co_await replica::tablet_map_to_mutations(
                 tmap,
                 tid,
@@ -4140,6 +4211,22 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                 [&] (mutation m) -> future<> {
                     updates.emplace_back(co_await make_canonical_mutation_gently(m));
                 });
+        };
+
+        if (use_pow2_presplit) {
+            for (const auto& [tid, cf_name] : tables_to_migrate) {
+                size_t target_pow2 = 0;
+                if (auto it = target_pow2s.find(tid); it != target_pow2s.end()) {
+                    target_pow2 = it->second;
+                }
+                auto tmap = build_tablet_map_for_migration(tm, erm, target_pow2);
+                co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
+            }
+        } else {
+            auto shared_tmap = build_tablet_map_for_migration(tm, erm, 0);
+            for (const auto& [tid, cf_name] : tables_to_migrate) {
+                co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
+            }
         }
 
         topology_change change{std::move(updates)};
@@ -4154,8 +4241,8 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         }
 
         for (const auto& [tid, cf_name] : tables_to_migrate) {
-            slogger.info("Successfully built tablet map for table {}.{} ({} tablet(s))",
-                         ks_name, cf_name, tablet_count);
+            slogger.info("Successfully built tablet map for table {}.{}",
+                         ks_name, cf_name);
         }
         break;
     }
