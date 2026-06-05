@@ -10,6 +10,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "utils/assert.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/small_vector.hh"
 #include "raft.hh"
 #include "tracker.hh"
@@ -28,7 +29,7 @@ struct fsm_output {
     };
     std::optional<std::pair<term_t, server_id>> term_and_vote;
     std::vector<log_entry_ptr> log_entries;
-    std::vector<std::pair<server_id, rpc_message>> messages;
+    utils::chunked_vector<std::pair<server_id, rpc_message>> messages;
     // Entries to apply.
     std::vector<log_entry_ptr> committed;
     std::optional<applied_snapshot> snp;
@@ -228,7 +229,7 @@ private:
     // If a server receives a request with a stale term number, it
     // rejects the request.
     // TLA+ line 328
-    std::vector<std::pair<server_id, rpc_message>> _messages;
+    utils::chunked_vector<std::pair<server_id, rpc_message>> _messages;
 
     // Signaled when there is a IO event to process.
     seastar::condition_variable& _sm_events;

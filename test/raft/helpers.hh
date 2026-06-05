@@ -103,7 +103,7 @@ using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
 bool deliver(raft_routing_map& routes, raft::server_id from,
         std::pair<raft::server_id, raft::rpc_message> m);
 void deliver(raft_routing_map& routes, raft::server_id from,
-        std::vector<std::pair<raft::server_id, raft::rpc_message>> msgs);
+        utils::chunked_vector<std::pair<raft::server_id, raft::rpc_message>> msgs);
 
 void
 communicate_impl(std::function<bool()> stop_pred, raft_routing_map& map);
