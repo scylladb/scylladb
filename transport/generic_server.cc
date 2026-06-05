@@ -408,15 +408,18 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 conn->shutdown();
                 continue;
             }
-            conn->_ssl_enabled = is_tls;
+            if (is_tls) {
+                // Allocate TLS metadata; protocol/cipher are filled in asynchronously below.
+                conn->_ssl_info = std::make_unique<connection::ssl_info>();
+            }
             // Move the processing into the background.
             (void)futurize_invoke([this, conn, is_tls] {
                 return (is_tls
                     ? tls::get_protocol_version(conn->_fd).then([conn](const sstring& protocol) {
                             return tls::get_cipher_suite(conn->_fd).then(
                                 [conn, protocol](const sstring& cipher_suite) mutable {
-                                    conn->_ssl_protocol = protocol;
-                                    conn->_ssl_cipher_suite = cipher_suite;
+                                    conn->_ssl_info->protocol = protocol;
+                                    conn->_ssl_info->cipher_suite = cipher_suite;
                                     return make_ready_future<bool>(true);
                                 });
                         }).handle_exception([conn](std::exception_ptr ep) {
