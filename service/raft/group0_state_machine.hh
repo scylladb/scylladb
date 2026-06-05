@@ -153,7 +153,10 @@ public:
 
 bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db);
 
-// Used to write data to topology and other tables except schema tables.
+// Used to write mutations directly to the database, bypassing in-memory
+// state machine processing. Used for topology tables during normal operation
+// and also for schema tables during early raft log replay (before
+// non-system keyspaces are loaded).
 future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms);
 
 } // end of namespace service

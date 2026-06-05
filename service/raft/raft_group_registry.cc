@@ -423,18 +423,28 @@ future<> raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
     if (const auto it = _servers.find(gid); it != _servers.end()) {
         auto& [gid, s] = *it;
         if (!s.aborted) {
-            co_await container().invoke_on_all([is_group0 = (gid == _group0_id), gid] (raft_group_registry& rg) {
-                if (is_group0) {
-                    rg._group0_is_alive = false;
-                }
-                rg._group_shards.erase(gid);
-            });
-            s.aborted = s.server->abort(std::move(reason))
-                .handle_exception([gid] (std::exception_ptr ex) {
-                    rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
-                });
+            // Set s.aborted immediately (before any co_await) to prevent
+            // concurrent calls from entering this block. This can happen
+            // when on_background_error fires abort_server concurrently with
+            // abort_and_drain's call to abort_server.
+            s.aborted = do_abort_server(gid, s, std::move(reason));
         }
         co_await s.aborted->get_future();
+    }
+}
+
+future<> raft_group_registry::do_abort_server(raft::group_id gid, raft_server_for_group& s, sstring reason) {
+    auto is_group0 = (gid == _group0_id);
+    try {
+        co_await container().invoke_on_all([is_group0, gid] (raft_group_registry& rg) {
+            if (is_group0) {
+                rg._group0_is_alive = false;
+            }
+            rg._group_shards.erase(gid);
+        });
+        co_await s.server->abort(std::move(reason));
+    } catch (...) {
+        rslog.warn("Failed to abort raft group server {}: {}", gid, std::current_exception());
     }
 }
 

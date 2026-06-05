@@ -146,6 +146,12 @@ public:
     // abort future is returned.
     future<> abort_server(raft::group_id gid, sstring reason = "");
 
+private:
+    // Helper for abort_server: performs the actual abort work.
+    future<> do_abort_server(raft::group_id gid, raft_server_for_group& s, sstring reason);
+
+public:
+
     // Destroys the server for the given group and removes it from the registry.
     // The server must be aborted before this function is called, see the abort_server function.
     // No further access to this server must occur after this point.
