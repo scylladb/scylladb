@@ -1638,7 +1638,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     if (!cache_key_bytes) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(cache_key_bytes).assume_error());
     }
-    bytes cache_key_value = cache_key_bytes.assume_value();
+    bytes cache_key_value = std::move(cache_key_bytes).assume_value();
     // A valid prepared id is always cql_prepared_id_type::size bytes. An id of a
     // different length (malformed/unknown client input) can never match a cached
     // statement; return the normal UNPREPARED error instead of letting the
@@ -1777,7 +1777,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             if (!cache_key_bytes) {
                 return make_exception_future<cql_server::process_fn_return_type>(std::move(cache_key_bytes).assume_error());
             }
-            bytes cache_key_value = cache_key_bytes.assume_value();
+            bytes cache_key_value = std::move(cache_key_bytes).assume_value();
             // A valid prepared id is always cql_prepared_id_type::size bytes. An id of
             // a different length (malformed/unknown client input) can never match a
             // cached statement; return the normal UNPREPARED error instead of letting
