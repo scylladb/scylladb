@@ -738,7 +738,12 @@ future<std::optional<sstring>> standard_role_manager::get_attribute(std::string_
     const auto result_set = co_await _qp.execute_internal(query, db::consistency_level::ONE, qs, {sstring(role_name), sstring(attribute_name)}, cql3::query_processor::cache_internal::yes);
     if (!result_set->empty()) {
         const cql3::untyped_result_set_row &row = result_set->one();
-        co_return std::optional<sstring>(row.get_as<sstring>("value"));
+        // Tolerate ghost rows with a live row marker but a missing value
+        // column (e.g. left behind by the removed auth v2 migration, which
+        // used INSERT). Such a row is visible to queries but has value=null.
+        if (row.has("value")) {
+            co_return std::optional<sstring>(row.get_as<sstring>("value"));
+        }
     }
     co_return std::optional<sstring>{};
 }
