@@ -4836,9 +4836,9 @@ protected:
         RATE_LIMIT,
     };
     db::consistency_level _cl;
+    bool _request_failed = false; // will be true if request fails or timeouts
     size_t _targets_count;
     promise<result<>> _done_promise; // all target responded
-    bool _request_failed = false; // will be true if request fails or timeouts
     timer<storage_proxy::clock_type> _timeout;
     schema_ptr _schema;
     size_t _failed = 0;
@@ -5576,7 +5576,6 @@ protected:
     lw_shared_ptr<query::read_command> _cmd;
     lw_shared_ptr<query::read_command> _retry_cmd;
     dht::partition_range _partition_range;
-    db::consistency_level _cl;
     size_t _block_for;
     host_id_vector_replica_set _targets;
     // Targets that were successfully used for a data or digest request
@@ -5584,13 +5583,10 @@ protected:
     promise<result<foreign_ptr<lw_shared_ptr<query::result>>>> _result_promise;
     tracing::trace_state_ptr _trace_state;
     lw_shared_ptr<replica::column_family> _cf;
-    bool _foreground = true;
     service_permit _permit; // holds admission permit until operation completes
     db::per_partition_rate_limit::info _rate_limit_info;
 
 private:
-    const bool _native_reversed_queries_enabled;
-
     void on_read_resolved() noexcept {
         // We could have !_foreground if this is called on behalf of background reconciliation.
         _proxy->get_stats().foreground_reads -= int(_foreground);
@@ -5608,8 +5604,8 @@ public:
             host_id_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit, db::per_partition_rate_limit::info rate_limit_info) :
                            _schema(std::move(s)), _proxy(std::move(proxy))
                          , _effective_replication_map_ptr(std::move(ermp))
-                         , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
-                           _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info),
+                         , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
+                           _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info), _cl(cl),
                            _native_reversed_queries_enabled(_proxy->features().native_reverse_queries) {
         _proxy->get_stats().reads++;
         _proxy->get_stats().foreground_reads++;
@@ -6022,6 +6018,12 @@ private:
 
     static constexpr latency_clock::duration NO_LATENCY{-1};
     latency_clock::duration _max_request_latency{NO_LATENCY};
+
+protected:
+    db::consistency_level _cl;
+    bool _foreground = true;
+private:
+    const bool _native_reversed_queries_enabled;
 };
 
 class never_speculating_read_executor : public abstract_read_executor {
