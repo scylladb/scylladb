@@ -361,7 +361,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 vs.start_background_tasks();
 
                 // server responds with 404 - client should return service_error
-                server->next_ann_response({status_type::not_found, "idx2 not found"});
+                server->next_ann_response({status_type::not_found, R"("idx2 not found")"});
                 auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!server->ann_requests().empty());
                 BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.3,0.2,0.1],"limit":1})");

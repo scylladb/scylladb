@@ -85,6 +85,24 @@ auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
     return {{schema, host, *port}};
 }
 
+auto decode_error_message(const std::vector<seastar::temporary_buffer<char>>& content) -> sstring {
+    if (content.size() == 1) {
+        auto body = std::string_view(content.front().get(), content.front().size());
+        auto json = rjson::try_parse(body);
+        if (json && json->IsString()) {
+            return sstring(rjson::to_string_view(*json));
+        }
+        return sstring(body);
+    }
+
+    auto body = vector_search::response_content_to_sstring(content);
+    auto json = rjson::try_parse(body);
+    if (json && json->IsString()) {
+        return sstring(rjson::to_string_view(*json));
+    }
+    return body;
+}
+
 auto get_key_column_value(const rjson::value& item, std::size_t idx, const column_definition& column) -> std::expected<bytes, ann_error> {
     auto const& column_name = column.name_as_text();
     auto const* keys_obj = rjson::find(item, column_name);
@@ -329,7 +347,7 @@ struct vector_store_client::impl {
             co_return index_status::creating;
         }
         try {
-            auto json = rjson::parse(response_content_to_sstring(resp->content));
+            auto json = rjson::parse(std::move(resp->content));
             const auto* status = rjson::find(json, "status");
             if (!status || !status->IsString()) {
                 co_return index_status::creating;
@@ -367,7 +385,7 @@ struct vector_store_client::impl {
         }
 
         if (resp->status != status_type::ok) {
-            auto error_content = response_content_to_sstring(resp->content);
+            auto error_content = decode_error_message(resp->content);
             vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, error_content);
             co_return std::unexpected{service_error{resp->status, std::move(error_content)}};
         }
