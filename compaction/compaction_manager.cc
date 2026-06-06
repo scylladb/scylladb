@@ -901,7 +901,7 @@ bool compaction::compaction_state::erase_sstable_requiring_cleanup(const sstable
     if (!_cleanup_state) {
         return false;
     }
-    bool erased = _cleanup_state->sstables_requiring_cleanup.erase(sst);
+    bool erased = _cleanup_state->sstables_requiring_cleanup.erase(sst) != 0;
     if (_cleanup_state->sstables_requiring_cleanup.empty()) {
         // Releasing the cleanup state also drops the associated owned ranges,
         // matching the previous behaviour of clearing owned_ranges_ptr once the
