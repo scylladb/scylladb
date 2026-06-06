@@ -23,6 +23,7 @@
 #include "utils/hash.hh"
 #include "utils/updateable_value.hh"
 #include "utils/pluggable.hh"
+#include "db/large_data_cache_tracker.hh"
 
 namespace sstables {
 class sstable;
@@ -114,23 +115,6 @@ private:
     record_set<record_type::collection> _collections;
 };
 
-struct guardrail_config {
-    // Partition thresholds (replica-side only — checked via SSTable metadata index)
-    utils::updateable_value<uint32_t> partition_size_fail_threshold_mb;
-    utils::updateable_value<uint32_t> partition_size_warn_threshold_mb;
-    utils::updateable_value<uint32_t> rows_count_fail_threshold;
-    utils::updateable_value<uint32_t> rows_count_warn_threshold;
-    // Row thresholds (shared: replica checks on-disk size, coordinator checks mutation memory)
-    utils::updateable_value<uint32_t> row_size_fail_threshold_mb;
-    utils::updateable_value<uint32_t> row_size_warn_threshold_mb;
-    // Collection thresholds (shared: replica checks SSTable metadata, coordinator checks mutation)
-    utils::updateable_value<uint32_t> collection_elements_fail_threshold;
-    utils::updateable_value<uint32_t> collection_elements_warn_threshold;
-    // Cell thresholds (coordinator-side only — checked from mutation content)
-    utils::updateable_value<uint32_t> cell_size_fail_threshold_mb;
-    utils::updateable_value<uint32_t> cell_size_warn_threshold_mb;
-};
-
 // Each replica::table holds a shared_ptr to either a real guardrail or a
 // noop.  The guardrail owns the per-table large_data_record_index, so
 // noop tables pay no index-maintenance cost.
@@ -149,6 +133,16 @@ public:
     // (cell value sizes, row memory usage, collection element counts).
     virtual void check_coordinator(const schema& s, const mutation_partition& mp,
             partition_key_view pk) const = 0;
+    // Returns a tracker to pass to partition_entry::apply(), or nullptr
+    // when no memtable-level tracking is needed.  The returned pointer
+    // remains valid until the next call to get_memtable_cache_tracker() or
+    // until this guardrail is destroyed.
+    virtual large_data_cache_tracker* get_memtable_cache_tracker(const schema& s,
+            partition_key_view pk) = 0;
+    // Called after a memtable flush completes and new SSTables are registered.
+    // Clears memtable-level caches whose data is now captured in the SSTable
+    // index, preventing unbounded cache growth.
+    virtual void on_flush() = 0;
     virtual void register_sstable(sstables::shared_sstable sst) = 0;
     virtual void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) = 0;
 };
@@ -163,6 +157,9 @@ public:
             partition_key_view) const override {}
     void check_coordinator(const schema&, const mutation_partition&,
             partition_key_view) const override {}
+    large_data_cache_tracker* get_memtable_cache_tracker(const schema&,
+            partition_key_view) override { return nullptr; }
+    void on_flush() override {}
     void register_sstable(sstables::shared_sstable) override {}
     void rebuild(const std::unordered_set<sstables::shared_sstable>&) override {}
 };
@@ -170,12 +167,16 @@ public:
 class large_data_guardrail final : public large_data_guardrail_base {
 public:
     explicit large_data_guardrail(guardrail_config cfg) noexcept
-        : _cfg(std::move(cfg)) {}
+        : _cfg(std::move(cfg))
+        , _tracker(_cfg, _memtable_row_cache, _memtable_collection_cache) {}
 
     void check(const schema& s, const mutation_partition& mp,
             partition_key_view pk) const override;
     void check_coordinator(const schema& s, const mutation_partition& mp,
             partition_key_view pk) const override;
+    large_data_cache_tracker* get_memtable_cache_tracker(const schema& s,
+            partition_key_view pk) override;
+    void on_flush() override;
     void register_sstable(sstables::shared_sstable sst) override;
     void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) override;
 
@@ -190,6 +191,9 @@ private:
 
     guardrail_config _cfg;
     large_data_record_index _index;
+    mutable memtable_row_cache _memtable_row_cache;
+    mutable memtable_collection_cache _memtable_collection_cache;
+    large_data_cache_tracker _tracker;
 };
 
 class large_data_handler {
