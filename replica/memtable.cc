@@ -787,12 +787,12 @@ memtable::apply(memtable& mt, reader_permit permit) {
 }
 
 void
-memtable::apply(const mutation& m, db::rp_handle&& h) {
-    with_allocator(allocator(), [this, &m] {
+memtable::apply(const mutation& m, db::large_data_cache_tracker* tracker, db::rp_handle&& h) {
+    with_allocator(allocator(), [this, &m, tracker] {
         _table_shared_data.allocating_section(*this, [&, this] {
             auto& p = find_or_create_partition(m.decorated_key());
             _stats_collector.update(*m.schema(), m.partition());
-            p.apply(region(), cleaner(), *_schema, m.partition(), *m.schema(), _table_stats.memtable_app_stats);
+            p.apply(region(), cleaner(), *_schema, m.partition(), *m.schema(), _table_stats.memtable_app_stats, tracker);
         });
     });
     update(std::move(h));
@@ -800,8 +800,9 @@ memtable::apply(const mutation& m, db::rp_handle&& h) {
 
 void
 memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema,
-                const db::large_data_guardrail_base& guardrails, db::rp_handle&& h) {
-    with_allocator(allocator(), [this, &m, &m_schema, &guardrails] {
+        const db::large_data_guardrail_base& guardrails, db::large_data_cache_tracker* tracker,
+        db::rp_handle&& h) {
+    with_allocator(allocator(), [this, &m, &m_schema, &guardrails, tracker] {
         _table_shared_data.allocating_section(*this, [&, this] {
             mutation_partition mp(*m_schema);
             partition_builder pb(*m_schema, mp);
@@ -809,7 +810,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema,
             guardrails.check(*m_schema, mp, m.key());
             auto& p = find_or_create_partition_slow(m.key());
             _stats_collector.update(*m_schema, mp);
-            p.apply(region(), cleaner(), *_schema, std::move(mp), *m_schema, _table_stats.memtable_app_stats);
+            p.apply(region(), cleaner(), *_schema, mp, *m_schema, _table_stats.memtable_app_stats, tracker);
         });
     });
     update(std::move(h));

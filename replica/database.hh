@@ -1033,10 +1033,10 @@ public:
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
-        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema, *db::noop_large_data_guardrail::instance());
+        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema, *_large_data_guardrail, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()));
     }
     void apply(const mutation& m, db::rp_handle&& h = {}) {
-        do_apply(compaction_group_for_token(m.token()), std::move(h), m);
+        do_apply(compaction_group_for_token(m.token()), std::move(h), m, _large_data_guardrail->get_memtable_cache_tracker(*m.schema(), m.key()));
     }
 
     future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h,
