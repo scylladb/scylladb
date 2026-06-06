@@ -220,20 +220,20 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& 
     return false;
 }
 
-tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info, tablet_task_info migration_task_info, int64_t sstables_repaired_at)
+tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, int64_t sstables_repaired_at)
     : replicas(std::move(replicas))
     , repair_time(repair_time)
-    , repair_task_info(std::move(repair_task_info))
-    , migration_task_info(std::move(migration_task_info))
     , sstables_repaired_at(sstables_repaired_at)
 {}
 
 tablet_info::tablet_info(tablet_replica_set replicas)
-    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{}, int64_t(0))
+    : tablet_info(std::move(replicas), db_clock::time_point{}, int64_t(0))
 {}
 
-std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
-    auto repair_task_info = tablet_task_info::merge_repair_tasks(a.repair_task_info, b.repair_task_info);
+std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b,
+        const tablet_task_info& a_repair, const tablet_task_info& b_repair,
+        tablet_task_info* merged_repair_out) {
+    auto repair_task_info = tablet_task_info::merge_repair_tasks(a_repair, b_repair);
     if (!repair_task_info) {
         return {};
     }
@@ -248,7 +248,10 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
 
     auto repair_time = std::max(a.repair_time, b.repair_time);
     int64_t sstables_repaired_at = std::max(a.sstables_repaired_at, b.sstables_repaired_at);
-    auto info = tablet_info(std::move(a.replicas), repair_time, *repair_task_info, a.migration_task_info, sstables_repaired_at);
+    auto info = tablet_info(std::move(a.replicas), repair_time, sstables_repaired_at);
+    if (merged_repair_out) {
+        *merged_repair_out = std::move(*repair_task_info);
+    }
     return info;
 }
 
@@ -551,7 +554,8 @@ tablet_layout tablet_map::get_layout() const {
 }
 
 tablet_map tablet_map::clone() const {
-    return tablet_map(_tablet_ids, _tablets, _transitions, _resize_decision, _resize_task_info,
+    return tablet_map(_tablet_ids, _tablets, _transitions, _repair_task_infos, _migration_task_infos,
+                      _resize_decision, _resize_task_info,
                       _repair_scheduler_config, _raft_info);
 }
 
@@ -572,6 +576,20 @@ future<tablet_map> tablet_map::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
 
+    task_info_map repair_task_infos;
+    repair_task_infos.reserve(_repair_task_infos.size());
+    for (const auto& [id, ti] : _repair_task_infos) {
+        repair_task_infos.emplace(id, ti);
+        co_await coroutine::maybe_yield();
+    }
+
+    task_info_map migration_task_infos;
+    migration_task_infos.reserve(_migration_task_infos.size());
+    for (const auto& [id, ti] : _migration_task_infos) {
+        migration_task_infos.emplace(id, ti);
+        co_await coroutine::maybe_yield();
+    }
+
     raft_info_container raft_info;
     raft_info.reserve(_raft_info.size());
     for (const auto& i: _raft_info) {
@@ -580,6 +598,7 @@ future<tablet_map> tablet_map::clone_gently() const {
     }
 
     co_return tablet_map(std::move(ids), std::move(tablets), std::move(transitions),
+                         std::move(repair_task_infos), std::move(migration_task_infos),
                          _resize_decision, _resize_task_info, _repair_scheduler_config, std::move(raft_info));
 }
 
@@ -739,6 +758,24 @@ void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info
     _transitions.insert_or_assign(id, std::move(info));
 }
 
+void tablet_map::set_repair_task_info(tablet_id id, tablet_task_info info) {
+    check_tablet_id(id);
+    if (info.is_valid()) {
+        _repair_task_infos.insert_or_assign(id, std::move(info));
+    } else {
+        _repair_task_infos.erase(id);
+    }
+}
+
+void tablet_map::set_migration_task_info(tablet_id id, tablet_task_info info) {
+    check_tablet_id(id);
+    if (info.is_valid()) {
+        _migration_task_infos.insert_or_assign(id, std::move(info));
+    } else {
+        _migration_task_infos.erase(id);
+    }
+}
+
 void tablet_map::set_resize_decision(locator::resize_decision decision) {
     _resize_decision = std::move(decision);
 }
@@ -754,6 +791,16 @@ void tablet_map::set_repair_scheduler_config(std::optional<locator::repair_sched
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
     check_tablet_id(id);
     _transitions.erase(id);
+}
+
+void tablet_map::clear_repair_task_info(tablet_id id) {
+    check_tablet_id(id);
+    _repair_task_infos.erase(id);
+}
+
+void tablet_map::clear_migration_task_info(tablet_id id) {
+    check_tablet_id(id);
+    _migration_task_infos.erase(id);
 }
 
 future<> tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const {
@@ -826,6 +873,34 @@ const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id i
         return nullptr;
     }
     return &i->second;
+}
+
+const tablet_task_info* tablet_map::get_repair_task_info_ptr(tablet_id id) const {
+    auto i = _repair_task_infos.find(id);
+    if (i == _repair_task_infos.end()) {
+        return nullptr;
+    }
+    return &i->second;
+}
+
+const tablet_task_info& tablet_map::get_repair_task_info(tablet_id id) const {
+    static const tablet_task_info empty;
+    auto* p = get_repair_task_info_ptr(id);
+    return p ? *p : empty;
+}
+
+const tablet_task_info* tablet_map::get_migration_task_info_ptr(tablet_id id) const {
+    auto i = _migration_task_infos.find(id);
+    if (i == _migration_task_infos.end()) {
+        return nullptr;
+    }
+    return &i->second;
+}
+
+const tablet_task_info& tablet_map::get_migration_task_info(tablet_id id) const {
+    static const tablet_task_info empty;
+    auto* p = get_migration_task_info_ptr(id);
+    return p ? *p : empty;
 }
 
 const tablet_raft_info& tablet_map::get_tablet_raft_info(tablet_id id) const {

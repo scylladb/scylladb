@@ -96,9 +96,9 @@ future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(ta
             };
         }
         std::optional<locator::tablet_id> tid = tmap.first_tablet();
-        for (const locator::tablet_info& info : tmap.tablets()) {
-            auto task_type = maybe_get_task_type(info.repair_task_info, task_id).or_else([&] () {
-                return maybe_get_task_type(info.migration_task_info, task_id);
+        for ([[maybe_unused]] const locator::tablet_info& info : tmap.tablets()) {
+            auto task_type = maybe_get_task_type(tmap.get_repair_task_info(*tid), task_id).or_else([&] () {
+                return maybe_get_task_type(tmap.get_migration_task_info(*tid), task_id);
             });
             if (task_type.has_value()) {
                 co_return tasks::virtual_task_hint{
@@ -159,8 +159,9 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
         auto& tmap = tmptr->tablets().get_tablet_map(table);
         if (is_repair_task(task_type)) {
             bool running = false;
-            co_await tmap.for_each_tablet([&] (locator::tablet_id, const locator::tablet_info& info) {
-                if (info.repair_task_info.is_valid() && info.repair_task_info.tablet_task_id.uuid() == id.uuid()) {
+            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, [[maybe_unused]] const locator::tablet_info& info) {
+                auto& rti = tmap.get_repair_task_info(tid);
+                if (rti.is_valid() && rti.tablet_task_id.uuid() == id.uuid()) {
                     running = true;
                 }
                 return make_ready_future();
@@ -171,7 +172,7 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
             co_return tmap.resize_task_info().tablet_task_id.uuid() != id.uuid();
         }
         if (is_migration_task(task_type)) {
-            co_return tmap.get_tablet_info(tablet_id_opt.value()).migration_task_info.tablet_task_id.uuid() != id.uuid();
+            co_return tmap.get_migration_task_info(tablet_id_opt.value()).tablet_task_id.uuid() != id.uuid();
         }
         on_internal_error(tasks::tmlogger, fmt::format("tablet_virtual_task::wait: unhandled tablet task type {}", task_type));
     };
@@ -238,20 +239,21 @@ future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
         if (resize_stats) {
             res.push_back(std::move(resize_stats.value()));
         }
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            auto repair_stats = maybe_make_task_stats(info.repair_task_info, schema);
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, [[maybe_unused]] const locator::tablet_info& info) {
+            auto& rti = tmap.get_repair_task_info(tid);
+            auto repair_stats = maybe_make_task_stats(rti, schema);
             if (repair_stats) {
-                if (info.repair_task_info.is_user_repair_request()) {
+                if (rti.is_user_repair_request()) {
                     // User requested repair may encompass more that one tablet.
-                    auto task_id = tasks::task_id{info.repair_task_info.tablet_task_id.uuid()};
+                    auto task_id = tasks::task_id{rti.tablet_task_id.uuid()};
                     user_requests[task_id] = std::move(repair_stats.value());
-                    sched_num_sum[task_id] += info.repair_task_info.sched_nr;
+                    sched_num_sum[task_id] += rti.sched_nr;
                 } else {
                     res.push_back(std::move(repair_stats.value()));
                 }
             }
 
-            auto migration_stats = maybe_make_task_stats(info.migration_task_info, schema);
+            auto migration_stats = maybe_make_task_stats(tmap.get_migration_task_info(tid), schema);
             if (migration_stats) {
                 res.push_back(std::move(migration_stats.value()));
             }
@@ -317,8 +319,8 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
                 repair_task_pending = true;
             }
         }
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            auto& task_info = info.repair_task_info;
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, [[maybe_unused]] const locator::tablet_info& info) {
+            auto& task_info = tmap.get_repair_task_info(tid);
             if (task_info.tablet_task_id.uuid() == id.uuid()) {
                 update_status(task_info, res.status, sched_nr);
                 no_tablets_processed = false;
@@ -329,7 +331,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
     } else if (is_migration_task(task_type)) {    // Migration task.
         auto tablet_id = hint.get_tablet_id();
         res.pending_replica = tmap.get_tablet_transition_info(tablet_id)->pending_replica;
-        auto& task_info = tmap.get_tablet_info(tablet_id).migration_task_info;
+        auto& task_info = tmap.get_migration_task_info(tablet_id);
         if (task_info.tablet_task_id.uuid() == id.uuid()) {
             update_status(task_info, res.status, sched_nr);
             no_tablets_processed = false;

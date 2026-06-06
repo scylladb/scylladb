@@ -301,14 +301,18 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
-        if (features.tablet_migration_virtual_task && tablet.migration_task_info.is_valid()) {
-            m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(tablet.migration_task_info), ts);
+        if (features.tablet_migration_virtual_task) {
+            auto& migration_task_info = tablets.get_migration_task_info(tid);
+            if (migration_task_info.is_valid()) {
+                m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(migration_task_info), ts);
+            }
         }
         if (features.tablet_repair_scheduler) {
-            if (tablet.repair_task_info.is_valid()) {
-                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+            auto& repair_task_info = tablets.get_repair_task_info(tid);
+            if (repair_task_info.is_valid()) {
+                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(repair_task_info), ts);
                 if (features.tablet_incremental_repair) {
-                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(tablet.repair_task_info.repair_incremental_mode), ts);
+                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(repair_task_info.repair_incremental_mode), ts);
                 }
             }
             if (tablet.repair_time != db_clock::time_point{}) {
@@ -834,7 +838,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
 
     auto last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
-    auto info = tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at};
+    auto info = tablet_info{std::move(tablet_replicas), repair_time, sstables_repaired_at};
     if (is_updating) {
         auto old_last_token = map.get_last_token(tid);
         if (last_token != old_last_token) {
@@ -846,6 +850,10 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     } else {
         map.emplace_tablet(tid, last_token, std::move(info));
     }
+    // Task infos live in tablet_map side maps. Always (re)set so an update that
+    // drops the column clears the entry (set_*_task_info() clears on invalid).
+    map.set_repair_task_info(tid, std::move(repair_task_info));
+    map.set_migration_task_info(tid, std::move(migration_task_info));
 
     if (row.has("raft_group_id")) {
         if (!map.has_raft_info()) {

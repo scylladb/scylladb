@@ -371,10 +371,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                         tablet_replica {h3, 1},
                     },
                     db_clock::now(),
-                    locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
-                    locator::tablet_task_info::make_intranode_migration_request(),
                     0
                 });
+                tmap.set_repair_task_info(tmap.first_tablet(), locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}));
+                tmap.set_migration_task_info(tmap.first_tablet(), locator::tablet_task_info::make_intranode_migration_request());
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
@@ -387,12 +387,9 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
                         tablet_replica {h1, 0},
-                    },
-                    {},
-                    {},
-                    locator::tablet_task_info::make_migration_request(),
-                    0
+                    }
                 });
+                tmap.set_migration_task_info(tb, locator::tablet_task_info::make_migration_request());
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
@@ -403,12 +400,9 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
                         tablet_replica {h2, 2},
-                    },
-                    {},
-                    {},
-                    locator::tablet_task_info::make_migration_request(),
-                    0
+                    }
                 });
+                tmap.set_migration_task_info(tb, locator::tablet_task_info::make_migration_request());
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
@@ -805,10 +799,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                         tablet_replica {h3, 1},
                     },
                     db_clock::now(),
-                    locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
-                    locator::tablet_task_info::make_intranode_migration_request(),
                     0
                 });
+                tmap.set_repair_task_info(tmap.first_tablet(), locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}));
+                tmap.set_migration_task_info(tmap.first_tablet(), locator::tablet_task_info::make_intranode_migration_request());
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
@@ -6864,8 +6858,8 @@ void run_tablet_manual_repair_rf1(cql_test_env& e) {
                 tablet_replica{host1, 0},
             }
         };
-        ti.repair_task_info = ti.repair_task_info.make_user_repair_request();
         tmap.set_tablet(tid, std::move(ti));
+        tmap.set_repair_task_info(tid, locator::tablet_task_info::make_user_repair_request());
         tmeta.set_tablet_map(table1, std::move(tmap));
         co_return;
     });

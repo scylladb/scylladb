@@ -276,15 +276,15 @@ struct restore_config {
 };
 
 /// Stores information about a single tablet.
+/// Rarely-set repair/migration task infos are kept in tablet_map side maps
+/// (like tablet_transition_info), not here, to keep tablet_info small.
 struct tablet_info {
     tablet_replica_set replicas;
     db_clock::time_point repair_time;
-    locator::tablet_task_info repair_task_info;
-    locator::tablet_task_info migration_task_info;
-    int64_t sstables_repaired_at;
+    int64_t sstables_repaired_at = 0;
 
     tablet_info() = default;
-    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info, int64_t sstables_repaired_at);
+    tablet_info(tablet_replica_set, db_clock::time_point, int64_t sstables_repaired_at);
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;
@@ -301,7 +301,11 @@ struct tablet_raft_info {
 //  - they cannot have active repair task, since each task has a different id
 //  - their replicas must be all co-located.
 // If tablet infos are mergeable, merged info is returned. Otherwise, nullopt.
-std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b);
+// Repair task infos live in tablet_map side maps, so they are passed in
+// (a_repair/b_repair) and the merged one is written to *merged_repair_out (if set).
+std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b,
+        const tablet_task_info& a_repair, const tablet_task_info& b_repair,
+        tablet_task_info* merged_repair_out);
 
 /// Represents states of the tablet migration state machine.
 ///
@@ -697,9 +701,13 @@ public:
     struct initialized_later {};
 private:
     using transitions_map = std::unordered_map<tablet_id, tablet_transition_info>;
+    // Rarely-set per-tablet task infos, kept out of tablet_info (SCYLLADB-1976).
+    using task_info_map = std::unordered_map<tablet_id, tablet_task_info>;
     tablet_id_map _tablet_ids;
     tablet_container _tablets;
     transitions_map _transitions;
+    task_info_map _repair_task_infos;
+    task_info_map _migration_task_infos;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
     std::optional<repair_scheduler_config> _repair_scheduler_config;
@@ -709,6 +717,8 @@ private:
     tablet_map(tablet_id_map ids,
                tablet_container tablets,
                transitions_map transitions,
+               task_info_map repair_task_infos,
+               task_info_map migration_task_infos,
                resize_decision resize_decision,
                tablet_task_info resize_task_info,
                std::optional<repair_scheduler_config> repair_scheduler_config,
@@ -716,6 +726,8 @@ private:
         : _tablet_ids(std::move(ids))
         , _tablets(std::move(tablets))
         , _transitions(std::move(transitions))
+        , _repair_task_infos(std::move(repair_task_infos))
+        , _migration_task_infos(std::move(migration_task_infos))
         , _resize_decision(resize_decision)
         , _resize_task_info(std::move(resize_task_info))
         , _repair_scheduler_config(std::move(repair_scheduler_config))
@@ -774,6 +786,15 @@ public:
     /// If there is no transition for a given tablet, returns nullptr.
     /// \throws std::logic_error If the given id does not belong to this instance.
     const tablet_transition_info* get_tablet_transition_info(tablet_id) const;
+
+    /// Returns the repair task info for a tablet, or a default (invalid) one if
+    /// it has no active repair task. Use get_repair_task_info_ptr() to tell them apart.
+    const tablet_task_info& get_repair_task_info(tablet_id) const;
+    const tablet_task_info* get_repair_task_info_ptr(tablet_id) const;
+
+    /// Like get_repair_task_info(), for migration tasks.
+    const tablet_task_info& get_migration_task_info(tablet_id) const;
+    const tablet_task_info* get_migration_task_info_ptr(tablet_id) const;
 
     /// Returns true for strongly-consistent tablets.
     /// Use get_tablet_raft_info() to retrieve Raft info for a specific tablet_id.
@@ -901,6 +922,11 @@ public:
     void emplace_tablet(tablet_id, dht::token last_token, tablet_info);
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
+    // Set/clear per-tablet repair/migration task infos; setting an invalid one clears it.
+    void set_repair_task_info(tablet_id, tablet_task_info);
+    void set_migration_task_info(tablet_id, tablet_task_info);
+    void clear_repair_task_info(tablet_id);
+    void clear_migration_task_info(tablet_id);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
     void set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config);

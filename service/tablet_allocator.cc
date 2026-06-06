@@ -1332,13 +1332,14 @@ public:
                 // Avoid rescheduling a failed tablet repair in a loop
                 // TODO: Allow user to config
                 const auto min_reschedule_time = std::chrono::seconds(5);
-                if (now - info.repair_task_info.sched_time < min_reschedule_time) {
+                auto& repair_task_info = tmap.get_repair_task_info(id);
+                if (now - repair_task_info.sched_time < min_reschedule_time) {
                     lblogger.debug("Skipped tablet repair for tablet={} which is scheduled too frequently", gid);
                     co_return;
                 }
 
                 db_clock::duration diff;
-                auto is_user_reuqest = info.repair_task_info.is_user_repair_request();
+                auto is_user_reuqest = repair_task_info.is_user_repair_request();
                 if (is_user_reuqest) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
@@ -1908,7 +1909,8 @@ public:
 
             // Sibling tablets cannot be considered co-located if their tablet info is temporarily unmergeable.
             // It can happen if either has an active repair task, for example.
-            all_colocated &= bool(merge_tablet_info(with_optimistic_replicas(t1), with_optimistic_replicas(t2)));
+            all_colocated &= bool(merge_tablet_info(with_optimistic_replicas(t1), with_optimistic_replicas(t2),
+                    tmap.get_repair_task_info(t1.tid), tmap.get_repair_task_info(t2.tid), nullptr));
             return make_ready_future<>();
         });
         if (all_colocated) {
@@ -4685,6 +4687,13 @@ private:
 
             new_tablets.emplace_tablet(new_left_tid, tablets.get_split_token(tid), tablet_info);
             new_tablets.emplace_tablet(new_right_tid, tablets.get_last_token(tid), tablet_info);
+            // Propagate side-map task infos to both split halves (as before, when inline).
+            const auto& repair_ti = tablets.get_repair_task_info(tid);
+            const auto& migration_ti = tablets.get_migration_task_info(tid);
+            new_tablets.set_repair_task_info(new_left_tid, repair_ti);
+            new_tablets.set_repair_task_info(new_right_tid, repair_ti);
+            new_tablets.set_migration_task_info(new_left_tid, migration_ti);
+            new_tablets.set_migration_task_info(new_right_tid, migration_ti);
         }
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
@@ -4705,6 +4714,9 @@ private:
 
             if (!right) {
                 new_tablets.emplace_tablet(*new_tid, tablets.get_last_token(left.tid), *left.info);
+                // Carry over side-map task infos.
+                new_tablets.set_repair_task_info(*new_tid, tablets.get_repair_task_info(left.tid));
+                new_tablets.set_migration_task_info(*new_tid, tablets.get_migration_task_info(left.tid));
                 new_tid = new_tablets.next_tablet(*new_tid);
                 return make_ready_future<>();
             }
@@ -4725,7 +4737,10 @@ private:
                 throw std::runtime_error(format("Sibling tablets {} (r: {}) and {} (r: {}) are not colocated.",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
             }
-            auto merged_tablet_info = locator::merge_tablet_info(left_tablet_info, right_tablet_info);
+            tablet_task_info merged_repair_task_info;
+            auto merged_tablet_info = locator::merge_tablet_info(left_tablet_info, right_tablet_info,
+                    tablets.get_repair_task_info(old_left_tid), tablets.get_repair_task_info(old_right_tid),
+                    &merged_repair_task_info);
             if (!merged_tablet_info) {
                 throw std::runtime_error(format("Unable to merge tablet info of sibling tablets {} (r: {}) and {} (r: {}).",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
@@ -4733,6 +4748,9 @@ private:
             lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->sstables_repaired_at);
 
             new_tablets.emplace_tablet(*new_tid, tablets.get_last_token(old_right_tid), *merged_tablet_info);
+            new_tablets.set_repair_task_info(*new_tid, std::move(merged_repair_task_info));
+            // Migration task infos aren't merged; carry over the left tablet's, if any.
+            new_tablets.set_migration_task_info(*new_tid, tablets.get_migration_task_info(old_left_tid));
             new_tid = new_tablets.next_tablet(*new_tid);
             return make_ready_future<>();
         });
