@@ -1528,8 +1528,8 @@ private:
                    | std::ranges::to<repair_hash_set>();
         }
         if (update_buf) {
-            // Both row_diff and _working_row_buf and are ordered, merging
-            // two sored list to make sure the combination of row_diff
+            // Both row_diff and _working_row_buf are ordered, merging
+            // two sorted lists to make sure the combination of row_diff
             // and _working_row_buf are ordered. The rows are spliced (moved)
             // out of row_diff, so it is left empty afterwards.
             utils::merge_to_gently(_working_row_buf, std::move(row_diff),
