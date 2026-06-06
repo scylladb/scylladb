@@ -346,9 +346,17 @@ def test_collection_rejects_after_flush(cql, test_keyspace):
         schema = "pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)"
         with new_test_table(cql, test_keyspace, schema,
                 extra=" WITH large_data_guardrails_enabled = true") as tbl:
-            build_large_collection(cql, tbl, pk=1, ck=0, num_elements=60)
-            nodetool.flush(cql, tbl)
+            # Build element-by-element (each UPDATE adds 1 element, so
+            # future coordinator-side guardrails won't reject).  Disable
+            # the fail threshold during setup to prevent memtable-level
+            # rejection while the collection grows past the limit.
+            with config_value_context(cql,
+                    'large_collection_elements_fail_threshold', '0'):
+                build_large_collection(cql, tbl, pk=1, ck=0, num_elements=60)
+                nodetool.flush(cql, tbl)
 
+            # Fail threshold restored to 50.  SSTable index has the
+            # 60-element collection, memtable cache was cleared by flush.
             insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, s) VALUES (?, ?, ?)")
             with pytest.raises(WriteFailure, match=REJECT_COLLECTION_RE):
                 cql.execute(insert, [1, 0, {0}])
@@ -622,10 +630,14 @@ def test_each_guardrail_rejects_independently(cql, test_keyspace):
             cql.execute(insert_v2, [2, 0, bytes(600 * 1024)])
 
             # pk=3: 60-element collection; row and partition tiny.
-            update_s = cql.prepare(
-                f"UPDATE {tbl} SET s = s + ? WHERE pk = ? AND ck = ?")
-            for i in range(60):
-                cql.execute(update_s, [{i}, 3, 0])
+            # Build element-by-element.  Disable the collection fail
+            # threshold during setup to prevent memtable-level rejection.
+            with config_value_context(cql,
+                    'large_collection_elements_fail_threshold', '0'):
+                update_s = cql.prepare(
+                    f"UPDATE {tbl} SET s = s + ? WHERE pk = ? AND ck = ?")
+                for i in range(60):
+                    cql.execute(update_s, [{i}, 3, 0])
 
             nodetool.flush(cql, tbl)
 
