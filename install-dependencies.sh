@@ -475,6 +475,11 @@ elif [ "$ID" == "arch" ]; then
     echo -e "Configure example:\n\t./configure.py\n\tninja release"
 fi
 
+# Keep this version in lockstep with the `cxx` crate pinned in rust/inc/Cargo.toml
+# and rust/wasmtime_bindings/Cargo.toml: the cxxbridge CLI generates the C++ side
+# of the FFI and the cxx crate generates the Rust side, so a version mismatch
+# breaks linking (unresolved cxxbridge symbols). Bumping one requires bumping the
+# other (and rebuilding the toolchain image).
 cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --version 1.0.83 --root /usr/local
 
 CURL_ARGS=$(minio_download_jobs)
