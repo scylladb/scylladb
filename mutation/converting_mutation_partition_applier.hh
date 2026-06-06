@@ -20,6 +20,7 @@ class deletable_row;
 class column_definition;
 class abstract_type;
 class atomic_cell_or_collection;
+namespace db { class large_data_cache_tracker; }
 
 // Mutation partition visitor which applies visited data into
 // existing mutation_partition. The visited data may be of a different schema.
@@ -34,8 +35,11 @@ private:
     static bool is_compatible(const column_definition& new_def, const abstract_type& old_type, column_kind kind);
     static atomic_cell upgrade_cell(const abstract_type& new_type, const abstract_type& old_type, atomic_cell_view cell,
                                     atomic_cell::collection_member cm = atomic_cell::collection_member::no);
-    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell);
-    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell);public:
+    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell,
+            db::large_data_cache_tracker* tracker = nullptr);
+    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell,
+            db::large_data_cache_tracker* tracker = nullptr);
+public:
     converting_mutation_partition_applier(
             const column_mapping& visited_column_mapping,
             const schema& target_schema,
@@ -52,5 +56,6 @@ private:
 
     // Appends the cell to dst upgrading it to the new schema.
     // Cells must have monotonic names.
-    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell);
+    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell,
+            db::large_data_cache_tracker* tracker = nullptr);
 };

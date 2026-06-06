@@ -11,6 +11,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "mutation_partition.hh"
+#include "db/large_data_cache_tracker.hh"
 #include "keys/clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
@@ -1052,26 +1053,26 @@ void deletable_row::apply(const schema& our_schema, const schema& their_schema, 
     apply_monotonically(our_schema, their_schema, src);
 }
 
-void deletable_row::apply_monotonically(const schema& s, deletable_row&& src) {
-    _cells.apply_monotonically(s, column_kind::regular_column, std::move(src._cells));
+void deletable_row::apply_monotonically(const schema& s, deletable_row&& src, db::large_data_cache_tracker* tracker) {
+    _cells.apply_monotonically(s, column_kind::regular_column, std::move(src._cells), tracker);
     _marker.apply(src._marker);
     _deleted_at.apply(src._deleted_at, _marker);
 }
 
-void deletable_row::apply_monotonically(const schema& s, const deletable_row& src) {
-    _cells.apply_monotonically(s, column_kind::regular_column, src._cells);
+void deletable_row::apply_monotonically(const schema& s, const deletable_row& src, db::large_data_cache_tracker* tracker) {
+    _cells.apply_monotonically(s, column_kind::regular_column, src._cells, tracker);
     _marker.apply(src._marker);
     _deleted_at.apply(src._deleted_at, _marker);
 }
 
-void deletable_row::apply_monotonically(const schema& our_schema, const schema& their_schema, deletable_row&& src) {
-    _cells.apply_monotonically(our_schema, their_schema, column_kind::regular_column, std::move(src._cells));
+void deletable_row::apply_monotonically(const schema& our_schema, const schema& their_schema, deletable_row&& src, db::large_data_cache_tracker* tracker) {
+    _cells.apply_monotonically(our_schema, their_schema, column_kind::regular_column, std::move(src._cells), tracker);
     _marker.apply(src._marker);
     _deleted_at.apply(src._deleted_at, _marker);
 }
 
-void deletable_row::apply_monotonically(const schema& our_schema, const schema& their_schema, const deletable_row& src) {
-    _cells.apply_monotonically(our_schema, their_schema, column_kind::regular_column, src._cells);
+void deletable_row::apply_monotonically(const schema& our_schema, const schema& their_schema, const deletable_row& src, db::large_data_cache_tracker* tracker) {
+    _cells.apply_monotonically(our_schema, their_schema, column_kind::regular_column, src._cells, tracker);
     _marker.apply(src._marker);
     _deleted_at.apply(src._deleted_at, _marker);
 }
@@ -1134,7 +1135,8 @@ mutation_partition mutation_partition::sliced(const schema& s, const query::clus
 static
 void
 apply_monotonically(const column_definition& def, cell_and_hash& dst,
-                    atomic_cell_or_collection& src, cell_hash_opt src_hash) {
+        atomic_cell_or_collection& src, cell_hash_opt src_hash,
+        db::large_data_cache_tracker* tracker = nullptr) {
     if (def.is_atomic()) {
         if (def.is_counter()) {
             counter_cell_view::apply(def, dst.cell, src); // FIXME: Optimize
@@ -1147,18 +1149,23 @@ apply_monotonically(const column_definition& def, cell_and_hash& dst,
     } else {
         dst.cell = merge(*def.type, dst.cell.as_collection_mutation(), src.as_collection_mutation());
         dst.hash = { };
+        if (tracker) {
+            tracker->on_collection_merged(def, dst.cell);
+        }
     }
 }
 
 void
-row::apply(const column_definition& column, const atomic_cell_or_collection& value, cell_hash_opt hash) {
+row::apply(const column_definition& column, const atomic_cell_or_collection& value, cell_hash_opt hash,
+        db::large_data_cache_tracker* tracker) {
     auto tmp = value.copy(*column.type);
-    apply_monotonically(column, std::move(tmp), std::move(hash));
+    apply_monotonically(column, std::move(tmp), std::move(hash), tracker);
 }
 
 void
-row::apply(const column_definition& column, atomic_cell_or_collection&& value, cell_hash_opt hash) {
-    apply_monotonically(column, std::move(value), std::move(hash));
+row::apply(const column_definition& column, atomic_cell_or_collection&& value, cell_hash_opt hash,
+        db::large_data_cache_tracker* tracker) {
+    apply_monotonically(column, std::move(value), std::move(hash), tracker);
 }
 
 template<typename Func>
@@ -1171,7 +1178,8 @@ void row::consume_with(Func&& func) {
 }
 
 void
-row::apply_monotonically(const column_definition& column, atomic_cell_or_collection&& value, cell_hash_opt hash) {
+row::apply_monotonically(const column_definition& column, atomic_cell_or_collection&& value, cell_hash_opt hash,
+        db::large_data_cache_tracker* tracker) {
     static_assert(std::is_nothrow_move_constructible<atomic_cell_or_collection>::value
                   && std::is_nothrow_move_assignable<atomic_cell_or_collection>::value,
                   "noexcept required for atomicity");
@@ -1185,7 +1193,7 @@ row::apply_monotonically(const column_definition& column, atomic_cell_or_collect
         _cells.emplace(id, std::move(value), std::move(hash));
         _size++;
     } else {
-        ::apply_monotonically(column, *cah, value, std::move(hash));
+        ::apply_monotonically(column, *cah, value, std::move(hash), tracker);
     }
 }
 
@@ -1554,46 +1562,46 @@ void row::apply(const schema& our_schema, const schema& their_schema, column_kin
     apply_monotonically(our_schema, their_schema, kind, other);
 };
 
-void row::apply_monotonically(const schema& s, column_kind kind, row&& other) {
+void row::apply_monotonically(const schema& s, column_kind kind, row&& other, db::large_data_cache_tracker* tracker) {
     if (other.empty()) {
         return;
     }
     other.consume_with([&] (column_id id, cell_and_hash& c_a_h) {
-        apply_monotonically(s.column_at(kind, id), std::move(c_a_h.cell), std::move(c_a_h.hash));
+        apply_monotonically(s.column_at(kind, id), std::move(c_a_h.cell), std::move(c_a_h.hash), tracker);
     });
 }
 
-void row::apply_monotonically(const schema& s, column_kind kind, const row& other) {
+void row::apply_monotonically(const schema& s, column_kind kind, const row& other, db::large_data_cache_tracker* tracker) {
     if (other.empty()) {
         return;
     }
     other.for_each_cell([&] (column_id id, const cell_and_hash& c_a_h) {
-        apply(s.column_at(kind, id), c_a_h.cell, c_a_h.hash);
+        apply(s.column_at(kind, id), c_a_h.cell, c_a_h.hash, tracker);
     });
 }
 
-void row::apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, row&& other) {
+void row::apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, row&& other, db::large_data_cache_tracker* tracker) {
     if (our_schema.version() == their_schema.version()) {
-        return apply_monotonically(our_schema, kind, std::move(other));
+        return apply_monotonically(our_schema, kind, std::move(other), tracker);
     }
     other.consume_with([&] (column_id id, cell_and_hash& c_a_h) {
         const column_definition& their_col = their_schema.column_at(kind, id);
         const column_definition* our_col = our_schema.get_column_definition(their_col.name());
         if (our_col) {
-            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, c_a_h.cell);
+            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, c_a_h.cell, tracker);
         }
     });
 }
 
-void row::apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, const row& other) {
+void row::apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, const row& other, db::large_data_cache_tracker* tracker) {
     if (our_schema.version() == their_schema.version()) {
-        return apply_monotonically(our_schema, kind, other);
+        return apply_monotonically(our_schema, kind, other, tracker);
     }
     other.for_each_cell([&] (column_id id, const cell_and_hash& c_a_h) {
         const column_definition& their_col = their_schema.column_at(kind, id);
         const column_definition* our_col = our_schema.get_column_definition(their_col.name());
         if (our_col) {
-            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, c_a_h.cell);
+            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, c_a_h.cell, tracker);
         }
     });
 }

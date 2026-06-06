@@ -20,6 +20,8 @@
 
 class static_row;
 
+namespace db { class large_data_cache_tracker; }
+
 // This is MVCC implementation for mutation_partitions.
 //
 // See docs/dev/mvcc.md for important design information.
@@ -601,21 +603,24 @@ public:
                const schema& s,
                const mutation_partition_v2& mp,
                const schema& mp_schema,
-               mutation_application_stats& app_stats);
+               mutation_application_stats& app_stats,
+               db::large_data_cache_tracker* tracker = nullptr);
 
     void apply(logalloc::region&,
                mutation_cleaner&,
                const schema& s,
                mutation_partition_v2&& mp,
                const schema& mp_schema,
-               mutation_application_stats& app_stats);
+               mutation_application_stats& app_stats,
+               db::large_data_cache_tracker* tracker = nullptr);
 
     void apply(logalloc::region&,
                mutation_cleaner&,
                const schema& s,
                const mutation_partition& mp,
                const schema& mp_schema,
-               mutation_application_stats& app_stats);
+               mutation_application_stats& app_stats,
+               db::large_data_cache_tracker* tracker = nullptr);
 
     // Adds mutation_partition represented by "pe" to the one represented
     // by this entry.

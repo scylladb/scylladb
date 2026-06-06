@@ -38,6 +38,7 @@
 class mutation_fragment;
 class mutation_partition_view;
 class mutation_partition_visitor;
+namespace db { class large_data_cache_tracker; }
 
 namespace query {
     class clustering_key_filter_ranges;
@@ -166,14 +167,17 @@ public:
 
     // Merges cell's value into the row.
     // Weak exception guarantees.
-    void apply(const column_definition& column, const atomic_cell_or_collection& cell, cell_hash_opt hash = cell_hash_opt());
+    void apply(const column_definition& column, const atomic_cell_or_collection& cell, cell_hash_opt hash = cell_hash_opt(),
+            db::large_data_cache_tracker* tracker = nullptr);
 
     // Merges cell's value into the row.
     // Weak exception guarantees.
-    void apply(const column_definition& column, atomic_cell_or_collection&& cell, cell_hash_opt hash = cell_hash_opt());
+    void apply(const column_definition& column, atomic_cell_or_collection&& cell, cell_hash_opt hash = cell_hash_opt(),
+            db::large_data_cache_tracker* tracker = nullptr);
 
     // Monotonic exception guarantees. In case of exception the sum of cell and this remains the same as before the exception.
-    void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell, cell_hash_opt hash = cell_hash_opt());
+    void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell, cell_hash_opt hash = cell_hash_opt(),
+            db::large_data_cache_tracker* tracker = nullptr);
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
@@ -185,10 +189,10 @@ public:
     void apply(const schema& our_schema, const schema& their_schema, column_kind kind, row&& other);
 
     // Monotonic exception guarantees
-    void apply_monotonically(const schema&, column_kind, row&& src);
-    void apply_monotonically(const schema&, column_kind, const row& src);
-    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind, row&& src);
-    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind, const row& src);
+    void apply_monotonically(const schema&, column_kind, row&& src, db::large_data_cache_tracker* tracker = nullptr);
+    void apply_monotonically(const schema&, column_kind, const row& src, db::large_data_cache_tracker* tracker = nullptr);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind, row&& src, db::large_data_cache_tracker* tracker = nullptr);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind, const row& src, db::large_data_cache_tracker* tracker = nullptr);
 
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
@@ -404,15 +408,15 @@ public:
     }
 
     // Monotonic exception guarantees
-    void apply_monotonically(const schema& s, column_kind kind, row&& src) {
+    void apply_monotonically(const schema& s, column_kind kind, row&& src, db::large_data_cache_tracker* tracker = nullptr) {
         if (src.empty()) {
             return;
         }
-        maybe_create().apply_monotonically(s, kind, std::move(src));
+        maybe_create().apply_monotonically(s, kind, std::move(src), tracker);
     }
 
     // Monotonic exception guarantees
-    void apply_monotonically(const schema& s, column_kind kind, lazy_row&& src) {
+    void apply_monotonically(const schema& s, column_kind kind, lazy_row&& src, db::large_data_cache_tracker* tracker = nullptr) {
         if (src.empty()) {
             return;
         }
@@ -420,15 +424,15 @@ public:
             _row = std::move(src._row);
             return;
         }
-        get_existing().apply_monotonically(s, kind, std::move(src.get_existing()));
+        get_existing().apply_monotonically(s, kind, std::move(src.get_existing()), tracker);
     }
 
     // Monotonic exception guarantees
-    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, lazy_row&& src) {
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, lazy_row&& src, db::large_data_cache_tracker* tracker = nullptr) {
         if (src.empty()) {
             return;
         }
-        maybe_create().apply_monotonically(our_schema, their_schema, kind, std::move(src.get_existing()));
+        maybe_create().apply_monotonically(our_schema, their_schema, kind, std::move(src.get_existing()), tracker);
     }
 
     // Expires cells based on query_time. Expires tombstones based on gc_before
@@ -878,10 +882,10 @@ public:
     void apply(const schema& our_schema, const schema& their_schema, const deletable_row& src);
     void apply(const schema& our_schema, const schema& their_schema, deletable_row&& src);
 
-    void apply_monotonically(const schema&, deletable_row&& src);
-    void apply_monotonically(const schema&, const deletable_row& src);
-    void apply_monotonically(const schema& our_schema, const schema& their_schema, deletable_row&& src);
-    void apply_monotonically(const schema& our_schema, const schema& their_schema, const deletable_row& src);
+    void apply_monotonically(const schema&, deletable_row&& src, db::large_data_cache_tracker* tracker = nullptr);
+    void apply_monotonically(const schema&, const deletable_row& src, db::large_data_cache_tracker* tracker = nullptr);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, deletable_row&& src, db::large_data_cache_tracker* tracker = nullptr);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, const deletable_row& src, db::large_data_cache_tracker* tracker = nullptr);
 public:
     row_tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
@@ -1020,11 +1024,11 @@ public:
     void apply(row_tombstone t) {
         _row.apply(t);
     }
-    void apply_monotonically(const schema& s, rows_entry&& e) {
-        _row.apply_monotonically(s, std::move(e._row));
+    void apply_monotonically(const schema& s, rows_entry&& e, db::large_data_cache_tracker* tracker = nullptr) {
+        _row.apply_monotonically(s, std::move(e._row), tracker);
     }
-    void apply_monotonically(const schema& our_schema, const schema& their_schema, rows_entry&& e) {
-        _row.apply_monotonically(our_schema, their_schema, std::move(e._row));
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, rows_entry&& e, db::large_data_cache_tracker* tracker = nullptr) {
+        _row.apply_monotonically(our_schema, their_schema, std::move(e._row), tracker);
     }
     bool empty() const {
         return _row.empty();

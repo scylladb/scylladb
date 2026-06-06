@@ -14,6 +14,8 @@
 
 #include <ranges>
 
+namespace db { class large_data_cache_tracker; }
+
 #ifdef SEASTAR_DEBUG
 #include "utils/assert.hh"
 #endif
@@ -196,7 +198,8 @@ public:
     // If is_preemptible::yes is passed, apply_resume must also be passed,
     // same instance each time until stop_iteration::yes is returned.
     stop_iteration apply_monotonically(const schema& this_schema, const schema& p_schema, mutation_partition_v2&& p,
-            cache_tracker*, mutation_application_stats& app_stats, preemption_check, apply_resume&, is_evictable);
+            cache_tracker*, mutation_application_stats& app_stats, preemption_check, apply_resume&, is_evictable,
+            db::large_data_cache_tracker* ld_tracker = nullptr);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
     // using the new schema.

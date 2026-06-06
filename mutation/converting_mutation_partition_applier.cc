@@ -33,15 +33,17 @@ converting_mutation_partition_applier::upgrade_cell(const abstract_type& new_typ
 }
 
 void
-converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell) {
+converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell,
+        db::large_data_cache_tracker* tracker) {
     if (!is_compatible(new_def, old_type, kind) || cell.timestamp() <= new_def.dropped_at()) {
         return;
     }
-    dst.apply(new_def, upgrade_cell(*new_def.type, old_type, cell));
+    dst.apply(new_def, upgrade_cell(*new_def.type, old_type, cell), {}, tracker);
 }
 
 void
-converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell) {
+converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell,
+        db::large_data_cache_tracker* tracker) {
     if (!is_compatible(new_def, old_type, kind)) {
         return;
     }
@@ -84,7 +86,7 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
     ));
 
     if (!new_view.empty()) {
-        dst.apply(new_def, std::move(new_view).finish());
+        dst.apply(new_def, std::move(new_view).finish(), {}, tracker);
     }
 }
 
@@ -163,10 +165,11 @@ converting_mutation_partition_applier::accept_row_cell(column_id id, collection_
 }
 
 void
-converting_mutation_partition_applier::append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell) {
+converting_mutation_partition_applier::append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell,
+        db::large_data_cache_tracker* tracker) {
     if (new_def.is_atomic()) {
-        accept_cell(dst, kind, new_def, *old_def.type, cell.as_atomic_cell(old_def));
+        accept_cell(dst, kind, new_def, *old_def.type, cell.as_atomic_cell(old_def), tracker);
     } else {
-        accept_cell(dst, kind, new_def, *old_def.type, cell.as_collection_mutation());
+        accept_cell(dst, kind, new_def, *old_def.type, cell.as_collection_mutation(), tracker);
     }
 }
