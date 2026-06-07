@@ -591,6 +591,7 @@ async def test_concurrent_tablet_migrations(manager: ManagerClient):
     for property_file in rack_property_files:
         servers.append(await manager.server_add(property_file=property_file, cmdline=cmdline_loggers))
 
+    await manager.servers_see_each_other(servers)
     await manager.disable_tablet_balancing()
     await pause_view_building_tasks(manager)
 
