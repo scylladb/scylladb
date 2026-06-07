@@ -223,17 +223,51 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& 
 tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info, tablet_task_info migration_task_info, int64_t sstables_repaired_at)
     : replicas(std::move(replicas))
     , repair_time(repair_time)
-    , repair_task_info(std::move(repair_task_info))
-    , migration_task_info(std::move(migration_task_info))
+    , repair_task_info(repair_task_info.is_valid() ? std::make_unique<tablet_task_info>(std::move(repair_task_info)) : nullptr)
+    , migration_task_info(migration_task_info.is_valid() ? std::make_unique<tablet_task_info>(std::move(migration_task_info)) : nullptr)
     , sstables_repaired_at(sstables_repaired_at)
 {}
 
 tablet_info::tablet_info(tablet_replica_set replicas)
-    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{}, int64_t(0))
+    : replicas(std::move(replicas))
+    , sstables_repaired_at(0)
 {}
 
+tablet_info::tablet_info(const tablet_info& o)
+    : replicas(o.replicas)
+    , repair_time(o.repair_time)
+    , repair_task_info(o.repair_task_info ? std::make_unique<tablet_task_info>(*o.repair_task_info) : nullptr)
+    , migration_task_info(o.migration_task_info ? std::make_unique<tablet_task_info>(*o.migration_task_info) : nullptr)
+    , sstables_repaired_at(o.sstables_repaired_at)
+{}
+
+tablet_info& tablet_info::operator=(const tablet_info& o) {
+    if (this != &o) {
+        replicas = o.replicas;
+        repair_time = o.repair_time;
+        repair_task_info = o.repair_task_info ? std::make_unique<tablet_task_info>(*o.repair_task_info) : nullptr;
+        migration_task_info = o.migration_task_info ? std::make_unique<tablet_task_info>(*o.migration_task_info) : nullptr;
+        sstables_repaired_at = o.sstables_repaired_at;
+    }
+    return *this;
+}
+
+bool tablet_info::operator==(const tablet_info& o) const {
+    auto eq = [](const std::unique_ptr<tablet_task_info>& a, const std::unique_ptr<tablet_task_info>& b) {
+        return (!a && !b) || (a && b && *a == *b);
+    };
+    return replicas == o.replicas
+        && repair_time == o.repair_time
+        && eq(repair_task_info, o.repair_task_info)
+        && eq(migration_task_info, o.migration_task_info)
+        && sstables_repaired_at == o.sstables_repaired_at;
+}
+
 std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
-    auto repair_task_info = tablet_task_info::merge_repair_tasks(a.repair_task_info, b.repair_task_info);
+    static const tablet_task_info empty_task_info;
+    auto repair_task_info = tablet_task_info::merge_repair_tasks(
+        a.repair_task_info ? *a.repair_task_info : empty_task_info,
+        b.repair_task_info ? *b.repair_task_info : empty_task_info);
     if (!repair_task_info) {
         return {};
     }
@@ -248,7 +282,8 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
 
     auto repair_time = std::max(a.repair_time, b.repair_time);
     int64_t sstables_repaired_at = std::max(a.sstables_repaired_at, b.sstables_repaired_at);
-    auto info = tablet_info(std::move(a.replicas), repair_time, *repair_task_info, a.migration_task_info, sstables_repaired_at);
+    auto info = tablet_info(std::move(a.replicas), repair_time, *repair_task_info,
+        a.migration_task_info ? *a.migration_task_info : empty_task_info, sstables_repaired_at);
     return info;
 }
 

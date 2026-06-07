@@ -23,6 +23,7 @@
 #include "utils/UUID.hh"
 #include "raft/raft.hh"
 
+#include <memory>
 #include <ranges>
 #include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
@@ -279,15 +280,20 @@ struct restore_config {
 struct tablet_info {
     tablet_replica_set replicas;
     db_clock::time_point repair_time;
-    locator::tablet_task_info repair_task_info;
-    locator::tablet_task_info migration_task_info;
+    std::unique_ptr<tablet_task_info> repair_task_info;
+    std::unique_ptr<tablet_task_info> migration_task_info;
     int64_t sstables_repaired_at;
 
     tablet_info() = default;
     tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info, int64_t sstables_repaired_at);
     tablet_info(tablet_replica_set);
 
-    bool operator==(const tablet_info&) const = default;
+    tablet_info(const tablet_info&);
+    tablet_info& operator=(const tablet_info&);
+    tablet_info(tablet_info&&) noexcept = default;
+    tablet_info& operator=(tablet_info&&) noexcept = default;
+
+    bool operator==(const tablet_info&) const;
 };
 
 /// Reft-related information for strongly-consistent tablets.

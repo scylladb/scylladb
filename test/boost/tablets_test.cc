@@ -6864,7 +6864,7 @@ void run_tablet_manual_repair_rf1(cql_test_env& e) {
                 tablet_replica{host1, 0},
             }
         };
-        ti.repair_task_info = ti.repair_task_info.make_user_repair_request();
+        ti.repair_task_info = std::make_unique<locator::tablet_task_info>(locator::tablet_task_info::make_user_repair_request());
         tmap.set_tablet(tid, std::move(ti));
         tmeta.set_tablet_map(table1, std::move(tmap));
         co_return;
