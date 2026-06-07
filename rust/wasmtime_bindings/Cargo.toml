@@ -5,7 +5,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cxx = { version = "1.0.83", features = ["c++20"] }
+# cxx must match the cxxbridge CLI version from install-dependencies.sh exactly
+# (see the note in rust/inc/Cargo.toml). Pinned to avoid a cxxbridge ABI/symbol
+# mismatch at link time.
+cxx = { version = "=1.0.83", features = ["c++20"] }
 wasmtime-wasi = "24.0.2"
 futures = "0.3.25"
 anyhow = "1.0.66"
