@@ -88,7 +88,21 @@ private:
         {}
     };
 
-    lw_shared_ptr<const state> _state = make_lw_shared<const state>();
+    // The initial state is an empty, immutable default-constructed state shared
+    // by all column_translation instances on the same shard. It is replaced
+    // (copy-on-write, by reassigning the pointer) the first time get_for_schema()
+    // is called with a matching format, so sharing the default avoids a heap
+    // allocation per sstable that, in practice, is almost always immediately
+    // overwritten or never used.
+    //
+    // thread_local (per-shard): lw_shared_ptr refcounting is not thread-safe, so
+    // the shared default must not be touched from more than one shard.
+    static const lw_shared_ptr<const state>& default_state() {
+        static thread_local const lw_shared_ptr<const state> s = make_lw_shared<const state>();
+        return s;
+    }
+
+    lw_shared_ptr<const state> _state = default_state();
 
 public:
     // Use for formats >= mc.
