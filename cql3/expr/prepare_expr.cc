@@ -1398,31 +1398,31 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
     // of another, existing, function. In that case, we return true here because we'll throw a proper exception
     // later with a more helpful error message that if we were to return false here.
     auto result = [&] () -> assignment_testable::test_result {
-    try {
-        auto&& fun = std::visit(overloaded_functor{
-            [&] (const functions::function_name& name) {
-                auto args = prepare_function_args_for_type_inference(fc.args, db, keyspace, schema_opt, memo);
-                return functions::instance().get(db, keyspace, name,
-                        args
-                                | std::views::transform(&partially_prepared_arg::testable)
-                                | std::ranges::to<std::vector>(),
-                        receiver.ks_name, receiver.cf_name, &receiver);
-            },
-            [] (const shared_ptr<functions::function>& func) {
-                return func;
-            },
-        }, fc.func);
-        if (fun && receiver.type == fun->return_type()) {
-            return assignment_testable::test_result::EXACT_MATCH;
-        } else if (!fun || receiver.type->is_value_compatible_with(*fun->return_type())
-                        || is_widenable_to(fun->return_type(), receiver.type)) {
+        try {
+            auto&& fun = std::visit(overloaded_functor{
+                [&] (const functions::function_name& name) {
+                    auto args = prepare_function_args_for_type_inference(fc.args, db, keyspace, schema_opt, memo);
+                    return functions::instance().get(db, keyspace, name,
+                            args
+                                    | std::views::transform(&partially_prepared_arg::testable)
+                                    | std::ranges::to<std::vector>(),
+                            receiver.ks_name, receiver.cf_name, &receiver);
+                },
+                [] (const shared_ptr<functions::function>& func) {
+                    return func;
+                },
+            }, fc.func);
+            if (fun && receiver.type == fun->return_type()) {
+                return assignment_testable::test_result::EXACT_MATCH;
+            } else if (!fun || receiver.type->is_value_compatible_with(*fun->return_type())
+                            || is_widenable_to(fun->return_type(), receiver.type)) {
+                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+            } else {
+                return assignment_testable::test_result::NOT_ASSIGNABLE;
+            }
+        } catch (exceptions::invalid_request_exception& e) {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-        } else {
-            return assignment_testable::test_result::NOT_ASSIGNABLE;
         }
-    } catch (exceptions::invalid_request_exception& e) {
-        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-    }
     }();
 
     if (memo_key) {
