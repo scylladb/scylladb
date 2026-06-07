@@ -368,6 +368,10 @@ private:
 
     locator::tablet_map build_tablet_map_for_migration(const locator::token_metadata& tm,
             const locator::static_effective_replication_map_ptr& erm) const;
+    future<std::unordered_map<table_id, uint64_t>> collect_table_sizes_for_migration(
+        const locator::token_metadata& tm,
+        const locator::tablet_aware_replication_strategy* trs,
+        const std::vector<std::pair<table_id, sstring>>& tables_to_estimate);
 
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
         return _shared_token_metadata.get()->clone_async().then([this] (token_metadata tm) {

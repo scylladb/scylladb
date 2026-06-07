@@ -4015,6 +4015,45 @@ locator::tablet_map storage_service::build_tablet_map_for_migration(
     return tmap;
 }
 
+future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_sizes_for_migration(
+    const locator::token_metadata& tm,
+    const locator::tablet_aware_replication_strategy* trs,
+    const std::vector<std::pair<table_id, sstring>>& tables_to_estimate) {
+
+    std::unordered_map<table_id, uint64_t> table_sizes;
+
+    const auto& local_dc = tm.get_topology().get_location().dc;
+    auto local_rf = trs->get_replication_factor(local_dc);
+    if (local_rf == 0) {
+        throw std::runtime_error(fmt::format(
+            "Cannot estimate table sizes for migration: replication factor for local DC '{}' is zero. Try again on a node with a non-zero replication factor.", local_dc));
+    }
+
+    const auto local_host = tm.get_my_id();
+
+    double local_fraction = 0.0;
+    auto token_ownership = dht::token::describe_ownership(tm.sorted_tokens());
+    for (const auto& [tok, fraction] : token_ownership) {
+        if (tm.get_endpoint(tok) == local_host) {
+            local_fraction += fraction;
+        }
+    }
+
+    if (local_fraction <= 0) {
+        throw std::runtime_error(fmt::format(
+            "Cannot estimate table sizes for migration: local token ownership fraction is {}", local_fraction));
+    }
+
+    for (const auto& [tid, ignored_cf_name] : tables_to_estimate) {
+        auto& cf = _db.local().find_column_family(tid);
+        auto local_size = static_cast<uint64_t>(cf.get_stats().live_disk_space_used.on_disk);
+        auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction) / local_rf;
+        table_sizes.emplace(tid, estimated_total_size);
+    }
+
+    co_return table_sizes;
+}
+
 future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
