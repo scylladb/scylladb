@@ -60,7 +60,8 @@ sstable_version_constants::get_component_map(sstable_version_types version) {
         case sstable_version_types::me:
             return sstable_version_constants_m::_component_map;
         case sstable_version_types::ms:
-            return sstable_version_constants_ms::_component_map;
+        case sstable_version_types::mt:
+            return sstable_version_constants_m_bti::_component_map;
     }
     // Should never reach this.
     // Compiler should complain if the switch above does no cover all sstable_version_types values.
@@ -89,17 +90,17 @@ const sstable_version_constants::component_map_t sstable_version_constants_m::cr
 const sstable_version_constants::component_map_t sstable_version_constants_m::_component_map =
         sstable_version_constants_m::create_component_map();
 
-const sstable_version_constants::component_map_t sstable_version_constants_ms::create_component_map() {
+const sstable_version_constants::component_map_t sstable_version_constants_m_bti::create_component_map() {
     auto result = sstable_version_constants_m::create_component_map();
-    // Note: for `ms`, we inherit all components from `me`.
-    // This means that we allow `ms` to have Index.db and Summary.db components.
+    // Note: for `ms`-`mt`, we inherit all components from `me`.
+    // This means that we allow `ms`-`mt` to have Index.db and Summary.db components.
     result.emplace(component_type::Rows, "Rows.db");
     result.emplace(component_type::Partitions, "Partitions.db");
     result.emplace(component_type::TemporaryHashes, "TemporaryHashes.db.tmp");
     return result;
 }
 
-const sstable_version_constants::component_map_t sstable_version_constants_ms::_component_map =
-        sstable_version_constants_ms::create_component_map();
+const sstable_version_constants::component_map_t sstable_version_constants_m_bti::_component_map =
+        sstable_version_constants_m_bti::create_component_map();
 
 }

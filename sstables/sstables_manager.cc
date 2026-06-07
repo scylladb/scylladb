@@ -183,7 +183,9 @@ storage_manager::connections_updater_sync::connections_updater_sync(const db::co
 {}
 
 sstables::sstable::version_types sstables_manager::get_highest_supported_format() const noexcept {
-     if (_features.ms_sstable) {
+     if (_features.mt_sstable) {
+         return sstable_version_types::mt;
+     } else if (_features.ms_sstable) {
          return sstable_version_types::ms;
      } else {
          return sstable_version_types::me;
@@ -192,22 +194,40 @@ sstables::sstable::version_types sstables_manager::get_highest_supported_format(
 
 sstables::sstable::version_types sstables_manager::get_preferred_sstable_version() const {
     auto preferred_format = sstables::version_from_string(_config.format());
+    auto mt_supported = bool(_features.mt_sstable);
+    if (mt_supported && preferred_format == sstable_version_types::mt) {
+        return sstable_version_types::mt;
+    }
+    // `mt` supersedes `ms` (it's just `ms`, but with a problem fixed), so
+    // if `ms` is chosen, but `mt` is available, we assume that the user
+    // wants `mt` and we silently pick that instead.
+    if (mt_supported && preferred_format == sstable_version_types::ms) {
+        return sstable_version_types::mt;
+    }
     auto ms_supported = bool(_features.ms_sstable);
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
-    } else {
-        return sstable_version_types::me;
     }
+    return sstable_version_types::me;
 }
 
 sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const {
     auto preferred_format = sstables::version_from_string(_config.format());
+    auto mt_supported = bool(_features.mt_sstable) || existing_version >= sstable_version_types::mt;
+    if (mt_supported && preferred_format == sstable_version_types::mt) {
+        return sstable_version_types::mt;
+    }
+    // `mt` supersedes `ms` (it's just `ms`, but with a problem fixed), so
+    // if `ms` is chosen, but `mt` is available, we assume that the user
+    // wants `mt` and we silently pick that instead.
+    if (mt_supported && preferred_format == sstable_version_types::ms) {
+        return sstable_version_types::mt;
+    }
     auto ms_supported = bool(_features.ms_sstable) || existing_version >= sstable_version_types::ms;
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
-    } else {
-        return sstable_version_types::me;
     }
+    return sstable_version_types::me;
 }
 
 locator::host_id sstables_manager::get_local_host_id() const {

@@ -259,6 +259,7 @@ const std::unordered_map<sstable_version_types, sstring, enum_hash<sstable_versi
     { sstable_version_types::md , "md" },
     { sstable_version_types::me , "me" },
     { sstable_version_types::ms , "ms" },
+    { sstable_version_types::mt , "mt" },
 };
 
 const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format_types>> format_string = {
@@ -2801,6 +2802,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     case sstable::version_types::md:
     case sstable::version_types::me:
     case sstable::version_types::ms:
+    case sstable::version_types::mt:
         return v + "-" + g + "-" + f + "-" + component;
     }
     on_internal_error(sstlog, seastar::format("invalid version {} for sstable: table={}.{}, generation={}, format={}, component={}",
@@ -2944,7 +2946,7 @@ static std::expected<std::tuple<entry_descriptor, sstring, sstring>, sstring> ma
     //   la-42-big-Data.db
     //   ka-42-big-Data.db
     //   me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
-    static boost::regex la_mx("(la|m[cdes])-([^-]+)-(\\w+)-(.*)");
+    static boost::regex la_mx("(la|m[cdest])-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     // Use non-greedy match so that a snapshot tag that ressembles a name-<uuid> wouldn't match
@@ -3040,6 +3042,19 @@ sstable_format_types format_from_string(std::string_view s) {
 }
 
 bool has_summary_and_index(sstable_version_types v) {
+    return v != sstable_version_types::ms && v != sstable_version_types::mt;
+}
+
+bool uses_legacy_dk_order(sstable_version_types v) {
+    // Decorated keys in sstables and memtables are ordered by a bytewise comparison
+    // of their "legacy form".
+    // Due to a design mistake, `ms` was the one format with index encoding designed
+    // for the other (column-wise, wrong) ordering.
+    // All `ms` files which were ever actually produced are compatible with the legacy
+    // ordering anyway, because some asserts in the writer would prevent the creation
+    // of an sstable which doesn't match that ordering.
+    // Nevertheless, index readers have to know when they are dealing with `ms`, because
+    // it uses a specific encoding of partition keys in the index.
     return v != sstable_version_types::ms;
 }
 
@@ -4097,6 +4112,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             cached_rows_file,
             _partitions_db_footer.value().trie_root_position,
             data_size(),
+            _version,
             _schema,
             std::move(permit),
             std::move(trace_state)
