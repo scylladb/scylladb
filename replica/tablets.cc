@@ -834,7 +834,10 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
 
     auto last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
-    auto info = tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at};
+    auto info = tablet_info{std::move(tablet_replicas), repair_time,
+            repair_task_info.is_valid() ? std::make_unique<locator::tablet_task_info>(std::move(repair_task_info)) : nullptr,
+            migration_task_info.is_valid() ? std::make_unique<locator::tablet_task_info>(std::move(migration_task_info)) : nullptr,
+            sstables_repaired_at};
     if (is_updating) {
         auto old_last_token = map.get_last_token(tid);
         if (last_token != old_last_token) {
