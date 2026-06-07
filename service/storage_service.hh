@@ -366,6 +366,9 @@ private:
     void register_metrics();
     future<> snitch_reconfigured();
 
+    locator::tablet_map build_tablet_map_for_migration(const locator::token_metadata& tm,
+            const locator::static_effective_replication_map_ptr& erm) const;
+
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
         return _shared_token_metadata.get()->clone_async().then([this] (token_metadata tm) {
             // bump the token_metadata ring_version
