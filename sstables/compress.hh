@@ -289,13 +289,16 @@ struct compression {
 
     disk_string<uint16_t> name;
     disk_array<uint32_t, option> options;
-    uint32_t chunk_len = 0;
     uint64_t data_len = 0;
     segmented_offsets offsets;
 
 private:
     // Variables *not* found in the "Compression Info" file (added by update()):
     uint64_t _compressed_file_length = 0;
+    // chunk_len and _full_checksum are grouped here so the two uint32_t pack
+    // into a single 8-byte slot (avoids padding holes). chunk_len is only
+    // accessed via uncompressed_chunk_length()/set_uncompressed_chunk_length().
+    uint32_t chunk_len = 0;
     uint32_t _full_checksum = 0;
     compressor_ptr _compressor;
 public:

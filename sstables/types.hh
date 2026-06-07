@@ -304,29 +304,33 @@ struct compaction_metadata : public metadata_base<compaction_metadata> {
 };
 
 struct stats_metadata : public metadata_base<stats_metadata> {
+    // NOTE: on-disk serialization order is defined by describe_type() below and
+    // is independent of this declaration order. Fields are grouped here to pack
+    // the sub-8-byte scalars together and avoid padding holes.
     utils::estimated_histogram estimated_partition_size;
     utils::estimated_histogram estimated_cells_count;
+    utils::streaming_histogram estimated_tombstone_drop_time;
     db::replay_position position;
+    db::replay_position commitlog_lower_bound; // 3_x only
     int64_t min_timestamp;
     int64_t max_timestamp;
-    int32_t min_local_deletion_time; // 3_x only
-    int32_t max_local_deletion_time;
-    int32_t min_ttl; // 3_x only
-    int32_t max_ttl; // 3_x only
     double compression_ratio;
-    utils::streaming_histogram estimated_tombstone_drop_time;
-    uint32_t sstable_level;
     // There is not meaningful value to put in this field, since we have no
     // incremental repair. Before we have it, let's set it to 0.
     // According to architecture/sstable/sstable3/sstables-3-statistics.rst,
     // the repaired_at is a int64_t value.
     int64_t repaired_at = 0;
-    disk_array<uint32_t, disk_string<uint16_t>> min_column_names;
-    disk_array<uint32_t, disk_string<uint16_t>> max_column_names;
-    bool has_legacy_counter_shards;
     int64_t columns_count; // 3_x only
     int64_t rows_count; // 3_x only
-    db::replay_position commitlog_lower_bound; // 3_x only
+    // Sub-8-byte scalars grouped together to avoid padding holes.
+    int32_t min_local_deletion_time; // 3_x only
+    int32_t max_local_deletion_time;
+    int32_t min_ttl; // 3_x only
+    int32_t max_ttl; // 3_x only
+    uint32_t sstable_level;
+    bool has_legacy_counter_shards;
+    disk_array<uint32_t, disk_string<uint16_t>> min_column_names;
+    disk_array<uint32_t, disk_string<uint16_t>> max_column_names;
     disk_array<uint32_t, commitlog_interval> commitlog_intervals; // 3_x only
     std::optional<locator::host_id> originating_host_id; // 3_11_11 and later (me format)
 
