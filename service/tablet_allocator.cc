@@ -4570,6 +4570,39 @@ public:
         return map;
     }
 
+    // Computes per-table target pow2 counts for tables being migrated from
+    // vnodes to tablets.
+    future<target_pow2_per_table_map> compute_migration_target_pow2s(
+            const tablet_aware_replication_strategy* rs,
+            const size_per_table_map& size_per_table) {
+        target_pow2_per_table_map target_pow2s;
+        auto tm_ptr = _db.get_shared_token_metadata().get();
+        auto lb = make_load_balancer(tm_ptr, nullptr, nullptr, nullptr, {});
+
+        std::vector<load_balancer::new_table_info> new_tables;
+        for (const auto& [tid, size] : size_per_table) {
+            auto s = _db.find_column_family(tid).schema();
+            new_tables.push_back({s, rs, size});
+        }
+
+        auto plan = co_await lb.make_sizing_plan(std::move(new_tables));
+
+        auto is_pow2 = [] (size_t n) { return n > 0 && std::has_single_bit(n); };
+
+        for (const auto& [tid, size] : size_per_table) {
+            auto it = plan.tables.find(tid);
+            if (it != plan.tables.end()) {
+                auto target = it->second.target_tablet_count_aligned;
+                if (!is_pow2(target)) {
+                    throw std::runtime_error(format("Invalid target tablet count {} for table {}; must be a power of two", target, tid));
+                }
+                target_pow2s[tid] = target;
+            }
+        }
+
+        co_return target_pow2s;
+    }
+
     // Allocate tablets for multiple new tables, which may be co-located with each other, or co-located with an existing base table.
     void allocate_tablets_for_new_tables(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
         utils::get_local_injector().inject("pause_in_allocate_tablets_for_new_table", utils::wait_for_message(std::chrono::minutes(5))).get();
@@ -4815,6 +4848,12 @@ void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balan
 
 future<locator::tablet_map> tablet_allocator::resize_tablets(locator::token_metadata_ptr tm, table_id table) {
     return impl().resize_tablets(std::move(tm), table);
+}
+
+future<target_pow2_per_table_map> tablet_allocator::compute_migration_target_pow2s(
+        const locator::tablet_aware_replication_strategy* rs,
+        const size_per_table_map& size_per_table) {
+    return impl().compute_migration_target_pow2s(rs, size_per_table);
 }
 
 tablet_allocator_impl& tablet_allocator::impl() {

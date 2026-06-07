@@ -20,6 +20,10 @@ namespace db {
 class system_keyspace;
 }
 
+namespace locator {
+class tablet_aware_replication_strategy;
+}
+
 namespace service {
 
 class topology;
@@ -127,6 +131,8 @@ public:
 };
 
 using tablet_migration_info = locator::tablet_migration_info;
+using size_per_table_map = std::unordered_map<table_id, uint64_t>;
+using target_pow2_per_table_map = std::unordered_map<table_id, size_t>;
 
 /// Represents intention to emit resize (split or merge) request for a
 /// table, and finalize or revoke the request previously initiated.
@@ -350,6 +356,15 @@ public:
     void set_use_table_aware_balancing(bool);
 
     future<locator::tablet_map> resize_tablets(locator::token_metadata_ptr, table_id);
+
+    /// Computes target power-of-two tablet counts for tables being migrated from
+    /// vnodes to tablets.
+    ///
+    /// Uses make_sizing_plan() to determine target pow2 counts per table based on
+    /// per-table size estimates and replication strategy.
+    future<target_pow2_per_table_map> compute_migration_target_pow2s(
+        const locator::tablet_aware_replication_strategy* rs,
+        const size_per_table_map& size_per_table);
 
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();
