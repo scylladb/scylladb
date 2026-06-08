@@ -19,6 +19,7 @@
 
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
+#include "timeout_config.hh"
 #include "exceptions/coordinator_result.hh"
 #include "locator/host_id.hh"
 #include "types/types.hh"
@@ -99,18 +100,21 @@ class result_message::bounce : public result_message {
     unsigned _shard;
     cql3::computed_function_values _cached_fn_calls;
     std::optional<seastar::lowres_clock::time_point> _timeout;
-    std::optional<bool> _is_write;
+    // Request timeout context, so the forwarding coordinator can type the timeout
+    // error correctly. Set by the bouncing statement (see redirect_statement);
+    // empty for shard bounces, which never forward.
+    std::optional<timeout_context> _timeout_ctx;
     locator::host_id_or_exception_callback _on_forwarding_finished;
 
 public:
     bounce(locator::host_id host, unsigned shard, cql3::computed_function_values cached_fn_calls,
-           std::optional<seastar::lowres_clock::time_point> timeout = std::nullopt, std::optional<bool> is_write = std::nullopt,
+           std::optional<seastar::lowres_clock::time_point> timeout = std::nullopt, std::optional<timeout_context> timeout_ctx = std::nullopt,
            locator::host_id_or_exception_callback on_forwarding_finished = {})
         : _host(host)
         , _shard(shard)
         , _cached_fn_calls(std::move(cached_fn_calls))
         , _timeout(std::move(timeout))
-        , _is_write(std::move(is_write))
+        , _timeout_ctx(std::move(timeout_ctx))
         , _on_forwarding_finished(std::move(on_forwarding_finished))
     {}
     virtual void accept(result_message::visitor& v) const override {
@@ -132,8 +136,8 @@ public:
         return _timeout;
     }
 
-    std::optional<bool> is_write() const {
-        return _is_write;
+    std::optional<timeout_context> timeout_ctx() const {
+        return _timeout_ctx;
     }
 
     cql3::computed_function_values&& take_cached_pk_function_calls() {

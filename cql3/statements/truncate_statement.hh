@@ -42,7 +42,7 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
 private:
-    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const override;
 };
 
 }

@@ -268,7 +268,7 @@ public:
 
     virtual ::shared_ptr<broadcast_modification_statement> prepare_for_broadcast_tables() const;
 
-    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const override;
 
 protected:
     /**

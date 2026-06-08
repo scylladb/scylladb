@@ -644,6 +644,10 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions) {
         ctx.clear_pk_function_calls_cache();
     }
+    if (prepared_stmt->has_conditions()) {
+        // CAS so a dropped response matches the storage proxy's CAS timeout.
+        prepared_stmt->set_timeout_write_type(db::write_type::CAS);
+    }
     prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
     return prepared_stmt;
 }

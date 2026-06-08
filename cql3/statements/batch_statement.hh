@@ -151,8 +151,8 @@ private:
             const query_options& options,
             service::query_state& state) const;
 
-    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 public:
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const override;
     // FIXME: no cql_statement::to_string() yet
 #if 0
     sstring to_string() const {
