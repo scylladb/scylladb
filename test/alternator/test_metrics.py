@@ -1109,7 +1109,141 @@ def test_authorization_failure(dynamodb, cql, metrics, test_table_s, enforce_aut
                 else:
                     assert new_auth_failures == saved_auth_failures
 
+# Some users looked for a metric which counts read and write activity and
+# that both CQL and Alternator operations increment, and found the metrics
+# scylla_storage_proxy_coordinator_{read,write}_latency_count. This is a
+# regression test to make sure that Alternator operations continue to
+# increment these metrics. We can modify or remove this test if we decide
+# one day that we don't really need these specific metrics.
+#
+# Because this metric is not per-table, we can't assert exactly how much
+# the metric increases after an operation - because there is always the
+# risk that some concurrent operation (e.g., the driver reads some system
+# table) can also increment the same metric. So we can only assert that
+# the metric increases - but not by how much.
+#
+# Note: a Scan operation does *not* increment read_latency_count. The code in
+# storage_proxy treats it not as a "read" but as a "range read" (referring to
+# a range of partitions, as opposed to a single partition), so it updates a
+# separate counter stats.range, but unlike stats.read it is not exposed
+# as a Prometheus metric, so we cannot test Scan in this test.
+def test_storage_proxy_coordinator_metrics(test_table_s, metrics):
+    read_count = 'scylla_storage_proxy_coordinator_read_latency_count'
+    write_count = 'scylla_storage_proxy_coordinator_write_latency_count'
+    p = random_string()
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.get_item(Key={'p': p})
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {'Keys': [{'p': p}], 'ConsistentRead': True}})
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.query(KeyConditions={
+            'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            ConsistentRead=True)
+    with check_increases_metric(metrics, [write_count]):
+        test_table_s.put_item(Item={'p': p})
+    with check_increases_metric(metrics, [write_count]):
+        test_table_s.delete_item(Key={'p': p})
+    with check_increases_metric(metrics, [write_count]):
+        test_table_s.update_item(Key={'p': p})
+    with check_increases_metric(metrics, [write_count]):
+        with test_table_s.batch_writer() as batch:
+            batch.put_item(Item={'p': p})
+
+# Test that the per-table metrics scylla_column_family_read_latency_count and
+# scylla_column_family_write_latency_count are incremented for Alternator
+# operations. These are replica-level metrics (incremented in table::query()
+# and table::apply() on the shard that locally executes the operation), as
+# opposed to scylla_storage_proxy_coordinator_read_latency_count which is
+# incremented at the coordinator level. Because they are per-table (filtered
+# by cf=<table_name>), they allow exact-count assertions without interference
+# from concurrent operations on other tables.
+#
+# Note: unlike the coordinator metric, scylla_column_family_read_latency_count
+# IS incremented by Scan, because Scan goes through table::query() on the
+# replica regardless of being a range read at the coordinator level.
+def test_cf_read_write_latency_metrics(test_table_s, metrics):
+    read_count = 'scylla_column_family_read_latency_count'
+    write_count = 'scylla_column_family_write_latency_count'
+    p = random_string()
+    cf = {'cf': test_table_s.name}
+    with check_increases_metric_exact(metrics, read_count, [[1, cf]]):
+        test_table_s.get_item(Key={'p': p})
+    with check_increases_metric_exact(metrics, read_count, [[1, cf]]):
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {'Keys': [{'p': p}], 'ConsistentRead': True}})
+    with check_increases_metric_exact(metrics, read_count, [[1, cf]]):
+        test_table_s.query(KeyConditions={
+            'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            ConsistentRead=True)
+    # Unlike scylla_storage_proxy_coordinator_read_latency_count, Scan also
+    # increments scylla_column_family_read_latency_count (via table::query()).
+    # A Scan may be split across multiple shards and generate multiple reads,
+    # so we only check it increases (not by how much), but do filter by cf.
+    with check_increases_metric(metrics, [read_count], cf):
+        test_table_s.scan(ConsistentRead=True, Limit=1)
+    with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
+        test_table_s.put_item(Item={'p': p})
+    with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
+        test_table_s.delete_item(Key={'p': p})
+    with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
+        test_table_s.update_item(Key={'p': p})
+    with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
+        with test_table_s.batch_writer() as batch:
+            batch.put_item(Item={'p': p})
+
+# Test that the reads_before_write and write_using_lwt metrics are incremented
+# for Alternator conditional-write operations.
+#
+# reads_before_write is incremented whenever a write operation must first
+# perform a read (e.g., conditional writes using ConditionExpression).
+#
+# write_using_lwt is incremented when a write uses LWT (Lightweight
+# Transactions). With the default 'only_rmw_uses_lwt' write isolation policy,
+# this happens for conditional writes. With 'always_use_lwt', it also happens
+# for unconditional writes.
+#
+# Global metrics are checked for increase only (not exact count) to avoid
+# spurious failures from concurrent Alternator traffic on other tables.
+# Per-table metrics allow exact assertions because they are filtered by table.
+def test_reads_before_write_and_write_using_lwt_metrics(dynamodb, test_table_s, metrics):
+    global_rbw = 'scylla_alternator_reads_before_write'
+    global_lwt = 'scylla_alternator_write_using_lwt'
+    table_rbw = 'scylla_alternator_table_reads_before_write'
+    table_lwt = 'scylla_alternator_table_write_using_lwt'
+    p = random_string()
+    cf = {'cf': test_table_s.name}
+    # Conditional PutItem: must read before write, and uses LWT.
+    with check_increases_metric(metrics, [global_rbw, global_lwt]):
+        with check_increases_metric_exact(metrics, table_rbw, [[1, cf]]):
+            with check_increases_metric_exact(metrics, table_lwt, [[1, cf]]):
+                test_table_s.put_item(Item={'p': p},
+                    ConditionExpression='attribute_not_exists(p)')
+    # Conditional UpdateItem: must read before write, and uses LWT.
+    with check_increases_metric(metrics, [global_rbw, global_lwt]):
+        with check_increases_metric_exact(metrics, table_rbw, [[1, cf]]):
+            with check_increases_metric_exact(metrics, table_lwt, [[1, cf]]):
+                test_table_s.update_item(Key={'p': p},
+                    ConditionExpression='attribute_exists(p)')
+    # Conditional DeleteItem: must read before write, and uses LWT.
+    with check_increases_metric(metrics, [global_rbw, global_lwt]):
+        with check_increases_metric_exact(metrics, table_rbw, [[1, cf]]):
+            with check_increases_metric_exact(metrics, table_lwt, [[1, cf]]):
+                test_table_s.delete_item(Key={'p': p},
+                    ConditionExpression='attribute_exists(p)')
+    # With the 'always_use_lwt' write isolation policy, even unconditional
+    # writes use LWT, so write_using_lwt is incremented but reads_before_write
+    # is not. Create a temporary table with that policy and verify.
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            Tags=[{'Key': 'system:write_isolation', 'Value': 'always_use_lwt'}]) as lwt_table:
+        lwt_cf = {'cf': lwt_table.name}
+        # Unconditional PutItem: no read before write, but still uses LWT.
+        with check_increases_metric_exact(metrics, table_rbw, [[0, lwt_cf]]):
+            with check_increases_metric_exact(metrics, table_lwt, [[1, lwt_cf]]):
+                lwt_table.put_item(Item={'p': p})
+
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
-# reads_before_write, write_using_lwt, shard_bounce_for_lwt,
-# requests_blocked_memory, requests_shed
+# shard_bounce_for_lwt, requests_blocked_memory, requests_shed
