@@ -342,7 +342,8 @@ class TestBypassCache(Tester):
         metric = ["scylla_cache_bytes_used"]
         for _ in range(NUM_OF_QUERY_EXECUTIONS):
             cache_bytes_used_before_write = self.get_scylla_cache_reads_metrics(node=node, metrics=metric)[metric[0]]
-            insert_c1c2(session, keys=list(range(self.first_key + 10)), cf=self.table_name, ks=self.keyspace_name)
+            insert_c1c2(session, keys=list(range(self.first_key, self.first_key + 10)), cf=self.table_name,
+                        ks=self.keyspace_name)
             self.cluster.nodetool(f"flush -- {self.keyspace_name} {self.table_name}")
             cache_bytes_used_after_write = self.get_scylla_cache_reads_metrics(node=node, metrics=metric)[metric[0]]
             if cache_bytes_used_before_write < cache_bytes_used_after_write:
