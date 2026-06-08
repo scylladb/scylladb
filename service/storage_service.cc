@@ -4841,6 +4841,19 @@ future<> storage_service::do_drain() {
     // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
     co_await stop_transport();
 
+    // Cancel write handlers that have pending remote targets so they release
+    // their ERMs (and the associated token_metadata versions). Without this,
+    // wait_for_group0_stop below may deadlock: the topology coordinator
+    // fiber calls barrier_and_drain which blocks in stale_versions_in_use()
+    // waiting for stale token_metadata versions held by write handlers
+    // whose MUTATION_DONE responses can no longer arrive (transport is stopped).
+    // Handlers with only local pending targets are left alone — they can
+    // still complete via apply_locally, and group0 needs them for raft commits
+    // until wait_for_group0_stop below.
+    co_await _qp.proxy().container().invoke_on_all([] (storage_proxy& sp) {
+        return sp.cancel_nonlocal_write_response_handlers();
+    });
+
     // Drain view builder before group0, because the view builder uses group0 to coordinate view building.
     // Drain after transport is stopped, because view_builder::drain aborts view writes for user writes as well.
     co_await _view_builder.invoke_on_all(&db::view::view_builder::drain);
@@ -6005,7 +6018,10 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail_before", [] {
                     throw std::runtime_error("raft_topology_barrier_and_drain_fail_before injected exception");
                 });
-                co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5)));
+                // share=false: each barrier_and_drain invocation needs its own message
+                // to proceed. Without this, a single message_injection call would release
+                // all past and future handlers sharing the same injection.
+                co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5), nullptr, false));
                 if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
                     for (auto& n : _topology_state_machine._topology.transition_nodes) {
                         if (!_address_map.find(locator::host_id{n.first.uuid()})) {

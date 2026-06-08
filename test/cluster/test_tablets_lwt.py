@@ -877,7 +877,11 @@ async def test_lwt_shutdown(manager: ManagerClient):
 
         logger.info("Start node shutdown")
         stop_task = asyncio.create_task(manager.server_stop_gracefully(s0.server_id))
-        await log.wait_for('Shutting down storage proxy RPC verbs')
+        # Wait for stop_transport to complete. After this, do_drain() will
+        # block in cancel_all_write_response_handlers() waiting for the
+        # paxos learn's background write handler to be released. The paxos
+        # store is still alive at this point.
+        await log.wait_for('Stop transport: done')
         assert len(await log.grep('Shutting down paxos store')) == 0
 
         logger.info("Trigger paxos_state_learn_after_mutate")
