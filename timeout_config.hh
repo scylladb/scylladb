@@ -11,6 +11,7 @@
 
 #include "db/timeout_clock.hh"
 #include "db/write_type.hh"
+#include "db/consistency_level_type.hh"
 #include "utils/updateable_value.hh"
 
 namespace db { class config; }
@@ -70,3 +71,12 @@ constexpr timeout_info truncate_timeout_info = {.selector = &timeout_config::tru
 constexpr timeout_info other_timeout_info = {.selector = &timeout_config::other_timeout, .is_write = false, .write_type = db::write_type::SIMPLE};
 constexpr timeout_info batch_write_timeout_info = {.selector = &timeout_config::write_timeout, .is_write = true, .write_type = db::write_type::BATCH};
 constexpr timeout_info unlogged_batch_write_timeout_info = {.selector = &timeout_config::write_timeout, .is_write = true, .write_type = db::write_type::UNLOGGED_BATCH};
+
+// Context for building a typed timeout error (ReadTimeout/WriteTimeout) when a
+// response expires in the send queue. Captured at statement execution, kept on
+// the service_permit with the deadline.
+struct timeout_context {
+    db::consistency_level cl = db::consistency_level::ONE;
+    bool is_write = false;
+    db::write_type wt = db::write_type::SIMPLE; // only meaningful when is_write == true
+};

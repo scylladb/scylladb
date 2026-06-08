@@ -57,7 +57,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
         query_id::create_null_id(),
         query::is_first_page::no,
         options.get_timestamp(state));
-    const auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    const auto timeout = get_deadline(state, options);
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
     auto query_result = co_await coordinator.get().query(_query_schema, *read_command,
         key_ranges, read_type, state.get_trace_state(), timeout, state.get_client_state().get_abort_source());

@@ -16,6 +16,7 @@
 #include "timeout_config.hh"
 #include "service/pager/query_plan.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/client_state.hh"
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
 
@@ -23,7 +24,6 @@ namespace service {
 
 class storage_proxy;
 class query_state;
-class client_state;
 
 }
 
@@ -74,6 +74,15 @@ public:
     { }
 
     timeout_config_selector get_timeout_config_selector() const { return _timeout_info.selector; }
+
+    virtual db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const {
+        return state.get_timeout_config().*get_timeout_config_selector();
+    }
+
+    // The first call installs the deadline and the timeout context
+    // on the permit, making the response subject to send-queue timeout
+    // accounting.
+    db::timeout_clock::time_point get_deadline(const service::query_state& qs, const query_options& options) const;
 
     virtual uint32_t get_bound_terms() const = 0;
 
@@ -162,6 +171,9 @@ public:
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
 
     virtual void sanitize_audit_info() {}
+
+protected:
+    void set_timeout_write_type(db::write_type wt) { _timeout_info.write_type = wt; }
 };
 
 }

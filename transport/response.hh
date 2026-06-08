@@ -93,6 +93,9 @@ public:
     cql_binary_opcode opcode() const {
         return _opcode;
     }
+    int16_t stream() const {
+        return _stream;
+    }
     size_t size() const {
         return _body.size();
     }

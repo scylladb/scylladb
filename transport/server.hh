@@ -221,6 +221,8 @@ private:
         uint32_t requests_serving = 0;
         uint64_t requests_blocked_memory = 0;
         uint64_t requests_shed = 0;
+        uint64_t requests_dropped_due_to_timeout = 0;
+        uint64_t requests_sent_after_timeout = 0;
         // forwarding stats
         uint64_t requests_forwarded_successfully = 0;
         uint64_t requests_forwarded_failed = 0;
@@ -373,7 +375,7 @@ private:
 
         cql3::dialect get_dialect() const;
 
-        void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression = cql_compression::none);
+        void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
         
         void update_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
         void update_control_connection_scheduling_group();

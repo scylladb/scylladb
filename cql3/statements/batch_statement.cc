@@ -66,6 +66,8 @@ batch_statement::batch_statement(int bound_terms, type type_,
         // build_cas_result_set_metadata right from the constructor to avoid crash trying to access
         // uninitialized batch metadata.
         build_cas_result_set_metadata();
+        // CAS so a dropped response matches the storage proxy's CAS timeout.
+        set_timeout_write_type(db::write_type::CAS);
     }
 }
 
@@ -298,7 +300,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     ++_stats.batches;
     _stats.statements_in_batches += _statements.size();
 
-    auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
+    auto timeout = get_deadline(query_state, options);
     auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
 
     return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
@@ -370,6 +372,8 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     if (!cl_for_paxos) [[unlikely]] {
         return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(std::move(cl_for_paxos).assume_error());
     }
+    // Record request deadline
+    get_deadline(qs, options);
     std::unique_ptr<cas_request> request;
     schema_ptr schema;
 

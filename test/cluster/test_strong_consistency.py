@@ -950,7 +950,7 @@ async def test_timed_out_queries(manager: ScyllaClusterManager):
             return False
         except Exception as e:
             if isinstance(e, exception_type):
-                assert f"Query timed out for {table}" in str(e)
+                assert f"Query timed out for {table}" in str(e) or "waiting in send queue" in str(e)
                 return True
             pytest.fail(f"Unexpected exception: {e}")
 

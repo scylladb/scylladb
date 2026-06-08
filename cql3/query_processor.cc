@@ -48,6 +48,23 @@ const sstring query_processor::CQL_VERSION = "3.3.1";
 
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
+db::timeout_clock::time_point
+cql_statement::get_deadline(const service::query_state& qs, const query_options& options) const {
+    auto permit = qs.get_permit();
+    if (permit.deadline() != db::timeout_clock::time_point::max()) {
+        return permit.deadline();
+    }
+    auto start = permit.start_time().value_or(db::timeout_clock::now());
+    auto deadline = start + get_timeout(qs.get_client_state(), options);
+    permit.set_deadline(deadline);
+    permit.set_timeout_ctx(timeout_context{
+        .cl = options.get_consistency(),
+        .is_write = _timeout_info.is_write,
+        .wt = _timeout_info.write_type,
+    });
+    return deadline;
+}
+
 struct query_processor::remote {
     remote(service::migration_manager& mm, service::mapreduce_service& fwd,
            service::storage_service& ss, service::raft_group0_client& group0_client,

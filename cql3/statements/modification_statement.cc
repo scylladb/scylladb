@@ -356,7 +356,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 future<coordinator_result<>>
 modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys, db::large_data_violation_type* violations) const {
     auto cl = options.get_consistency();
-    auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
+    auto timeout = get_deadline(qs, options);
     return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, json_cache, std::move(keys)).then([this, cl, timeout, &qp, &qs, &options, violations] (auto mutations) {
         if (mutations.empty()) {
             return make_ready_future<coordinator_result<>>(bo::success());
@@ -433,6 +433,8 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     if (!cl_for_paxos) [[unlikely]] {
         return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(std::move(cl_for_paxos).assume_error());
     }
+    // Record request deadline
+    get_deadline(qs, options);
     db::timeout_clock::time_point now = db::timeout_clock::now();
     const timeout_config& cfg = qs.get_client_state().get_timeout_config();
 
@@ -667,6 +669,10 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     // participate in the caching mechanism later.
     if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions) {
         ctx.clear_pk_function_calls_cache();
+    }
+    if (prepared_stmt->has_conditions()) {
+        // CAS so a dropped response matches the storage proxy's CAS timeout.
+        prepared_stmt->set_timeout_write_type(db::write_type::CAS);
     }
     prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
     return prepared_stmt;
