@@ -176,12 +176,12 @@ select_statement::parameters::orderings_type const& select_statement::parameters
     return _orderings;
 }
 
-timeout_config_selector
+timeout_info
 select_timeout(const restrictions::statement_restrictions& restrictions) {
     if (restrictions.is_key_range()) {
-        return &timeout_config::range_read_timeout;
+        return range_read_timeout_info;
     } else {
-        return &timeout_config::read_timeout;
+        return read_timeout_info;
     }
 }
 

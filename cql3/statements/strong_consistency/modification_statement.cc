@@ -22,7 +22,7 @@ namespace cql3::statements::strong_consistency {
 static logging::logger logger("sc_modification_statement");
 
 modification_statement::modification_statement(shared_ptr<base_statement> statement)
-    : cql_statement(&timeout_config::write_timeout)
+    : cql_statement(write_timeout_info)
     , _statement(std::move(statement))
 {
 }
