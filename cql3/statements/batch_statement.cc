@@ -30,11 +30,15 @@ namespace statements {
 
 logging::logger batch_statement::_logger("BatchStatement");
 
-timeout_config_selector
+timeout_info
 timeout_for_type(batch_statement::type t) {
-    return t == batch_statement::type::COUNTER
-            ? &timeout_config::counter_write_timeout
-            : &timeout_config::write_timeout;
+    if (t == batch_statement::type::COUNTER) {
+        return counter_write_timeout_info;
+    } else if (t == batch_statement::type::UNLOGGED) {
+        return unlogged_batch_write_timeout_info;
+    } else {
+        return batch_write_timeout_info;
+    }
 }
 
 db::timeout_clock::duration batch_statement::get_timeout(const service::client_state& state, const query_options& options) const {

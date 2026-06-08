@@ -37,7 +37,7 @@ broadcast_modification_statement::broadcast_modification_statement(
     uint32_t bound_terms,
     schema_ptr schema,
     broadcast_tables::prepared_update query)
-    : cql_statement_opt_metadata{&timeout_config::write_timeout}
+    : cql_statement_opt_metadata{write_timeout_info}
     , _bound_terms{bound_terms}
     , _schema{schema}
     , _query{std::move(query)}
