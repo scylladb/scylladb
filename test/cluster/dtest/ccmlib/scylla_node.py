@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 import logging
 
+
 from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
 from test.pylib.manager_client import NoSuchProcess
@@ -651,12 +652,15 @@ class ScyllaNode:
 
 
     def flush(self, ks: str | None = None, table: str | None = None, **kwargs) -> None:
-        cmd = ["flush"]
+        """Flush memtables to sstables via the REST API.
+
+        Uses ScyllaRESTAPIClient (same as test/pylib/nodetool.py) which is
+        much faster than spawning a nodetool subprocess.
+        """
         if ks:
-            cmd.append(ks)
-        if table:
-            cmd.append(table)
-        self.nodetool(" ".join(cmd), **kwargs)
+            self.cluster.manager.api.keyspace_flush(node_ip=self.address(), keyspace=ks, table=table)
+        else:
+            self.cluster.manager.api.flush_all_keyspaces(node_ip=self.address())
 
     def compact(self, keyspace: str = "", tables: str | None = ()) -> None:
         compact_cmd = ["compact"]
