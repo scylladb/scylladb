@@ -45,12 +45,12 @@ namespace cql3 {
 
 namespace statements {
 
-timeout_config_selector
+timeout_info
 modification_statement_timeout(const schema& s) {
     if (s.is_counter()) {
-        return &timeout_config::counter_write_timeout;
+        return counter_write_timeout_info;
     } else {
-        return &timeout_config::write_timeout;
+        return write_timeout_info;
     }
 }
 

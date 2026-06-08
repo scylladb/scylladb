@@ -10,6 +10,7 @@
 #pragma once
 
 #include "db/timeout_clock.hh"
+#include "db/write_type.hh"
 #include "utils/updateable_value.hh"
 
 namespace db { class config; }
@@ -54,3 +55,20 @@ struct updateable_timeout_config {
 using timeout_config_selector = db::timeout_clock::duration (timeout_config::*);
 
 extern const timeout_config infinite_timeout_config;
+
+struct timeout_info {
+    timeout_config_selector selector;
+    bool is_write;
+    db::write_type write_type = db::write_type::SIMPLE;
+    // Whether responses participate in send-queue timeout accounting.
+    bool has_send_queue_deadline = true;
+};
+
+constexpr timeout_info read_timeout_info = {.selector = &timeout_config::read_timeout, .is_write = false};
+constexpr timeout_info range_read_timeout_info = {.selector = &timeout_config::range_read_timeout, .is_write = false};
+constexpr timeout_info write_timeout_info = {.selector = &timeout_config::write_timeout, .is_write = true};
+constexpr timeout_info counter_write_timeout_info = {.selector = &timeout_config::counter_write_timeout, .is_write = true, .write_type = db::write_type::COUNTER};
+constexpr timeout_info truncate_timeout_info = {.selector = &timeout_config::truncate_timeout, .is_write = true, .write_type = db::write_type::SIMPLE, .has_send_queue_deadline = false};
+constexpr timeout_info other_timeout_info = {.selector = &timeout_config::other_timeout, .is_write = false, .write_type = db::write_type::SIMPLE, .has_send_queue_deadline = false};
+constexpr timeout_info batch_write_timeout_info = {.selector = &timeout_config::write_timeout, .is_write = true, .write_type = db::write_type::BATCH};
+constexpr timeout_info unlogged_batch_write_timeout_info = {.selector = &timeout_config::write_timeout, .is_write = true, .write_type = db::write_type::UNLOGGED_BATCH};
