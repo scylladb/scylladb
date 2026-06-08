@@ -302,7 +302,9 @@ buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group 
 future<> buffered_writer::start() {
     logstor_logger.info("Starting write buffer");
     _consumer = with_gate(_async_gate, [this] {
-        return consumer_loop();
+        return with_scheduling_group(_flush_sg, [this] {
+            return consumer_loop();
+        });
     });
     co_return;
 }
@@ -383,9 +385,7 @@ future<> buffered_writer::consumer_loop() {
             _head_can_advance.broadcast();
         }
 
-        co_await with_scheduling_group(_flush_sg, [this] {
-            return _sm.write(tail_buf());
-        });
+        co_await _sm.write(tail_buf());
 
         tail_buf().reset();
         ++_tail;
