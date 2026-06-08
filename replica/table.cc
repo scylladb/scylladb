@@ -2281,12 +2281,6 @@ void table::rebuild_large_data_index() {
     _large_data_guardrail->rebuild(sstables);
 }
 
-void table::subtract_compaction_group_from_stats(const compaction_group& cg) noexcept {
-    _stats.live_disk_space_used -= cg.live_disk_space_used_full_stats();
-    _stats.total_disk_space_used -= cg.total_disk_space_used_full_stats();
-    _stats.live_sstable_count -= cg.live_sstable_count();
-}
-
 future<table::sstable_list_permit>
 table::get_sstable_list_permit() {
     co_return sstable_list_permit(co_await seastar::get_units(_sstable_set_mutation_sem, 1));
@@ -5671,7 +5665,6 @@ future<> compaction_group::cleanup() {
         }
 
         virtual void execute() override {
-            _t.subtract_compaction_group_from_stats(_cg);
             _cg.set_main_sstables(std::move(_empty_main_set));
             _cg.set_maintenance_sstables(std::move(_empty_maintenance_set));
             _t.refresh_compound_sstable_set();
@@ -5687,17 +5680,21 @@ future<> compaction_group::cleanup() {
     // Since permit is still held, all actions below will be executed atomically:
     co_await _t._cache.invalidate(std::move(updater), p_range);
     _t._cache.refresh_snapshot();
+    _t.rebuild_statistics();
 
     if (_t.uses_logstor()) {
         co_await _t.logstor_index().erase(p_range);
         co_await discard_logstor_segments();
     }
 
-    co_await _t.delete_sstables_atomically(permit, _sstables_compacted_but_not_deleted);
-    // Clearing sstables_compacted_but_not_deleted only on success allows a retry caused
-    // by a failure during deletion to still find the sstables, despite they were removed
-    // from the sstable sets.
-    _sstables_compacted_but_not_deleted.clear();
+    if (!_sstables_compacted_but_not_deleted.empty()) {
+        co_await _t.delete_sstables_atomically(permit, _sstables_compacted_but_not_deleted);
+        // delete_sstables_atomically swallows exceptions, so this always runs.
+        // Any SSTables that failed to delete will eventually be re-compacted
+        // and re-deleted.
+        _sstables_compacted_but_not_deleted.clear();
+        _t.rebuild_statistics();
+    }
     if (utils::get_local_injector().enter("tablet_cleanup_failure_post_deletion")) {
         tlogger.info("Cleanup failed for tablet {}", group_id());
         throw std::runtime_error("tablet cleanup failure");
