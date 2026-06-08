@@ -336,6 +336,7 @@ add_scylla_test(combined_tests
     sstable_compaction_test.cc
     sstable_directory_test.cc
     sstable_set_test.cc
+    sstable_tablet_streaming_test.cc
     statement_restrictions_test.cc
     storage_proxy_test.cc
     tablets_test.cc
