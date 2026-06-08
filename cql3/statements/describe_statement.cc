@@ -515,7 +515,7 @@ std::vector<std::vector<managed_bytes_opt>> serialize_descriptions(utils::chunke
 
 
 // DESCRIBE STATEMENT
-describe_statement::describe_statement() : cql_statement(&timeout_config::other_timeout) {}
+describe_statement::describe_statement() : cql_statement(other_timeout_info) {}
 
 uint32_t describe_statement::get_bound_terms() const { return 0; }
 

@@ -19,7 +19,7 @@ namespace statements {
 
 class authentication_statement : public raw::parsed_statement, public cql_statement {
 public:
-    authentication_statement() : cql_statement(&timeout_config::other_timeout) {}
+    authentication_statement() : cql_statement(other_timeout_info) {}
 
     uint32_t get_bound_terms() const override;
 

@@ -21,7 +21,7 @@ namespace cql3::statements::strong_consistency {
 static logging::logger logger("sc_batch_statement");
 
 batch_statement::batch_statement(int bound_terms, type type_, std::vector<single_statement> statements, std::unique_ptr<attributes> attrs)
-    : cql_statement(&timeout_config::write_timeout)
+    : cql_statement(batch_write_timeout_info)
     , _bound_terms(bound_terms)
     , _statements(std::move(statements))
     , _attrs(std::move(attrs))
