@@ -1523,6 +1523,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/sstable_compaction_test.cc',
     'test/boost/sstable_directory_test.cc',
     'test/boost/sstable_set_test.cc',
+    'test/boost/sstable_tablet_streaming_test.cc',
     'test/boost/statement_restrictions_test.cc',
     'test/boost/storage_proxy_test.cc',
     'test/boost/tablets_test.cc',

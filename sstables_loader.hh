@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <vector>
 #include <seastar/core/sharded.hh>
 #include "schema/schema_fwd.hh"
@@ -53,7 +54,10 @@ struct stream_progress {
         // we should not move backward
         assert(amount >= 0);
         completed += amount;
-        assert(completed <= total);
+        // Clamp to total to absorb floating point rounding errors from
+        // fractional progress contributions (e.g. per-tablet progress
+        // computed as num_streamed / num_mapped).
+        completed = std::min(completed, total);
     }
 };
 
