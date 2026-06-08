@@ -69,7 +69,7 @@ public:
         return _cache_tracker;
     }
 
-    future<> write(const mutation&, compaction_group&, seastar::gate::holder cg_holder);
+    future<> write(const mutation&, compaction_group&, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout);
 
     future<std::optional<mutation>> read(const schema&, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
 

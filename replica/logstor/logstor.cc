@@ -89,7 +89,7 @@ const compaction_manager& logstor::get_compaction_manager() const noexcept {
     return _segment_manager.get_compaction_manager();
 }
 
-future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder) {
+future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout) {
     primary_index_key key(m.decorated_key());
     table_id table = m.schema()->id();
     auto& index = cg.get_logstor_index();
@@ -105,7 +105,7 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record), &cg, std::move(cg_holder)).then_unpack([this, index_ptr = &index, ts, key = std::move(key)]
+    return _write_buffer.write(std::move(record), timeout, &cg, std::move(cg_holder)).then_unpack([this, index_ptr = &index, ts, key = std::move(key)]
             (log_location location, seastar::gate::holder op) {
         index_entry new_entry {
             .location = location,
