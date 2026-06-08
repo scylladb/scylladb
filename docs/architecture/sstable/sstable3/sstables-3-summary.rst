@@ -94,15 +94,5 @@ The last two entries in the ``summary`` structure are  ``serialized_keys`` that 
 
 They store the first and the last keys in the index/data file.
 
-References
-
-* `IndexSummary.java`_ 
-
-* `SSTableReader.java, saveSummary`_ 
-
-.. _`IndexSummary.java`: https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/io/sstable/IndexSummary.java
-
-.. _`SSTableReader.java, saveSummary`: https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/io/sstable/format/SSTableReader.java
-
 
 .. include:: /rst_include/apache-copyrights.rst
