@@ -8,7 +8,10 @@
 
 #pragma once
 
+#include <seastar/core/lowres_clock.hh>
+
 #include "server.hh"
+#include "timeout_config.hh"
 
 namespace cql_transport {
 
@@ -38,6 +41,12 @@ class response {
     cql_binary_opcode _opcode;
     uint8_t           _flags = 0; // a bitwise OR mask of zero or more cql_frame_flags values
     bytes_ostream _body;
+    // Request deadline for send-queue timeout accounting; an expired response is
+    // replaced with a typed error before writing. Defaults to max() (no deadline).
+    seastar::lowres_clock::time_point _deadline = seastar::lowres_clock::time_point::max();
+    // Context for constructing a typed timeout error when the deadline expires
+    // in the send queue. Populated from the service_permit's timeout context.
+    timeout_context _timeout_ctx;
 public:
     template<typename T>
     class placeholder;
@@ -93,11 +102,24 @@ public:
     cql_binary_opcode opcode() const {
         return _opcode;
     }
+    int16_t stream() const {
+        return _stream;
+    }
     size_t size() const {
         return _body.size();
     }
     uint8_t flags() const {
         return _flags;
+    }
+    void set_deadline(seastar::lowres_clock::time_point deadline, timeout_context ctx) noexcept {
+        _deadline = deadline;
+        _timeout_ctx = ctx;
+    }
+    seastar::lowres_clock::time_point deadline() const noexcept {
+        return _deadline;
+    }
+    const timeout_context& timeout_ctx() const noexcept {
+        return _timeout_ctx;
     }
 
     bytes_ostream extract_body() && {

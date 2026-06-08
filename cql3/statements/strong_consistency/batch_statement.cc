@@ -51,7 +51,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
         co_return seastar::make_shared<result_message::void_message>();
     }
 
-    auto timeout = db::timeout_clock::now() + (_attrs->is_timeout_set() ? _attrs->get_timeout(options) : qs.get_client_state().get_timeout_config().write_timeout);
+    auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
 
     // Build partition keys for all statements and validate they all target the same partition
     std::optional<dht::decorated_key> batch_key;
@@ -113,6 +113,12 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
     }
 
     co_return seastar::make_shared<result_message::void_message>();
+}
+
+// Honor USING TIMEOUT in the reported timeout, keeping the send-queue
+// deadline in sync with the enforced timeout.
+db::timeout_clock::duration batch_statement::get_timeout(const service::client_state& state, const query_options& options) const {
+    return _attrs->is_timeout_set() ? _attrs->get_timeout(options) : cql_statement::get_timeout(state, options);
 }
 
 future<> batch_statement::check_access(query_processor& qp, const service::client_state& state) const {

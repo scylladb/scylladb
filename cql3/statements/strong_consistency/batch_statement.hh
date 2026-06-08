@@ -51,6 +51,8 @@ public:
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const override;
+
     virtual uint32_t get_bound_terms() const override;
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;

@@ -42,6 +42,8 @@ public:
 
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const override;
+
     void validate(query_processor& qp, const service::client_state& state) const override;
 
     uint32_t get_bound_terms() const override;
