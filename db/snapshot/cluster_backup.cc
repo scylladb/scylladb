@@ -197,11 +197,64 @@ future<> cluster_backup_task::do_backup() {
         };
 
         std::unordered_map<db::snapshot_dc_location, dst_data> dst_mapping;
+        // redundant since we don't support per-dc tablets, but why not complicate things
+        std::unordered_map<std::string, utils::chunked_vector<db::snapshot_tablet_entry>> dc_tablets;
+        for (auto& dc : _locations | std::views::keys) {
+            dc_tablets.emplace(dc, co_await sth.get_snapshot_tablets(_snapshot, keyspace, table, dc));
+        }
+        std::unordered_map<db::snapshot_dc_location, std::unordered_map<dht::token, locator::host_id>> repair_masters;
+        std::unordered_map<locator::host_id, std::pair<size_t, size_t>> node_sstables;
+
+        for (const db::snapshot_node_entry& node : nodes_for_location) {
+            if (auto e = _as.abort_requested_exception_ptr(); e) {
+                snap_log.warn("Abort requested. Skipping processing of {}, {}:{}", _snapshot, node.node, keyspace, table);
+                std::rethrow_exception(e);
+            }
+            snap_log.info("Calculating sstable set for {} node {}, {}:{}", _snapshot, node.node, keyspace, table);
+
+            assert(state_filter.count(node.datacenter));
+            assert(_locations.count(node.datacenter));
+
+            auto& dst = _locations.at(node.datacenter);
+            auto& repair_master = repair_masters[dst];
+            auto sstables = co_await sth.get_snapshot_sstables(_snapshot, keyspace, table, node.datacenter, node.rack);
+            auto& tablets = dc_tablets.at(node.datacenter);
+            auto ti = tablets.begin();
+            auto te = tablets.end();
+
+            // eliminate all but one of the completed repair set.
+            // for each tablet/dc, we include sstables that are either 
+            // not repaired, or if they are, if we are the first node
+            // to process the tablet.
+            sstables = sstables | std::views::filter([&](auto& e) {
+                while (ti != te && ti->last_token < e.first_token) {
+                    ++ti;
+                }
+                if (ti == te) {
+                    throw std::runtime_error("Could not find tablet range");
+                }
+                if (e.repaired_at < ti->repaired_at) {
+                    return true; // must include
+                }
+                auto i = repair_master.find(ti->first_token);
+                if (i == repair_master.end()) {
+                    i = repair_master.emplace(ti->first_token, node.node).first;
+                }
+                return i->second == node.node; // we claimed the token range
+            }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
+
+            auto& dst_info = dst_mapping[dst];
+            auto off = dst_info.sstables.size(), n = sstables.size();
+            dst_info.sstables.insert(dst_info.sstables.end(), sstables.begin(), sstables.end());
+            dst_info.datacenters.emplace(node.datacenter);
+
+            node_sstables.emplace(node.node, std::make_pair(off, n));
+        }
 
         co_await coroutine::parallel_for_each(nodes_for_location, [&](const db::snapshot_node_entry& node) -> future<>{
-            if (_as.abort_requested()) {
+            if (auto e = _as.abort_requested_exception_ptr(); e) {
                 snap_log.warn("Abort {} requested. Skipping processing of {}, {}:{}", _snapshot, node.node, keyspace, table);
-                co_return;
+                std::rethrow_exception(e);
             }
 
             snap_log.info("Processing {} node {}, {}:{}", _snapshot, node.node, keyspace, table);
@@ -209,19 +262,13 @@ future<> cluster_backup_task::do_backup() {
             assert(state_filter.count(node.datacenter));
             assert(_locations.count(node.datacenter));
 
-            auto sstables = co_await sth.get_snapshot_sstables(_snapshot, keyspace, table, node.datacenter, node.rack);
+            auto [off, n]= node_sstables.at(node.node);
             auto filter = state_filter.at(node.datacenter);
             auto& dst = _locations.at(node.datacenter);
-
             auto& dst_info = dst_mapping[dst];
-            dst_info.sstables.insert( dst_info.sstables.end(), sstables.begin(), sstables.end());
-            dst_info.datacenters.emplace(node.datacenter);
-
-            // TODO: here we would like to group sstables by tablet replica and
-            // if possible eliminate some of the data to store.
 
             // filter out sstables already backed up
-            sstables = sstables | std::views::filter([&node, filter](auto& e) { 
+            auto sstables = std::ranges::subrange(dst_info.sstables.begin() + off, dst_info.sstables.begin() + off + n) | std::views::filter([&node, filter](auto& e) { 
                 return e.node == node.node && e.state < filter;
             }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
 

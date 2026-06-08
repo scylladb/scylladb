@@ -1287,7 +1287,8 @@ async def prepare_write_workload(cql, table_name, flush=True, n: int = None):
 async def do_test_snapshot_on_all_nodes(manager: ManagerClient,
                                         handle_snapshot: Callable[[ManagerClient, str, str, str, list[ServerInfo]], Awaitable[None]],
                                         object_storage = None, 
-                                        do_snapshot: bool = True):
+                                        do_snapshot: bool = True,
+                                        do_repair: bool = False):
     """
     Helper for tests of topology operation snapshot.
     """
@@ -1301,6 +1302,8 @@ async def do_test_snapshot_on_all_nodes(manager: ManagerClient,
         async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)", "") as tbl:
             cf = tbl.split('.')[1]
             await prepare_write_workload(manager.get_cql(), tbl, flush=False)
+            if do_repair:
+                await manager.api.repair(servers[0].ip_addr, ks, cf)
             if do_snapshot:
                 await manager.api.take_cluster_snapshot(servers[0].ip_addr, ks, tag=snapshot_name, tables=[cf])
             try:
@@ -1353,11 +1356,13 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ManagerClient
                     """))
 
         for sstable in sstables:
-            assert sstable.state >= 3
+            assert (not sstable.toc_name in manifest_sstables) or sstable.state >= 3
 
         for sstable in sstables:
-            assert sstable.toc_name in objects
-            assert sstable.toc_name in manifest_sstables
+            assert sstable.state < 3 or sstable.toc_name in objects
+            assert sstable.state < 3 or sstable.toc_name in manifest_sstables
+
+    return manifest
 
 @pytest.mark.asyncio
 async def test_cluster_snapshot_backup(manager: ManagerClient, object_storage):
@@ -1387,3 +1392,24 @@ async def test_cluster_snapshot_backup_to_new_location(manager: ManagerClient, o
     Tests a cluster snapshot can be backed to new location even when already backed up
     """
     await do_test_snapshot_on_all_nodes(manager, partial(run_double_cluster_backup, object_storage), object_storage)
+
+
+async def run_cluster_backup_and_check_redundancy(object_storage, manager: ManagerClient, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper
+    """
+    manifest = await run_cluster_backup(object_storage, 'ninjax', manager, snapshot_name, ks, cf, servers)
+    tablet_to_node = { t['id']: set() for t in manifest['tablets'] }
+    for sst in manifest['sstables']:
+        tablet_to_node[sst['tablet_id']].add(sst['node'])
+
+    for k, nodes in tablet_to_node.items():
+        assert len(nodes) <= 1, f"tablet {k} not pruned"
+
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_repair_set_unique(manager: ManagerClient, object_storage):
+    """
+    Tests a cluster snapshot reduces the snapshot sstable set by the current repair set for each tablet
+    """
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage), object_storage, True, True)
