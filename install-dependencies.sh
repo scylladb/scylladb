@@ -304,7 +304,7 @@ go_arch() {
         ["x86_64"]=amd64
         ["aarch64"]=arm64
     )
-    echo ${GO_ARCH["$(arch)"]}
+    echo "${GO_ARCH["$(arch)"]}"
 }
 
 MINIO_BINARIES_DIR=/usr/local/bin
