@@ -188,17 +188,14 @@ def test_delete_in_batch_always_allowed(cql, test_table_set):
         cql.execute(f"BEGIN BATCH DELETE FROM {test_table_set} WHERE pk = 1 APPLY BATCH")
 
 
-# --- LWT exemption tests ---
-# LWT (Paxos) writes are exempt from coordinator-side guardrails because
-# the mutation is not available until after the Paxos prepare round, and
-# abandoning mid-round would violate linearizability (see issue #6299).
+# --- LWT rejection tests ---
 
-
-def test_lwt_insert_exempt_from_coordinator_guardrail(cql, test_table_set):
-    """LWT INSERT with large collection must not be rejected by coordinator guardrail."""
+def test_lwt_insert_rejected_by_coordinator_guardrail(cql, test_table_set):
+    """LWT INSERT with large collection must be rejected by coordinator guardrail."""
     insert_if = cql.prepare(f"INSERT INTO {test_table_set} (pk, v) VALUES (?, ?) IF NOT EXISTS")
     with config_value_context(cql, "large_collection_elements_fail_threshold", "5"):
-        cql.execute(insert_if, [100, make_set(6)])
+        with pytest.raises(InvalidRequest, match="Large data guardrail"):
+            cql.execute(insert_if, [100, make_set(6)])
 
 
 # --- Per-table guardrail toggle tests ---

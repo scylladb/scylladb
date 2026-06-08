@@ -172,26 +172,25 @@ def test_at_hard_limit_succeeds(cql, test_table):
         cql.execute(insert, [1, make_blob(1048576)])
 
 
-# --- LWT exemption tests ---
-# LWT (Paxos) writes are exempt from coordinator-side guardrails because
-# the mutation is not available until after the Paxos prepare round, and
-# abandoning mid-round would violate linearizability (see issue #6299).
+# --- LWT rejection tests ---
 
 
-def test_lwt_insert_exempt_from_coordinator_guardrail(cql, test_table):
-    """LWT INSERT with large cell must not be rejected by coordinator guardrail."""
+def test_lwt_insert_rejected_by_coordinator_guardrail(cql, test_table):
+    """LWT INSERT with large cell must be rejected by coordinator guardrail."""
     insert_if = cql.prepare(f"INSERT INTO {test_table} (pk, v) VALUES (?, ?) IF NOT EXISTS")
     with config_value_context(cql, "large_cell_fail_threshold_mb", "1"):
-        cql.execute(insert_if, [100, make_blob(1048576 + 1)])
+        with pytest.raises(InvalidRequest, match="Large data guardrail"):
+            cql.execute(insert_if, [100, make_blob(1048576 + 1)])
 
 
-def test_lwt_update_exempt_from_coordinator_guardrail(cql, test_table):
-    """LWT UPDATE with large cell must not be rejected by coordinator guardrail."""
+def test_lwt_update_rejected_by_coordinator_guardrail(cql, test_table):
+    """LWT UPDATE with large cell must be rejected by coordinator guardrail."""
     insert = cql.prepare(f"INSERT INTO {test_table} (pk, v) VALUES (?, ?)")
     update_if = cql.prepare(f"UPDATE {test_table} SET v = ? WHERE pk = ? IF v != null")
     with config_value_context(cql, "large_cell_fail_threshold_mb", "1"):
         cql.execute(insert, [102, b"\x00"])
-        cql.execute(update_if, [make_blob(1048576 + 1), 102])
+        with pytest.raises(InvalidRequest, match="Large data guardrail"):
+            cql.execute(update_if, [make_blob(1048576 + 1), 102])
 
 
 # --- Per-table guardrail toggle tests ---
