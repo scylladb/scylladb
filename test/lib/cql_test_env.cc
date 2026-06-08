@@ -582,7 +582,7 @@ private:
 
             auto scheduling_groups = get_scheduling_groups().get();
             debug::streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
-            debug::gossip_scheduling_group = scheduling_groups.streaming_scheduling_group;
+            debug::gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
 
             auto notify_set = init_configurables
                 ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
@@ -863,7 +863,7 @@ private:
                         // FIXME: should not need to do this - it makes this whole thing unsafe. But
                         // reactor::posix_reuseport_detect() currently always returns false, thus
                         // trying to grab a port and reusing it properly here does _not_ work at all.
-                        // Once the seastar issue is fixed, we can just keep the tmp socket aliva across
+                        // Once the seastar issue is fixed, we can just keep the tmp socket alive across
                         // the listen invoke below.
                         tmp = {};
                         _ms.invoke_on_all(&netw::messaging_service::start_listen, std::ref(_token_metadata), [host_id] (gms::inet_address ip) {return host_id; }).get();
@@ -938,7 +938,7 @@ private:
             _mapreduce_service.start(std::ref(_ms), std::ref(_proxy), std::ref(_db), std::ref(abort_sources)).get();
             auto stop_mapreduce_service =  defer_verbose_shutdown("mapreduce service", [this] { _mapreduce_service.stop().get(); });
 
-            // gropu0 client exists only on shard 0
+            // group0 client exists only on shard 0
             service::raft_group0_client group0_client(_group0_registry.local(), _gossiper.local(), _sys_ks.local(), _token_metadata.local(), maintenance_mode_enabled::no);
 
             _mm.start(std::ref(_mnotifier), std::ref(_feature_service), std::ref(_ms), std::ref(_proxy), std::ref(_gossiper), std::ref(group0_client), std::ref(_sys_ks)).get();
