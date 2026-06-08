@@ -325,7 +325,7 @@ minio_download_jobs() {
         -e 's/:.*$//g' \
         -e "s#${MINIO_BINARIES_DIR}/minio#$(minio_server_url) -o ${MINIO_BINARIES_DIR}/minio#" \
         -e "s#${MINIO_BINARIES_DIR}/mc#$(minio_client_url) -o ${MINIO_BINARIES_DIR}/mc#"
-    rm -f ${cfile}
+    rm -f "${cfile}"
 }
 
 print_usage() {
