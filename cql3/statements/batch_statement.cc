@@ -63,6 +63,8 @@ batch_statement::batch_statement(int bound_terms, type type_,
         // build_cas_result_set_metadata right from the constructor to avoid crash trying to access
         // uninitialized batch metadata.
         build_cas_result_set_metadata();
+        // CAS so a dropped response matches the storage proxy's CAS timeout.
+        set_timeout_write_type(db::write_type::CAS);
     }
 }
 
