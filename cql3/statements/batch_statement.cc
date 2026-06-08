@@ -456,7 +456,8 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
             first_ks = parsed->keyspace();
             first_cf = parsed->column_family();
         } else {
-            have_multiple_cfs = first_ks.value() != parsed->keyspace() || first_cf.value() != parsed->column_family();
+            have_multiple_cfs |= first_ks.value() != parsed->keyspace();
+            have_multiple_cfs |= first_cf.value() != parsed->column_family();
         }
         statements.emplace_back(parsed->prepare(db, meta, stats));
         auto audit_info = statements.back().statement->get_audit_info();
