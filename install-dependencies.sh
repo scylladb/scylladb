@@ -414,7 +414,7 @@ elif [ "$ID" = "fedora" ]; then
     fedora_packages+=(openssl-devel)
     if rpm -q --quiet yum-utils; then
         echo
-        echo "This script will install dnf-utils package, witch will conflict with currently installed package: yum-utils"
+        echo "This script will install dnf-utils package, which will conflict with currently installed package: yum-utils"
         echo "Please remove the package and try to run this script again."
         exit 1
     fi
