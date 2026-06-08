@@ -120,9 +120,7 @@ In other words, that means that the block of ``unfiltereds`` in the data file th
 It is set for a range tombstone marker of either the ``INCL_START_BOUND`` or the ``EXCL_END_INCL_START_BOUNDARY`` kind and contains the open bound deletion time.
 
 The ``end_open_marker`` has to do with how range tombstones are organised in SSTables 3.0. and is closely connected with the merging logic of storage engine code. That code expects all the data it reads from SSTables to come strictly ordered and it expects range tombstone markers to always come in pairs (the combined "boundary" type marker is just treated as two markers - an end marker for the previous RT followed immediately by a start marker for a new RT.
-So when a slice of data is being read, it may contain an end RT marker without the corresponding start RT marker. In order to properly handle this, reader code returns a start RT marker corresponding to the slice start bound with the deletion time taken from the ``end_open_marker`` structure see: SSTableIterator.java.handlePreSliceData_ 
-
-.. _SSTableIterator.java.handlePreSliceData: https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/db/columniterator/SSTableIterator.java#L125
+So when a slice of data is being read, it may contain an end RT marker without the corresponding start RT marker. In order to properly handle this, reader code returns a start RT marker corresponding to the slice start bound with the deletion time taken from the ``end_open_marker`` structure. 
 
 The higher-level reason for this design is that C* 3.0 storage design aims to be as iterator-based as possible and as such doesn't re-arrange the data it reads (and without start RT marker, such re-arrangement would be due).
 
