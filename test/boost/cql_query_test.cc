@@ -2661,6 +2661,45 @@ APPLY BATCH;)"
     });
 }
 
+// Regression test for SCYLLADB-2474: have_multiple_cfs misclassification in
+// batch_statement::prepare(): the flag was assigned with = instead of |=, so a
+// batch whose first and last sub-statements target the same table (e.g.
+// [ta, tb, ta]) had the flag cleared on the last sub-statement and was
+// misclassified as targeting a single table. A single-table batch is given a
+// routing key (partition_key_bind_indices) computed from its first
+// sub-statement, while a multi-table batch has no single partition key and must
+// have none. The misclassification therefore makes the prepared statement
+// advertise a bogus routing key.
+SEASTAR_TEST_CASE(test_batch_multi_table_has_no_partition_key_bind_indices) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ta (pk int PRIMARY KEY, v int);").get();
+        e.execute_cql("create table tb (pk int PRIMARY KEY, v int);").get();
+        // A multi-table batch whose first and last sub-statements target the
+        // same table must not advertise a single routing key.
+        const auto multi_table_id = e.prepare(
+            "BEGIN BATCH "
+            "INSERT INTO ta (pk, v) VALUES (?, ?); "
+            "INSERT INTO tb (pk, v) VALUES (?, ?); "
+            "INSERT INTO ta (pk, v) VALUES (?, ?); "
+            "APPLY BATCH").get();
+        const auto multi_table_prepared = e.local_qp().get_prepared(multi_table_id);
+        BOOST_REQUIRE(multi_table_prepared);
+        BOOST_REQUIRE(multi_table_prepared->partition_key_bind_indices.empty());
+        // A single-table batch, on the other hand, must keep its routing key.
+        // This guards against the fix accidentally breaking the single-table
+        // case.
+        const auto single_table_id = e.prepare(
+            "BEGIN BATCH "
+            "INSERT INTO ta (pk, v) VALUES (?, ?); "
+            "INSERT INTO ta (pk, v) VALUES (?, ?); "
+            "INSERT INTO ta (pk, v) VALUES (?, ?); "
+            "APPLY BATCH").get();
+        const auto single_table_prepared = e.local_qp().get_prepared(single_table_id);
+        BOOST_REQUIRE(single_table_prepared);
+        BOOST_REQUIRE(!single_table_prepared->partition_key_bind_indices.empty());
+    });
+}
+
 SEASTAR_TEST_CASE(test_in_restriction) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tir (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1));").get();
