@@ -699,7 +699,7 @@ public:
         return _client->copy_object(std::move(src), std::move(dst), abort_source());
     }
     future<> delete_object(object_name name) const {
-        return _client->delete_object(std::move(name));
+        return _client->delete_object(std::move(name), abort_source());
     }
     file make_readable_file(object_name name) {
         return _client->make_readable_file(std::move(name), abort_source());

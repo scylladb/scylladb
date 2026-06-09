@@ -845,7 +845,7 @@ utils::gcp::storage::client::client(std::string_view endpoint, std::optional<goo
 utils::gcp::storage::client::~client() = default;
 
 
-future<> utils::gcp::storage::client::create_bucket(std::string_view project, rjson::value meta) {
+future<> utils::gcp::storage::client::create_bucket(std::string_view project, rjson::value meta, seastar::abort_source* as) {
     gcp_storage.debug("Create bucket {}:{}", project, rjson::get(meta, "name"));
 
     auto path = fmt::format("/storage/v1/b?project={}", project);
@@ -856,6 +856,8 @@ future<> utils::gcp::storage::client::create_bucket(std::string_view project, rj
         , body
         , APPLICATION_JSON
         , httpclient::method_type::POST
+        , {}
+        , as
     );
 
     switch (res.result()) {
@@ -867,7 +869,7 @@ future<> utils::gcp::storage::client::create_bucket(std::string_view project, rj
     }
 }
 
-future<> utils::gcp::storage::client::create_bucket(std::string_view project, std::string_view bucket, std::string_view region, std::string_view storage_class) {
+future<> utils::gcp::storage::client::create_bucket(std::string_view project, std::string_view bucket, std::string_view region, std::string_view storage_class, seastar::abort_source* as) {
     // Construct metadata. Could fmt::format, but this is somewhat safer.
     rjson::value meta = rjson::empty_object();
     rjson::add(meta, "name", std::string(bucket));
@@ -880,10 +882,10 @@ future<> utils::gcp::storage::client::create_bucket(std::string_view project, st
     rjson::add(iamConfiguration, "uniformBucketLevelAccess", std::move(uniformBucketLevelAccess));
     rjson::add(meta, "iamConfiguration", std::move(iamConfiguration));
 
-    co_await create_bucket(project, std::move(meta));
+    co_await create_bucket(project, std::move(meta), as);
 }
 
-future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket_in) {
+future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket_in, seastar::abort_source* as) {
     std::string bucket(bucket_in);
 
     gcp_storage.debug("Delete bucket {}", bucket);
@@ -895,6 +897,8 @@ future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket_in) 
         , ""s
         , ""s
         , httpclient::method_type::DELETE
+        , {}
+        , as
     );
 
     switch (res.result()) {
@@ -924,7 +928,7 @@ static utils::gcp::storage::object_info create_info(const rjson::value& item) {
 // read all data from network, etc. Thus there is not all that much
 // point in it. Return chunked_vector to avoid large alloc, but keep it
 // in one object... for now...
-future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix, bucket_paging& pager) {
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix, bucket_paging& pager, seastar::abort_source* as) {
     utils::chunked_vector<utils::gcp::storage::object_info> result;
 
     if (pager.done) {
@@ -987,18 +991,20 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
 
         }
         , httpclient::method_type::GET
+        , {}
+        , as
     );
 
     co_return result;
 }
 
-future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix) {
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix, seastar::abort_source* as) {
     bucket_paging dummy(0);
-    co_return co_await list_objects(bucket, prefix, dummy);
+    co_return co_await list_objects(bucket, prefix, dummy, as);
 }
 
 // See https://cloud.google.com/storage/docs/deleting-objects
-future<> utils::gcp::storage::client::delete_object(std::string_view bucket_in, std::string_view object_name_in) {
+future<> utils::gcp::storage::client::delete_object(std::string_view bucket_in, std::string_view object_name_in, seastar::abort_source* as) {
     std::string bucket(bucket_in), object_name(object_name_in);
 
     gcp_storage.debug("Delete object {}:{}", bucket, object_name);
@@ -1007,7 +1013,7 @@ future<> utils::gcp::storage::client::delete_object(std::string_view bucket_in, 
 
     httpclient::result_type res;
     try {
-        res = co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_WRITE, ""s, ""s, httpclient::method_type::DELETE);
+        res = co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_WRITE, ""s, ""s, httpclient::method_type::DELETE, {}, as);
     } catch (const storage_io_error& ex) {
         if (ex.code().value() == ENOENT) {
             gcp_storage.debug("Could not delete {}:{} - no such object", bucket, object_name);
@@ -1030,13 +1036,13 @@ future<> utils::gcp::storage::client::delete_object(std::string_view bucket_in, 
 
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
 // GCP does not support moveTo across buckets.
-future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view new_name) {
-    co_await copy_object(bucket, object_name, new_bucket, new_name);
-    co_await delete_object(bucket, object_name);
+future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view new_name, seastar::abort_source* as) {
+    co_await copy_object(bucket, object_name, new_bucket, new_name, as);
+    co_await delete_object(bucket, object_name, as);
 }
 
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
-future<> utils::gcp::storage::client::rename_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_name_in) {
+future<> utils::gcp::storage::client::rename_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_name_in, seastar::abort_source* as) {
     std::string bucket(bucket_in), object_name(object_name_in), new_name(new_name_in);
 
     gcp_storage.debug("Move object {}:{} -> {}", bucket, object_name, new_name);
@@ -1051,6 +1057,8 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket_in, 
         , ""s
         , ""s
         , httpclient::method_type::PUT
+        , {}
+        , as
     );
 
     switch (res.result()) {
@@ -1068,7 +1076,7 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket_in, 
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
 // Copying an object in GCP can only process a certain amount of data in one call
 // Must keep doing it until all data is copied, and check response.
-future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_bucket_in, std::string_view to_name_in) {
+future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_bucket_in, std::string_view to_name_in, seastar::abort_source* as) {
     std::string bucket(bucket_in), object_name(object_name_in), new_bucket(new_bucket_in), to_name(to_name_in);
 
     auto path = fmt::format("/storage/v1/b/{}/o/{}/rewriteTo/b/{}/o/{}"
@@ -1085,6 +1093,8 @@ future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, st
             , body
             , APPLICATION_JSON
             , httpclient::method_type::POST
+            , {}
+            , as
         );
 
         if (res.result() != status_type::ok) {
@@ -1150,8 +1160,8 @@ future<utils::gcp::storage::object_info> utils::gcp::storage::client::merge_obje
     co_return create_info(resp);
 }
 
-future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::string_view object_name, std::string_view to_name) {
-    co_await copy_object(bucket, object_name, bucket, to_name);
+future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::string_view object_name, std::string_view to_name, seastar::abort_source* as) {
+    co_await copy_object(bucket, object_name, bucket, to_name, as);
 }
 
 seastar::data_sink utils::gcp::storage::client::create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata, seastar::abort_source* as) const {

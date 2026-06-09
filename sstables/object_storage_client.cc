@@ -90,8 +90,8 @@ public:
     future<> copy_object(object_name src, object_name dst, abort_source* as) override {
         return _client->copy_object(src.str(), dst.str(), std::nullopt, std::nullopt, as);
     }
-    future<> delete_object(object_name name) override {
-        return _client->delete_object(name.str());
+    future<> delete_object(object_name name, abort_source* as) override {
+        return _client->delete_object(name.str(), as);
     }
     file make_readable_file(object_name name, abort_source* as) override {
         return _client->make_readable_file(name.str(), as);
@@ -168,11 +168,11 @@ public:
         co_await sink.flush();
         co_await sink.close();
     }
-    future<> copy_object(object_name src, object_name dst, abort_source*) override {
-        return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object());
+    future<> copy_object(object_name src, object_name dst, abort_source* as) override {
+        return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object(), as);
     }
-    future<> delete_object(object_name name) override {
-        return _client->delete_object(name.bucket(), name.object());
+    future<> delete_object(object_name name, abort_source* as) override {
+        return _client->delete_object(name.bucket(), name.object(), as);
     }
     file make_readable_file(object_name name, abort_source* as) override {
         auto src = _client->create_download_source(name.bucket(), name.object(), as);
@@ -200,6 +200,8 @@ public:
             utils::gcp::storage::bucket_paging _paging;
             utils::chunked_vector<utils::gcp::storage::object_info> _info;
             size_t _pos;
+            seastar::abort_source _as;
+
         public:
             list_impl(shared_ptr<gcp::storage::client> client, std::string bucket, std::string prefix, lister::filter_type filter)
                 : _client(std::move(client))
@@ -214,7 +216,7 @@ public:
                 while (true) {
                     if (_pos == _info.size()) {
                         _info.clear();
-                        _info = co_await _client->list_objects(_bucket, _prefix, _paging);
+                        _info = co_await _client->list_objects(_bucket, _prefix, _paging, &_as);
                         _pos = 0;
                     }
                     if (_info.empty()) {
@@ -231,6 +233,7 @@ public:
                 co_return std::nullopt;
             }
             future<> close() noexcept override {
+                _as.request_abort();
                 co_return;
             }
         };
@@ -285,7 +288,7 @@ public:
                 off += rem;
             }
 
-            auto existing = (co_await _client->list_objects(bucket, fmt::format("{}-temp-", object)))
+            auto existing = (co_await _client->list_objects(bucket, fmt::format("{}-temp-", object), as))
                 | std::views::transform([](auto& info) { return info.name; })
                 | std::ranges::to<std::unordered_set<std::string>>()
             ;
@@ -301,8 +304,8 @@ public:
             auto names = ranges | std::views::transform([](auto& p) { return p.name; }) | std::ranges::to<std::vector<std::string>>();
             co_await _client->merge_objects(bucket, object, names, {}, as);
 
-            co_await parallel_for_each(names, [this, bucket](auto& name) -> future<> {
-                co_await _client->delete_object(bucket, name);
+            co_await parallel_for_each(names, [this, bucket, as](auto& name) -> future<> {
+                co_await _client->delete_object(bucket, name, as);
             });
         }
 
