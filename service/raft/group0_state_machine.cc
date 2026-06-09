@@ -56,12 +56,12 @@ namespace service {
 static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-        gms::gossiper& gossiper, gms::feature_service& feat)
+        gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately)
     : _client(client), _mm(mm), _sp(sp), _ss(ss)
     , _gate("group0_state_machine")
     , _state_id_handler(ss._topology_state_machine, sp.local_db(), gossiper)
     , _feature_service(feat)
-    , _in_memory_state_machine_enabled(utils::get_local_injector().is_enabled("group0_enable_sm_immediately")) {
+    , _in_memory_state_machine_enabled(enable_immediately || utils::get_local_injector().is_enabled("group0_enable_sm_immediately")) {
     _state_id_handler.run();
 }
 
