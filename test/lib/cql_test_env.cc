@@ -200,8 +200,9 @@ private:
     struct core_local_state {
         service::client_state client_state;
 
-        core_local_state(auth::service& auth_service, qos::service_level_controller& sl_controller, timeout_config timeout)
-            : client_state(service::client_state::external_tag{}, auth_service, &sl_controller, timeout)
+        core_local_state(auth::service& auth_service, qos::service_level_controller& sl_controller, timeout_config timeout, abort_source& as)
+            : client_state(service::client_state::external_tag{}, auth_service, &sl_controller, timeout,
+                    socket_address(), false, &as)
         {
             client_state.set_login(auth::authenticated_user(testing_superuser));
         }
@@ -451,14 +452,17 @@ public:
     }
 
     future<> create_keyspace(const cql_test_config& cfg, std::string_view name) {
-        sstring tablets = "";
+        sstring options = "";
         if (cfg.initial_tablets) {
-            tablets = format(" and tablets = {{'initial' : {}}}", *cfg.initial_tablets);
+            options = format(" and tablets = {{'initial' : {}}}", *cfg.initial_tablets);
         } else if (cfg.db_config->enable_tablets()) {
-            tablets = " and tablets = {'enabled' : true}";
+            options = " and tablets = {'enabled' : true}";
+        }
+        if (cfg.strongly_consistent_tables) {
+            options += " and consistency = 'global'";
         }
         auto query = seastar::format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.NetworkTopologyStrategy', 'replication_factor' : 1}}{};", name,
-                            tablets);
+                            options);
         return execute_cql(query).discard_result();
     }
 
@@ -1066,10 +1070,6 @@ private:
                 return raft_gr.start();
             }).get();
 
-            auto shutdown_db = defer_verbose_shutdown("database tables", [this] {
-                _db.invoke_on_all(&replica::database::shutdown).get();
-            });
-
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
 
             _paxos_store.start(std::ref(_sys_ks), std::ref(_feature_service), std::ref(_db), std::ref(_mm)).get();
@@ -1084,6 +1084,10 @@ private:
                 if (need) {
                     _proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
                 }
+            });
+
+            auto drain_db = defer_verbose_shutdown("database drain", [this] {
+                _db.invoke_on_all(&replica::database::drain).get();
             });
 
             _sl_controller.invoke_on_all([this, &group0_client] (qos::service_level_controller& service) {
@@ -1254,7 +1258,7 @@ private:
 
             _group0_client = &group0_client;
 
-            _core_local.start(std::ref(_auth_service), std::ref(_sl_controller), cfg_in.query_timeout.value_or(infinite_timeout_config)).get();
+            _core_local.start(std::ref(_auth_service), std::ref(_sl_controller), cfg_in.query_timeout.value_or(infinite_timeout_config), std::ref(abort_sources)).get();
             auto stop_core_local = defer_verbose_shutdown("local client state", [this] { _core_local.stop().get(); });
 
             if (!local_db().has_keyspace(ks_name)) {
