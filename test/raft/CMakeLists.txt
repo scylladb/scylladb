@@ -27,6 +27,9 @@ add_scylla_test(failure_detector_test
 add_scylla_test(fsm_test
   KIND BOOST
   LIBRARIES test-raft)
+add_scylla_test(log_indexed_container_test
+  KIND BOOST
+  LIBRARIES test-raft)
 add_scylla_test(many_test
   KIND SEASTAR
   LIBRARIES test-raft)
