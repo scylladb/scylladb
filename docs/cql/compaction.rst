@@ -205,21 +205,21 @@ The following options only apply to IncrementalCompactionStrategy:
 
 =====
 
-``bucket_high`` (default: 1.5)
+``bucket_high`` (default: 1.4142)
    A new SSTable is added to the bucket if the SSTable size is **less than**
    bucket_high * the average size of that bucket (and if the bucket_low condition also holds).
-   For example, if **'bucket_high = 1.5'** and the **SSTable size = 14MB**, does the SSTable belong to a bucket with an average size of 10MB?
-   Yes, because the **SSTable size = 14**, which is **less** than **'bucket_high' * average bucket size = 15**.
-   So, the SSTable will be added to the bucket, and the bucket’s average size will be recalculated.
+   For example, if **'bucket_high = 1.4142'** and the **SSTable size = 14MB**, does the SSTable belong to a bucket with an average size of 10MB?
+   Yes, because the **SSTable size = 14**, which is **less** than **'bucket_high' * average bucket size = 14.142**.
+   So, the SSTable will be added to the bucket, and the bucket's average size will be recalculated.
 
 =====
 
-``bucket_low`` (default: 0.5)
+``bucket_low`` (default: 0.7071)
    A new SSTable is added to the bucket if the SSTable size is **more than**
    bucket_low * the average size of that bucket (and if the bucket_high condition also holds).
-   For example, if **'bucket_high = 0.5'** and the **SSTable size is 10MB**, does the SSTable belong to a bucket with an average size of 15MB?
-   Yes, because the **SSTable size = 10**, which is **more** than **'bucket_low' * average bucket size = 7.5**.
-   So, the SSTable will be added to the bucket, and the bucket’s average size will be recalculated.
+   For example, if **'bucket_low = 0.7071'** and the **SSTable size is 10MB**, does the SSTable belong to a bucket with an average size of 15MB?
+   No, because the **SSTable size = 10**, which is **less** than **'bucket_low' * average bucket size = 10.607**.
+   So, the SSTable will not be added to the bucket.
 
 =====
 
