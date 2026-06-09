@@ -217,19 +217,34 @@ def test_lwt_update_prepared_collections(cql, test_keyspace, is_scylla):
                        uuid.UUID("12345678-1234-5678-1234-567812345678"))],
         },
     }
-    # Build one table per (collection_type, frozen) combination, with one
-    # column per element type. This avoids creating a separate table for each
-    # (collection_type, frozen, element_type) triple.
+    # Build a single table covering all (collection_type, frozen) combinations
+    # by encoding the combination in the column name, e.g. val_int_list,
+    # val_int_frozen_list.  This reduces 6 DDL round-trips to 1.
+    col_defs_parts = []
     for collection_type in ("list", "set", "tuple"):
         for is_frozen in (False, True):
-            col_defs = ", ".join(
-                f"val_{et} {_build_collection_typename(et, is_frozen, collection_type)}"
-                for et in collection_element_types)
-            with new_test_table(cql, test_keyspace,
-                                f"k int PRIMARY KEY, {col_defs}") as table:
-                row_key = 0
+            frozen_tag = "frozen_" if is_frozen else ""
+            for et in collection_element_types:
+                col_name = f"val_{et}_{frozen_tag}{collection_type}"
+                col_defs_parts.append(
+                    f"{col_name} {_build_collection_typename(et, is_frozen, collection_type)}")
+    with new_test_table(cql, test_keyspace,
+                        f"k int PRIMARY KEY, {', '.join(col_defs_parts)}") as table:
+        row_key = 0
+        for collection_type in ("list", "set", "tuple"):
+            for is_frozen in (False, True):
+                frozen_tag = "frozen_" if is_frozen else ""
                 for elem_type, type_info in collection_element_types.items():
-                    col = f"val_{elem_type}"
+                    col = f"val_{elem_type}_{frozen_tag}{collection_type}"
+                    # Prepare once per (col, table) — not once per test case.
+                    insert = cql.prepare(f"INSERT INTO {table} (k, {col}) VALUES (?, ?)")
+                    stmt = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col}=:v")
+                    stmt2 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col} IN (:v)")
+                    stmt3 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col} IN :v")
+                    if collection_type == "list":
+                        stmt4 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col}[:i]=:v")
+                        stmt5 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col}[:i] IN (:v)")
+                        stmt6 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col}[:i] IN :v")
                     for elem_init, elem_upd in type_info["cases"]:
                         init_val = [elem_init]
                         upd_val = [elem_upd]
@@ -237,11 +252,9 @@ def test_lwt_update_prepared_collections(cql, test_keyspace, is_scylla):
                             init_val = tuple(init_val)
                             upd_val = tuple(upd_val)
 
-                        insert = cql.prepare(f"INSERT INTO {table} (k, {col}) VALUES (?, ?)")
                         cql.execute(insert, [row_key, init_val])
 
                         # IF col=:v
-                        stmt = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col}=:v")
                         _assert_lwt_applied(cql, stmt, is_scylla, True, init_val,
                                             upd_v=upd_val, k=row_key, v=init_val)
                         _assert_lwt_applied(cql, stmt, is_scylla, False, upd_val,
@@ -251,7 +264,6 @@ def test_lwt_update_prepared_collections(cql, test_keyspace, is_scylla):
                         cql.execute(insert, [row_key, init_val])
 
                         # IF col IN (:v)
-                        stmt2 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col} IN (:v)")
                         _assert_lwt_applied(cql, stmt2, is_scylla, True, init_val,
                                             upd_v=upd_val, k=row_key, v=init_val)
                         _assert_lwt_applied(cql, stmt2, is_scylla, False, upd_val,
@@ -261,7 +273,6 @@ def test_lwt_update_prepared_collections(cql, test_keyspace, is_scylla):
                         cql.execute(insert, [row_key, init_val])
 
                         # IF col IN :v (tuple of values)
-                        stmt3 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col} IN :v")
                         _assert_lwt_applied(cql, stmt3, is_scylla, True, init_val,
                                             upd_v=upd_val, k=row_key, v=[init_val])
                         _assert_lwt_applied(cql, stmt3, is_scylla, False, upd_val,
@@ -272,7 +283,6 @@ def test_lwt_update_prepared_collections(cql, test_keyspace, is_scylla):
 
                         # List-only: IF col[:i]=:v, IF col[:i] IN (:v), IF col[:i] IN :v
                         if collection_type == "list":
-                            stmt4 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col}[:i]=:v")
                             _assert_lwt_applied(cql, stmt4, is_scylla, True, init_val,
                                                 upd_v=upd_val, k=row_key, i=0, v=elem_init)
                             _assert_lwt_applied(cql, stmt4, is_scylla, False, upd_val,
@@ -280,7 +290,6 @@ def test_lwt_update_prepared_collections(cql, test_keyspace, is_scylla):
 
                             cql.execute(insert, [row_key, init_val])
 
-                            stmt5 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col}[:i] IN (:v)")
                             _assert_lwt_applied(cql, stmt5, is_scylla, True, init_val,
                                                 upd_v=upd_val, k=row_key, i=0, v=elem_init)
                             _assert_lwt_applied(cql, stmt5, is_scylla, False, upd_val,
@@ -288,13 +297,12 @@ def test_lwt_update_prepared_collections(cql, test_keyspace, is_scylla):
 
                             cql.execute(insert, [row_key, init_val])
 
-                            stmt6 = cql.prepare(f"UPDATE {table} SET {col}=:upd_v WHERE k=:k IF {col}[:i] IN :v")
                             _assert_lwt_applied(cql, stmt6, is_scylla, True, init_val,
                                                 upd_v=upd_val, k=row_key, i=0, v=[elem_init])
                             _assert_lwt_applied(cql, stmt6, is_scylla, False, upd_val,
                                                 upd_v=upd_val, k=row_key, i=0, v=[elem_init])
 
-                        row_key += 1
+                    row_key += 1
 
 
 def test_lwt_compare_collection_with_null(cql, test_keyspace, is_scylla):
