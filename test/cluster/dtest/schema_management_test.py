@@ -158,43 +158,86 @@ class TestSchemaManagement(Tester):
         """
         Create a table and write into while altering the table
         1. Create a cluster of 3 nodes and populate a table
-        2. Run write/read/read_and_write" statement in a loop
-        3. Alter table while inserts are running
+        2. Run write/read/mixed statement in a loop
+        3. Alter table while the statement is running
+        4. Stop the background I/O and verify the schema change
         """
         logger.debug("1. Create a cluster of 3 nodes and populate a table")
         cluster = self.prepare(racks_num=3)
         col_number = 20
+        columns_to_drop = 2
+        bg_col_number = col_number - columns_to_drop
+        num_populated_rows = 200
 
         [node1, node2, node3] = cluster.nodelist()
-        session = self.patient_exclusive_cql_connection(node1)
+        alter_session = self.patient_exclusive_cql_connection(node1)
+        bg_session = self.patient_exclusive_cql_connection(node2)
 
-        def run_stress(stress_type, col=col_number - 2):
-            node2.stress_object([stress_type, "n=10000", "cl=QUORUM", "-schema", "replication(factor=3)", "-col", f"n=FIXED({col})", "-rate", "threads=1"])
+        create_ks(alter_session, "ks", 3)
+        columns = ", ".join(f"c{i} text" for i in range(col_number))
+        alter_session.execute(f"CREATE TABLE ks.t (pk int PRIMARY KEY, {columns})")
+
+        all_cols = ", ".join(f"c{i}" for i in range(col_number))
+        all_placeholders = ", ".join("?" for _ in range(col_number + 1))
+        populate_stmt = bg_session.prepare(
+            f"INSERT INTO ks.t (pk, {all_cols}) VALUES ({all_placeholders})"
+        )
+        populate_stmt.consistency_level = ConsistencyLevel.QUORUM
+
+        # The background workload only touches the columns that survive the ALTER
+        # (c0..c{bg_col_number-1}); the dropped columns are the last ones, so the
+        # concurrent I/O stays valid while the schema changes underneath it.
+        bg_cols = ", ".join(f"c{i}" for i in range(bg_col_number))
+        bg_placeholders = ", ".join("?" for _ in range(bg_col_number + 1))
+        insert_stmt = bg_session.prepare(
+            f"INSERT INTO ks.t (pk, {bg_cols}) VALUES ({bg_placeholders})"
+        )
+        insert_stmt.consistency_level = ConsistencyLevel.QUORUM
+
+        select_stmt = bg_session.prepare("SELECT * FROM ks.t WHERE pk = ?")
+        select_stmt.consistency_level = ConsistencyLevel.QUORUM
 
         logger.debug("Populate")
-        run_stress("write", col_number)
+        for pk in range(num_populated_rows):
+            bg_session.execute(populate_stmt, [pk] + ["v"] * col_number)
+
+        def stress(stop):
+            # New rows start right after the populated range so writes never
+            # collide with the rows that reads iterate over.
+            pk = num_populated_rows
+            while not stop.is_set():
+                if case in ("write", "mixed"):
+                    bg_session.execute(insert_stmt, [pk] + ["v"] * bg_col_number)
+                if stop.is_set():
+                    return
+                if case in ("read", "mixed"):
+                    read_pk = pk if case == "mixed" else pk % num_populated_rows
+                    bg_session.execute(select_stmt, [read_pk])
+                pk += 1
+
+        stop = threading.Event()
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             logger.debug(f"2. Run {case} statement in a loop")
-            statement_future = executor.submit(functools.partial(run_stress, case))
+            statement_future = executor.submit(stress, stop)
 
             logger.debug(f"let's {case} statement work some time")
-            time.sleep(2)
+            time.sleep(1)
 
-            logger.debug("3. Alter table while inserts are running")
-            alter_statement = f'ALTER TABLE keyspace1.standard1 DROP ("C{col_number - 1}", "C{col_number - 2}")'
+            logger.debug("3. Alter table while I/O is running")
+            drop_cols = ", ".join(f"c{col_number - 1 - i}" for i in range(columns_to_drop))
+            alter_statement = f"ALTER TABLE ks.t DROP ({drop_cols})"
             logger.debug(f"alter_statement {alter_statement}")
-            alter_result = session.execute(alter_statement)
-            logger.debug(alter_result.all())
+            alter_session.execute(alter_statement)
 
-            logger.debug(f"wait till {case} statement finished")
+            logger.debug("4. Stop background I/O")
+            stop.set()
             statement_future.result()
 
-        rows = session.execute(SimpleStatement("SELECT * FROM keyspace1.standard1 LIMIT 1;", consistency_level=ConsistencyLevel.ALL))
-        assert len(rows_to_list(rows)[0]) == col_number - 1, f"Expected {col_number - 1} columns but got rows:{rows} instead"
-
-        logger.debug("read and check data")
-        run_stress("read")
+        logger.debug("Verify schema change and that reads work after ALTER")
+        rows = alter_session.execute(SimpleStatement("SELECT * FROM ks.t", consistency_level=ConsistencyLevel.ALL))
+        expected_cols = 1 + col_number - columns_to_drop  # pk + remaining columns
+        assert len(rows_to_list(rows)[0]) == expected_cols, f"Expected {expected_cols} columns but got {len(rows_to_list(rows)[0])}"
 
     @pytest.mark.skip_not_implemented(reason="unimplemented")
     def commitlog_replays_after_schema_change(self):
