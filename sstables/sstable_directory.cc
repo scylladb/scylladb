@@ -657,38 +657,34 @@ future<sstring> sstable_directory::create_pending_deletion_log(opened_directory&
         sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
         dirlog.trace("Writing {}", tmp_pending_delete_log);
 
-            touch_directory(pending_delete_dir).get();
-            auto oflags = sstable_write_open_flags;
-            // Create temporary pending_delete log file.
-            auto f = open_file_dma(tmp_pending_delete_log, oflags).get();
-            // Write all toc names into the log file.
-            auto out = make_file_output_stream(std::move(f), 4096).get();
-            auto close_out = deferred_close(out);
+        touch_directory(pending_delete_dir).get();
+        auto oflags = sstable_write_open_flags;
+        // Create temporary pending_delete log file.
+        auto f = open_file_dma(tmp_pending_delete_log, oflags).get();
+        // Write all toc names into the log file.
+        auto out = make_file_output_stream(std::move(f), 4096).get();
+        auto close_out = deferred_close(out);
 
-        try {
-            auto trim_size = base_dir.native().size() + 1; // Account for the '/' delimiter
-            for (const auto& sst : ssts) {
-                sstring toc = seastar::to_sstring(sst->toc_filename());
-                if (toc.size() <= trim_size) {
-                    on_internal_error(dirlog, fmt::format("Sstable {} outside of basedir {} is scheduled for deletion", toc, base_dir.native()));
-                }
-                out.write(toc.begin() + trim_size, toc.size() - trim_size).get();
-                out.write("\n").get();
-                dirlog.trace("Wrote '{}' to {}", sstring(toc.begin() + trim_size, toc.size() - trim_size), tmp_pending_delete_log);
+        auto trim_size = base_dir.native().size() + 1; // Account for the '/' delimiter
+        for (const auto& sst : ssts) {
+            sstring toc = seastar::to_sstring(sst->toc_filename());
+            if (toc.size() <= trim_size) {
+                on_internal_error(dirlog, fmt::format("Sstable {} outside of basedir {} is scheduled for deletion", toc, base_dir.native()));
             }
-
-            out.flush().get();
-            close_out.close_now();
-        } catch (...) {
-            dirlog.warn("Error while writing {}: {}. Ignoring.", tmp_pending_delete_log, std::current_exception());
+            out.write(toc.begin() + trim_size, toc.size() - trim_size).get();
+            out.write("\n").get();
+            dirlog.trace("Wrote '{}' to {}", sstring(toc.begin() + trim_size, toc.size() - trim_size), tmp_pending_delete_log);
         }
 
-            // Once flushed and closed, the temporary log file can be renamed.
-            io_check(rename_file, tmp_pending_delete_log, pending_delete_log, rename_flags::none).get();
+        out.flush().get();
+        close_out.close_now();
 
-            // Guarantee that the changes above reached the disk.
-            base_dir.sync(general_disk_error_handler).get();
-            dirlog.debug("{} written successfully.", pending_delete_log);
+        // Once flushed and closed, the temporary log file can be renamed.
+        io_check(rename_file, tmp_pending_delete_log, pending_delete_log, rename_flags::none).get();
+
+        // Guarantee that the changes above reached the disk.
+        base_dir.sync(general_disk_error_handler).get();
+        dirlog.debug("{} written successfully.", pending_delete_log);
 
         return pending_delete_log;
     });

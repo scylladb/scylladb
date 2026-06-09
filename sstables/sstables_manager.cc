@@ -23,6 +23,7 @@
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/http.hh"
 #include "exceptions/exceptions.hh"
 
@@ -416,19 +417,28 @@ future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
     // front element. The deleter implementation is welcome to check
     // that sstables from the vector really live in it.
     auto& storage = ssts.front()->get_storage();
+    if (utils::get_local_injector().enter("delete_atomically_before_prepare")) {
+        throw std::runtime_error("delete_atomically_before_prepare");
+    }
     auto ctx = co_await storage.atomic_delete_prepare(ssts);
 
-    utils::get_local_injector().inject("delete_atomically_after_prepare",
-            [] { throw std::runtime_error("delete_atomically_after_prepare"); });
+    try {
+        utils::get_local_injector().inject("delete_atomically_after_prepare",
+                [] { throw std::runtime_error("delete_atomically_after_prepare"); });
 
-    co_await coroutine::parallel_for_each(ssts, [&ctx] (shared_sstable sst) {
-        return sst->unlink(&ctx);
-    });
+        co_await coroutine::parallel_for_each(ssts, [&ctx] (shared_sstable sst) {
+            return sst->unlink(&ctx);
+        });
 
-    utils::get_local_injector().inject("delete_atomically_after_unlink",
-            [] { throw std::runtime_error("delete_atomically_after_unlink"); });
+        utils::get_local_injector().inject("delete_atomically_after_unlink",
+                [] { throw std::runtime_error("delete_atomically_after_unlink"); });
 
-    co_await storage.atomic_delete_complete(std::move(ctx));
+        co_await storage.atomic_delete_complete(std::move(ctx));
+    } catch (...) {
+        // After atomic_delete_prepare, the sstables will be deleted
+        // even after a crash, so just warn and carry on.
+        smlogger.warn("SSTables deletion failed after prepare: {}. Ignored.", std::current_exception());
+    }
 }
 
 future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_snapshot(std::vector<shared_sstable> ssts, sstring name) {

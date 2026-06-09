@@ -2317,14 +2317,8 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
 
 future<>
 table::delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove) {
-    try {
-        auto gh = _sstable_deletion_gate.hold();
-        co_await get_sstables_manager().delete_atomically(std::move(sstables_to_remove));
-    } catch (...) {
-        // There is nothing more we can do here.
-        // Any remaining SSTables will eventually be re-compacted and re-deleted.
-        tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::current_exception());
-    }
+    auto gh = _sstable_deletion_gate.hold();
+    co_await get_sstables_manager().delete_atomically(std::move(sstables_to_remove));
 }
 
 future<>
@@ -2585,7 +2579,13 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
         _t._large_data_guardrail->register_sstable(sst);
     }
 
-    co_await builder.delete_sstables_atomically(unused_sstables_for_deletion(std::move(desc)));
+    try {
+        co_await builder.delete_sstables_atomically(unused_sstables_for_deletion(std::move(desc)));
+    } catch (...) {
+        // If atomic_delete_prepare succeeded, sstables will eventually be deleted on restart.
+        // Otherwise no sstables were affected. Either way it's safe to continue.
+        tlogger.warn("SSTables deletion failed: {}. Ignored.", std::current_exception());
+    }
 }
 
 future<>
@@ -2933,7 +2933,13 @@ future<> table::drop_quarantined_sstables() {
     _cache.refresh_snapshot();
     rebuild_statistics();
 
-    co_await delete_sstables_atomically(permit, std::move(removed));
+    try {
+        co_await delete_sstables_atomically(permit, std::move(removed));
+    } catch (...) {
+        // If atomic_delete_prepare succeeded, sstables will eventually be deleted on restart.
+        // Otherwise no sstables were affected. Either way it's safe to continue.
+        tlogger.warn("SSTables deletion failed: {}. Ignored.", std::current_exception());
+    }
 }
 
 bool storage_group::no_compacted_sstable_undeleted() const {
@@ -4717,7 +4723,13 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         static constexpr size_t max_atomic_delete_chunk = 100;
         for (auto chunk_view : del | std::views::chunk(max_atomic_delete_chunk)) {
             auto chunk = chunk_view | std::views::as_rvalue | std::ranges::to<std::vector>();
-            co_await delete_sstables_atomically(permit, std::move(chunk));
+            try {
+                co_await delete_sstables_atomically(permit, std::move(chunk));
+            } catch (...) {
+                // If atomic_delete_prepare succeeded, sstables will eventually be deleted on restart.
+                // Otherwise no sstables were affected. Either way it's safe to continue.
+                tlogger.warn("SSTables deletion failed: {}. Ignored.", std::current_exception());
+            }
         }
     });
     co_return rp;
@@ -5697,11 +5709,14 @@ future<> compaction_group::cleanup() {
     }
 
     if (!_sstables_compacted_but_not_deleted.empty()) {
-        co_await _t.delete_sstables_atomically(permit, _sstables_compacted_but_not_deleted);
-        // delete_sstables_atomically swallows exceptions, so this always runs.
-        // Any SSTables that failed to delete will eventually be re-compacted
-        // and re-deleted.
-        _sstables_compacted_but_not_deleted.clear();
+        try {
+            co_await _t.delete_sstables_atomically(permit, _sstables_compacted_but_not_deleted);
+            _sstables_compacted_but_not_deleted.clear();
+        } catch (...) {
+            // There is nothing more we can do here.
+            // Any remaining SSTables will eventually be re-compacted and re-deleted.
+            tlogger.warn("SSTables deletion failed: {}. Ignored.", std::current_exception());
+        }
         _t.rebuild_statistics();
     }
     if (utils::get_local_injector().enter("tablet_cleanup_failure_post_deletion")) {
