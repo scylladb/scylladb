@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <optional>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/future.hh>
 #include <boost/intrusive/set.hpp>
 #include "bytes.hh"
 #include "schema/schema_fwd.hh"
@@ -114,24 +115,40 @@ private:
 };
 
 struct guardrail_config {
+    // Partition thresholds (replica-side only — checked via SSTable metadata index)
     utils::updateable_value<uint32_t> partition_size_fail_threshold_mb;
     utils::updateable_value<uint32_t> partition_size_warn_threshold_mb;
     utils::updateable_value<uint32_t> rows_count_fail_threshold;
     utils::updateable_value<uint32_t> rows_count_warn_threshold;
+    // Row thresholds (shared: replica checks on-disk size, coordinator checks mutation memory)
     utils::updateable_value<uint32_t> row_size_fail_threshold_mb;
     utils::updateable_value<uint32_t> row_size_warn_threshold_mb;
+    // Collection thresholds (shared: replica checks SSTable metadata, coordinator checks mutation)
     utils::updateable_value<uint32_t> collection_elements_fail_threshold;
     utils::updateable_value<uint32_t> collection_elements_warn_threshold;
+    // Cell thresholds (coordinator-side only — checked from mutation content)
+    utils::updateable_value<uint32_t> cell_size_fail_threshold_mb;
+    utils::updateable_value<uint32_t> cell_size_warn_threshold_mb;
 };
 
-// Each replica::table holds a unique_ptr to either a real guardrail or a
+// Each replica::table holds a shared_ptr to either a real guardrail or a
 // noop.  The guardrail owns the per-table large_data_record_index, so
 // noop tables pay no index-maintenance cost.
+//
+// The guardrail provides two check methods:
+//   check()              — replica-side, uses SSTable metadata index
+//   check_coordinator()  — coordinator-side, checks mutation content directly
 class large_data_guardrail_base {
 public:
     virtual ~large_data_guardrail_base() = default;
+    // Replica-side check: looks up partition/row/collection in the SSTable
+    // metadata index and rejects or warns based on recorded on-disk sizes.
     virtual void check(const schema& s, const mutation_partition& mp,
-                       partition_key_view pk) const = 0;
+            partition_key_view pk) const = 0;
+    // Coordinator-side check: inspects the mutation content directly
+    // (cell value sizes, row memory usage, collection element counts).
+    virtual void check_coordinator(const schema& s, const mutation_partition& mp,
+            partition_key_view pk) const = 0;
     virtual void register_sstable(sstables::shared_sstable sst) = 0;
     virtual void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) = 0;
 };
@@ -143,7 +160,9 @@ public:
         return inst;
     }
     void check(const schema&, const mutation_partition&,
-               partition_key_view) const override {}
+            partition_key_view) const override {}
+    void check_coordinator(const schema&, const mutation_partition&,
+            partition_key_view) const override {}
     void register_sstable(sstables::shared_sstable) override {}
     void rebuild(const std::unordered_set<sstables::shared_sstable>&) override {}
 };
@@ -154,7 +173,9 @@ public:
         : _cfg(std::move(cfg)) {}
 
     void check(const schema& s, const mutation_partition& mp,
-               partition_key_view pk) const override;
+            partition_key_view pk) const override;
+    void check_coordinator(const schema& s, const mutation_partition& mp,
+            partition_key_view pk) const override;
     void register_sstable(sstables::shared_sstable sst) override;
     void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) override;
 

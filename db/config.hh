@@ -233,6 +233,7 @@ public:
     named_value<uint32_t> compaction_large_partition_warning_threshold_mb;
     named_value<uint32_t> compaction_large_row_warning_threshold_mb;
     named_value<uint32_t> compaction_large_cell_warning_threshold_mb;
+    named_value<uint32_t> large_cell_fail_threshold_mb;
     named_value<uint32_t> large_partition_fail_threshold_mb;
     named_value<uint32_t> rows_count_fail_threshold;
     named_value<uint32_t> large_row_fail_threshold_mb;
