@@ -1731,6 +1731,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , object_storage_connections_per_shard(this, "object_storage_connections_per_shard", liveness::LiveUpdate, value_status::Used, 128,
         "Maximum number of object storage connections per shard. "
         "Connections are distributed proportionally across scheduling groups based on their shares.")
+    , object_storage_clients_memory_fraction(this, "object_storage_clients_memory_fraction", value_status::Unused, 0.01,
+        "Fraction of shard memory used as the buffer budget shared by all object storage clients.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")
     , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces. (deprecated)")
