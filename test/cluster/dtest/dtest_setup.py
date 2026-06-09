@@ -439,6 +439,9 @@ class DTestSetup:
 
             # Expected Raft errors on decommission-abort or node restart with MV.
             r"raft_topology - raft_topology_cmd.*failed with: raft::request_aborted",
+
+            # Expected when a node is stopped while raft topology is waiting for an IP.
+            r"raft_topology - raft_topology_cmd.*failed with: seastar::sleep_aborted",
         }))
 
         errors = node.grep_log_for_errors(distinct_errors=True)
