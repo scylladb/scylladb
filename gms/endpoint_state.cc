@@ -42,7 +42,9 @@ bool endpoint_state::is_cql_ready() const noexcept {
         return false;
     }
     try {
-        return boost::lexical_cast<int>(app_state->value());
+        return app_state->value().with_linearized([] (std::string_view sv) {
+            return boost::lexical_cast<int>(sv);
+        });
     } catch (...) {
         return false;
     }
@@ -51,7 +53,7 @@ bool endpoint_state::is_cql_ready() const noexcept {
 locator::host_id endpoint_state::get_host_id() const noexcept {
     locator::host_id host_id;
     if (auto app_state = get_application_state_ptr(application_state::HOST_ID)) {
-        host_id = locator::host_id(utils::UUID(app_state->value()));
+        host_id = locator::host_id(utils::UUID(app_state->value().linearize()));
         if (!host_id) {
             on_internal_error_noexcept(logger, format("Node has null host_id"));
         }
@@ -63,9 +65,9 @@ std::optional<locator::endpoint_dc_rack> endpoint_state::get_dc_rack() const {
     if (const auto* dc_state = get_application_state_ptr(application_state::DC)) {
         const auto* rack_state = get_application_state_ptr(application_state::RACK);
         if (dc_state->value().empty() || !rack_state || rack_state->value().empty()) {
-            on_internal_error_noexcept(logger, format("Node {} has empty dc={} or rack={}", get_host_id(), dc_state->value(), rack_state ? rack_state->value() : "(null)"));
+            on_internal_error_noexcept(logger, format("Node {} has empty dc={} or rack={}", get_host_id(), dc_state->value(), rack_state ? rack_state->value() : utils::chunked_string("(null)")));
         } else {
-            return std::make_optional<locator::endpoint_dc_rack>(dc_state->value(), rack_state->value());
+            return std::make_optional<locator::endpoint_dc_rack>(dc_state->value().linearize(), rack_state->value().linearize());
         }
     }
     return std::nullopt;

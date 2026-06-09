@@ -37,7 +37,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
                     // We return the enum index and not it's name to stay compatible to origin
                     // method that the state index are static but the name can be changed.
                     version_val.application_state = static_cast<std::underlying_type<gms::application_state>::type>(as_type);
-                    version_val.value = app_state.value();
+                    version_val.value = app_state.value().linearize();
                     version_val.version = app_state.version().value();
                     val.application_state.push(version_val);
                 }

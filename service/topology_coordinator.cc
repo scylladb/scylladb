@@ -118,7 +118,7 @@ sstring get_application_state_gently(const gms::application_state_map& epmap, gm
         return sstring{};
     }
     // it's versioned_value::value(), not std::optional::value() - it does not throw
-    return it->second.value();
+    return it->second.value().linearize();
 }
 } // namespace
 

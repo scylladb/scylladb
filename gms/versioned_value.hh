@@ -12,6 +12,7 @@
 
 #include <seastar/core/sstring.hh>
 #include "locator/host_id.hh"
+#include "utils/chunked_string.hh"
 #include "version_generator.hh"
 #include "gms/inet_address.hh"
 #include "dht/token.hh"
@@ -37,7 +38,7 @@ namespace gms {
 
 class versioned_value {
     version_type _version;
-    sstring _value;
+    utils::chunked_string _value;
 public:
     // this must be a char that cannot be present in any token
     static constexpr std::string_view DELIMITER{","};
@@ -49,25 +50,14 @@ public:
     static constexpr std::string_view SHUTDOWN{"shutdown"};
 
     [[nodiscard]] version_type version() const noexcept { return _version; };
-    [[nodiscard]] const sstring& value() const noexcept { return _value; };
+    [[nodiscard]] const utils::chunked_string& value() const noexcept { return _value; };
 
     bool operator==(const versioned_value& other) const noexcept {
         return _version == other._version &&
                _value   == other._value;
     }
 
-    explicit versioned_value(const sstring& value, version_type version = version_generator::get_next_version())
-        : _version(version), _value(value) {
-#if 0
-        // blindly interning everything is somewhat suboptimal -- lots of VersionedValues are unique --
-        // but harmless, and interning the non-unique ones saves significant memory.  (Unfortunately,
-        // we don't really have enough information here in VersionedValue to tell the probably-unique
-        // values apart.)  See CASSANDRA-6410.
-        this.value = value.intern();
-#endif
-    }
-
-    explicit versioned_value(sstring&& value, version_type version = version_generator::get_next_version()) noexcept
+    explicit versioned_value(utils::chunked_string value, version_type version = version_generator::get_next_version()) noexcept
         : _version(version), _value(std::move(value)) {
     }
 
@@ -76,7 +66,7 @@ public:
     }
 
     static versioned_value clone_with_higher_version(const versioned_value& value) noexcept {
-        return versioned_value(value.value());
+        return versioned_value(utils::chunked_string(utils::chunked_string_view(value.value())));
     }
 
 private:
@@ -146,8 +136,8 @@ public:
         return versioned_value(fmt::to_string(fmt::join(features, ",")));
     }
 
-    static versioned_value cache_hitrates(const sstring& hitrates) {
-        return versioned_value(hitrates);
+    static versioned_value cache_hitrates(utils::chunked_string hitrates) {
+        return versioned_value(std::move(hitrates));
     }
 
     static versioned_value cql_ready(bool value) {
@@ -164,6 +154,10 @@ public:
 
 template <> struct fmt::formatter<gms::versioned_value> : fmt::formatter<string_view> {
     static auto format(const gms::versioned_value& v, fmt::format_context& ctx) {
-        return fmt::format_to(ctx.out(), "Value({},{})", v.value(), v.version());
+        auto out = fmt::format_to(ctx.out(), "Value(");
+        for (bytes_view frag : fragment_range(managed_bytes_view(v.value().data()))) {
+            out = fmt::format_to(out, "{}", utils::to_string_view(frag));
+        }
+        return fmt::format_to(out, ",{})", v.version());
     }
 };

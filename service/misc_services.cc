@@ -8,6 +8,7 @@
  */
 
 #include <seastar/core/sleep.hh>
+#include <seastar/util/defer.hh>
 #include "gms/inet_address.hh"
 #include "load_meter.hh"
 #include "load_broadcaster.hh"
@@ -19,7 +20,7 @@
 #include "replica/database.hh"
 #include "locator/abstract_replication_strategy.hh"
 
-#include <cstdlib>
+#include <charconv>
 
 namespace service {
 
@@ -152,73 +153,81 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         return a;
     };
 
-    return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<table_id, stat>(), sum_stats_per_cf).then([this] (std::unordered_map<table_id, stat> rates) mutable {
-        _diff = 0;
-        _gstate.reserve(_slen); // assume length did not change from previous iteration
-        _slen = 0;
-        _rates = std::move(rates);
-        // set calculated rates on all shards
-        return _db.invoke_on_all([this, cpuid = this_shard_id()] (replica::database& db) {
-            return do_for_each(_rates, [this, cpuid, &db] (auto&& r) mutable {
-                auto cf_opt = db.get_tables_metadata().get_table_if_exists(r.first);
-                if (!cf_opt) { // a table may be added before map/reduce completes and this code runs
-                    return;
-                }
-                auto& cf = cf_opt;
-                stat& s = r.second;
-                float rate = 0;
-                if (s.h) {
-                    rate = s.h / (s.h + s.m);
-                }
-                if (this_shard_id() == cpuid) {
-                    // calculate max difference between old rate and new one for all cfs
-                    _diff = std::max(_diff, std::abs(float(cf->get_global_cache_hit_rate()) - rate));
-                    _gstate += format("{}.{}:{:0.6f};", cf->schema()->ks_name(), cf->schema()->cf_name(), rate);
-                }
-                cf->set_global_cache_hit_rate(cache_temperature(rate));
-            });
-        });
-    }).then([this] {
-        _slen = _gstate.size();
-        using namespace std::chrono_literals;
-        auto now = lowres_clock::now();
-        // Publish CACHE_HITRATES in case:
-        //
-        // - We haven't published it at all
-        // - The diff is bigger than 1% and we haven't published in the last 5 seconds
-        // - The diff is really big 10%
-        //
-        // Note: A peer node can know the cache hitrate through read_data
-        // read_mutation_data and read_digest RPC verbs which have
-        // cache_temperature in the response. So there is no need to update
-        // CACHE_HITRATES through gossip in high frequency.
-        bool do_publish = (_published_nr == 0) ||
-                          (_diff > 0.1) ||
-                          ( _diff > 0.01 && (now - _published_time) > 5000ms);
-
-        // We do the recalculation faster if the diff is bigger than 0.01. It
-        // is useful to do the calculation even if we do not publish the
-        // CACHE_HITRATES though gossip, since the recalculation will call the
-        // table->set_global_cache_hit_rate to set the hitrate.
-        auto recalculate_duration = _diff > 0.01 ? lowres_clock::duration(500ms) : lowres_clock::duration(2000ms);
-        if (do_publish) {
-            llogger.debug("Send CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
-            ++_published_nr;
-            _published_time = now;
-            return container().invoke_on(0, [&gstate = _gstate] (cache_hitrate_calculator& self) {
-                return self._gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES,
-                        gms::versioned_value::cache_hitrates(gstate));
-            }).then([recalculate_duration] {
-                return recalculate_duration;
-            });
-        } else {
-            llogger.debug("Skip CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
-            return make_ready_future<lowres_clock::duration>(recalculate_duration);
-        }
-    }).finally([this] {
-        _gstate = std::string(); // free memory, do not trust clear() to do that for string
+    auto finally = defer([this] noexcept {
         _rates.clear();
     });
+
+    _rates = co_await _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<table_id, stat>(), sum_stats_per_cf);
+    _diff = 0;
+
+    // set calculated rates on all shards
+    auto cpuid = this_shard_id();
+    std::vector<std::string> parts;
+    co_await _db.invoke_on_all([this, cpuid, &parts] (replica::database& db) {
+        return do_for_each(_rates, [this, cpuid, &db, &parts] (auto&& r) mutable {
+            auto cf_opt = db.get_tables_metadata().get_table_if_exists(r.first);
+            if (!cf_opt) { // a table may be added before map/reduce completes and this code runs
+                return;
+            }
+            auto& cf = cf_opt;
+            stat& s = r.second;
+            float rate = 0;
+            if (s.h) {
+                rate = s.h / (s.h + s.m);
+            }
+            if (this_shard_id() == cpuid) {
+                // calculate max difference between old rate and new one for all cfs
+                _diff = std::max(_diff, std::abs(float(cf->get_global_cache_hit_rate()) - rate));
+                parts.push_back(format("{}.{}:{:0.6f};", cf->schema()->ks_name(), cf->schema()->cf_name(), rate));
+            }
+            cf->set_global_cache_hit_rate(cache_temperature(rate));
+        });
+    });
+
+    // Build gstate as a chunked_string from accumulated parts
+    size_t total_size = 0;
+    for (auto& p : parts) {
+        total_size += p.size();
+    }
+    utils::chunked_string gstate(utils::chunked_string::initialized_later{}, total_size);
+    auto view = gstate.mutable_view();
+    for (auto& p : parts) {
+        write_fragmented(view, std::string_view(p));
+    }
+
+    using namespace std::chrono_literals;
+    auto now = lowres_clock::now();
+    // Publish CACHE_HITRATES in case:
+    //
+    // - We haven't published it at all
+    // - The diff is bigger than 1% and we haven't published in the last 5 seconds
+    // - The diff is really big 10%
+    //
+    // Note: A peer node can know the cache hitrate through read_data
+    // read_mutation_data and read_digest RPC verbs which have
+    // cache_temperature in the response. So there is no need to update
+    // CACHE_HITRATES through gossip in high frequency.
+    bool do_publish = (_published_nr == 0) ||
+                      (_diff > 0.1) ||
+                      ( _diff > 0.01 && (now - _published_time) > 5000ms);
+
+    // We do the recalculation faster if the diff is bigger than 0.01. It
+    // is useful to do the calculation even if we do not publish the
+    // CACHE_HITRATES though gossip, since the recalculation will call the
+    // table->set_global_cache_hit_rate to set the hitrate.
+    auto recalculate_duration = _diff > 0.01 ? lowres_clock::duration(500ms) : lowres_clock::duration(2000ms);
+    if (do_publish) {
+        llogger.debug("Send CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
+        ++_published_nr;
+        _published_time = now;
+        co_await container().invoke_on(0, [gstate = std::move(gstate)] (cache_hitrate_calculator& self) mutable {
+            return self._gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES,
+                    gms::versioned_value::cache_hitrates(std::move(gstate)));
+        });
+    } else {
+        llogger.debug("Skip CACHE_HITRATES update max_diff={}, published_nr={}", _diff, _published_nr);
+    }
+    co_return recalculate_duration;
 }
 
 future<> cache_hitrate_calculator::stop() {
@@ -273,34 +282,35 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, locat
             return make_ready_future<>();
         }
 
-        size_t current;
-        size_t max;
-        api::timestamp_type ticks;
-        const char* start_bound = value.value().data();
-        char* end_bound;
-        for (auto* ptr : {&current, &max}) {
-            errno = 0;
-            *ptr = std::strtoull(start_bound, &end_bound, 10);
-            if (errno == ERANGE) {
+        return value.value().with_linearized([&] (std::string_view sv) {
+            size_t current;
+            size_t max;
+            api::timestamp_type ticks;
+            const char* first = sv.data();
+            const char* last = sv.data() + sv.size();
+
+            for (auto* ptr : {&current, &max}) {
+                auto [p, ec] = std::from_chars(first, last, *ptr);
+                if (ec != std::errc{} || p == last) {
+                    return make_ready_future();
+                }
+                first = p + 1; // skip delimiter
+            }
+            if (max == 0) {
                 return make_ready_future();
             }
-            start_bound = end_bound + 1;
-        }
-        if (max == 0) {
-            return make_ready_future();
-        }
-        errno = 0;
-        ticks = std::strtoll(start_bound, &end_bound, 10);
-        if (ticks == 0 || errno == ERANGE || end_bound != value.value().data() + value.value().size()) {
-            return make_ready_future();
-        }
-        auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};
-        return _sp.invoke_on_all([id, backlog] (service::storage_proxy& sp) {
-            auto[it, inserted] = sp._view_update_backlogs.try_emplace(id, backlog);
-            if (!inserted && it->second.ts < backlog.ts) {
+            auto [p, ec] = std::from_chars(first, last, ticks);
+            if (ticks == 0 || ec != std::errc{} || p != last) {
+                return make_ready_future();
+            }
+            auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};
+            return _sp.invoke_on_all([id, backlog] (service::storage_proxy& sp) {
+                auto[it, inserted] = sp._view_update_backlogs.try_emplace(id, backlog);
+                if (!inserted && it->second.ts < backlog.ts) {
                 it->second = backlog;
             }
             return make_ready_future();
+        });
         });
     });
 }

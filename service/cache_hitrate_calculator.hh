@@ -10,6 +10,7 @@
 
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
+#include "utils/chunked_string.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/sharded.hh>
 
@@ -36,8 +37,6 @@ class cache_hitrate_calculator : public seastar::async_sharded_service<cache_hit
     bool _stopped = false;
     float _diff = 0;
     std::unordered_map<table_id, stat> _rates;
-    size_t _slen = 0;
-    std::string _gstate;
     uint64_t _published_nr = 0;
     lowres_clock::time_point _published_time;
     future<> _done = make_ready_future();

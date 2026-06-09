@@ -4951,10 +4951,20 @@ table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, locator
             float f = -1.0f; // missing state means old node
             if (state) {
                 const auto me = format("{}.{}", _schema->ks_name(), _schema->cf_name());
-                const auto& value = state->value();
-                const auto i = value.find(me);
-                if (i != sstring::npos) {
-                    f = strtof(&value[i + me.size() + 1], nullptr);
+                utils::chunked_string_view csv(state->value());
+                auto it = std::search(csv.begin(), csv.end(), me.begin(), me.end());
+                if (it != csv.end()) {
+                    // Skip past the table name and the ':' separator
+                    std::advance(it, me.size() + 1);
+                    // Extract float value until ';' or end into a small buffer
+                    char buf[16];
+                    size_t n = 0;
+                    while (it != csv.end() && *it != ';' && n < sizeof(buf) - 1) {
+                        buf[n++] = *it;
+                        ++it;
+                    }
+                    buf[n] = '\0';
+                    f = strtof(buf, nullptr);
                 } else {
                     f = 0.0f; // empty state means that node has rebooted
                 }

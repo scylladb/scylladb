@@ -32,7 +32,7 @@ enum class application_state:int {
 };
 
 class versioned_value {
-    sstring value();
+    utils::chunked_string value();
     gms::version_type version();
 };
 
