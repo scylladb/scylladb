@@ -1308,7 +1308,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting storage manager");
             sstables::storage_manager::config stm_cfg;
-            stm_cfg.object_storage_clients_memory = std::clamp<size_t>(memory::stats().total_memory() * 0.01, 10 << 20, 100 << 20);
+            stm_cfg.object_storage_clients_memory = std::max<size_t>(10 << 20, memory::stats().total_memory() * cfg->object_storage_clients_memory_fraction());
+            startlog.info("Object storage clients memory budget: {} bytes ({}% of shard memory)",
+                          stm_cfg.object_storage_clients_memory,
+                          cfg->object_storage_clients_memory_fraction() * 100);
             sstm.start(std::ref(*cfg), stm_cfg).get();
             auto stop_sstm = defer_verbose_shutdown("sstables storage manager", [&sstm] {
                 sstm.stop().get();
