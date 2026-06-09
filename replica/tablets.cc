@@ -301,14 +301,14 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
-        if (features.tablet_migration_virtual_task && tablet.migration_task_info.is_valid()) {
-            m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(tablet.migration_task_info), ts);
+        if (features.tablet_migration_virtual_task && tablet.migration_task_info) {
+            m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(*tablet.migration_task_info), ts);
         }
         if (features.tablet_repair_scheduler) {
-            if (tablet.repair_task_info.is_valid()) {
-                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+            if (tablet.repair_task_info) {
+                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(*tablet.repair_task_info), ts);
                 if (features.tablet_incremental_repair) {
-                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(tablet.repair_task_info.repair_incremental_mode), ts);
+                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(tablet.repair_task_info->repair_incremental_mode), ts);
                 }
             }
             if (tablet.repair_time != db_clock::time_point{}) {
@@ -834,7 +834,10 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
 
     auto last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
-    auto info = tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at};
+    auto info = tablet_info{std::move(tablet_replicas), repair_time,
+            repair_task_info.is_valid() ? std::make_unique<locator::tablet_task_info>(std::move(repair_task_info)) : nullptr,
+            migration_task_info.is_valid() ? std::make_unique<locator::tablet_task_info>(std::move(migration_task_info)) : nullptr,
+            sstables_repaired_at};
     if (is_updating) {
         auto old_last_token = map.get_last_token(tid);
         if (last_token != old_last_token) {

@@ -1332,13 +1332,13 @@ public:
                 // Avoid rescheduling a failed tablet repair in a loop
                 // TODO: Allow user to config
                 const auto min_reschedule_time = std::chrono::seconds(5);
-                if (now - info.repair_task_info.sched_time < min_reschedule_time) {
+                if (info.repair_task_info && now - info.repair_task_info->sched_time < min_reschedule_time) {
                     lblogger.debug("Skipped tablet repair for tablet={} which is scheduled too frequently", gid);
                     co_return;
                 }
 
                 db_clock::duration diff;
-                auto is_user_reuqest = info.repair_task_info.is_user_repair_request();
+                auto is_user_reuqest = info.repair_task_info && info.repair_task_info->is_user_repair_request();
                 if (is_user_reuqest) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {

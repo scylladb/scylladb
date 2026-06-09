@@ -371,8 +371,8 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                         tablet_replica {h3, 1},
                     },
                     db_clock::now(),
-                    locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
-                    locator::tablet_task_info::make_intranode_migration_request(),
+                    std::make_unique<locator::tablet_task_info>(locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"})),
+                    std::make_unique<locator::tablet_task_info>(locator::tablet_task_info::make_intranode_migration_request()),
                     0
                 });
                 tm.set_tablet_map(table1, std::move(tmap));
@@ -390,7 +390,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     },
                     {},
                     {},
-                    locator::tablet_task_info::make_migration_request(),
+                    std::make_unique<locator::tablet_task_info>(locator::tablet_task_info::make_migration_request()),
                     0
                 });
                 tb = *tmap.next_tablet(tb);
@@ -406,7 +406,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     },
                     {},
                     {},
-                    locator::tablet_task_info::make_migration_request(),
+                    std::make_unique<locator::tablet_task_info>(locator::tablet_task_info::make_migration_request()),
                     0
                 });
                 tb = *tmap.next_tablet(tb);
@@ -805,8 +805,8 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                         tablet_replica {h3, 1},
                     },
                     db_clock::now(),
-                    locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
-                    locator::tablet_task_info::make_intranode_migration_request(),
+                    std::make_unique<locator::tablet_task_info>(locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"})),
+                    std::make_unique<locator::tablet_task_info>(locator::tablet_task_info::make_intranode_migration_request()),
                     0
                 });
                 tm.set_tablet_map(table1, std::move(tmap));
@@ -6940,7 +6940,7 @@ void run_tablet_manual_repair_rf1(cql_test_env& e) {
                 tablet_replica{host1, 0},
             }
         };
-        ti.repair_task_info = ti.repair_task_info.make_user_repair_request();
+        ti.repair_task_info = std::make_unique<locator::tablet_task_info>(locator::tablet_task_info::make_user_repair_request());
         tmap.set_tablet(tid, std::move(ti));
         tmeta.set_tablet_map(table1, std::move(tmap));
         co_return;
