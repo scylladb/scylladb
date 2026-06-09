@@ -10,6 +10,8 @@
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/strong_consistency/batch_statement.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/coroutine/switch_to.hh>
@@ -1729,6 +1731,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
 
     modifications.reserve(n.assume_value());
     values.reserve(n.assume_value());
+    bool is_sc = false;
 
     if (init_trace) {
         tracing::begin(trace_state, "Execute batch of CQL3 queries", client_state.get_client_address());
@@ -1787,10 +1790,13 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
                             + std::to_string(int(kind.assume_value()))));
         }
 
-        if (dynamic_cast<cql3::statements::modification_statement*>(ps->statement.get()) == nullptr) {
+        auto unwrapped_stmt = ps->statement->unwrap_strong_consistency_statement(ps->statement);
+        is_sc |= unwrapped_stmt.get() != ps->statement.get();
+
+        auto modif_statement_ptr = dynamic_pointer_cast<cql3::statements::modification_statement>(unwrapped_stmt);
+        if (!modif_statement_ptr) {
             return make_exception_future<cql_server::process_fn_return_type>(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
         }
-        ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         if (init_trace) {
             tracing::add_table_name(trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
             tracing::add_prepared_statement(trace_state, ps);
@@ -1836,9 +1842,20 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     }
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
-    batch->set_audit_info(batch->audit_info());
-    return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
-            .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
+    auto ai = batch->audit_info();
+    ::shared_ptr<cql3::cql_statement> statement = batch;
+
+    if (is_sc) {
+        if (cql3::statements::batch_statement::type(type.assume_value()) == cql3::statements::batch_statement::type::COUNTER) {
+            return make_exception_future<cql_server::process_fn_return_type>(
+                exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables"));
+        }
+        statement = ::make_shared<cql3::statements::strong_consistency::batch_statement>(std::move(batch));
+    }
+    statement->set_audit_info(std::move(ai));
+
+    return qp.local().execute_batch_without_checking_exception_message(std::move(statement), query_state, options, std::move(pending_authorization_entries))
+            .then([stream, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
         if (msg->as_bounce()) {
             return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {

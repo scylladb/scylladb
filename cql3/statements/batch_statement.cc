@@ -19,6 +19,8 @@
 #include "service/storage_proxy.hh"
 #include "tracing/trace_state.hh"
 #include "utils/unique_view.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "cql3/statements/strong_consistency/batch_statement.hh"
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -438,6 +440,12 @@ void batch_statement::build_cas_result_set_metadata() {
     _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
 }
 
+std::optional<std::vector<shared_ptr<cql3::statements::modification_statement>>> batch_statement::get_batch_statements() const {
+    return _statements
+            | std::views::transform([] (const single_statement& ss) { return ss.statement; })
+            | std::ranges::to<std::vector>();
+}
+
 namespace raw {
 
 std::unique_ptr<prepared_statement>
@@ -474,7 +482,20 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
     if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
         partition_key_bind_indices = meta.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
     }
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
+    auto batch_ptr = make_shared<cql3::statements::batch_statement>(std::move(batch_statement_));
+
+    shared_ptr<cql_statement> statement;
+    bool is_sc = first_ks && strong_consistency::is_strongly_consistent(db, *first_ks);
+    if (is_sc) {
+        if (_type == type::COUNTER) {
+            throw exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables");
+        }
+        statement = ::make_shared<strong_consistency::batch_statement>(std::move(batch_ptr));
+    } else {
+        statement = std::move(batch_ptr);
+    }
+
+    return std::make_unique<prepared_statement>(audit_info(), std::move(statement),
                                                      meta.get_variable_specifications(),
                                                      std::move(partition_key_bind_indices));
 }

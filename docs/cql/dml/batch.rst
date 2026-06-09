@@ -67,6 +67,17 @@ used, a failed batch might leave the batch only partly applied.
 Use the ``COUNTER`` option for batched counter updates. Unlike other
 updates in ScyllaDB, counter updates are not idempotent.
 
+Strongly consistent batches
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When a ``BATCH`` targets a strongly consistent table, all statements in the batch must target the same partition.
+The mutations are merged into a single mutation and committed atomically through Raft.
+
+Both ``LOGGED`` and ``UNLOGGED`` batches are accepted, but there is no difference between them in this context:
+atomicity is always guaranteed by the underlying Raft consensus protocol, not by the batch log.
+
+``COUNTER`` batches are not supported with strongly consistent tables.
+
 
 :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 

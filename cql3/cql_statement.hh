@@ -41,6 +41,7 @@ class metadata;
 seastar::shared_ptr<const metadata> make_empty_metadata();
 
 class query_options;
+namespace statements { class modification_statement; }
 
 // A vector of CQL warnings generated during execution of a statement.
 using cql_warnings_vec = std::vector<sstring>;
@@ -114,6 +115,21 @@ public:
 
     virtual bool is_conditional() const {
         return false;
+    }
+
+    /**
+     * Get inner statements of batch statement.
+     * Non-batch statements return nullopt.
+     */
+    virtual std::optional<std::vector<shared_ptr<cql3::statements::modification_statement>>> get_batch_statements() const {
+        return std::nullopt;
+    }
+
+    // Returns a statement with strong consistency wrappers removed.
+    // Non-strong-consistency statements return self.
+    // The caller must pass a shared_ptr that owns this object as self.
+    virtual shared_ptr<cql_statement> unwrap_strong_consistency_statement(const shared_ptr<cql_statement>& self) const {
+        return self;
     }
 
     audit::audit_info* get_audit_info() { return _audit_info.get(); }
