@@ -5750,7 +5750,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         if (rs.state == node_state::bootstrapping) {
                             if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
                                 auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                        parent_info.id, streaming::stream_reason::bootstrap, _bootstrap_result, coroutine::lambda([this, &rs, session] () -> future<> {
+                                        parent_info.id, streaming::stream_reason::bootstrap, _bootstrap_result, [this, rs, session] () -> future<> {
                                     if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
                                         co_await utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120));
 
@@ -5762,7 +5762,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                             locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
                                         co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, session);
                                     }
-                                }));
+                                });
                                 co_await task->done();
                             }
                             // Bootstrap did not complete yet, but streaming did
@@ -5771,7 +5771,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         } else {
                             auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
                             auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                    parent_info.id, streaming::stream_reason::replace, _bootstrap_result, coroutine::lambda([this, &rs, &id, replaced_id, session] () -> future<> {
+                                    parent_info.id, streaming::stream_reason::replace, _bootstrap_result, [this, rs, id, replaced_id, session] () -> future<> {
                                 if (!_topology_state_machine._topology.req_param.contains(id)) {
                                     on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", id));
                                 }
@@ -5790,7 +5790,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
                                     co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, session, locator::host_id{replaced_id.uuid()});
                                 }
-                            }));
+                            });
                             co_await task->done();
                         }
                         co_await _db.invoke_on_all([] (replica::database& db) {
@@ -5804,10 +5804,10 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     case node_state::decommissioning: {
                         tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
                         auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.id, streaming::stream_reason::decommission, _decommission_result, coroutine::lambda([this] () -> future<> {
+                                parent_info.id, streaming::stream_reason::decommission, _decommission_result, [this] () -> future<> {
                             co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run", utils::wait_for_message(60s));
                             co_await unbootstrap();
-                        }));
+                        });
                         co_await task->done();
                         result.status = raft_topology_cmd_result::command_status::success;
                     }
