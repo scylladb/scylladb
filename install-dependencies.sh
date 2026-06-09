@@ -170,14 +170,16 @@ fedora_python3_packages=(
     python3-pyyaml
     python3-urwid
     python3-pyparsing
-    python3-requests
-    python3-setuptools
     python3-psutil
     python3-distro
     python3-click
     python3-six
     python3-pyudev
 )
+# NOTE: requests and setuptools are intentionally NOT taken from Fedora RPMs.
+# The Fedora packages lag upstream and ship versions with known CVEs (requests
+# pulls vulnerable urllib3/idna; setuptools vendors vulnerable jaraco.context and
+# wheel). They are installed via pip below with CVE-fixed version floors instead.
 
 # an associative array from packages to constrains
 declare -A pip_packages=(
@@ -192,6 +194,18 @@ declare -A pip_packages=(
     [universalasync]=""
     [boto3-stubs[dynamodb]]=""
     [setuptools_scm]=""
+    # Security floors (replace the formerly RPM-provided packages). pip's default
+    # --upgrade-strategy is only-if-needed, so transitive deps are NOT bumped unless
+    # named explicitly here.
+    #   requests >=2.33.0  -> CVE-2026-25645
+    #   urllib3  >=2.7.0   -> CVE-2026-44431, CVE-2026-44432 (transitive of requests)
+    #   idna     >=3.15    -> CVE-2026-45409 (transitive of requests)
+    #   setuptools >=81.0.0 -> vendors jaraco.context 6.1.0 (CVE-2026-23949, since 80.10.0)
+    #                          and wheel 0.46.3 (CVE-2026-24049, since 81.0.0)
+    [requests]=">=2.33.0"
+    [urllib3]=">=2.7.0"
+    [idna]=">=3.15"
+    [setuptools]=">=81.0.0"
 )
 
 pip_symlinks=(
