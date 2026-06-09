@@ -7599,4 +7599,134 @@ SEASTAR_THREAD_TEST_CASE(test_migration_target_pow2_from_size) {
     }, std::move(cfg)).get();
 }
 
+// Verify that a converging table does not cause unrelated tables to be
+// scaled down via the per-shard-goal mechanism.
+//
+// During pow2 convergence a table temporarily carries an inflated tablet
+// count (vnode boundaries + pow2 boundaries). If the per-shard-goal
+// accounting naively uses this inflated count, it will incorrectly conclude
+// the cluster is overloaded and scale down other tables.
+//
+// The fix accounts converging tables at their steady-state pow2 target
+// (via target_tablet_count_for_scaling). This test verifies that a
+// non-converging table in a separate keyspace is not resized during the
+// entire convergence of a second table.
+SEASTAR_THREAD_TEST_CASE(test_pow2_convergence_does_not_trigger_scale_down) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    cfg.db_config->tablets_per_shard_goal.set(10);
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 1;
+        const unsigned shard_count = 1;
+
+        // Build the topology: 1 node, 1 shard.
+        topology_builder topo(e);
+        auto host = topo.add_node(node_state::normal, shard_count);
+
+        // Create two keyspaces with one table each.
+        // Table A: non-converging, stable at 4 tablets.
+        // Table B: converging, starts at 32 tablets with target_pow2 = 4.
+        auto ks_a = add_keyspace(e, {{topo.dc(), rf}});
+        auto table_a = add_table(e, ks_a).get();
+
+        auto ks_b = add_keyspace(e, {{topo.dc(), rf}});
+        auto table_b = add_table(e, ks_b).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        const size_t table_a_tablet_count = 4;
+        const size_t table_b_tablet_count = 32;
+        const size_t target_pow2_b = 4;
+
+        // Set up Table A with a stable 4-tablet pow2 map.
+        mutate_tablets(e, [&](tablet_metadata& tmeta) -> future<> {
+            auto boundaries = dht::get_uniform_tokens(table_a_tablet_count);
+            tablet_map tmap(std::move(boundaries));
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info{tablet_replica_set{{tablet_replica{host, shard_id(tid.value() % shard_count)}}}});
+            }
+            tmeta.set_tablet_map(table_a, std::move(tmap));
+            co_return;
+        });
+
+        mutate_tablets(e, [&](tablet_metadata& tmeta) -> future<> {
+            auto boundaries = dht::get_uniform_tokens(table_b_tablet_count);
+            tablet_map tmap(std::move(boundaries));
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info{tablet_replica_set{{tablet_replica{host, shard_id(0)}}}});
+            }
+            tmap.set_target_pow2_tablet_count(target_pow2_b);
+            tmeta.set_tablet_map(table_b, std::move(tmap));
+            co_return;
+        });
+
+        // Verify initial state.
+        {
+            auto& tmap_a = stm.get()->tablets().get_tablet_map(table_a);
+            BOOST_REQUIRE_EQUAL(tmap_a.tablet_count(), table_a_tablet_count);
+            auto& tmap_b = stm.get()->tablets().get_tablet_map(table_b);
+            BOOST_REQUIRE_EQUAL(tmap_b.tablet_count(), table_b_tablet_count);
+            BOOST_REQUIRE(tmap_b.is_converging_to_pow2());
+        }
+
+        // Lower "initial" tablets so it doesn't force splits after convergence.
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_a)).get();
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_b)).get();
+
+        // Set load stats so both tables are at ideal avg tablet size (no
+        // size-based resize pressure). Use target_pow2 as the effective
+        // number of tablets for sizing Table B's total size.
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_default_tablet_sizes(stm.get());
+        load_stats.set_size(table_a, service::default_target_tablet_size * table_a_tablet_count);
+        load_stats.set_size(table_b, service::default_target_tablet_size * target_pow2_b);
+
+        // Per-shard-goal math (tablets_per_shard_goal = 10, shards = 1):
+        //
+        // Buggy (naive current count):
+        //   (4 + 32) * RF / shards = 36 / 1 = 36 > 10 -> scale-down triggered
+        //
+        // Fixed (converging table counted at steady-state target):
+        //   (4 + ~4) * RF / shards = 8 / 1 = 8 < 10 -> no scale-down
+
+        // Run the load balancer to convergence, checking at every iteration
+        // that Table A is never resized.
+        rebalance_tablets(e, &load_stats, {}, [&] (const migration_plan& plan) {
+            auto& tmap_b = stm.get()->tablets().get_tablet_map(table_b);
+            if (!tmap_b.is_converging_to_pow2()) {
+                return true;
+            }
+            auto it = plan.resize_plan().resize.find(table_a);
+            if (it != plan.resize_plan().resize.end()) {
+                BOOST_FAIL(fmt::format(
+                        "Table A got a {} decision during Table B convergence: current tablet count = {}",
+                        it->second.way, stm.get()->tablets().get_tablet_map(table_a).tablet_count()));
+            }
+            return false;
+        });
+
+        // Verify final state.
+        {
+            auto& tmap_a = stm.get()->tablets().get_tablet_map(table_a);
+            BOOST_REQUIRE_EQUAL(tmap_a.tablet_count(), table_a_tablet_count);
+
+            auto& tmap_b = stm.get()->tablets().get_tablet_map(table_b);
+            BOOST_REQUIRE_EQUAL(tmap_b.tablet_count(), target_pow2_b);
+            BOOST_REQUIRE(!tmap_b.is_converging_to_pow2());
+            BOOST_REQUIRE(tmap_b.get_layout() == tablet_layout::pow_of_2);
+        }
+
+        // Verify stability: no further action after convergence.
+        {
+            auto& talloc = e.get_tablet_allocator().local();
+            auto& sys_ks = e.get_system_keyspace().local();
+            auto& topology = e.get_topology_state_machine().local()._topology;
+            auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks, load_stats.get()).get();
+            BOOST_REQUIRE(plan.empty());
+        }
+
+        e.execute_cql(fmt::format("drop keyspace {}", ks_a)).get();
+        e.execute_cql(fmt::format("drop keyspace {}", ks_b)).get();
+    }, std::move(cfg)).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
