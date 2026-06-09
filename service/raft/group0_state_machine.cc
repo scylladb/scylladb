@@ -398,8 +398,8 @@ static void ensure_group0_schema(const group0_command& cmd, data_dictionary::dat
 }
 #endif
 
-future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
-    slogger.trace("apply() is called with {} commands", command.size());
+future<> group0_state_machine::apply(raft::log_entry_ptr_list commands) {
+    slogger.trace("apply() is called with {} commands", commands.size());
 
     co_await utils::get_local_injector().inject("group0_state_machine::delay_apply", 1s);
 
@@ -410,7 +410,8 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
     group0_state_machine_merger m(co_await _client.get_last_group0_state_id(), std::move(read_apply_mutex_holder),
                                   max_command_size, _sp.data_dictionary());
 
-    for (auto&& c : command) {
+    for (const auto& entry : commands) {
+        const auto& c = std::get<raft::command>(entry->data);
         auto is = ser::as_input_stream(c);
         auto cmd = ser::deserialize(is, std::type_identity<group0_command>{});
 

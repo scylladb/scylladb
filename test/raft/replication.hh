@@ -310,7 +310,7 @@ struct rpc_config {
 
 template <typename Clock>
 class raft_cluster {
-    using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
+    using apply_fn = std::function<size_t(raft::server_id id, const raft::log_entry_ptr_list& commands, lw_shared_ptr<hasher_int> hasher)>;
     class state_machine;
     class persistence;
     class connected;
@@ -411,7 +411,7 @@ public:
             snapshots* snapshots):
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         hasher(make_lw_shared<hasher_int>()) {}
-    future<> apply(const std::vector<raft::command_cref> commands) override {
+    future<> apply(raft::log_entry_ptr_list commands) override {
         auto n = _apply(_id, commands, hasher);
         _seen += n;
         if (n && _seen >= _apply_entries) {
@@ -1035,7 +1035,7 @@ void raft_cluster<Clock>::set_ticker_callback(size_t id) noexcept {
 
 std::vector<raft::log_entry> create_log(std::vector<log_entry> list, raft::index_t start_idx);
 
-size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands,
+size_t apply_changes(raft::server_id id, const raft::log_entry_ptr_list& commands,
         lw_shared_ptr<hasher_int> hasher);
 
 // Wait for leader log to propagate to follower

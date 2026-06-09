@@ -28,7 +28,7 @@ namespace internal {
 
 using node_to_hint_store_factory_type = utils::loading_shared_values<endpoint_id, db::commitlog>;
 using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
-using hint_entry_reader = commitlog_entry_reader;
+using hint_entry_reader = commitlog_mutation_entry_reader;
 
 /// \brief Rebalance hints segments among all present shards.
 ///

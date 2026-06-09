@@ -27,6 +27,9 @@
 #include "commitlog_entry.hh"
 #include "validation.hh"
 #include "mutation/mutation_partition_view.hh"
+#include <seastar/core/on_internal_error.hh>
+#include "locator/tablet_replication_strategy.hh"
+#include "raft_commitlog_replay_buffer.hh"
 
 static logging::logger rlogger("commitlog_replayer");
 
@@ -45,7 +48,7 @@ class db::commitlog_replayer::impl {
 
     friend class db::commitlog_replayer;
 public:
-    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks);
+    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer);
 
     future<> init();
 
@@ -81,8 +84,9 @@ public:
         return _column_mappings.stop();
     }
 
-    future<> process(stats*, commitlog::buffer_and_replay_position buf_rp) const;
+    future<> process(stats*, detail::commitlog_entry_serialization_format, commitlog::buffer_and_replay_position buf_rp) const;
     future<stats> recover(const commitlog::descriptor&, const commitlog::replay_state&) const;
+    detail::commitlog_entry_serialization_format get_entry_format(const commitlog::descriptor&) const;
 
     typedef std::unordered_map<table_id, replay_position> rp_map;
     typedef std::unordered_map<unsigned, rp_map> shard_rpm_map;
@@ -112,14 +116,17 @@ public:
 
     seastar::sharded<replica::database>& _db;
     seastar::sharded<db::system_keyspace>& _sys_ks;
+    seastar::sharded<raft_commitlog_replay_buffer>* _raft_buffer;
     shard_rpm_map _rpm;
     db::system_keyspace::commitlog_cleanup_map _cleanup_map;
     shard_rp_map _min_pos;
 };
 
-db::commitlog_replayer::impl::impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks)
+db::commitlog_replayer::impl::impl(
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
     : _db(db)
     , _sys_ks(sys_ks)
+    , _raft_buffer(raft_buffer)
 {}
 
 future<> db::commitlog_replayer::impl::init() {
@@ -185,9 +192,10 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
 
     auto s = make_lw_shared<stats>();
     auto& exts = _db.local().extensions();
+    auto entry_format = get_entry_format(d);
 
     return db::commitlog::read_log_file(rpstate, f, d.filename_prefix,
-            std::bind(&impl::process, this, s.get(), std::placeholders::_1),
+            std::bind(&impl::process, this, s.get(), entry_format, std::placeholders::_1),
             p, &exts).then_wrapped([s](future<> f) {
         try {
             f.get();
@@ -204,103 +212,126 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
     });
 }
 
-future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_replay_position buf_rp) const {
+detail::commitlog_entry_serialization_format db::commitlog_replayer::impl::get_entry_format(const commitlog::descriptor& d) const {
+    if (!d.descriptor_tag.empty()) {
+        SCYLLA_ASSERT(d.descriptor_tag == detail::variant_format_tag);
+        return detail::commitlog_entry_serialization_format::variant;
+    }
+    return detail::commitlog_entry_serialization_format::mutation;
+}
+
+future<> db::commitlog_replayer::impl::process(
+        stats* s, detail::commitlog_entry_serialization_format entry_format, commitlog::buffer_and_replay_position buf_rp) const {
     auto&& buf = buf_rp.buffer;
     auto&& rp = buf_rp.position;
     try {
 
-        commitlog_entry_reader cer(buf);
-        auto& fm = cer.mutation();
+        commitlog_entry_reader cer(buf, entry_format);
+        const auto& read_entry = cer.entry().item;
 
-        auto& local_cm = _column_mappings.local().map;
-        auto cm_it = local_cm.find(fm.schema_version());
-        if (cm_it == local_cm.end()) {
-            if (!cer.get_column_mapping()) {
-                rlogger.debug("replaying at {} v={} at {}", fm.column_family_id(), fm.schema_version(), rp);
-                throw std::runtime_error(format("unknown schema version {}, table={}", fm.schema_version(), fm.column_family_id()));
-            }
-            rlogger.debug("new schema version {} in entry {}", fm.schema_version(), rp);
-            cm_it = local_cm.emplace(fm.schema_version(), *cer.get_column_mapping()).first;
-        }
-        const column_mapping& src_cm = cm_it->second;
-
-        auto shard_id = rp.shard_id();
-        if (rp < min_pos(shard_id)) {
-            rlogger.trace("entry {} is less than global min position. skipping", rp);
-            s->skipped_mutations++;
+        if (std::holds_alternative<raft_commitlog_entry>(read_entry)) {
+            const auto& raft_entry = std::get<raft_commitlog_entry>(read_entry);
+            SCYLLA_ASSERT(_raft_buffer);
+            rlogger.debug("Adding raft log entry for group {} at {} to replay buffer", raft_entry.group_id, rp);
+            _raft_buffer->local().add(raft_entry.group_id, raft_entry.entry);
             co_return;
-        }
+        } else if (std::holds_alternative<mutation_entry>(read_entry)) {
+            const auto& mut_entry = std::get<mutation_entry>(read_entry);
 
-        auto uuid = fm.column_family_id();
-        auto& table = _db.local().find_column_family(uuid);
-        const auto& schema = *table.schema();
-        auto token = fm.token(schema);
+            auto& fm = mut_entry.mutation();
 
-        auto cf_rp = cf_min_pos(uuid, shard_id);
-        if (rp <= cf_rp) {
-            rlogger.trace("entry {} at {} is younger than recorded replay position {}. skipping", fm.column_family_id(), rp, cf_rp);
-            s->skipped_mutations++;
-            co_return;
-        }
-
-        auto token_range_rp = token_min_pos(uuid, shard_id, token);
-        if (rp <= token_range_rp) {
-            rlogger.trace("entry {}, token {} in table {}, is younger than recorded replay position {} for its token range. skipping",
-                          rp, token, fm.column_family_id(), token_range_rp);
-            s->skipped_mutations++;
-            co_return;
-        }
-
-      auto apply = [&] (seastar::shard_id shard) {
-        return _db.invoke_on(shard, [this, &fm, &src_cm, rp] (replica::database& db) mutable -> future<> {
-            // TODO: might need better verification that the deserialized mutation
-            // is schema compatible. My guess is that just applying the mutation
-            // will not do this.
-            auto& cf = db.find_column_family(fm.column_family_id());
-
-            if (rlogger.is_enabled(logging::log_level::debug)) {
-                rlogger.debug("replaying at {} v={} {}:{} at {}", fm.column_family_id(), fm.schema_version(),
-                        cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
+            auto& local_cm = _column_mappings.local().map;
+            auto cm_it = local_cm.find(fm.schema_version());
+            if (cm_it == local_cm.end()) {
+                if (!mut_entry.mapping()) {
+                    rlogger.debug("replaying at {} v={} at {}", fm.column_family_id(), fm.schema_version(), rp);
+                    throw std::runtime_error(format("unknown schema version {}, table={}", fm.schema_version(), fm.column_family_id()));
+                }
+                rlogger.debug("new schema version {} in entry {}", fm.schema_version(), rp);
+                cm_it = local_cm.emplace(fm.schema_version(), *mut_entry.mapping()).first;
             }
-            if (const auto err = validation::is_cql_key_invalid(*cf.schema(), fm.key()); err) {
-                throw std::runtime_error(fmt::format("found entry with invalid key {} at {} v={} {}:{} at {}: {}.", fm.key(), fm.column_family_id(),
-                        fm.schema_version(), cf.schema()->ks_name(), cf.schema()->cf_name(), rp, *err));
+            const column_mapping& src_cm = cm_it->second;
+
+            auto shard_id = rp.shard_id();
+            if (rp < min_pos(shard_id)) {
+                rlogger.trace("entry {} is less than global min position. skipping", rp);
+                s->skipped_mutations++;
+                co_return;
             }
-            // Removed forwarding "new" RP. Instead give none/empty.
-            // This is what origin does, and it should be fine.
-            // The end result should be that once sstables are flushed out
-            // their "replay_position" attribute will be empty, which is
-            // lower than anything the new session will produce.
-            if (cf.schema()->version() != fm.schema_version()) {
-                auto& local_cm = _column_mappings.local().map;
-                auto cm_it = local_cm.try_emplace(fm.schema_version(), src_cm).first;
-                const column_mapping& cm = cm_it->second;
-                mutation m(cf.schema(), fm.decorated_key(*cf.schema()));
-                converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());
-                fm.partition().accept(cm, v);
-                return do_with(std::move(m), [&db, &cf] (const mutation& m) {
-                    return db.apply_in_memory(m, cf, db::rp_handle(), db::no_timeout);
+
+            auto uuid = fm.column_family_id();
+            auto& table = _db.local().find_column_family(uuid);
+            const auto& schema = *table.schema();
+            auto token = fm.token(schema);
+
+            auto cf_rp = cf_min_pos(uuid, shard_id);
+            if (rp <= cf_rp) {
+                rlogger.trace("entry {} at {} is younger than recorded replay position {}. skipping", fm.column_family_id(), rp, cf_rp);
+                s->skipped_mutations++;
+                co_return;
+            }
+
+            auto token_range_rp = token_min_pos(uuid, shard_id, token);
+            if (rp <= token_range_rp) {
+                rlogger.trace("entry {}, token {} in table {}, is younger than recorded replay position {} for its token range. skipping",
+                              rp, token, fm.column_family_id(), token_range_rp);
+                s->skipped_mutations++;
+                co_return;
+            }
+
+            auto apply = [&] (seastar::shard_id shard) {
+                return _db.invoke_on(shard, [this, &fm, &src_cm, rp] (replica::database& db) mutable -> future<> {
+                    // TODO: might need better verification that the deserialized mutation
+                    // is schema compatible. My guess is that just applying the mutation
+                    // will not do this.
+                    auto& cf = db.find_column_family(fm.column_family_id());
+
+                    if (rlogger.is_enabled(logging::log_level::debug)) {
+                        rlogger.debug("replaying at {} v={} {}:{} at {}", fm.column_family_id(), fm.schema_version(),
+                                cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
+                    }
+                    if (const auto err = validation::is_cql_key_invalid(*cf.schema(), fm.key()); err) {
+                        throw std::runtime_error(fmt::format("found entry with invalid key {} at {} v={} {}:{} at {}: {}.", fm.key(), fm.column_family_id(),
+                                fm.schema_version(), cf.schema()->ks_name(), cf.schema()->cf_name(), rp, *err));
+                    }
+                    // Removed forwarding "new" RP. Instead give none/empty.
+                    // This is what origin does, and it should be fine.
+                    // The end result should be that once sstables are flushed out
+                    // their "replay_position" attribute will be empty, which is
+                    // lower than anything the new session will produce.
+                    if (cf.schema()->version() != fm.schema_version()) {
+                        auto& local_cm = _column_mappings.local().map;
+                        auto cm_it = local_cm.try_emplace(fm.schema_version(), src_cm).first;
+                        const column_mapping& cm = cm_it->second;
+                        mutation m(cf.schema(), fm.decorated_key(*cf.schema()));
+                        converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());
+                        fm.partition().accept(cm, v);
+                        return do_with(std::move(m), [&db, &cf] (const mutation& m) {
+                            return db.apply_in_memory(m, cf, db::rp_handle(), db::no_timeout);
+                        });
+                    } else {
+                        return db.apply_in_memory(fm, cf.schema(), db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
+                    }
+                }).then_wrapped([s] (future<> f) {
+                    try {
+                        f.get();
+                        s->applied_mutations++;
+                    } catch (...) {
+                        s->invalid_mutations++;
+                        // TODO: write mutation to file like origin.
+                        rlogger.warn("error replaying: {}", std::current_exception());
+                    }
                 });
+            };
+            auto shards = table.get_effective_replication_map()->shard_for_writes(schema, token);
+            if (shards.empty()) {
+                rlogger.debug("no shard for token {} in table {}", token, uuid);
+                s->skipped_mutations++;
             } else {
-                return db.apply_in_memory(fm, cf.schema(), db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
+                co_await seastar::parallel_for_each(shards, apply);
             }
-        }).then_wrapped([s] (future<> f) {
-            try {
-                f.get();
-                s->applied_mutations++;
-            } catch (...) {
-                s->invalid_mutations++;
-                // TODO: write mutation to file like origin.
-                rlogger.warn("error replaying: {}", std::current_exception());
-            }
-        });
-      };
-        auto shards = table.get_effective_replication_map()->shard_for_writes(schema, token);
-        if (shards.empty()) {
-            rlogger.debug("no shard for token {} in table {}", token, uuid);
-            s->skipped_mutations++;
         } else {
-            co_await seastar::parallel_for_each(shards, apply);
+            on_fatal_internal_error(rlogger, fmt::format("Unknown variant type in commitlog entry at replay position {}", rp));
         }
     } catch (replica::no_such_column_family&) {
         // No such CF now? Origin just ignores this.
@@ -311,8 +342,9 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
     }
 }
 
-db::commitlog_replayer::commitlog_replayer(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks)
-    : _impl(std::make_unique<impl>(db, sys_ks))
+db::commitlog_replayer::commitlog_replayer(
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
+    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer))
 {}
 
 db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
@@ -322,8 +354,9 @@ db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
 db::commitlog_replayer::~commitlog_replayer()
 {}
 
-future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks) {
-    return do_with(commitlog_replayer(db, sys_ks), [](auto&& rp) {
+future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer) {
+    return do_with(commitlog_replayer(db, sys_ks, raft_buffer), [](auto&& rp) {
         auto f = rp._impl->init();
         return f.then([rp = std::move(rp)]() mutable {
             return make_ready_future<commitlog_replayer>(std::move(rp));

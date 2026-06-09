@@ -23,6 +23,9 @@ namespace seastar { class file; }
 
 #include "seastarx.hh"
 
+class commitlog_mutation_entry_writer;
+class commitlog_raft_log_entry_writer;
+
 namespace db {
 
 class config;
@@ -82,7 +85,7 @@ public:
     enum class sync_mode {
         PERIODIC, BATCH
     };
-    using force_sync = commitlog_entry_writer::force_sync;
+    using force_sync = db::commitlog_force_sync;
     struct config {
         config() = default;
         config(const config&) = default;
@@ -105,6 +108,10 @@ public:
 
         sync_mode mode = sync_mode::PERIODIC;
         std::string fname_prefix = descriptor::FILENAME_PREFIX;
+        // Optional tag appended before the file extension
+        // (e.g. entry_tag="variant" produces "CommitLog-4-12345.variant.log").
+        // When non-empty, the entry format is determined by the tag.
+        std::string descriptor_tag;
 
         bool use_o_dsync = false;
         bool warn_about_segments_left_on_disk_after_shutdown = true;
@@ -140,7 +147,7 @@ public:
 
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;
-        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = current_version, sstring = {});
+        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = current_version, sstring = {}, std::string tag = {});
         descriptor(replay_position p, const std::string& fname_prefix = FILENAME_PREFIX);
         descriptor(const std::string& filename, const std::string& fname_prefix = FILENAME_PREFIX);
 
@@ -150,6 +157,7 @@ public:
         const segment_id_type id;
         const uint32_t ver;
         const std::string filename_prefix = FILENAME_PREFIX;
+        const std::string descriptor_tag;
     };
 
     commitlog(commitlog&&) noexcept;
@@ -218,14 +226,23 @@ public:
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writer a writer responsible for writing the entry
      */
-    future<rp_handle> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer, db::timeout_clock::time_point timeout);
+    future<rp_handle> add_entry(const cf_id_type& id, const commitlog_mutation_entry_writer& entry_writer, db::timeout_clock::time_point timeout);
+
 
     /**
      * Add N entries to the commit log as a single operation (in a single segment).
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writers a vector of writers responsible for writing respective entry
      */
-    future<utils::chunked_vector<rp_handle>> add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
+    future<utils::chunked_vector<rp_handle>> add_entries(
+            utils::chunked_vector<commitlog_mutation_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
+
+    /**
+     * Add N raft log entries to the commit log as a single operation (in a single segment).
+     * Always uses force_sync::yes.
+     */
+    future<utils::chunked_vector<rp_handle>> add_raft_entries(
+            const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position

@@ -159,7 +159,7 @@ SEASTAR_TEST_CASE(test_commitlog_cleanups) {
         // but shouldn't resurrect the 1 cleaned row.
         e.db().invoke_on_all([&] (replica::database& db) -> future<> {
             auto cl = db.commitlog();
-            auto rp = co_await db::commitlog_replayer::create_replayer(e.db(), e.get_system_keyspace());
+            auto rp = co_await db::commitlog_replayer::create_replayer(e.db(), e.get_system_keyspace(), &e.raft_replay_buffer());
             auto paths = co_await cl->list_existing_segments();
             co_await rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX);
         }).get();

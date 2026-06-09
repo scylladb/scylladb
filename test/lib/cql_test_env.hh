@@ -30,6 +30,7 @@
 #include "schema/schema.hh"
 #include "service/tablet_allocator.hh"
 #include "vector_search/vector_store_client.hh"
+#include "db/commitlog/raft_commitlog_replay_buffer.hh"
 
 namespace replica {
 class database;
@@ -220,6 +221,8 @@ public:
     virtual sharded<vector_search::vector_store_client>& vector_store_client() = 0;
 
     virtual sharded<auth::cache>& auth_cache() = 0;
+
+    virtual sharded<db::raft_commitlog_replay_buffer>& raft_replay_buffer() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {}, std::optional<cql_test_init_configurables> = {});

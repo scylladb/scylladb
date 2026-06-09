@@ -181,7 +181,7 @@ const configuration& log::last_conf_for(index_t idx) const {
     return _snapshot.config;
 }
 
-index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
+index_t log::maybe_append(log_entry_ptr_list&& entries) {
     SCYLLA_ASSERT(!entries.empty());
 
     index_t last_new_idx = entries.back()->idx;

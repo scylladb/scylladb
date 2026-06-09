@@ -339,8 +339,9 @@ add_scylla_test(combined_tests
     castas_fcts_test.cc
     cdc_test.cc
     column_mapping_test.cc
-    commitlog_cleanup_test.cc
-    commitlog_test.cc
+     commitlog_cleanup_test.cc
+     commitlog_raft_replay_test.cc
+     commitlog_test.cc
     cql_auth_query_test.cc
     cql_functions_test.cc
     cql_query_group_test.cc

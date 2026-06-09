@@ -118,8 +118,8 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     return c;
 }
 
-db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v, sstring fname)
-        : _filename(std::move(fname)), id(i), ver(v), filename_prefix(fname_prefix) {
+db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v, sstring fname, std::string t)
+        : _filename(std::move(fname)), id(i), ver(v), filename_prefix(fname_prefix), descriptor_tag(std::move(t)) {
 }
 
 db::commitlog::descriptor::descriptor(replay_position p, const std::string& fname_prefix)
@@ -131,12 +131,16 @@ const std::string db::commitlog::descriptor::FILENAME_PREFIX("CommitLog" + SEPAR
 const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
 
 static const boost::regex allowed_prefix("[a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR);
-static const boost::regex filename_match("(?:Recycled-)?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR + ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
+// Matches filenames like "CommitLog-4-12345.log" or "CommitLog-4-12345.variant.log"
+// Groups: (1) prefix e.g. "CommitLog-", (2) version, (3) segment id, (4) optional tag e.g. "variant"
+static const boost::regex filename_match("(?:Recycled-)?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR +
+                                         ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?(?:\\.([a-zA-Z]+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
 
 db::commitlog::descriptor::descriptor(const std::string& filename, const std::string& fname_prefix)
     : descriptor([&filename, &fname_prefix]() {
         boost::smatch m;
         // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
+        // Also matches tagged files like CommitLog-4-12345.variant.log
         auto cbegin = filename.cbegin();
         auto pos = filename.rfind('/');
         if (pos != std::string::npos) {
@@ -155,8 +159,9 @@ db::commitlog::descriptor::descriptor(const std::string& filename, const std::st
 
         segment_id_type id = std::stoull(m[3].str());
         uint32_t ver = std::stoul(m[2].str());
+        auto tag = m[4].str(); // e.g. "variant" or ""
 
-        return descriptor(id, fname_prefix, ver, filename);
+        return descriptor(id, fname_prefix, ver, filename, std::move(tag));
     }()) {
 }
 
@@ -164,8 +169,13 @@ sstring db::commitlog::descriptor::filename() const {
     if (!_filename.empty()) {
         return _filename;
     }
-    return filename_prefix + std::to_string(ver) + SEPARATOR
-            + std::to_string(id) + FILENAME_EXTENSION;
+    auto name = filename_prefix + std::to_string(ver) + SEPARATOR
+            + std::to_string(id);
+    if (!descriptor_tag.empty()) {
+        name += "." + descriptor_tag;
+    }
+    name += FILENAME_EXTENSION;
+    return name;
 }
 
 db::commitlog::descriptor::operator db::replay_position() const {
@@ -878,6 +888,11 @@ public:
     }
     void forget_schema_versions() {
         _known_schema_versions.clear();
+    }
+    // Tags can currently only be set for segments using the 'variant' entry format,
+    // where commitlog items may be either mutations or Raft log entries.
+    auto descriptor_tag() const {
+        return _segment_manager->cfg.descriptor_tag;
     }
 
     void release_cf_count(const cf_id_type& cf) {
@@ -2447,7 +2462,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment() {
     for (;;) {
-        descriptor d(next_id(), cfg.fname_prefix);
+        descriptor d(next_id(), cfg.fname_prefix, descriptor::current_version, {}, cfg.descriptor_tag);
         auto dst = filename(d);
         auto flags = open_flags::wo;
         if (cfg.use_o_dsync) {
@@ -3098,22 +3113,22 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
     return _segment_manager->allocate_when_possible(serializer_func_entry_writer(id, size, std::move(func), sync), timeout);
 }
 
-future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
+future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_mutation_entry_writer& cew, timeout_clock::time_point timeout)
 {
     SCYLLA_ASSERT(id == cew.schema()->id());
 
     class cl_entry_writer final : public entry_writer {
-        commitlog_entry_writer _writer;
+        commitlog_mutation_entry_writer _writer;
     public:
         rp_handle res;
-        cl_entry_writer(const commitlog_entry_writer& wr) 
+        cl_entry_writer(const commitlog_mutation_entry_writer& wr) 
             : entry_writer(wr.sync()), _writer(wr) 
         {}
         const cf_id_type& id(size_t) const override {
             return _writer.schema()->id();
         }
         size_t size(segment& seg) override {
-            _writer.set_with_schema(!seg.is_schema_version_known(_writer.schema()));
+            _writer.setup_for_segment(seg.descriptor_tag(), !seg.is_schema_version_known(_writer.schema()));
             return _writer.size();
         }
         size_t size(segment& seg, size_t) override {
@@ -3142,15 +3157,15 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
 }
 
 future<utils::chunked_vector<db::rp_handle>>
-db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
+db::commitlog::add_entries(utils::chunked_vector<commitlog_mutation_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
     class cl_entries_writer final : public entry_writer {
-        utils::chunked_vector<commitlog_entry_writer> _writers;
+        utils::chunked_vector<commitlog_mutation_entry_writer> _writers;
         std::unordered_set<table_schema_version> _known;
         const segment* _sizes_computed = nullptr;
     public:
         utils::chunked_vector<rp_handle> res;
 
-        cl_entries_writer(force_sync sync, utils::chunked_vector<commitlog_entry_writer> entry_writers)
+        cl_entries_writer(force_sync sync, utils::chunked_vector<commitlog_mutation_entry_writer> entry_writers)
             : entry_writer(sync, entry_writers.size()), _writers(std::move(entry_writers))
         {
             res.reserve(_writers.size());
@@ -3168,7 +3183,7 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_w
                 if (!known) {
                     _known.emplace(i->schema()->version());
                 }
-                i->set_with_schema(!known);
+                i->setup_for_segment(seg.descriptor_tag(), !known);
                 res += i->size();
             }
             _sizes_computed = &seg;
@@ -3177,12 +3192,12 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_w
         size_t size(segment& seg, size_t i) override {
             auto& w = _writers.at(i);
             if (_sizes_computed != &seg) {
-                w.set_with_schema(!seg.is_schema_version_known(w.schema()));
+                w.setup_for_segment(seg.descriptor_tag(), !seg.is_schema_version_known(w.schema()));
             }
             return w.size();
         }
         size_t size() const override {
-            return std::accumulate(_writers.begin(), _writers.end(), size_t(0), [](size_t acc, const commitlog_entry_writer& w) {
+            return std::accumulate(_writers.begin(), _writers.end(), size_t(0), [](size_t acc, const commitlog_mutation_entry_writer& w) {
                 return w.mutation_size() + acc;
             });
         }
@@ -3207,6 +3222,57 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_w
 
     force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
     return _segment_manager->allocate_when_possible(cl_entries_writer(sync, std::move(entry_writers)), timeout);
+}
+future<utils::chunked_vector<db::rp_handle>> db::commitlog::add_raft_entries(
+        const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers) {
+    class cl_raft_entries_writer final : public entry_writer {
+        utils::chunked_vector<commitlog_raft_log_entry_writer> _writers;
+        cf_id_type _id;
+
+    public:
+        utils::chunked_vector<rp_handle> res;
+
+        cl_raft_entries_writer(utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers, cf_id_type id)
+            : entry_writer(force_sync::yes, entry_writers.size())
+            , _writers(std::move(entry_writers))
+            , _id(id) {
+            res.reserve(_writers.size());
+        }
+        const cf_id_type& id(size_t) const override {
+            return _id;
+        }
+        size_t size(segment&) override {
+            size_t res = 0;
+            for (auto& w : _writers) {
+                res += w.size();
+            }
+            return res;
+        }
+        size_t size(segment&, size_t i) override {
+            return _writers.at(i).size();
+        }
+        size_t size() const override {
+            size_t res = 0;
+            for (auto& w : _writers) {
+                res += w.size();
+            }
+            return res;
+        }
+        void write(segment&, output& out, size_t i) const override {
+            _writers.at(i).write(out);
+        }
+        void result(size_t i, rp_handle h) override {
+            SCYLLA_ASSERT(i == res.size());
+            res.emplace_back(std::move(h));
+        }
+
+        using result_type = utils::chunked_vector<db::rp_handle>;
+
+        result_type result() {
+            return std::move(res);
+        }
+    };
+    return _segment_manager->allocate_when_possible(cl_raft_entries_writer(std::move(entry_writers), id), db::no_timeout);
 }
 
 db::commitlog::commitlog(config cfg)
