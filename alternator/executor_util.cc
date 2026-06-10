@@ -26,6 +26,19 @@ namespace alternator {
 
 extern logging::logger elogger; // from executor.cc
 
+std::string_view rjson_type_to_string(rjson::type t) {
+    switch (t) {
+    case rapidjson::kNullType: return "null";
+    case rapidjson::kFalseType: return "false";
+    case rapidjson::kTrueType: return "true";
+    case rapidjson::kObjectType: return "object";
+    case rapidjson::kArrayType: return "array";
+    case rapidjson::kStringType: return "string";
+    case rapidjson::kNumberType: return "number";
+    default: return "unknown";
+    }
+}
+
 std::optional<int> get_int_attribute(const rjson::value& value, std::string_view attribute_name) {
     const rjson::value* attribute_value = rjson::find(value, attribute_name);
     if (!attribute_value)
@@ -37,15 +50,41 @@ std::optional<int> get_int_attribute(const rjson::value& value, std::string_view
     return attribute_value->GetInt();
 }
 
-std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, const char* default_return) {
+// Tries to read and return string attribute. If `allow_missing` is true and attribute is missing, returns an empty optional.
+// If the attribute doesn't exist and `allow_missing` is false, throws a descriptive api_error.
+// If the attribute exists but is not a string, throws a descriptive api_error.
+static std::optional<std::string> get_string_attribute_impl(const rjson::value& value, std::string_view attribute_name, bool allow_missing) {
     const rjson::value* attribute_value = rjson::find(value, attribute_name);
-    if (!attribute_value)
-        return default_return;
+    if (allow_missing && !attribute_value)
+        return std::nullopt;
+    if (!attribute_value) {
+        throw api_error::validation(fmt::format("Missing attribute {}", attribute_name));
+    }
     if (!attribute_value->IsString()) {
         throw api_error::validation(fmt::format("Expected string value for attribute {}, got: {}",
                 attribute_name, value));
     }
     return rjson::to_string(*attribute_value);
+}
+
+// Returns the string attribute, or `default_return` if the attribute is missing and `default_return` is supplied.
+// Throws an error if the attribute is missing and `default_return` is not supplied, or if the attribute exists but is not a string.
+std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, std::optional<std::string_view> default_return) {
+    auto val = get_string_attribute_impl(value, attribute_name, default_return.has_value());
+    if (!val) return std::string{ *default_return };
+    return std::move(*val);
+}
+
+// Returns the string attribute, or `default_return` if the attribute is missing and `default_return` is supplied.
+// Throws an error if the attribute is missing and `default_return` is not supplied, or if the attribute exists but is an empty string or an attribute is not a string.
+// Note: `default_return` is allowed to be an empty string and it will be returned in case the attribute is missing.
+std::string get_non_empty_string_attribute(const rjson::value& value, std::string_view attribute_name, std::optional<std::string_view> default_return) {
+    auto val = get_string_attribute_impl(value, attribute_name, default_return.has_value());
+    if (!val) return std::string{ *default_return };
+    if (val->empty()) {
+        throw api_error::validation(fmt::format("Expected non-empty string value for attribute {}, got empty string", attribute_name));
+    }
+    return std::move(*val);
 }
 
 bool get_bool_attribute(const rjson::value& value, std::string_view attribute_name, bool default_return) {
