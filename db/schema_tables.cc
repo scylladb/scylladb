@@ -268,6 +268,7 @@ schema_ptr scylla_keyspaces() {
             {"initial_tablets", int32_type},
             {"consistency", utf8_type},
             {"configs", configs_map_type()},
+            {"dedicated_rack", map_type_impl::get_instance(utf8_type, utf8_type, false)},
         },
         // static columns
         {},
@@ -1321,7 +1322,10 @@ utils::chunked_vector<mutation> make_create_keyspace_mutations(schema_features f
         }
         auto consistency = keyspace->consistency_option();
         if (consistency) {
-            scylla_m.set_cell(ckey, "consistency", data_dictionary::consistency_config_option_to_string(*consistency), timestamp);
+            scylla_m.set_cell(ckey, "consistency", data_dictionary::consistency_config_option_to_string(consistency->type), timestamp);
+            if (consistency->has_dedicated_rack()) {
+                store_map(scylla_m, ckey, "dedicated_rack", timestamp, consistency->dedicated_rack);
+            }
         }
         // The out-of-band configs column is only meaningful once the cluster-config feature
         // is enabled. Gating the write (rather than always emitting an empty collection
@@ -1418,7 +1422,7 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
 
     data_dictionary::storage_options storage_opts;
     std::optional<unsigned> initial_tablets;
-    std::optional<data_dictionary::consistency_config_option> consistency;
+    std::optional<data_dictionary::consistency_config> consistency;
     std::map<sstring, sstring> config_options;
     // Scylla-specific row will only be present if SCYLLA_KEYSPACES schema feature is available in the cluster
     if (scylla_specific_rs) {
@@ -1436,7 +1440,15 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
             initial_tablets = row.get<int>("initial_tablets");
             auto copt = row.get<sstring>("consistency");
             if (copt) {
-                consistency = data_dictionary::consistency_config_option_from_string(*copt);
+                data_dictionary::consistency_config cfg;
+                cfg.type = data_dictionary::consistency_config_option_from_string(*copt);
+                auto dr = row.get<map_type_impl::native_type>("dedicated_rack");
+                if (dr) {
+                    for (const auto& entry : *dr) {
+                        cfg.dedicated_rack.emplace(value_cast<sstring>(entry.first), value_cast<sstring>(entry.second));
+                    }
+                }
+                consistency = std::move(cfg);
             }
             if (auto configs = row.get<map_type_impl::native_type>("configs")) {
                 for (const auto& entry : *configs) {
