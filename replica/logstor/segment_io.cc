@@ -29,6 +29,9 @@ segment_header make_segment_header(const write_buffer::buffer_header& bh, std::o
 
     switch (bh.kind) {
     case segment_kind::full:
+        if (!sh) {
+            throw std::runtime_error("Full segment buffer header without segment header");
+        }
         seg_hdr.v = segment_header::full {
             .table = sh->table,
             .first_token = sh->first_token,
