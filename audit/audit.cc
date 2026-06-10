@@ -329,7 +329,7 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
             node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
             audit_info.query(), client_ip, audit_info.table(), username);
     }
-    return futurize_invoke(std::mem_fn(&storage_helper::write), _storage_helper_ptr, sinks, &audit_info, node_ip, client_ip, cl, username, error)
+    return _storage_helper_ptr->write(sinks, &audit_info, node_ip, client_ip, cl, username, error)
         .handle_exception([audit_info, node_ip, client_ip, cl, username, error] (auto ep) {
             logger.error("Unexpected exception when writing log with: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {} exception {}",
                 node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
@@ -382,7 +382,7 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
         logger.debug("Login log written: node_ip {}, client_ip {}, username {}, error {}",
             node_ip, client_ip, username, error ? "true" : "false");
     }
-    return futurize_invoke(std::mem_fn(&storage_helper::write_login), _storage_helper_ptr, sinks, username, node_ip, client_ip, error)
+    return _storage_helper_ptr->write_login(sinks, username, node_ip, client_ip, error)
         .handle_exception([username, node_ip, client_ip, error] (auto ep) {
             logger.error("Unexpected exception when writing login log with: node_ip {} client_ip {} username {} error {} exception {}",
                 node_ip, client_ip, username, error, ep);
