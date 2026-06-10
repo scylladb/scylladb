@@ -288,7 +288,7 @@ private:
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
 
     raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
-        service::migration_manager& mm);
+        service::migration_manager& mm, bool enable_sm_immediately);
 
     // Start a Raft server for the cluster-wide group 0 and join it to the group.
     // Called during bootstrap or upgrade.
@@ -331,7 +331,7 @@ private:
     // XXX: perhaps it would be good to make this function callable multiple times,
     // if we want to handle crashes of the group 0 server without crashing the entire Scylla process
     // (we could then try restarting the server internally).
-    future<> start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
+    future<> start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool enable_sm_immediately);
 
     // Modify the given server voter status in Raft group 0 configuration.
     // Retries on raft::commit_status_unknown.

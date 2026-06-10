@@ -220,9 +220,9 @@ const raft::server_id& raft_group0::load_my_id() {
 }
 
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
-                                                            service::migration_manager& mm) {
+                                                            service::migration_manager& mm, bool enable_sm_immediately) {
     auto state_machine = std::make_unique<group0_state_machine>(
-            _client, mm, qp.proxy(), ss, _gossiper, _feat);
+            _client, mm, qp.proxy(), ss, _gossiper, _feat, enable_sm_immediately);
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id);
     // Keep a reference to a specific RPC class.
@@ -443,13 +443,13 @@ void raft_group0::destroy() {
     }
 }
 
-future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
+future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool enable_sm_immediately) {
     SCYLLA_ASSERT(group0_id != raft::group_id{});
     // The address map may miss our own id in case we connect
     // to an existing Raft Group 0 leader.
     auto my_id = load_my_id();
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
-    auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm);
+    auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm, enable_sm_immediately);
     auto& persistence = srv_for_group0.persistence;
     auto& server = *srv_for_group0.server;
     co_await with_scheduling_group(_sg, [this, &srv_for_group0, group0_id] (this auto self) -> future<> {
@@ -521,7 +521,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
     auto group0_id = raft::group_id{co_await sys_ks.get_raft_group0_id()};
     if (group0_id) {
         // Group 0 ID present means we've already joined group 0 before.
-        co_await start_server_for_group0(group0_id, ss, qp, mm);
+        co_await start_server_for_group0(group0_id, ss, qp, mm, true);
         co_await enable_group0_state_machine();
         co_return;
     }
@@ -591,7 +591,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
             utils::get_local_injector().inject("stop_after_bootstrapping_initial_raft_configuration",
                 [] { std::raise(SIGSTOP); });
 
-            co_await start_server_for_group0(group0_id, ss, qp, mm);
+            co_await start_server_for_group0(group0_id, ss, qp, mm, true);
             co_await enable_group0_state_machine();
             server = &_raft_gr.group0();
             // FIXME if we crash now or after getting added to the config but before storing group 0 ID,
@@ -694,7 +694,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
     if (group0_id) {
         // Group 0 ID is present => we've already joined group 0 earlier.
         group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
-        co_await start_server_for_group0(group0_id, ss, qp, mm);
+        co_await start_server_for_group0(group0_id, ss, qp, mm, false);
 
         // Start group 0 leadership monitor fiber.
         _leadership_monitor = leadership_monitor_fiber();

@@ -141,7 +141,7 @@ class group0_state_machine : public raft_state_machine {
     future<> sync_audit_known_entities();
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-            gms::gossiper& gossiper, gms::feature_service& feat);
+            gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately);
     future<> apply(raft::log_entry_ptr_list commands) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;

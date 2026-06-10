@@ -56,12 +56,12 @@ namespace service {
 static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-        gms::gossiper& gossiper, gms::feature_service& feat)
+        gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately)
     : _client(client), _mm(mm), _sp(sp), _ss(ss)
     , _gate("group0_state_machine")
     , _state_id_handler(ss._topology_state_machine, sp.local_db(), gossiper)
     , _feature_service(feat)
-    , _in_memory_state_machine_enabled(utils::get_local_injector().is_enabled("group0_enable_sm_immediately")) {
+    , _in_memory_state_machine_enabled(enable_immediately || utils::get_local_injector().is_enabled("group0_enable_sm_immediately")) {
     _state_id_handler.run();
 }
 
@@ -475,6 +475,8 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
 future<> group0_state_machine::enable_in_memory_state_machine() {
     co_await utils::get_local_injector().inject("group0_state_machine_enable_in_memory_fail",
             [] { return std::make_exception_ptr(std::runtime_error("injected failure in enable_in_memory_state_machine")); });
+    co_await utils::get_local_injector().inject("delay_before_enable_in_memory_state_machine",
+            utils::wait_for_message(300s));
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
     if (!_in_memory_state_machine_enabled) {
         _in_memory_state_machine_enabled = true;
@@ -602,6 +604,8 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     co_await notify_client_route_change_if_needed(_ss, client_routes_update);
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
+
+    slogger.info("transfer snapshot from {} index {} snp id {} completed", hid, snp.idx, snp.id);
   } catch (const abort_requested_exception&) {
     throw raft::request_aborted(fmt::format(
         "Abort requested while transferring snapshot from ID: {}, snapshot descriptor id: {}, snapshot index: {}", from_id, snp.id, snp.idx));
