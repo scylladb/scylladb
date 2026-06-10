@@ -38,7 +38,9 @@
 #include "mutation_query.hh"
 #include "db/timeout_clock.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "db/schema_tables.hh"
+#include "sstables/page_cache.hh"
 #include "gms/generation-number.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
@@ -1166,6 +1168,41 @@ schema_ptr system_keyspace::tablets() {
     return schema;
 }
 
+schema_ptr system_keyspace::pagecache() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, PAGECACHE);
+        return schema_builder(this_smp_shard_count(), NAME, PAGECACHE, id)
+            .with_column("sstable", timeuuid_type, column_kind::partition_key)
+            .with_column("offset", long_type, column_kind::clustering_key)
+            .with_column("page", bytes_type)
+            .set_comment("Object-storage page cache: stores raw bytes fetched from object storage keyed by (sstable generation, file offset)")
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::pagecache_hits() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, PAGECACHE_HITS);
+        return schema_builder(this_smp_shard_count(), NAME, PAGECACHE_HITS, id)
+            .with_column("sstable", timeuuid_type, column_kind::partition_key)
+            .with_column("offset", long_type, column_kind::clustering_key)
+            .with_column("last_hit", timestamp_type)
+            // This is intentionally a separate table from system.pagecache, which stores the
+            // raw page data (large blobs, written once, rarely updated).  Access tracking is
+            // kept separate because its write pattern is the opposite: small rows, updated on
+            // every cache hit.  Mixing the two would create compaction pressure from the
+            // high-churn hit timestamps against the large, stable page blobs.  The separation
+            // also lets a future eviction daemon scan only the small hits table to find
+            // least-recently-used pages, without touching the bulky page data at all.
+            .set_comment("Object-storage page cache access tracking: records the last time each cached page was accessed")
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::service_levels_v2() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, SERVICE_LEVELS_V2);
@@ -2278,7 +2315,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), {tablets()});
 
     if (cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
-        r.insert(r.end(), {sstables_registry()});
+        r.insert(r.end(), {sstables_registry(), pagecache(), pagecache_hits()});
     }
 
     if (cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
@@ -2309,6 +2346,10 @@ future<> system_keyspace::make(
 
     replica::tablet_add_repair_scheduler_user_types(NAME, db);
     db.find_keyspace(NAME).add_user_type(sstableinfo_type);
+
+    if (db.get_config().check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
+        db.get_user_sstables_manager().set_page_cache(make_page_cache());
+    }
 }
 
 void system_keyspace::mark_writable() {
@@ -3518,6 +3559,67 @@ future<> system_keyspace::sstables_registry_list(table_id tid, locator::host_id 
         co_await consumer(std::move(status), std::move(state), std::move(desc));
         co_return stop_iteration::no;
     });
+}
+
+future<std::optional<temporary_buffer<char>>> system_keyspace::pagecache_get(utils::UUID sstable_gen, int64_t offset) {
+    static const auto req = format("SELECT page FROM system.{} WHERE sstable = ? AND offset = ?", PAGECACHE);
+    auto rs = co_await execute_cql(req, sstable_gen, offset);
+    if (!rs || rs->empty()) {
+        co_return std::nullopt;
+    }
+    auto& row = rs->one();
+    if (!row.has("page")) {
+        co_return std::nullopt;
+    }
+    auto blob = row.get_blob_unfragmented("page");
+    temporary_buffer<char> buf(blob.size());
+    std::copy(blob.begin(), blob.end(), buf.get_write());
+
+    // Update last_hit timestamp asynchronously (fire and forget).
+    // Exceptions are ignored - best-effort for eviction tracking.
+    static const auto hit_req = format("INSERT INTO system.{} (sstable, offset, last_hit) VALUES (?, ?, ?)", PAGECACHE_HITS);
+    (void)execute_cql(hit_req, sstable_gen, offset, db_clock::now()).discard_result().handle_exception([] (std::exception_ptr) {});
+
+    co_return std::move(buf);
+}
+
+future<> system_keyspace::pagecache_put(utils::UUID sstable_gen, int64_t offset, temporary_buffer<char> data) {
+    static const auto req = format("INSERT INTO system.{} (sstable, offset, page) VALUES (?, ?, ?)", PAGECACHE);
+    bytes blob(reinterpret_cast<const int8_t*>(data.get()), data.size());
+    co_await execute_cql(req, sstable_gen, offset, std::move(blob)).discard_result();
+}
+
+future<> system_keyspace::pagecache_evict_sstable(utils::UUID sstable_gen) {
+    static const auto req = fmt::format("DELETE FROM system.{} WHERE sstable = ?", PAGECACHE);
+    static const auto hits_req = fmt::format("DELETE FROM system.{} WHERE sstable = ?", PAGECACHE_HITS);
+    co_await execute_cql(req, sstable_gen).discard_result();
+    co_await execute_cql(hits_req, sstable_gen).discard_result();
+}
+
+namespace {
+
+class system_page_cache : public sstables::page_cache {
+    system_keyspace& _sys_ks;
+public:
+    explicit system_page_cache(system_keyspace& sys_ks) : _sys_ks(sys_ks) {}
+
+    future<std::optional<temporary_buffer<char>>> get_page(utils::UUID sstable_gen, int64_t offset) override {
+        return _sys_ks.pagecache_get(sstable_gen, offset);
+    }
+
+    future<> put_page(utils::UUID sstable_gen, int64_t offset, temporary_buffer<char> data) override {
+        return _sys_ks.pagecache_put(sstable_gen, offset, std::move(data));
+    }
+
+    future<> evict_sstable(utils::UUID sstable_gen) override {
+        return _sys_ks.pagecache_evict_sstable(sstable_gen);
+    }
+};
+
+} // anonymous namespace
+
+shared_ptr<sstables::page_cache> system_keyspace::make_page_cache() {
+    return make_shared<system_page_cache>(*this);
 }
 
 future<service::topology_request_state> system_keyspace::get_topology_request_state(utils::UUID id, bool require_entry) {

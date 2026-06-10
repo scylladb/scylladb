@@ -337,18 +337,28 @@ static storage_options::object_storage object_storage_from_map(std::string_view 
             throw std::runtime_error(fmt::format("Missing {} option: {}", type, option.first));
         }
     }
-    if (values.size() > allowed_options.size()) {
-        throw std::runtime_error(fmt::format("Extraneous options for {}: {}; allowed: {}",
-            type, fmt::join(values | std::views::keys, ","),
-            fmt::join(allowed_options | std::views::keys, ",")));
+    if (auto it = values.find("tiering"); it != values.end()) {
+        if (it->second == "data_page_cache") {
+            options.tiering = storage_options::tiering_mode::data_page_cache;
+        } else {
+            throw std::runtime_error(fmt::format("Unknown tiering value '{}'; allowed: data_page_cache", it->second));
+        }
+    }
+    const size_t known_options = allowed_options.size() + (values.contains("tiering") ? 1 : 0);
+    if (values.size() > known_options) {
+        throw std::runtime_error(fmt::format("Extraneous options for {}: {}; allowed: bucket, endpoint, tiering",
+            type, fmt::join(values | std::views::keys, ",")));
     }
     options.type = std::string(type);
     return options;
 }
 
 std::map<sstring, sstring> storage_options::object_storage::to_map() const {
-    return {{"bucket", bucket},
-            {"endpoint", endpoint}};
+    std::map<sstring, sstring> result{{"bucket", bucket}, {"endpoint", endpoint}};
+    if (tiering == storage_options::tiering_mode::data_page_cache) {
+        result["tiering"] = "data_page_cache";
+    }
+    return result;
 }
 
 std::string_view storage_options::object_storage::name() const {

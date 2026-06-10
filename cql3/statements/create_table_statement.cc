@@ -26,6 +26,7 @@
 #include "auth/service.hh"
 #include "schema/schema_builder.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "types/user.hh"
 #include "gms/feature_service.hh"
@@ -217,7 +218,29 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
     bool ks_uses_tablets;
     try {
-        ks_uses_tablets = db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets();
+        const auto ks = db.find_keyspace(keyspace());
+        ks_uses_tablets = ks.get_replication_strategy().uses_tablets();
+        auto& storage_opts = ks.metadata()->get_storage_options();
+        if (auto* obj = std::get_if<data_dictionary::storage_options::object_storage>(&storage_opts.value)) {
+            if (obj->tiering != data_dictionary::storage_options::tiering_mode::none) {
+                auto compression_opts = _properties.properties()->get_compression_options();
+                // compression_opts == nullopt means "use default" which has
+                // compression enabled. Compression is disabled in two ways:
+                // WITH compression = {}  -> compression_opts is an empty map)
+                // WITH compression = {'sstable_compression': ''} -> map with empty value
+                const sstring sstable_compression_key = "sstable_compression";
+                bool compression_disabled =
+                    compression_opts &&
+                    (compression_opts->empty() ||
+                     (compression_opts->count(sstable_compression_key) &&
+                      compression_opts->at(sstable_compression_key).empty()));
+                if (compression_disabled) {
+                    throw exceptions::invalid_request_exception(
+                        "Tables in a keyspace with tiering=data_page_cache must have compression enabled. "
+                        "The page cache uses compressed-chunk offsets as cache keys, which require compression.");
+                }
+            }
+        }
     } catch (const data_dictionary::no_such_keyspace& e) {
         throw exceptions::invalid_request_exception("Cannot create a table in a non-existent keyspace: " + keyspace());
     }
