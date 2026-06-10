@@ -1195,25 +1195,33 @@ future<> schema_applier::destroy() {
     co_await _functions_batch.stop();
 }
 
-static future<> execute_do_merge_schema(sharded<service::storage_proxy>& proxy, schema_applier& ap, utils::chunked_vector<mutation> mutations) {
-    co_await ap.prepare(mutations);
-    co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
-    co_await ap.update();
+future<> schema_applier::prepare_and_persist(utils::chunked_vector<mutation> mutations) {
+    co_await prepare(mutations);
+    co_await _proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
+}
+
+future<> schema_applier::update_and_commit() {
+    co_await update();
     try {
-        co_await ap.commit();
+        co_await commit();
     } catch (...) {
         // We have no good way to recover from partial commit and continuing
         // would mean that schema is in inconsistent state.
         on_fatal_internal_error(slogger, format("schema commit failed: {}", std::current_exception()));
     }
-    co_await ap.post_commit();
+    co_await post_commit();
+}
+
+static future<> execute_do_merge_schema(schema_applier& ap, utils::chunked_vector<mutation> mutations) {
+    co_await ap.prepare_and_persist(std::move(mutations));
+    co_await ap.update_and_commit();
 }
 
 static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations)
 {
     slogger.trace("do_merge_schema: {}", mutations);
     schema_applier ap(proxy, ss, sys_ks);
-    co_await execute_do_merge_schema(proxy, ap, std::move(mutations)).finally([&ap]() {
+    co_await execute_do_merge_schema(ap, std::move(mutations)).finally([&ap]() {
         return ap.destroy();
     });
 }
