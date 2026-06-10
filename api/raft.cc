@@ -139,7 +139,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
             });
             co_return json_void{};
         }
-        raft::group_id gid{utils::UUID{req->get_path_param("group_id")}};
+        raft::group_id gid{utils::UUID{req->get_query_param("group_id")}};
 
         std::atomic<bool> found_srv{false};
         co_await raft_gr.invoke_on_all([gid, timeout_dur, &found_srv] (service::raft_group_registry& raft_gr) -> future<> {
