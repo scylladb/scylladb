@@ -36,6 +36,7 @@ using mutable_static_effective_replication_map_ptr = seastar::shared_ptr<static_
 using static_erm_ptr = static_effective_replication_map_ptr;
 using mutable_static_erm_ptr = mutable_static_effective_replication_map_ptr;
 
+using replication_strategy_config_map = utils::property_string_map;
 using replication_strategy_config_option = utils::property_value;
 using replication_strategy_config_options = utils::extended_property_map;
 
