@@ -76,6 +76,18 @@ The `--release` option supports various version specifiers, such as 5.4.7
 5.4.0~rc2 (a pre-release), or Enterprise releases such as 2021.1.9 or 2023.1
 (the latest in that branch).
 
+The `--vs` option (the double minus is important, `-vs` is different) tells
+`test/alternator/run` to also run a vector store in addition to Scylla. This
+is needed for tests for the vector index feature (test_vector.py).
+
+If you like the ability of `test/alternator/run` to easily and quickly start
+Alternator for you, but want to interactively run your own code against it
+instead of the standard tests, then use `test/alternator/run --interactive`.
+With `--interactive`, `run` will start Alternator, tell you the URL where it
+is listening, and then just wait until interrupted - without running tests.
+You can combine the `--interactive` option with `--release` or `--vs`, but no
+other options are allowed.
+
 ## HTTPS support
 
 In order to run tests over HTTPS instead of the default HTTP, run

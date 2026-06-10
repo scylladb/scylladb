@@ -7,6 +7,7 @@ import run
 import os
 import requests
 import glob
+import signal
 
 # When tests are to be run against AWS (the "--aws" option), it is not
 # necessary to start Scylla at all. All we need to do is to run pytest.
@@ -49,6 +50,11 @@ if '--vnodes' in sys.argv:
     remove_scylla_options.append('--enable-tablets=true')
     # Tablets are now enabled by default on some releases, it is not enough to remove the enable above.
     extra_scylla_options.append('--enable-tablets=false')
+# test/alternator/run --interactive will not run any test. It will instead
+# leave the server running and allow the user to connect to it. This server
+# will be more practical to use if we do NOT enforce authorization.
+if '--interactive' in sys.argv:
+    remove_scylla_options.append('--alternator-enforce-authorization=1')
 
 if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)
@@ -62,7 +68,7 @@ def run_alternator_cmd(pid, dir):
     ip = run.pid_to_ip(pid)
     cmd += [
         '--alternator-address', ip,
-        '--alternator-enforce-authorization', '1',
+        '--alternator-enforce-authorization=1',
         '--alternator-write-isolation', 'only_rmw_uses_lwt',
         '--alternator-streams-time-window-s', '0',
         '--alternator-timeout-in-ms', '30000',
@@ -100,9 +106,10 @@ def run_alternator_cmd(pid, dir):
     if 'release' in globals():
         version = release.split('~')[0].split('.')
         major = [int(version[0]), int(version[1])]
-        print(major)
         if major < [2025,4]:
             cmd.remove('--alternator-allow-system-table-write=1')
+        if major < [2026,3]:
+            cmd.remove('--tablet-load-stats-refresh-interval-in-seconds=1')
 
     return (cmd, env)
 
@@ -134,6 +141,7 @@ def run_vector_store_cmd(pid, dir):
         vector_store_executable
     ]
     return (cmd, env)
+
 if '--vs' in sys.argv:
     sys.argv.remove('--vs')
     # Find the vector-store executable. We look for it in the vector-store/
@@ -171,6 +179,16 @@ run.wait_for_services(pid, [
     lambda: run.check_cql(ip),
     lambda: check_alternator(alternator_url),
 ])
+
+# test/alternator/run --interactive will not run any test. It will instead
+# leave the server running and allow the user to interact with it. The user
+# should interrupt this process (e.g., control-C) to kill the server.
+if '--interactive' in sys.argv:
+    if len(sys.argv) != 2:
+        print('The "--interactive" option can be combined with "--release" or "--vs", but no other options.')
+        exit(1)
+    print(f'Scylla with Alternator is running without authorization enforced.\nConnect at: {alternator_url}\nPress Ctrl-C to stop.')
+    signal.pause()
 
 # Finally run pytest:
 success = run.run_pytest(sys.path[0], ['--url', alternator_url] + sys.argv[1:])
