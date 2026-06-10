@@ -1472,6 +1472,7 @@ async def test_read_forwarding(manager: ManagerClient):
                 rows = await cql.run_async(read_stmt, host=non_leader_replica_host)
                 assert len(rows) == 1, f"Expected 1 row for pk={100 + i}, got {len(rows)}"
                 assert rows[0].c == i * 10, f"Linearizability violation: pk={100 + i}, expected c={i * 10}, got c={rows[0].c}"
+
 @pytest.mark.asyncio
 async def test_data_survives_crash(manager: ManagerClient):
     """Verify that SC table data survives a non-graceful crash and is recovered
