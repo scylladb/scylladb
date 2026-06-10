@@ -24,7 +24,7 @@ namespace utils {
 
 using property_string_list = std::vector<sstring>;
 using property_string_map = std::map<sstring, sstring>;
-using property_value = std::variant<sstring, property_string_list>;
+using property_value = std::variant<sstring, property_string_list, property_string_map>;
 using extended_property_map = std::map<sstring, property_value>;
 
 }
