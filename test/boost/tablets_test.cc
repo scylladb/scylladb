@@ -7412,4 +7412,191 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_pow2_convergence) {
     }, std::move(cfg)).get();
 }
 
+// Verify that compute_migration_target_pow2s() returns a pow2 target that
+// matches the tablet count of a fresh empty tablet-based table under the same
+// topology and replication strategy.
+SEASTAR_THREAD_TEST_CASE(test_migration_target_pow2_from_scale) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 1;
+        const unsigned shard_count = 1;
+        const int n_nodes = 3;
+
+        // Build topology.
+        topology_builder topo(e);
+        for (int i = 0; i < n_nodes; ++i) {
+            topo.add_node(node_state::normal, shard_count);
+        }
+
+        auto& stm = e.shared_token_metadata().local();
+
+        // Create a tablets-based table (reference).
+        // Read its tablet count, then drop it to avoid noise when computing
+        // the migration target.
+        auto ks_ref = add_keyspace(e, {{topo.dc(), rf}});
+        auto t_ref = add_table(e, ks_ref).get();
+        auto fresh_tablet_count = stm.get()->tablets().get_tablet_map(t_ref).tablet_count();
+        e.execute_cql(fmt::format("drop keyspace {}", ks_ref)).get();
+
+        // Create a vnode-based table with the same RS.
+        // This is the table we will compute the migration target for.
+        auto ks_vnode = "vnode_ks";
+        e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy', '{}': {}}}"
+                                  " and tablets = {{'enabled': false}}",
+                                  ks_vnode, topo.dc(), rf)).get();
+        e.execute_cql(fmt::format("create table {}.t (pk int primary key)", ks_vnode)).get();
+        auto t_cmp = e.local_db().find_schema(ks_vnode, "t")->id();
+
+        auto& ks = e.local_db().find_keyspace(ks_vnode);
+        auto* trs = dynamic_cast<const tablet_aware_replication_strategy*>(&ks.get_replication_strategy());
+        BOOST_REQUIRE(trs);
+
+        // Compute migration target for the vnode-based table with size = 0 (empty).
+        service::size_per_table_map sizes = {{t_cmp, 0}};
+        auto target_pow2s = e.get_tablet_allocator().local().compute_migration_target_pow2s(trs, sizes).get();
+
+        auto it = target_pow2s.find(t_cmp);
+        BOOST_REQUIRE(it != target_pow2s.end());
+        auto target_pow2 = it->second;
+
+        BOOST_REQUIRE_MESSAGE(std::has_single_bit(target_pow2),
+            fmt::format("Target pow2 {} is not a power of two", target_pow2));
+        BOOST_REQUIRE_MESSAGE(target_pow2 == fresh_tablet_count,
+            fmt::format("Migration target pow2 ({}) does not match fresh-table tablet count ({})",
+                        target_pow2, fresh_tablet_count));
+
+        e.execute_cql(fmt::format("drop keyspace {}", ks_vnode)).get();
+    }, std::move(cfg)).get();
+}
+
+// Verify that compute_migration_target_pow2s() returns a pow2 target that
+// matches the tablet count of a fresh empty table even under per-shard-goal
+// pressure. The pow2 target is expected to be scaled down based on the
+// per-shard-goal budget.
+SEASTAR_THREAD_TEST_CASE(test_migration_target_pow2_near_goal) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    cfg.db_config->tablets_per_shard_goal.set(10);
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 1;
+        const unsigned shard_count = 1;
+        const int n_nodes = 3;
+
+        // Build topology.
+        topology_builder topo(e);
+        for (int i = 0; i < n_nodes; ++i) {
+            topo.add_node(node_state::normal, shard_count);
+        }
+
+        auto& stm = e.shared_token_metadata().local();
+
+        // Create a pressure table that occupies most of the goal budget.
+        // With goal=10, RF=1, 1 shard/node: budget is 10 tablets/shard.
+        // Create the table with 8 tablets to leave very little room.
+        auto ks_pressure = add_keyspace(e, {{topo.dc(), rf}}, 8);
+        auto t_pressure = add_table(e, ks_pressure).get();
+
+        // Create a reference table in a separate keyspace under the same
+        // pressure conditions. Read its tablet count, then drop it to avoid
+        // noise when computing the migration target.
+        auto ks_ref = add_keyspace(e, {{topo.dc(), rf}});
+        auto t_ref = add_table(e, ks_ref).get();
+        auto fresh_tablet_count = stm.get()->tablets().get_tablet_map(t_ref).tablet_count();
+        e.execute_cql(fmt::format("drop keyspace {}", ks_ref)).get();
+
+        // Create a vnode-based table with the same RS.
+        auto ks_vnode = "vnode_ks";
+        e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy', '{}': {}}}"
+                                  " and tablets = {{'enabled': false}}",
+                                  ks_vnode, topo.dc(), rf)).get();
+        e.execute_cql(fmt::format("create table {}.t (pk int primary key)", ks_vnode)).get();
+        auto t_cmp = e.local_db().find_schema(ks_vnode, "t")->id();
+
+        auto& ks = e.local_db().find_keyspace(ks_vnode);
+        auto* trs = dynamic_cast<const tablet_aware_replication_strategy*>(&ks.get_replication_strategy());
+        BOOST_REQUIRE(trs);
+
+        // Compute migration target with size = 0 (empty).
+        service::size_per_table_map sizes = {{t_cmp, 0}};
+        auto target_pow2s = e.get_tablet_allocator().local().compute_migration_target_pow2s(trs, sizes).get();
+
+        auto it = target_pow2s.find(t_cmp);
+        BOOST_REQUIRE(it != target_pow2s.end());
+        auto target_pow2 = it->second;
+
+        BOOST_REQUIRE_MESSAGE(std::has_single_bit(target_pow2),
+            fmt::format("Target pow2 {} is not a power of two", target_pow2));
+        BOOST_REQUIRE_MESSAGE(target_pow2 == fresh_tablet_count,
+            fmt::format("Migration target pow2 ({}) does not match fresh-table tablet count ({}) under near-goal pressure",
+                        target_pow2, fresh_tablet_count));
+
+        e.execute_cql(fmt::format("drop keyspace {}", ks_pressure)).get();
+        e.execute_cql(fmt::format("drop keyspace {}", ks_vnode)).get();
+    }, std::move(cfg)).get();
+}
+
+// Verify that compute_migration_target_pow2s() with a non-zero size produces
+// a pow2 target that falls within the load balancer's split/merge thresholds.
+// This exercises the size_per_table argument.
+SEASTAR_THREAD_TEST_CASE(test_migration_target_pow2_from_size) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    cfg.db_config->tablets_initial_scale_factor(1); // lower initial tablets so it doesn't interfere with size-driven scaling
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 1;
+        const unsigned shard_count = 1;
+        const int n_nodes = 1;
+
+        // Build topology.
+        topology_builder topo(e);
+        for (int i = 0; i < n_nodes; ++i) {
+            topo.add_node(node_state::normal, shard_count);
+        }
+
+        const std::vector<uint64_t> test_sizes = {
+            10ULL * 1024 * 1024 * 1024,   // 10 GiB
+            32ULL * 1024 * 1024 * 1024,   // 32 GiB
+        };
+
+        auto& stm = e.shared_token_metadata().local();
+
+        for (auto S : test_sizes) {
+            testlog.info("Testing size_per_table parity with size = {} bytes", S);
+
+            auto ks_vnode = "vnode_ks";
+            e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy', '{}': {}}}"
+                                      " and tablets = {{'enabled': false}}",
+                                      ks_vnode, topo.dc(), rf)).get();
+            e.execute_cql(fmt::format("create table {}.t (pk int primary key)", ks_vnode)).get();
+            auto t_cmp = e.local_db().find_schema(ks_vnode, "t")->id();
+
+            auto& ks = e.local_db().find_keyspace(ks_vnode);
+            auto* trs = dynamic_cast<const tablet_aware_replication_strategy*>(&ks.get_replication_strategy());
+            BOOST_REQUIRE(trs);
+
+            // Compute migration target for a given size.
+            service::size_per_table_map sizes = {{t_cmp, S}};
+            auto target_pow2s = e.get_tablet_allocator().local().compute_migration_target_pow2s(trs, sizes).get();
+
+            auto it = target_pow2s.find(t_cmp);
+            BOOST_REQUIRE(it != target_pow2s.end());
+            auto target_pow2 = it->second;
+
+            BOOST_REQUIRE_MESSAGE(std::has_single_bit(target_pow2),
+                fmt::format("Target pow2 {} is not a power of two (size={})", target_pow2, S));
+
+            auto avg_tablet_size = S / target_pow2;
+            BOOST_REQUIRE_MESSAGE(avg_tablet_size <= service::default_target_tablet_size * 2,
+                fmt::format("Average tablet size {} exceeds split threshold ({}), expected a larger pow2 target (size={})",
+                            avg_tablet_size, service::default_target_tablet_size, S));
+            BOOST_REQUIRE_MESSAGE(avg_tablet_size >= service::default_target_tablet_size / 2,
+                fmt::format("Average tablet size {} is below the merge threshold ({}), expected a smaller pow2 target (size={})",
+                            avg_tablet_size, service::default_target_tablet_size, S));
+
+            e.execute_cql(fmt::format("drop keyspace {}", ks_vnode)).get();
+        }
+    }, std::move(cfg)).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
