@@ -24,6 +24,12 @@ namespace gms {
 class feature_service;
 }
 
+namespace db {
+namespace schema_tables {
+class schema_applier;
+}
+}
+
 namespace service {
 class raft_group0_client;
 class migration_manager;
@@ -111,6 +117,11 @@ class group0_state_machine : public raft_state_machine {
     group0_state_id_handler _state_id_handler;
     gms::feature_service& _feature_service;
 
+    // Holds the result of Phase 1 of a schema change that was initiated
+    // during transfer_snapshot().  Phase 2 is completed in reload_state()
+    // after topology_state_load() has brought token_metadata up to date.
+    std::unique_ptr<db::schema_tables::schema_applier> _pending_schema_change;
+
     // This boolean controls whether the in-memory data structures should be updated
     // after snapshot transfer / command application.
     //
@@ -142,6 +153,7 @@ class group0_state_machine : public raft_state_machine {
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
             gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately);
+    ~group0_state_machine();
     future<> apply(raft::log_entry_ptr_list commands) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
