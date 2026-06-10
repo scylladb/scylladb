@@ -20,6 +20,8 @@
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
 #include "db/config.hh"
+#include "utils/overloaded_functor.hh"
+#include "utils/on_internal_error.hh"
 #include <random>
 
 namespace cql3 {
@@ -322,10 +324,15 @@ void ks_prop_defs::validate() {
 
 locator::replication_strategy_config_options ks_prop_defs::get_replication_options() const {
     auto replication_options = get_extended_map(KW_REPLICATION);
-    if (replication_options) {
-        return replication_options.value();
+    if (!replication_options) {
+        return {};
     }
-    return {};
+    if (std::any_of(replication_options->begin(), replication_options->end(), [] (const auto& opt) {
+        return std::holds_alternative<map_type>(opt.second);
+    })) {
+        throw exceptions::configuration_exception("Cannot specify replication options as a map");
+    }
+    return *replication_options;
 }
 
 data_dictionary::storage_options ks_prop_defs::get_storage_options() const {

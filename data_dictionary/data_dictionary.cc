@@ -16,6 +16,7 @@
 #include "schema/schema.hh"
 #include "cql3/util.hh"
 #include "gms/feature_service.hh"
+#include "utils/on_internal_error.hh"
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
@@ -582,6 +583,9 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
                         os << cql3::util::single_quote(*it);
                     }
                     os << "]";
+                },
+                [] (const locator::replication_strategy_config_map&) {
+                    on_internal_error(locator::rslogger, "replication strategy configuration map used in keyspace metadata description");
                 }
             }, opt.second);
         }
