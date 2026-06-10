@@ -44,14 +44,14 @@ def workdir():
     with tempfile.TemporaryDirectory() as tmp_dir:
         yield tmp_dir
 
-async def test_file_streaming_respects_encryption(manager: ManagerClient, storage, workdir):
+async def test_file_streaming_respects_encryption(manager: ManagerClient, storage_layer, workdir):
     # pylint: disable=missing-function-docstring
     cfg = {
         'tablets_mode_for_new_keyspaces': 'enabled',
     }
 
-    if storage:
-        cfg['object_storage_endpoints'] = storage.create_endpoint_conf()
+    if storage_layer:
+        cfg['object_storage_endpoints'] = storage_layer.create_endpoint_conf()
         cfg['experimental_features'] = ['keyspace-storage-options']
 
     cmdline = ['--smp=1']
@@ -62,11 +62,11 @@ async def test_file_streaming_respects_encryption(manager: ManagerClient, storag
     cql = manager.cql
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     ks_cmd = "CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
-    if storage:
-        storage = format_tuples(type=storage.type,
-                                endpoint=storage.address,
-                                bucket=storage.bucket_name)
-        ks_cmd += f" AND STORAGE = {storage}"
+    if storage_layer:
+        storage_layer = format_tuples(type=storage_layer.type,
+                                endpoint=storage_layer.address,
+                                bucket=storage_layer.bucket_name)
+        ks_cmd += f" AND STORAGE = {storage_layer}"
     cql.execute(ks_cmd)
     cql.execute(f"""CREATE TABLE ks.t(pk text primary key) WITH scylla_encryption_options = {{
         'cipher_algorithm' : 'AES/ECB/PKCS5Padding',

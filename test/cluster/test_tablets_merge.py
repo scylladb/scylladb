@@ -34,7 +34,7 @@ async def disable_injection_on(manager, error_name, servers):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_merge_simple(manager: ManagerClient, tablet_storage):
+async def test_tablet_merge_simple(manager: ManagerClient, storage_layer):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -42,7 +42,7 @@ async def test_tablet_merge_simple(manager: ManagerClient, tablet_storage):
         '--logger-log-level', 'load_balancer=debug',
         '--target-tablet-size-in-bytes', '30000',
     ]
-    cfg = make_cfg(tablet_storage, extra={
+    cfg = make_cfg(storage_layer, extra={
         'tablet_load_stats_refresh_interval_in_seconds': 1
     })
     servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
@@ -50,7 +50,7 @@ async def test_tablet_merge_simple(manager: ManagerClient, tablet_storage):
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=1)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
 
         # Initial average table size of 400k (1 tablet), so triggers some splits.
@@ -178,7 +178,7 @@ async def test_tablet_merge_simple(manager: ManagerClient, tablet_storage):
 
 # Multiple cycles of split and merge, with topology changes in parallel and RF > 1.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: ManagerClient, tablet_storage):
+async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: ManagerClient, storage_layer):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=info',
@@ -188,7 +188,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
         '--logger-log-level', 'load_balancer=info',
         '--target-tablet-size-in-bytes', '30000',
     ]
-    config = make_cfg(tablet_storage, extra={
+    config = make_cfg(storage_layer, extra={
         'tablet_load_stats_refresh_interval_in_seconds': 1
     })
     servers = [await manager.server_add(config=config, cmdline=cmdline),
@@ -196,7 +196,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
                await manager.server_add(config=config, cmdline=cmdline)]
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=1)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
 
         async def perform_topology_ops():
@@ -323,9 +323,9 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
 
 @pytest.mark.parametrize("racks", [2, 3])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks, tablet_storage):
+async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks, storage_layer):
     cmdline = ['--target-tablet-size-in-bytes', '30000',]
-    config = make_cfg(tablet_storage, extra={'tablet_load_stats_refresh_interval_in_seconds': 1})
+    config = make_cfg(storage_layer, extra={'tablet_load_stats_refresh_interval_in_seconds': 1})
     servers = []
     rf = racks
     for rack_id in range(0, racks):
@@ -333,7 +333,7 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks,
         servers.extend(await manager.servers_add(3, config=config, cmdline=cmdline, property_file={'dc': 'mydc', 'rack': rack}))
 
     cql, _ = await manager.get_ready_cql(servers)
-    ks = await create_new_test_keyspace(cql, make_ks_opts(tablet_storage, rf=rf, initial_tablets=1))
+    ks = await create_new_test_keyspace(cql, make_ks_opts(storage_layer, rf=rf, initial_tablets=1))
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
 
     await inject_error_on(manager, "forbid_cross_rack_migration_attempt", servers)

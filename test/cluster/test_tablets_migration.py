@@ -32,13 +32,13 @@ async def await_api_task(task, allowed_exception: Optional[Type[Exception]]=None
 
 
 @pytest.mark.parametrize("action", ['move', 'add_replica', 'del_replica'])
-async def test_tablet_transition_sanity(manager: ManagerClient, tablet_storage, action):
-    if tablet_storage is not None:
+async def test_tablet_transition_sanity(manager: ManagerClient, storage_layer, action):
+    if storage_layer is not None:
         skip_env('Object storage: del_replica leaves the tablet under RF, so the coordinator '
                  'restores the replica via failed-rebuild retry and races the post-delete check; '
                  'needs deeper investigation')
     logger.info("Bootstrapping cluster")
-    cfg = make_cfg(tablet_storage)
+    cfg = make_cfg(storage_layer)
     host_ids = []
     servers = []
     hosts_by_rack = defaultdict(list)
@@ -58,7 +58,7 @@ async def test_tablet_transition_sanity(manager: ManagerClient, tablet_storage, 
 
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=2, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=2, initial_tablets=1)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
@@ -121,16 +121,16 @@ async def test_tablet_transition_sanity(manager: ManagerClient, tablet_storage, 
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_node_failure_during_tablet_migration(manager: ManagerClient, tablet_storage, fail_replica, fail_stage):
+async def test_node_failure_during_tablet_migration(manager: ManagerClient, storage_layer, fail_replica, fail_stage):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
         skip_env('Failing destination during cleanup is pointless')
     if fail_stage == 'cleanup_target' and fail_replica == 'source':
         skip_env('Failing source during target cleanup is pointless')
-    if tablet_storage is not None and tablet_storage.type == 'GS':
+    if storage_layer is not None and storage_layer.type == 'GS':
         skip_env('GCS flavor of this test gets stuck, deeper investigation is needed')
 
     logger.info("Bootstrapping cluster")
-    cfg = make_cfg(tablet_storage, extra={'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'})
+    cfg = make_cfg(storage_layer, extra={'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'})
     host_ids = []
     servers = []
 
@@ -147,7 +147,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, tabl
 
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=3, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=3, initial_tablets=1)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         keys = range(256)
@@ -277,9 +277,9 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, tabl
         # For dropping the keyspace after the node failure
         await reconnect_driver(manager)
 
-async def test_tablet_back_and_forth_migration(manager: ManagerClient, tablet_storage):
+async def test_tablet_back_and_forth_migration(manager: ManagerClient, storage_layer):
     logger.info("Bootstrapping cluster")
-    cfg = make_cfg(tablet_storage)
+    cfg = make_cfg(storage_layer)
     host_ids = []
     servers = []
 
@@ -295,7 +295,7 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient, tablet_st
     await make_server()
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=1)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await make_server()
 
@@ -424,7 +424,7 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: M
 
 @pytest.mark.parametrize("migration_stage_and_injection", [("cleanup", "cleanup_tablet_wait"), ("end_migration", "handle_tablet_migration_end_migration")], ids=["cleanup", "end_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, tablet_storage, migration_stage_and_injection):
+async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, storage_layer, migration_stage_and_injection):
     """
     Migrate a tablet from one node to another, and while in some migration
     cleanup stage, either before or after the tablet is cleaned, restart the
@@ -438,13 +438,13 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, ta
     """
     stage, injection = migration_stage_and_injection
 
-    cfg = make_cfg(tablet_storage, extra={'tablet_load_stats_refresh_interval_in_seconds': 1})
+    cfg = make_cfg(storage_layer, extra={'tablet_load_stats_refresh_interval_in_seconds': 1})
     servers = await manager.servers_add(2, config=cfg)
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};")
 
         total_keys = 10
@@ -507,25 +507,25 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, ta
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient, tablet_storage):
+async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient, storage_layer):
     """
     Migrate a tablet from one node to another, and restart the leaving replica during
     the tablet cleanup stage, after tablet cleanup is completed.
     Reproduces issue #24857
     """
-    if tablet_storage is not None and tablet_storage.type == 'GS':
+    if storage_layer is not None and storage_layer.type == 'GS':
         skip_env('GCS: even with fsync enabled, SIGKILL can race with registry update after object deletion, causing 404 on restart')
-    cfg = make_cfg(tablet_storage, extra={'tablet_load_stats_refresh_interval_in_seconds': 1})
+    cfg = make_cfg(storage_layer, extra={'tablet_load_stats_refresh_interval_in_seconds': 1})
     # Object storage (S3/GCS) requires fsync: SIGKILL + unfsynced commitlog
     # can lose CQL registry-entry deletions while S3 object deletions (HTTP)
     # are always durable, leaving stale entries that cause 404 on restart.
-    cmdline = ['--unsafe-bypass-fsync', '0'] if tablet_storage else []
+    cmdline = ['--unsafe-bypass-fsync', '0'] if storage_layer else []
     servers = await manager.servers_add(2, cmdline=cmdline, config=cfg)
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};")
 
         total_keys = 10

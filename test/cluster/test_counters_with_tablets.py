@@ -18,7 +18,7 @@ import pytest
 logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("migration_type", ["internode", "intranode"])
-async def test_counter_updates_during_tablet_migration(manager: ManagerClient, migration_type: str, tablet_storage):
+async def test_counter_updates_during_tablet_migration(manager: ManagerClient, migration_type: str, storage_layer):
     """
     Test that counter updates remain consistent during tablet migrations.
 
@@ -38,12 +38,12 @@ async def test_counter_updates_during_tablet_migration(manager: ManagerClient, m
 
     cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'storage_service=debug']
 
-    cfg = make_cfg(tablet_storage)
+    cfg = make_cfg(storage_layer)
     servers = await manager.servers_add(node_count, config=cfg, cmdline=cmdline)
     cql = manager.get_cql()
     await manager.disable_tablet_balancing()
 
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=1)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.counters (pk int PRIMARY KEY, c counter)")
 
         stop_event = asyncio.Event()

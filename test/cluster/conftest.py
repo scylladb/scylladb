@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
 from test.pylib.runner import PHASE_REPORT_KEY
-from test.cluster.object_store.conftest import make_object_storage
+from test.pylib.object_storage import make_object_storage
 from test.pylib.random_tables import RandomTables
 from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
@@ -383,77 +383,10 @@ async def key_provider(request, tmpdir, scylla_binary):
 
 
 @pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
-async def tablet_storage(request, tmpdir, manager: ManagerClient):
-    """Parametrize tablet tests over local / S3 / GCS storage.
-
-    When tablet_storage is None the test runs with local (filesystem) storage.
-    Otherwise the fixture yields an object-storage server handle.  For S3 we
-    reuse the MinIO instance that test.py starts globally (its coordinates are
-    published through environment variables).  For GCS we start a local
-    fake-gcs-server container per test.
-
-    Depends on manager to guarantee that servers are stopped before the bucket
-    is destroyed during teardown (see SCYLLADB-2471).
-    """
-    if request.param is None:
-        yield None
-        return
-
-    if request.param == 's3':
-        from test.pylib.minio_server import MinioServer
-        from test.cluster.object_store.conftest import S3_Server, MinioWrapper
-
-        address = os.environ.get(MinioServer.ENV_ADDRESS)
-        port = os.environ.get(MinioServer.ENV_PORT)
-
-        if address and port:
-            server = S3_Server(
-                tmpdir.strpath,
-                address,
-                int(port),
-                os.environ.get(MinioServer.ENV_ACCESS_KEY),
-                os.environ.get(MinioServer.ENV_SECRET_KEY),
-                MinioServer.DEFAULT_REGION,
-                os.environ.get(MinioServer.ENV_BUCKET))
-        else:
-            server = MinioWrapper(tmpdir.strpath)
-    else:
-        from test.cluster.object_store.conftest import GSServer
-        server = GSServer(tmpdir.strpath)
-
-    await server.start()
-    bucket_created = False
-    try:
-        server.create_test_bucket(request.node.name)
-        bucket_created = True
-        yield server
-    finally:
-        # Stop all running Scylla servers before destroying the bucket.
-        # Without this, in-flight operations (compaction, tablet migration) may
-        # still reference objects in the bucket, causing S3 404s that abort the
-        # node.  See SCYLLADB-2471.
-        # Hard stop (not graceful): graceful drain could hang if a migration
-        # is in progress, and we don't need data integrity — the test is over.
-        # convict=False: no live peers left to notify.
-        try:
-            for srv in await manager.running_servers():
-                await manager.server_stop(srv.server_id, convict=False)
-        except Exception:
-            pass  # Best effort — servers may already be stopped
-        if bucket_created:
-            server.destroy_test_bucket()
-        await server.stop()
-
-
-@pytest.fixture(scope="function")
-def failure_detector_timeout(build_mode):
-    return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
-
-@pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
-async def storage(request, pytestconfig, tmpdir, manager: ManagerClient):
+async def storage_layer(request, pytestconfig, tmpdir, manager: ManagerClient):
     """Parametrize tests over local / S3 / GCS storage.
 
-    When storage is None the test runs with local (filesystem) storage.
+    When storage_layer is None the test runs with local (filesystem) storage.
     Otherwise the fixture yields an object-storage server handle.
 
     Depends on manager to guarantee that servers are stopped before the bucket
@@ -465,3 +398,42 @@ async def storage(request, pytestconfig, tmpdir, manager: ManagerClient):
 
     async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name, manager) as server:
         yield server
+
+
+@pytest.fixture(scope="function", params=['s3', 'gs'])
+async def object_storage(request, pytestconfig, tmpdir, manager: ManagerClient):
+    """Object-storage fixture parametrized over S3 and GCS.
+
+    Depends on manager to guarantee that servers are stopped before the bucket
+    is destroyed during teardown (see SCYLLADB-2471).
+    """
+    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name, manager) as server:
+        yield server
+
+
+@pytest.fixture(scope="function")
+async def s3_storage(request, pytestconfig, tmpdir, manager: ManagerClient):
+    """S3-only object-storage fixture, for tests that need a single flavor.
+
+    Depends on manager to guarantee that servers are stopped before the bucket
+    is destroyed during teardown (see SCYLLADB-2471).
+    """
+    async with make_object_storage('s3', pytestconfig, tmpdir, request.node.name, manager) as server:
+        yield server
+
+
+@pytest.fixture(scope="function")
+async def gs_storage(request, pytestconfig, tmpdir, manager: ManagerClient):
+    """GCS-only object-storage fixture, for tests that need a single flavor.
+
+    Depends on manager to guarantee that servers are stopped before the bucket
+    is destroyed during teardown (see SCYLLADB-2471).
+    """
+    async with make_object_storage('gs', pytestconfig, tmpdir, request.node.name, manager) as server:
+        yield server
+
+
+@pytest.fixture(scope="function")
+def failure_detector_timeout(build_mode):
+    return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
+

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_intranode_migration(manager: ManagerClient, tablet_storage):
+async def test_intranode_migration(manager: ManagerClient, storage_layer):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=trace',
@@ -31,13 +31,13 @@ async def test_intranode_migration(manager: ManagerClient, tablet_storage):
         '--logger-log-level', 'tablets=trace',
         '--logger-log-level', 'database=trace',
     ]
-    cfg = make_cfg(tablet_storage)
+    cfg = make_cfg(storage_layer)
     servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=1)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         finish_writes = await start_writes(cql, ks, "test")
@@ -60,20 +60,20 @@ async def test_intranode_migration(manager: ManagerClient, tablet_storage):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_crash_during_intranode_migration(manager: ManagerClient, tablet_storage):
+async def test_crash_during_intranode_migration(manager: ManagerClient, storage_layer):
     cmdline = [
         '--logger-log-level', 'tablets=trace',
         '--logger-log-level', 'database=trace',
         '--commitlog-sync', 'batch', # So that ACKed writes are not lost on crash
     ]
-    cfg = make_cfg(tablet_storage)
+    cfg = make_cfg(storage_layer)
     servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=4)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=4)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         finish_writes = await start_writes(cql, ks, "test", ignore_errors=True)
@@ -112,7 +112,7 @@ async def test_crash_during_intranode_migration(manager: ManagerClient, tablet_s
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cross_shard_migration(manager: ManagerClient, tablet_storage):
+async def test_cross_shard_migration(manager: ManagerClient, storage_layer):
     """
     Test scenario where writes are concurrently made with migration, where
     some of them are coordinated by the owning host and some by the non-owning host.
@@ -134,13 +134,13 @@ async def test_cross_shard_migration(manager: ManagerClient, tablet_storage):
         '--logger-log-level', 'database=trace',
     ]
 
-    cfg = make_cfg(tablet_storage)
+    cfg = make_cfg(storage_layer)
     servers = await manager.servers_add(2, config=cfg, cmdline=cmdline)
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         finish_writes = await start_writes(cql, ks, "test")

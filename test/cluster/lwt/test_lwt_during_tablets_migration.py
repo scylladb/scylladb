@@ -98,7 +98,7 @@ async def tablet_migration_ops(stop_event: asyncio.Event,
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='debug mode is too slow for this test')
-async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_timeout, tablet_storage):
+async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_timeout, storage_layer):
     """
     Test scenario:
       1. Start N servers with tablets enabled
@@ -111,7 +111,7 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_t
     """
 
     # Setup cluster
-    cfg = make_cfg(tablet_storage, extra={
+    cfg = make_cfg(storage_layer, extra={
         "tablets_mode_for_new_keyspaces": "enabled",
         "rf_rack_valid_keyspaces": False,
     })
@@ -124,7 +124,7 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_t
 
     async with new_test_keyspace(
         manager,
-        make_ks_opts(tablet_storage, rf=rf, initial_tablets=5),
+        make_ks_opts(storage_layer, rf=rf, initial_tablets=5),
     ) as ks:
         stop_event_ = asyncio.Event()
         tester = BaseLWTTester(
@@ -160,7 +160,7 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_t
             )
             await asyncio.wait_for(
                 migration_task,
-                timeout=scale_timeout(NUM_MIGRATIONS * 5 + 15 if tablet_storage else NUM_MIGRATIONS * 2 + 15),
+                timeout=scale_timeout(NUM_MIGRATIONS * 5 + 15 if storage_layer else NUM_MIGRATIONS * 2 + 15),
                 # 10*2+15 = 35s before scaling or 65s in case of object storage since it is much slower
             )
             logger.info("LWT during migrating phase: %d ops", tester.get_phase_ops(PHASE_MIGRATING))

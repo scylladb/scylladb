@@ -19,10 +19,10 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_migration(manager: ManagerClient, tablet_storage):
+async def test_truncate_while_migration(manager: ManagerClient, storage_layer):
 
     logger.info('Bootstrapping cluster')
-    cfg = make_cfg(tablet_storage, extra={
+    cfg = make_cfg(storage_layer, extra={
         'error_injections_at_startup': ['migration_streaming_wait']
     })
 
@@ -32,7 +32,7 @@ async def test_truncate_while_migration(manager: ManagerClient, tablet_storage):
     cql = manager.get_cql()
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
 
         keys = range(1024)
@@ -212,10 +212,10 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_truncate_already_waiting(manager: ManagerClient, tablet_storage):
+async def test_truncate_while_truncate_already_waiting(manager: ManagerClient, storage_layer):
 
     logger.info('Bootstrapping cluster')
-    cfg = make_cfg(tablet_storage, extra={
+    cfg = make_cfg(storage_layer, extra={
         'error_injections_at_startup': ['migration_streaming_wait']
     })
 
@@ -225,7 +225,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ManagerClient, t
     cql = manager.get_cql()
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
 
         keys = range(1024)
@@ -294,10 +294,10 @@ async def test_replay_position_check_during_truncate(manager):
         await truncate_task
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_parallel_truncate(manager: ManagerClient, tablet_storage):
+async def test_parallel_truncate(manager: ManagerClient, storage_layer):
 
     logger.info('Bootstrapping cluster')
-    cfg = make_cfg(tablet_storage, extra={
+    cfg = make_cfg(storage_layer, extra={
         'error_injections_at_startup': ['migration_streaming_wait']
     })
 
@@ -307,7 +307,7 @@ async def test_parallel_truncate(manager: ManagerClient, tablet_storage):
     cql = manager.get_cql()
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
         await cql.run_async(f'CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, c int);')
 

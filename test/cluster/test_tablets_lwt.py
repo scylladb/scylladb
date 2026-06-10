@@ -106,7 +106,7 @@ async def test_lwt(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_during_migration(manager: ManagerClient, tablet_storage):
+async def test_lwt_during_migration(manager: ManagerClient, storage_layer):
     # Scenario:
     # 1. A cluster with three nodes, a table with one tablet and RF=2
     # 2. Run the tablet migration and suspend it during streaming
@@ -119,7 +119,7 @@ async def test_lwt_during_migration(manager: ManagerClient, tablet_storage):
         '--logger-log-level', 'paxos=trace',
         '--smp', '2'
     ]
-    cfg = make_cfg(tablet_storage)
+    cfg = make_cfg(storage_layer)
     servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, property_file=[
         {'dc': 'my_dc', 'rack': 'r1'},
         {'dc': 'my_dc', 'rack': 'r2'},
@@ -131,7 +131,7 @@ async def test_lwt_during_migration(manager: ManagerClient, tablet_storage):
     logger.info("Disable tablet balancing")
     await manager.disable_tablet_balancing()
 
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=2, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=2, initial_tablets=1)) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -207,7 +207,7 @@ async def test_lwt_during_migration(manager: ManagerClient, tablet_storage):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient, tablet_storage):
+async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient, storage_layer):
     # Scenario:
     # 1. Cells c1 and c2 of some partition are not set.
     # 2. An LWT on {n1, n2} writes 1 to c1, stores accepts on {n1, n2} and learn on n1.
@@ -228,7 +228,7 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    cfg = make_cfg(tablet_storage)
+    cfg = make_cfg(storage_layer)
     servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, auto_rack_dc='my_dc')
     cql = manager.get_cql()
 
@@ -246,7 +246,7 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
     await manager.disable_tablet_balancing()
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=3, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=3, initial_tablets=1)) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c1 int, c2 int);")
 
@@ -586,7 +586,7 @@ async def test_paxos_state_table_permissions(manager: ManagerClient):
         cql = manager.get_cql()
 
 
-async def test_lwt_coordinator_shard(manager: ManagerClient, tablet_storage):
+async def test_lwt_coordinator_shard(manager: ManagerClient, storage_layer):
     # The test checks that an LWT coordinator runs on a replica shard, and not on a 'default' (zero) shard.
     # Scenario:
     # 1. Start a cluster with one node with --smp 2
@@ -602,7 +602,7 @@ async def test_lwt_coordinator_shard(manager: ManagerClient, tablet_storage):
         '--logger-log-level', 'paxos=trace',
         '--smp', '2'
     ]
-    cfg = make_cfg(tablet_storage)
+    cfg = make_cfg(storage_layer)
     servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
     cql = manager.get_cql()
 
@@ -610,7 +610,7 @@ async def test_lwt_coordinator_shard(manager: ManagerClient, tablet_storage):
     await manager.disable_tablet_balancing()
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=1)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=1)) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -867,7 +867,7 @@ async def test_lwt_shutdown(manager: ManagerClient):
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enough')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout, tablet_storage):
+async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout, storage_layer):
     """
     This is a regression test for #26437:
     1. A cluster with one node, a table with rf=1 and two tablets on the same shard.
@@ -885,7 +885,7 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout
         '--logger-log-level', 'load_balancer=debug',
         '--logger-log-level', 'tablets=debug'
     ]
-    config = make_cfg(tablet_storage, extra={
+    config = make_cfg(storage_layer, extra={
         # to force faster tablet balancer reactions
         'tablet_load_stats_refresh_interval_in_seconds': 1
     })
@@ -899,7 +899,7 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout
     await manager.api.enable_injection(s0.ip_addr, "tablet_migration_bypass", one_shot=False)
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=2)) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
