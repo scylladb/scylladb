@@ -3495,7 +3495,7 @@ int sstable::compare_by_max_timestamp(const sstable& other) const {
 }
 
 future<> sstable::close_files() {
-    utils::small_vector<future<>, 4> close_futures;
+    utils::small_vector<future<>, 5> close_futures;
     if (_index_file) {
         close_futures.push_back(_index_file.close().handle_exception([me = shared_from_this()] (auto ep) {
             sstlog.warn("sstable close index_file failed: {}", ep);
@@ -3521,7 +3521,6 @@ future<> sstable::close_files() {
         }));
     }
 
-    auto unlinked = make_ready_future<>();
     if (_marked_for_deletion != mark_for_deletion::none && !_unlinked_at) {
         // If a deletion fails for some reason we
         // log and ignore this failure, because on startup we'll again try to
@@ -3529,14 +3528,14 @@ future<> sstable::close_files() {
         // generation number anyway.
         sstlog.debug("Deleting sstable that is {}marked for deletion", _marked_for_deletion == mark_for_deletion::implicit ? "implicitly " : "");
         try {
-            unlinked = unlink().handle_exception(
+            close_futures.push_back(unlink().handle_exception(
                         [me = shared_from_this()] (std::exception_ptr eptr) {
                             try {
                                 std::rethrow_exception(eptr);
                             } catch (...) {
                                 sstlog.warn("Exception when deleting sstable file: {}", eptr);
                             }
-                        });
+                        }));
         } catch (...) {
             sstlog.warn("Exception when deleting sstable file: {}", std::current_exception());
         }
