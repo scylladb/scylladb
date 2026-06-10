@@ -878,6 +878,9 @@ class load_balancer {
             if (utils::get_local_injector().enter("force_resize_cancellation")) {
                 return true;
             }
+            if (utils::get_local_injector().enter("skip_resize_cancellation")) {
+                return false;
+            }
             return d.resize_decision.split_or_merge() && to_resize_decision(d).way != d.resize_decision.way;
         }
 
