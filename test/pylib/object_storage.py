@@ -112,10 +112,6 @@ class S3Server:
         pass
 
 
-# Keep the old name as an alias for backward compatibility
-S3_Server = S3Server
-
-
 class MinioWrapper(S3Server):
     def __init__(self, tempdir):
         self.host_registry = HostRegistry()
@@ -285,10 +281,6 @@ class GSServerImpl(GSFront):
         if self.server:
             await self.server.stop()
         self.unpublish()
-
-
-# Keep the old name as an alias for backward compatibility (conftest.py imports it)
-GSServer = GSServerImpl
 
 
 def create_s3_server(pytestconfig, tmpdir):
