@@ -1027,6 +1027,14 @@ SEASTAR_TEST_CASE(test_rack_list_rf) {
             "CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1a']}").get(),
             exceptions::configuration_exception);
 
+        // Nested map value not allowed as RF
+        try {
+            e.execute_cql("CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': {'rack1a': '1'}}").get();
+            BOOST_FAIL("Expected nested map replication factor to fail");
+        } catch (const exceptions::configuration_exception& ex) {
+            BOOST_REQUIRE(std::string_view(ex.what()).contains("Cannot specify replication options as a map"));
+        }
+
         // Alter to numeric with different count
         BOOST_REQUIRE_THROW(e.execute_cql(
             "ALTER KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}").get(),
