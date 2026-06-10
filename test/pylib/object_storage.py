@@ -381,15 +381,6 @@ async def make_object_storage(kind, pytestconfig, tmpdir, test_name, manager: Ma
 
 @pytest.fixture(scope="function")
 async def s3_server(request, pytestconfig, tmpdir):
-    server = create_s3_server(pytestconfig, tmpdir)
-    await server.start()
-    bucket_created = False
-    try:
-        server.create_test_bucket(request.node.name)
-        bucket_created = True
+    async with make_object_storage('s3', pytestconfig, tmpdir, request.node.name) as server:
         yield server
-    finally:
-        if bucket_created:
-            server.destroy_test_bucket()
-        await server.stop()
 
