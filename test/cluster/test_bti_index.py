@@ -9,11 +9,13 @@ import random
 import os
 import glob
 import logging
+import time
 from typing import Any, Optional
 from test.cluster.conftest import skip_mode
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import ScyllaMetrics
+from test.pylib.util import wait_for_feature
 
 # main logger
 logger = logging.getLogger(__name__)
@@ -79,6 +81,24 @@ async def set_suppressions(manager: ManagerClient, servers: list[ServerInfo],
     else:
         injections = []
     await asyncio.gather(*[manager.server_update_config(s.server_id, "error_injections_at_startup", injections) for s in servers])
+
+async def wait_for_sstable_format_features(manager: ManagerClient, servers: list[ServerInfo],
+                                           ms_unsuppressed: bool, mt_unsuppressed: bool):
+    # A cluster feature is enabled asynchronously after the node observes that it
+    # is supported (i.e. after a suppression is lifted and the node restarts).
+    # Writing or upgrading sstables before the corresponding *_SSTABLE_FORMAT
+    # feature is enabled silently falls back to an older format, so wait for the
+    # feature to actually be enabled before relying on the chosen format.
+    features = []
+    if ms_unsuppressed:
+        features.append("MS_SSTABLE_FORMAT")
+    if mt_unsuppressed:
+        features.append("MT_SSTABLE_FORMAT")
+    if not features:
+        return
+    cql, hosts = await manager.get_ready_cql(servers)
+    deadline = time.time() + 60
+    await asyncio.gather(*(wait_for_feature(feature, cql, host, deadline) for feature in features for host in hosts))
 
 # Matrix of expected output sstable formats.
 #
@@ -162,6 +182,7 @@ async def test_bti_index_output_format(manager: ManagerClient) -> None:
             prev_suppressions = (ms_unsuppressed, mt_unsuppressed)
 
         logger.info(f"chosen={chosen!r} -> expected output format {expected!r}")
+        await wait_for_sstable_format_features(manager, servers, ms_unsuppressed, mt_unsuppressed)
         await live_update_config(manager, servers, 'sstable_format', chosen)
         await asyncio.gather(*[manager.api.keyspace_upgrade_sstables(s.ip_addr, ks) for s in servers])
         await check_output_format(workdirs, ks, cf, expected)
@@ -285,6 +306,7 @@ async def test_bti_index_read_path(manager: ManagerClient) -> None:
             prev_suppressions = (ms_unsuppressed, mt_unsuppressed)
 
         logger.info(f"chosen={chosen!r}")
+        await wait_for_sstable_format_features(manager, servers, ms_unsuppressed, mt_unsuppressed)
         await live_update_config(manager, servers, 'sstable_format', chosen)
         await asyncio.gather(*[manager.api.keyspace_upgrade_sstables(s.ip_addr, ks) for s in servers])
         await check_output_format(workdirs, ks, cf, chosen)
