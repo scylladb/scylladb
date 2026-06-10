@@ -59,9 +59,9 @@ bool uses_rack_list_exclusively(const replication_strategy_config_options&);
 struct replication_strategy_params {
     const replication_strategy_config_options options;
     std::optional<unsigned> initial_tablets;
-    std::optional<data_dictionary::consistency_config_option> consistency;
+    std::optional<data_dictionary::consistency_config> consistency;
     explicit replication_strategy_params(const replication_strategy_config_options& o, std::optional<unsigned> it,
-        std::optional<data_dictionary::consistency_config_option> c) noexcept : options(o), initial_tablets(it), consistency(c) {}
+        std::optional<data_dictionary::consistency_config> c) noexcept : options(o), initial_tablets(it), consistency(std::move(c)) {}
 };
 
 using replication_map = std::unordered_map<token, host_id_vector_replica_set>;

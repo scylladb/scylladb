@@ -2193,7 +2193,7 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
                         // on startup after resharding (while the node is offline).
                         // It is determined on startup by the distributed loader.
                         auto old_tablet_rs = old_rs->maybe_as_tablet_aware();
-                        locator::replication_strategy_params params(rs->get_config_options(), old_tablet_rs->get_initial_tablets(), old_tablet_rs->get_consistency());
+                        locator::replication_strategy_params params(rs->get_config_options(), old_tablet_rs->get_initial_tablets(), old_tablet_rs->get_consistency_config());
                         auto& ks = ss.get_database().find_keyspace(table_schema->ks_name());
                         auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(ks.metadata()->strategy_name(), params, tmptr->get_topology());
                         auto pt_rs = tablet_rs->maybe_as_per_table();
