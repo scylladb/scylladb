@@ -2698,12 +2698,12 @@ std::map<sstring, sstring> convert_property_map(const collection_constructor& ma
     return res;
 }
 
-std::map<sstring, std::variant<sstring, std::vector<sstring>>>
+std::map<sstring, std::variant<sstring, std::vector<sstring>, std::map<sstring, sstring>>>
 convert_extended_property_map(const collection_constructor& map, error_sink_fn add_recognition_error) {
     if (map.elements.empty()) {
         return {};
     }
-    std::map<sstring, std::variant<sstring, std::vector<sstring>>> res;
+    std::map<sstring, std::variant<sstring, std::vector<sstring>, std::map<sstring, sstring>>> res;
     for (auto&& entry : map.elements) {
         auto entry_tuple = expr::as_if<tuple_constructor>(&entry);
         // Because the parser tries to be smart and recover on error (to
@@ -2722,17 +2722,13 @@ convert_extended_property_map(const collection_constructor& map, error_sink_fn a
             break;
         }
         auto right_str = expr::as_if<untyped_constant>(&entry_tuple->elements[1]);
+        const auto left_text = left->raw_text.linearize();
+        std::variant<sstring, std::vector<sstring>, std::map<sstring, sstring>> value;
         if (right_str) {
-            const auto left_text = left->raw_text.linearize();
-            const auto right_text = right_str->raw_text.linearize();
-            if (!res.emplace(left_text, right_text).second) {
-                sstring msg = fmt::format("Multiple definition for property {}", left_text);
-                add_recognition_error(msg);
-                break;
-            }
+            value = right_str->raw_text.linearize();
         } else {
-            auto right_vec = expr::as_if<collection_constructor>(&entry_tuple->elements[1]);
-            if (!right_vec) {
+            auto right_coll = expr::as_if<collection_constructor>(&entry_tuple->elements[1]);
+            if (!right_coll) {
                 sstring msg = fmt::format("Invalid property value: {} for property: {}", entry_tuple->elements[1], entry_tuple->elements[0]);
                 if (expr::is<bind_variable>(entry_tuple->elements[1])) {
                     msg += " (bind variables are not supported in DDL queries)";
@@ -2740,24 +2736,30 @@ convert_extended_property_map(const collection_constructor& map, error_sink_fn a
                 add_recognition_error(msg);
                 break;
             }
-            auto values = right_vec->elements | std::views::transform([&] (const auto& x) -> sstring {
-                auto elem = expr::as_if<untyped_constant>(&x);
-                if (!elem) {
-                    sstring msg = fmt::format("Invalid property vector value: {} for property: {}", x, entry_tuple->elements[0]);
-                    if (expr::is<bind_variable>(x)) {
-                        msg += " (bind variables are not supported in DDL queries)";
+            if (right_coll->style == collection_constructor::style_type::map) {
+                // Nested map value: convert inner map to map<sstring, sstring>
+                value = convert_property_map(*right_coll, add_recognition_error);
+            } else {
+                // List/vector value
+                value = right_coll->elements | std::views::transform([&] (const auto& x) -> sstring {
+                    auto elem = expr::as_if<untyped_constant>(&x);
+                    if (!elem) {
+                        sstring msg = fmt::format("Invalid property vector value: {} for property: {}", x, entry_tuple->elements[0]);
+                        if (expr::is<bind_variable>(x)) {
+                            msg += " (bind variables are not supported in DDL queries)";
+                        }
+                        add_recognition_error(msg);
+                        return "<invalid>";
                     }
-                    add_recognition_error(msg);
-                    return "<invalid>";
-                }
-                return elem->raw_text.linearize();
-            }) | std::ranges::to<std::vector<sstring>>();
-            const auto left_text = left->raw_text.linearize();
-            if (!res.emplace(left_text, std::move(values)).second) {
-                sstring msg = fmt::format("Multiple definition for property {}", left_text);
-                add_recognition_error(msg);
-                break;
+                    return elem->raw_text.linearize();
+                }) | std::ranges::to<std::vector<sstring>>();
             }
+        }
+
+        if (!res.emplace(left_text, std::move(value)).second) {
+            sstring msg = fmt::format("Multiple definition for property {}", left_text);
+            add_recognition_error(msg);
+            break;
         }
     }
     return res;

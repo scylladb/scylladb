@@ -18,6 +18,7 @@
 #include "utils/maybe_yield.hh"
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
+#include "utils/on_internal_error.hh"
 #include "tablets.hh"
 #include "data_dictionary/consistency_config_options.hh"
 
@@ -45,7 +46,8 @@ enum class replication_strategy_type {
     everywhere_topology,
 };
 
-using replication_strategy_config_option = std::variant<sstring, rack_list>;
+using replication_strategy_config_map = std::map<sstring, sstring>;
+using replication_strategy_config_option = std::variant<sstring, rack_list, replication_strategy_config_map>;
 using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;
 
 // Returns the number of replicas inferred by the option.
@@ -654,6 +656,9 @@ struct appending_hash<locator::static_effective_replication_map::factory_key> {
                 },
                 [&h] (const std::vector<sstring>& vec) {
                     feed_hash(h, vec);
+                },
+                [] (const locator::replication_strategy_config_map&) {
+                    on_internal_error(locator::rslogger, "replication strategy configuration map used in replication map cache key");
                 }
             }, val);
         }
@@ -725,6 +730,10 @@ struct fmt::formatter<locator::replication_strategy_config_option> {
             },
             [&ctx] (const std::vector<sstring>& v) {
                 return fmt::format_to(ctx.out(), "[{}]", fmt::join(v | std::views::transform([] (auto& s) { return fmt::format("'{}'", s); }), ","));
+            },
+            [&ctx] (const locator::replication_strategy_config_map&) {
+                on_internal_error(locator::rslogger, "replication strategy configuration map formatted as replication option");
+                return fmt::format_to(ctx.out(), "{{}}");
             }
         }, opt);
     }
