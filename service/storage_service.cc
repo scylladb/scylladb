@@ -258,6 +258,7 @@ storage_service::storage_service(abort_source& abort_source,
         _tablets_module->make_virtual_task<service::tablet_virtual_task>(*this);
         _global_topology_requests_module->make_virtual_task<service::topo::global_topology_request_virtual_task>(*this);
         _vnodes_to_tablets_migration_module->make_virtual_task<service::vnodes_to_tablets::migration_virtual_task>(*this);
+        _vnodes_to_tablets_migration_module->make_virtual_task<service::vnodes_to_tablets::pow2_convergence_virtual_task>(*this);
     }
     register_metrics();
 

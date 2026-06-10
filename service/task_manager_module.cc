@@ -16,6 +16,7 @@
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
 #include "utils/UUID_gen.hh"
+#include <cmath>
 #include <seastar/coroutine/maybe_yield.hh>
 
 namespace service {
@@ -342,6 +343,9 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
             update_status(task_info, res.status, sched_nr);
             res.status.state = tasks::task_manager::task_state::running;
             res.status.children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id, _ss.get_token_metadata_ptr()) : utils::chunked_vector<tasks::task_identity>{};
+            if (task_type == locator::tablet_task_type::merge && tmap.is_converging_to_pow2()) {
+                res.status.parent_id = vnodes_to_tablets::pow2_convergence_virtual_task::make_table_task_id(schema->ks_name(), schema->cf_name());
+            }
             co_return res;
         }
     }
@@ -657,6 +661,362 @@ future<std::vector<tasks::task_stats>> migration_virtual_task::get_stats() {
         result.push_back(make_task_stats(make_task_id(ks_name), ks_name));
     }
     co_return result;
+}
+
+// pow2_convergence_virtual_task
+
+tasks::task_id pow2_convergence_virtual_task::make_ks_task_id(const sstring& keyspace) {
+    auto uuid = utils::UUID_gen::get_name_UUID("pow2_convergence:" + keyspace);
+    return tasks::task_id{uuid};
+}
+
+tasks::task_id pow2_convergence_virtual_task::make_table_task_id(const sstring& keyspace, const sstring& table) {
+    auto uuid = utils::UUID_gen::get_name_UUID("pow2_convergence:" + keyspace + ":" + table);
+    return tasks::task_id{uuid};
+}
+
+tasks::task_stats pow2_convergence_virtual_task::make_task_stats(tasks::task_id id,
+        const sstring& keyspace, const sstring& table,
+        const sstring& scope, const sstring& entity) {
+    return tasks::task_stats{
+        .task_id = id,
+        .type = "pow2_convergence",
+        .kind = tasks::task_kind::cluster,
+        .scope = scope,
+        .state = tasks::task_manager::task_state::running,
+        .sequence_number = 0,
+        .keyspace = keyspace,
+        .table = table,
+        .entity = entity,
+        .shard = 0,
+        .start_time = {},
+        .end_time = {},
+    };
+}
+
+tasks::task_status pow2_convergence_virtual_task::make_task_status(tasks::task_id id,
+        const sstring& keyspace, const sstring& table, const sstring& scope,
+        tasks::task_manager::task_state state,
+        tasks::task_manager::task::progress progress,
+        const sstring& progress_units, const sstring& entity,
+        tasks::task_id parent_id,
+        utils::chunked_vector<tasks::task_identity> children) {
+    auto stats = make_task_stats(id, keyspace, table, scope, entity);
+    return tasks::task_status{
+        .task_id = stats.task_id,
+        .type = stats.type,
+        .kind = stats.kind,
+        .scope = stats.scope,
+        .state = state,
+        .is_abortable = tasks::is_abortable::no,
+        .start_time = stats.start_time,
+        .end_time = stats.end_time,
+        .parent_id = parent_id,
+        .sequence_number = stats.sequence_number,
+        .shard = stats.shard,
+        .keyspace = stats.keyspace,
+        .table = stats.table,
+        .entity = stats.entity,
+        .progress_units = progress_units,
+        .progress = progress,
+        .children = std::move(children),
+    };
+}
+
+std::optional<pow2_convergence_virtual_task::table_match>
+pow2_convergence_virtual_task::find_converging_table_for_task_id(tasks::task_id id) const {
+    auto& db = _ss._db.local();
+    const auto& tablet_metadata = _ss.get_token_metadata().tablets();
+    for (const auto& ks_name : db.get_all_keyspaces()) {
+        auto& ks = db.find_keyspace(ks_name);
+        if (!ks.uses_tablets()) {
+            continue;
+        }
+        for (const auto& schema : ks.metadata()->tables()) {
+            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                continue;
+            }
+            auto& tmap = tablet_metadata.get_tablet_map(schema->id());
+            if (!tmap.is_converging_to_pow2()) {
+                continue;
+            }
+            if (make_table_task_id(ks_name, schema->cf_name()) == id) {
+                return table_match{ks_name, schema->cf_name(), schema->id()};
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<sstring>
+pow2_convergence_virtual_task::find_converging_ks_for_task_id(tasks::task_id id) const {
+    auto& db = _ss._db.local();
+    const auto& tablet_metadata = _ss.get_token_metadata().tablets();
+    for (const auto& ks_name : db.get_all_keyspaces()) {
+        auto& ks = db.find_keyspace(ks_name);
+        if (!ks.uses_tablets()) {
+            continue;
+        }
+        bool has_converging_table = false;
+        for (const auto& schema : ks.metadata()->tables()) {
+            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                continue;
+            }
+            if (tablet_metadata.get_tablet_map(schema->id()).is_converging_to_pow2()) {
+                has_converging_table = true;
+                break;
+            }
+        }
+        if (!has_converging_table) {
+            continue;
+        }
+        if (make_ks_task_id(ks_name) == id) {
+            return ks_name;
+        }
+    }
+    return std::nullopt;
+}
+
+tasks::task_manager::task_group pow2_convergence_virtual_task::get_group() const noexcept {
+    return tasks::task_manager::task_group::pow2_convergence_group;
+}
+
+future<std::optional<tasks::virtual_task_hint>> pow2_convergence_virtual_task::contains(tasks::task_id task_id) const {
+    if (!task_id.uuid().is_name_based()) {
+        co_return std::nullopt;
+    }
+    // Try as a table-level task first.
+    auto table_match = find_converging_table_for_task_id(task_id);
+    if (table_match) {
+        co_return tasks::virtual_task_hint{
+            .table_id = table_match->id,
+            .keyspace_name = table_match->keyspace,
+        };
+    }
+    // Try as a keyspace-level task.
+    auto ks_name = find_converging_ks_for_task_id(task_id);
+    if (ks_name) {
+        co_return tasks::virtual_task_hint{.keyspace_name = *ks_name};
+    }
+    co_return std::nullopt;
+}
+
+future<std::vector<tasks::task_stats>> pow2_convergence_virtual_task::get_stats() {
+    std::vector<tasks::task_stats> result;
+    auto& db = _ss._db.local();
+    const auto& tablet_metadata = _ss.get_token_metadata().tablets();
+
+    for (const auto& ks_name : db.get_all_keyspaces()) {
+        auto& ks = db.find_keyspace(ks_name);
+        if (!ks.uses_tablets()) {
+            continue;
+        }
+        bool has_converging_table = false;
+        for (const auto& schema : ks.metadata()->tables()) {
+            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                continue;
+            }
+            auto& tmap = tablet_metadata.get_tablet_map(schema->id());
+            if (!tmap.is_converging_to_pow2()) {
+                continue;
+            }
+            has_converging_table = true;
+            auto target = tmap.target_pow2_tablet_count();
+            auto current = tmap.tablet_count();
+            result.push_back(make_task_stats(
+                make_table_task_id(ks_name, schema->cf_name()),
+                ks_name, schema->cf_name(), "table",
+                fmt::format("{} tablets (target: {})", current, target)));
+        }
+        if (has_converging_table) {
+            result.push_back(make_task_stats(
+                make_ks_task_id(ks_name), ks_name, "", "keyspace", ""));
+        }
+    }
+    co_return result;
+}
+
+future<std::optional<tasks::task_status>> pow2_convergence_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
+    auto& ks_name = hint.keyspace_name;
+    if (!ks_name) {
+        co_return std::nullopt;
+    }
+
+    auto& db = _ss._db.local();
+    const auto& tablet_metadata = _ss.get_token_metadata().tablets();
+    auto my_id = _ss.get_token_metadata().get_my_id();
+
+    if (hint.table_id) {
+        // Table-level task.
+        auto tid = *hint.table_id;
+        if (!tablet_metadata.has_tablet_map(tid)) {
+            co_return std::nullopt;
+        }
+        auto& tmap = tablet_metadata.get_tablet_map(tid);
+        if (!tmap.is_converging_to_pow2()) {
+            co_return std::nullopt;
+        }
+
+        auto table_ptr = db.get_tables_metadata().get_table_if_exists(tid);
+        if (!table_ptr) {
+            co_return std::nullopt;
+        }
+        auto schema = table_ptr->schema();
+        auto target = tmap.target_pow2_tablet_count();
+        auto current = tmap.tablet_count();
+        double pct = std::round(static_cast<double>(target) * 100.0 / static_cast<double>(current));
+        auto entity = fmt::format("{} tablets (target: {})", current, target);
+
+        // Check for active merge task as child.
+        utils::chunked_vector<tasks::task_identity> children;
+        auto& task_info = tmap.resize_task_info();
+        if (task_info.is_valid() && task_info.request_type == locator::tablet_task_type::merge) {
+            children.push_back(tasks::task_identity{
+                .host_id = my_id,
+                .task_id = tasks::task_id{task_info.tablet_task_id.uuid()},
+            });
+        }
+
+        co_return make_task_status(id, *ks_name, schema->cf_name(), "table",
+            tasks::task_manager::task_state::running, {pct, 100},
+            "percent", entity, make_ks_task_id(*ks_name), std::move(children));
+    }
+
+    // Keyspace-level task.
+    auto& ks = db.find_keyspace(*ks_name);
+    if (!ks.uses_tablets()) {
+        co_return std::nullopt;
+    }
+
+    double tables_converging = 0;
+    double tables_total = 0;
+    utils::chunked_vector<tasks::task_identity> children;
+
+    for (const auto& schema : ks.metadata()->tables()) {
+        if (!tablet_metadata.has_tablet_map(schema->id())) {
+            continue;
+        }
+        auto& tmap = tablet_metadata.get_tablet_map(schema->id());
+        if (!tmap.is_converging_to_pow2()) {
+            continue;
+        }
+        tables_total++;
+        children.push_back(tasks::task_identity{
+            .host_id = my_id,
+            .task_id = make_table_task_id(*ks_name, schema->cf_name()),
+        });
+    }
+
+    if (tables_total == 0) {
+        co_return std::nullopt;
+    }
+
+    co_return make_task_status(id, *ks_name, "", "keyspace",
+        tasks::task_manager::task_state::running, {tables_converging, tables_total},
+        "tables", "", tasks::task_id::create_null_id(), std::move(children));
+}
+
+future<std::optional<tasks::task_status>> pow2_convergence_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
+    auto& ks_name = hint.keyspace_name;
+    if (!ks_name) {
+        co_return std::nullopt;
+    }
+
+    auto& db = _ss._db.local();
+    tasks::tmlogger.info("pow2_convergence_virtual_task: waiting for pow2 convergence to finish: task_id={}, keyspace={}", id, *ks_name);
+
+    if (hint.table_id) {
+        // Table-level wait: wait until this table's target_pow2 becomes 0.
+        auto tid = *hint.table_id;
+        while (true) {
+            auto tmptr = _ss.get_token_metadata_ptr();
+            if (!tmptr->tablets().has_tablet_map(tid)) {
+                // Table was deleted.
+                co_return std::nullopt;
+            }
+            if (!tmptr->tablets().get_tablet_map(tid).is_converging_to_pow2()) {
+                break;
+            }
+            co_await _ss._topology_state_machine.event.wait();
+        }
+
+        auto table_ptr = db.get_tables_metadata().get_table_if_exists(tid);
+        sstring table_name = table_ptr ? table_ptr->schema()->cf_name() : "";
+
+        auto status = make_task_status(id, *ks_name, table_name, "table",
+            tasks::task_manager::task_state::done, {100, 100},
+            "percent", "", make_ks_task_id(*ks_name), {});
+        status.end_time = db_clock::now();
+        co_return status;
+    }
+
+    // Keyspace-level wait: wait until all tracked tables have finished converging.
+    // Record the initial set of converging tables so that we can report progress in task status.
+    std::set<table_id> tracked_tables;
+    {
+        if (!db.has_keyspace(*ks_name)) {
+            co_return std::nullopt;
+        }
+        auto& ks = db.find_keyspace(*ks_name);
+        const auto& tablet_metadata = _ss.get_token_metadata().tablets();
+        for (const auto& schema : ks.metadata()->tables()) {
+            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                continue;
+            }
+            if (tablet_metadata.get_tablet_map(schema->id()).is_converging_to_pow2()) {
+                tracked_tables.insert(schema->id());
+            }
+        }
+    }
+
+    if (tracked_tables.empty()) {
+        co_return std::nullopt;
+    }
+
+    double tables_total = tracked_tables.size();
+
+    while (true) {
+        auto tmptr = _ss.get_token_metadata_ptr();
+        const auto& tablet_metadata = tmptr->tablets();
+        double tables_completed = 0;
+
+        for (auto it = tracked_tables.begin(); it != tracked_tables.end(); ) {
+            if (!tablet_metadata.has_tablet_map(*it)) {
+                // Table was deleted.
+                it = tracked_tables.erase(it);
+                tables_total--;
+            } else if (!tablet_metadata.get_tablet_map(*it).is_converging_to_pow2()) {
+                // Convergence finished for this table.
+                tables_completed++;
+                ++it;
+            } else {
+                // Table is still converging.
+                ++it;
+            }
+        }
+
+        if (tables_total == 0) {
+            // All tracked tables were deleted.
+            co_return std::nullopt;
+        }
+
+        if (tables_completed == tables_total) {
+            break;
+        }
+
+        co_await _ss._topology_state_machine.event.wait();
+    }
+
+    auto status = make_task_status(id, *ks_name, "", "keyspace",
+        tasks::task_manager::task_state::done, {tables_total, tables_total},
+        "tables", "", tasks::task_id::create_null_id(), {});
+    status.end_time = db_clock::now();
+    co_return status;
+}
+
+future<> pow2_convergence_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
+    // Pow2 convergence cannot be aborted.
+    return make_ready_future<>();
 }
 
 task_manager_module::task_manager_module(tasks::task_manager& tm, service::storage_service& ss) noexcept

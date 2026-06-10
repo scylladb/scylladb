@@ -1105,6 +1105,7 @@ public:
     friend class tablet_virtual_task;
     friend class topo::global_topology_request_virtual_task;
     friend class vnodes_to_tablets::migration_virtual_task;
+    friend class vnodes_to_tablets::pow2_convergence_virtual_task;
 };
 
 }

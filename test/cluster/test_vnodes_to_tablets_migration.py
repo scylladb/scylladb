@@ -208,7 +208,7 @@ async def verify_migration_status(manager: ManagerClient, server: ServerInfo,
         # Verify migration status via the tasks API
         tm = TaskManagerClient(manager.api)
         tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        ks_tasks = [t for t in tasks if t.keyspace == ks]
+        ks_tasks = [t for t in tasks if t.keyspace == ks and t.type == "vnodes_to_tablets_migration"]
 
         if expected_status == "migrating_to_tablets":
             assert len(ks_tasks) == 1, f"Expected 1 virtual task for keyspace '{ks}', got {len(ks_tasks)}"
@@ -724,7 +724,7 @@ async def test_migration_task_not_abortable(manager: ManagerClient):
 
         tm = TaskManagerClient(manager.api)
         tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        ks_tasks = [t for t in tasks if t.keyspace == ks]
+        ks_tasks = [t for t in tasks if t.keyspace == ks and t.type == "vnodes_to_tablets_migration"]
         assert len(ks_tasks) == 1, f"Expected 1 migration task for keyspace '{ks}', got {len(ks_tasks)}"
 
         task = ks_tasks[0]
@@ -759,9 +759,10 @@ async def test_migration_wait_task(manager: ManagerClient):
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
 
         tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        assert len(tasks) == 1
-        assert tasks[0].keyspace == ks
-        task_id = tasks[0].task_id
+        migration_tasks = [t for t in tasks if t.type == "vnodes_to_tablets_migration"]
+        assert len(migration_tasks) == 1
+        assert migration_tasks[0].keyspace == ks
+        task_id = migration_tasks[0].task_id
 
         log = await manager.server_open_log(server.server_id)
         mark = await log.mark()
@@ -785,9 +786,10 @@ async def test_migration_wait_task(manager: ManagerClient):
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
 
         tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        assert len(tasks) == 1
-        assert tasks[0].keyspace == ks
-        task_id = tasks[0].task_id
+        migration_tasks = [t for t in tasks if t.type == "vnodes_to_tablets_migration"]
+        assert len(migration_tasks) == 1
+        assert migration_tasks[0].keyspace == ks
+        task_id = migration_tasks[0].task_id
 
         logger.info("Marking the node for tablets migration and restarting")
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
