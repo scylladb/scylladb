@@ -1047,3 +1047,147 @@ async def test_tablet_status_in_migration_api(manager: ManagerClient):
             tablet_count = t['current_tablet_count']
             assert tablet_count > 0 and (tablet_count & (tablet_count - 1)) == 0, \
                 f"Tablet count {tablet_count} for table {t['table']} is not a power of two"
+
+
+@pytest.mark.asyncio
+async def test_pow2_convergence_virtual_task(manager: ManagerClient):
+    """Verify that pow2 convergence is tracked via a virtual task.
+
+    Coverage:
+    - Task visibility: keyspace-level and table-level tasks appear during convergence.
+    - Progress: keyspace task reports tables converged/total; table tasks report percent complete.
+    - Parent-child: table tasks reference keyspace task as parent; keyspace task lists
+      table tasks as children.
+    - Not abortable: abort attempt is rejected.
+    - Wait API: wait on keyspace-level task returns "done" when convergence finishes.
+    - Lifetime: tasks disappear after convergence completes.
+
+    Edge cases not covered (but could be added in the future):
+    - Drop converging keyspace during task wait.
+    - Drop converging table during task wait.
+    - Drop all converging tables during task wait.
+    """
+    num_shards = 3
+    tokens_per_node = 16
+
+    logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
+    cfg = {'num_tokens': tokens_per_node}
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    logger.info("Creating keyspace with two empty vnode-based tables")
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, c int)")
+
+        # Disable tablet balancing so convergence doesn't start after finalization.
+        await manager.api.disable_tablet_balancing(server.ip_addr)
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Marking node for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        logger.info("Restarting node to trigger resharding")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Finalizing migration")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        # At this point: migration is done, tables have target_pow2 != 0,
+        # but load balancing is disabled so no merges will run.
+
+        tm = TaskManagerClient(manager.api)
+
+        logger.info("Verifying pow2 convergence tasks appear in task manager")
+        tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
+
+        # Filter pow2_convergence tasks.
+        convergence_tasks = [t for t in tasks if t.type == "pow2_convergence"]
+        ks_tasks = [t for t in convergence_tasks if t.scope == "keyspace" and t.keyspace == ks]
+        table_tasks = [t for t in convergence_tasks if t.scope == "table" and t.keyspace == ks]
+
+        assert len(ks_tasks) == 1, f"Expected 1 keyspace-level convergence task, got {len(ks_tasks)}"
+        assert len(table_tasks) == 2, f"Expected 2 table-level convergence tasks, got {len(table_tasks)}"
+
+        ks_task = ks_tasks[0]
+        assert ks_task.kind == "cluster"
+        assert ks_task.state == "running"
+
+        table_names = {t.table for t in table_tasks}
+        assert table_names == {'t1', 't2'}, f"Expected tables t1 and t2, got {table_names}"
+        for t in table_tasks:
+            assert t.kind == "cluster"
+            assert t.state == "running"
+
+        logger.info("Verifying keyspace-level task status (progress and children)")
+        ks_status = await tm.get_task_status(server.ip_addr, ks_task.task_id)
+        assert ks_status.kind == "cluster"
+        assert ks_status.state == "running"
+        assert ks_status.is_abortable is False
+        assert ks_status.progress_units == "tables"
+        assert ks_status.progress_total == 2, f"Expected total=2, got {ks_status.progress_total}"
+        assert ks_status.progress_completed == 0, f"Expected completed=0, got {ks_status.progress_completed}"
+
+        # Children should be the two table-level task IDs.
+        children_task_ids = {c['task_id'] for c in ks_status.children_ids}
+        expected_children = {t.task_id for t in table_tasks}
+        assert children_task_ids == expected_children, \
+            f"Keyspace task children mismatch: got {children_task_ids}, expected {expected_children}"
+
+        logger.info("Verifying table-level task status (progress, entity, parent)")
+        for t_task in table_tasks:
+            t_status = await tm.get_task_status(server.ip_addr, t_task.task_id)
+            assert t_status.kind == "cluster"
+            assert t_status.state == "running"
+            assert t_status.is_abortable is False
+            assert t_status.progress_units == "percent"
+            assert t_status.progress_total == 100
+            # Validate progress against the authoritative values in system.tablets.
+            current_tablet_count = await get_tablet_count(manager, server, ks, t_task.table)
+            target_pow2_tablet_count = await get_target_pow2_tablet_count(manager, server, ks, t_task.table)
+            assert current_tablet_count > 0, f"Table {t_task.table}: expected current_tablet_count > 0, got {current_tablet_count}"
+            expected_progress = int((target_pow2_tablet_count * 100.0 / current_tablet_count) + 0.5)
+            assert t_status.progress_completed == expected_progress, \
+                f"Table {t_task.table}: expected progress {expected_progress} (target={target_pow2_tablet_count}, current={current_tablet_count}), got {t_status.progress_completed}"
+            expected_entity = f"{current_tablet_count} tablets (target: {target_pow2_tablet_count})"
+            assert t_status.entity == expected_entity, \
+                f"Table {t_task.table}: expected entity '{expected_entity}', got '{t_status.entity}'"
+            # Parent should be the keyspace-level task.
+            assert t_status.parent_id == ks_task.task_id, \
+                f"Table {t_task.table}: expected parent_id={ks_task.task_id}, got {t_status.parent_id}"
+
+        logger.info("Verifying convergence tasks are not abortable")
+        with pytest.raises(HTTPError):
+            await tm.abort_task(server.ip_addr, ks_task.task_id)
+
+        with pytest.raises(HTTPError):
+            await tm.abort_task(server.ip_addr, table_tasks[0].task_id)
+
+        logger.info("Starting wait on keyspace-level convergence task")
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        wait_task = asyncio.create_task(tm.wait_for_task(server.ip_addr, ks_task.task_id))
+
+        await log.wait_for('pow2_convergence_virtual_task: waiting for pow2 convergence to finish', from_mark=mark)
+
+        logger.info("Enabling tablet load balancing to let convergence proceed")
+        await manager.api.enable_tablet_balancing(server.ip_addr)
+
+        logger.info("Waiting for convergence to complete via task manager")
+        wait_status = await asyncio.wait_for(wait_task, timeout=120)
+        assert wait_status.state == "done", f"Expected 'done' state, got '{wait_status.state}'"
+        assert wait_status.progress_completed == wait_status.progress_total, \
+            f"Expected progress_completed == progress_total, got {wait_status.progress_completed}/{wait_status.progress_total}"
+
+        logger.info("Verifying convergence tasks have disappeared")
+        tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
+        convergence_tasks = [t for t in tasks if t.type == "pow2_convergence"]
+        assert len(convergence_tasks) == 0, \
+            f"Expected no convergence tasks after completion, got {len(convergence_tasks)}"
