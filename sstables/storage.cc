@@ -906,7 +906,19 @@ future<> object_storage_base::destroy(const sstable& sst) {
     // Remove the registry entry only after S3 objects are cleaned up.
     // If this fails, the "removing" entry survives and garbage_collect()
     // will delete the (already gone) objects tolerantly and retry deletion.
+    //
+    // This destroy() is fire-and-forget from the shared_sstable deleter and can
+    // race with shutdown: unplug_system_keyspace() may have already unplugged the
+    // sstables_registry by the time we get here. Accessing it then would trip the
+    // SCYLLA_ASSERT in sstables_manager::sstables_registry(). Skip the entry
+    // deletion in that case — the "removing" entry survives and garbage_collect()
+    // on the next startup deletes the (already gone) objects tolerantly and
+    // removes the entry.
     try {
+        if (!sst.manager().has_sstables_registry()) {
+            sstlog.warn("Skipping registry entry deletion for {}: sstables registry already unplugged (shutdown in progress)", sst.toc_filename());
+            co_return;
+        }
         co_await sst.manager().sstables_registry().delete_entry(owner(), sst.manager().get_local_host_id(), sst.generation());
     } catch (...) {
         sstlog.warn("Failed to delete registry entry for {}: {}", sst.toc_filename(), std::current_exception());
