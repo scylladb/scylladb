@@ -791,6 +791,72 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_parallel(build_mode: str, manager: ManagerClient, object_storage):
+    '''Verify that the tablets of a single table are restored in parallel, not one by one.
+    Pause one tablet download per node with a one-shot injection and assert that the remaining
+    tablets keep downloading (restore progress advances above zero) while those are blocked.
+    If tablet downloads were serialized, a blocked tablet would stall all progress.'''
+
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+
+    cql = manager.get_cql()
+
+    # Enough keys to populate a few tablets across the nodes: we need at least two
+    # tablets with sstables so that pausing one still leaves others to make progress.
+    num_keys = 500
+    tablet_count = 4
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        snap_name, _ = await take_snapshot(ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
+
+        # Pause the first tablet download to reach the injection on each node; the
+        # remaining tablets proceed (one_shot consumes the injection after one pause).
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "pause_tablet_restore", one_shot=True) for s in servers))
+
+        manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+
+        # Wait until a tablet download is parked on at least one node.
+        waiters = [asyncio.create_task(manager.api.wait_for_injection_enter(s.ip_addr, "pause_tablet_restore")) for s in servers]
+        done, pending = await asyncio.wait(waiters, timeout=30, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        assert done, "Restore did not reach the tablet-download pause on any node"
+
+        # While that tablet is blocked, the others must keep downloading: restore
+        # progress advances above zero without reaching completion (the blocked tablet's
+        # sstables stay pending). Progress refreshes on a 5s timer.
+        st = None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            st = await manager.api.get_task_status(servers[0].ip_addr, tid)
+            if 0 < st['progress_completed'] < st['progress_total']:
+                break
+            await asyncio.sleep(1)
+        assert st is not None and 0 < st['progress_completed'] < st['progress_total'], \
+            f"Expected other tablets to download while one was paused, got progress {st}"
+        logger.info(f"Cross-tablet parallelism confirmed: {st['progress_completed']}/{st['progress_total']} "
+                    f"sstables downloaded while a tablet was paused")
+
+        # Release the paused tablet and let the restore finish.
+        await asyncio.gather(*(manager.api.message_injection(s.ip_addr, "pause_tablet_restore") for s in servers))
+
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done'), f"Restore failed: {status}"
+        assert status['progress_completed'] == status['progress_total']
+
+        await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restore_tablets_vs_migration(build_mode: str, manager: ManagerClient, object_storage):
     '''Check that restore handles tablets migrating around'''
 
