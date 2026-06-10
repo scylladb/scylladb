@@ -352,7 +352,7 @@ private:
 
     static void ensure_that_keyspace_is_not_strongly_consistent(const keyspace_metadata& ksm, const schema& schema) {
         using data_dictionary::consistency_config_option;
-        if (ksm.consistency_option().value_or(consistency_config_option::eventual) != consistency_config_option::eventual) {
+        if (ksm.consistency_type().value_or(consistency_config_option::eventual) != consistency_config_option::eventual) {
             throw exceptions::invalid_request_exception(format("Cannot create CDC log for table {}.{}: CDC is not supported in strongly consistent keyspaces",
                     schema.ks_name(), schema.cf_name()));
         }

@@ -47,6 +47,7 @@
 #include <seastar/core/coroutine.hh>
 #include "db/schema_tables.hh"
 #include "db/config.hh"
+#include "data_dictionary/consistency_config_options.hh"
 
 using namespace locator;
 
