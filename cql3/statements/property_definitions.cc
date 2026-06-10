@@ -85,13 +85,15 @@ std::optional<property_definitions::map_type> property_definitions::get_map(cons
 }
 
 property_definitions::map_type property_definitions::to_simple_map(const extended_map_type& xmap) {
-    return xmap | std::views::transform([](const auto& x) {
+    return xmap | std::views::transform([](const auto& x) -> std::pair<sstring, sstring> {
         // Convert each pair to a string key and value
-        try {
-            return std::make_pair(x.first, std::get<sstring>(x.second));
-        } catch (const std::bad_variant_access& e) {
+        if (auto* str = std::get_if<sstring>(&x.second)) {
+            return std::make_pair(x.first, *str);
+        }
+        if (std::holds_alternative<list_type>(x.second)) {
             throw exceptions::syntax_exception(seastar::format("Invalid map value '{}' for key '{}'. It should be a simple string.", std::get<list_type>(x.second), x.first));
         }
+        throw exceptions::syntax_exception(seastar::format("Invalid map value for key '{}'. It should be a simple string, not a nested map.", x.first));
     }) | std::ranges::to<map_type>();
 }
 
@@ -247,6 +249,9 @@ property_definitions::map_type to_flattened_map(const property_definitions::exte
                         out[fmt::format("{}:{}", in_key, i)] = v;
                     }
                 }
+            },
+            [&] (const property_definitions::map_type&) {
+                throw std::invalid_argument(fmt::format("key '{}' has a nested map value which cannot be flattened", in_key));
             }
         }, in_value);
     }
