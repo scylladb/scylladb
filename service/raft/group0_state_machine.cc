@@ -522,6 +522,13 @@ future<> group0_state_machine::reload_state() {
     // we assume that the apply mutex is held, topology_state_load applies
     // persisted state machine into memory so it needs to be protected with it
     co_await _ss.topology_state_load();
+    // If transfer_snapshot() left a pending schema change (Phase 1 completed
+    // but Phase 2 deferred), run Phase 2 now.  topology_state_load() has
+    // already refreshed token_metadata so ERMs will be computed against the
+    // correct replica placement.
+    if (_pending_schema_change) {
+        co_await _mm.complete_schema_change(std::move(_pending_schema_change));
+    }
     co_await _ss.view_building_state_load();
     if (_feature_service.compression_dicts) {
         co_await _ss.compression_dictionary_updated_callback_all();
@@ -590,7 +597,12 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
 
     if (_in_memory_state_machine_enabled) {
-        co_await _mm.merge_schema_from(hid, std::move(*cm));
+        // Phase 1 only: persist schema mutations to disk and snapshot the
+        // 'before' state.  Phase 2 (build in-memory schema objects with
+        // correct ERMs) is deferred to reload_state(), which runs inside
+        // load_snapshot() after topology_state_load() has brought
+        // token_metadata up to date.
+        _pending_schema_change = co_await _mm.prepare_schema_change(hid, std::move(*cm));
     } else {
         co_await write_mutations_to_database(_ss, _sp, gms::inet_address{}, std::move(*cm));
     }
@@ -631,5 +643,7 @@ future<> group0_state_machine::abort() {
     _abort_source.request_abort();
     return _gate.close();
 }
+
+group0_state_machine::~group0_state_machine() = default;
 
 } // end of namespace service
