@@ -154,8 +154,20 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_ms_large) {
     return test_sstable_conforms_to_mutation_source(sstable_version_types::ms, block_sizes[2]);
 }
 
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_mt_tiny) {
+    return test_sstable_conforms_to_mutation_source(sstable_version_types::mt, block_sizes[0]);
+}
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_mt_medium) {
+    return test_sstable_conforms_to_mutation_source(sstable_version_types::mt, block_sizes[1]);
+}
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_mt_large) {
+    return test_sstable_conforms_to_mutation_source(sstable_version_types::mt, block_sizes[2]);
+}
+
 // This SCYLLA_ASSERT makes sure we don't miss writable vertions
-static_assert(writable_sstable_versions.size() == 4);
+static_assert(writable_sstable_versions.size() == 5);
 
 // `keys` may contain repetitions.
 // The generated position ranges are non-empty. The start of each range in the vector is greater than the end of the previous range.
