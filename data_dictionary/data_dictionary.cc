@@ -221,7 +221,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
              std::string_view strategy_name,
              locator::replication_strategy_config_options strategy_options,
              std::optional<unsigned> initial_tablets,
-             std::optional<consistency_config_option> consistency_option,
+             std::optional<consistency_config> consistency_option,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs,
              user_types_metadata user_types,
@@ -235,7 +235,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     , _durable_writes{durable_writes}
     , _user_types{std::move(user_types)}
     , _storage_options(make_lw_shared<storage_options>(std::move(storage_opts)))
-    , _consistency_option(consistency_option)
+    , _consistency_option(std::move(consistency_option))
 {
     for (auto&& s : cf_defs) {
         _cf_meta_data.emplace(s->cf_name(), s);
@@ -247,14 +247,45 @@ void keyspace_metadata::validate(const gms::feature_service& fs, const locator::
     locator::replication_strategy_params params(strategy_options(), initial_tablets(), consistency_option());
     auto strategy = locator::abstract_replication_strategy::create_replication_strategy(strategy_name(), params, topology);
     strategy->validate_options(fs, topology);
-    if (!params.initial_tablets && params.consistency.value_or(data_dictionary::consistency_config_option::eventual) != data_dictionary::consistency_config_option::eventual) {
+    if (!params.initial_tablets && params.consistency && params.consistency->type != data_dictionary::consistency_config_option::eventual) {
         throw exceptions::configuration_exception("Only eventual consistency is supported for non-tablet keyspaces");
     }
     if (params.consistency && !fs.strongly_consistent_tables) {
         throw exceptions::configuration_exception("The strongly_consistent_tables feature must be enabled to use a consistency option");
     }
-    if (params.consistency && *params.consistency == data_dictionary::consistency_config_option::local) {
+    if (params.consistency && params.consistency->type == data_dictionary::consistency_config_option::local) {
         throw exceptions::configuration_exception("Local consistency is not supported yet");
+    }
+    // Validate dedicated_rack: if specified, the replication for that DC must be rack-based
+    // and must contain the dedicated rack in its rack list.
+    if (_consistency_option && _consistency_option->has_dedicated_rack()) {
+        if (_consistency_option->type == data_dictionary::consistency_config_option::eventual) {
+            throw exceptions::configuration_exception("dedicated_rack is not allowed with eventual consistency");
+        }
+        if (_consistency_option->type == data_dictionary::consistency_config_option::global
+                && _consistency_option->dedicated_rack.size() > 1) {
+            throw exceptions::configuration_exception("Only a single dedicated_rack entry is supported with global consistency");
+        }
+        if (!params.initial_tablets) {
+            throw exceptions::configuration_exception("dedicated_rack requires tablets to be enabled");
+        }
+        for (const auto& [dc, rack] : _consistency_option->dedicated_rack) {
+            auto it = strategy_options().find(dc);
+            if (it == strategy_options().end()) {
+                throw exceptions::configuration_exception(
+                    fmt::format("dedicated_rack references datacenter '{}' which is not in the replication options", dc));
+            }
+            auto rf = locator::abstract_replication_strategy::parse_replication_factor(it->second);
+            if (!rf.is_rack_based()) {
+                throw exceptions::configuration_exception(
+                    fmt::format("dedicated_rack requires rack-based replication for datacenter '{}', but replication factor is numeric", dc));
+            }
+            const auto& rack_list = rf.get_rack_list();
+            if (std::find(rack_list.begin(), rack_list.end(), rack) == rack_list.end()) {
+                throw exceptions::configuration_exception(
+                    fmt::format("dedicated_rack '{}' is not in the replication rack list for datacenter '{}': {}", rack, dc, rack_list));
+            }
+        }
     }
 }
 
@@ -273,7 +304,7 @@ keyspace_metadata::new_keyspace(std::string_view name,
                                 std::string_view strategy_name,
                                 locator::replication_strategy_config_options options,
                                 std::optional<unsigned> initial_tablets,
-                                std::optional<consistency_config_option> consistency_option,
+                                std::optional<consistency_config> consistency_option,
                                 bool durables_writes,
                                 storage_options storage_opts,
                                 std::vector<schema_ptr> cf_defs,
@@ -598,7 +629,22 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
         os << "} AND durable_writes = " << fmt::to_string(_durable_writes);
         if (db.features().tablets) {
             if (_consistency_option) {
-                os << " AND consistency = " << cql3::util::single_quote(consistency_config_option_to_string(*_consistency_option));
+                if (_consistency_option->has_dedicated_rack()) {
+                    os << " AND consistency = {'type': "
+                       << cql3::util::single_quote(consistency_config_option_to_string(_consistency_option->type))
+                       << ", 'dedicated_rack': {";
+                    bool first = true;
+                    for (const auto& [dc, rack] : _consistency_option->dedicated_rack) {
+                        if (!first) {
+                            os << ", ";
+                        }
+                        os << cql3::util::single_quote(dc) << ": " << cql3::util::single_quote(rack);
+                        first = false;
+                    }
+                    os << "}}";
+                } else {
+                    os << " AND consistency = " << cql3::util::single_quote(consistency_config_option_to_string(_consistency_option->type));
+                }
             }
             if (!_initial_tablets.has_value()) {
                 os << " AND tablets = {'enabled': false}";
