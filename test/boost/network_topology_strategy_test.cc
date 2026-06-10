@@ -47,6 +47,7 @@
 #include <seastar/core/coroutine.hh>
 #include "db/schema_tables.hh"
 #include "db/config.hh"
+#include "data_dictionary/consistency_config_options.hh"
 
 using namespace locator;
 
@@ -1112,6 +1113,50 @@ SEASTAR_TEST_CASE(test_rack_list_rejected_when_using_vnodes) {
 
         BOOST_REQUIRE_THROW(e.execute_cql(create_stmt(false)).get(), exceptions::configuration_exception);
         e.execute_cql(create_stmt(true)).get();
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_consistency_preserved_on_alter_keyspace) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.db_config->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        topo.start_new_dc({"dc1", "rack1"});
+        topo.add_node(service::node_state::normal, shard_count);
+
+        // Create keyspace with consistency and dedicated_rack
+        e.execute_cql("CREATE KEYSPACE ks_cons WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                      "'dc1': ['rack1']} AND consistency = {'type': 'global', 'dedicated_rack': {'dc1': 'rack1'}}").get();
+
+        auto check_consistency = [&] {
+            auto ksm = e.local_db().find_keyspace("ks_cons").metadata();
+            auto consistency = ksm->consistency_option();
+            BOOST_REQUIRE(consistency.has_value());
+            BOOST_REQUIRE(consistency->type == data_dictionary::consistency_config_option::global);
+            BOOST_REQUIRE(consistency->has_dedicated_rack());
+            BOOST_REQUIRE_EQUAL(consistency->dedicated_rack.at("dc1"), sstring("rack1"));
+        };
+        check_consistency();
+        BOOST_REQUIRE(describe(e, "ks_cons").contains("'type': 'global'"));
+        BOOST_REQUIRE(describe(e, "ks_cons").contains("'dedicated_rack'"));
+
+        // ALTER KEYSPACE without re-specifying consistency must preserve it
+        e.execute_cql("ALTER KEYSPACE ks_cons WITH DURABLE_WRITES = false").get();
+        check_consistency();
+
+        // Altering consistency is forbidden
+        try {
+            e.execute_cql("ALTER KEYSPACE ks_cons WITH consistency = {'type': 'eventual'}").get();
+            BOOST_FAIL("Expected ALTER KEYSPACE consistency update to fail");
+        } catch (const exceptions::invalid_request_exception& ex) {
+            BOOST_REQUIRE(std::string_view(ex.what()).contains("Cannot alter consistency option"));
+        }
+
+        // Consistency still intact after failed alter
+        check_consistency();
     }, cfg);
 }
 
