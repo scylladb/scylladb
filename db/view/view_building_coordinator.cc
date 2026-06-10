@@ -55,7 +55,7 @@ view_building_coordinator::view_building_coordinator(replica::database& db, raft
     , _as(as) {}
 
 future<service::group0_guard> view_building_coordinator::start_operation() {
-    auto guard = co_await _group0.client().start_operation(_as, service::raft_timeout{});
+    auto guard = co_await _group0.client().start_operation(_as);
     vbc_logger.debug("starting new operation");
     if (_term != _raft.get_current_term()) {
         throw service::term_changed_error{};
