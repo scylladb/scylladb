@@ -411,6 +411,11 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--rf-rack-valid-keyspaces=1')
     if major < [2025,2]:
         cmd.remove('--group0-raft-op-timeout-in-ms=300000')
+    if major < [2026,2]:
+        cmd.remove('--experimental-features=logstor')
+        cmd.remove('--logstor-disk-size-in-mb=8')
+        cmd.remove('--logstor-file-size-in-mb=4')
+        cmd.remove('--logstor-separator-max-memory-in-mb=8')
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with
