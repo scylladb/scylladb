@@ -467,6 +467,15 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
+    // Switching a keyspace to or from strong consistency would have to move the data it
+    // already holds between two write paths, so the consistency option cannot be altered.
+    // Restating the value the keyspace already has is allowed, so that a keyspace can be
+    // described and altered back.
+    if (const auto consistency = get_consistency_option();
+            consistency && *consistency != old->consistency_option().value_or(data_dictionary::consistency_config{})) {
+        throw exceptions::invalid_request_exception("Cannot alter consistency option of a keyspace");
+    }
+
     locator::replication_strategy_config_options options;
     const auto& old_options = old->strategy_options();
     // if tablets options have not been specified, inherit them if it's tablets-enabled KS
@@ -483,7 +492,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         sc = old->strategy_name();
         options = old_options;
     }
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt());
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, old->consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt());
 }
 
 namespace {
