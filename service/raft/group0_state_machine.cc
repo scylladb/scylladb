@@ -36,6 +36,7 @@
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "service/migration_manager.hh"
+#include "db/schema_applier.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -310,12 +311,17 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 
     std::optional<storage_service::state_change_hint> topology_state_change_hint;
     modules_to_reload modules_to_reload;
+    std::unique_ptr<db::schema_tables::schema_applier> pending_schema;
 
     co_await std::visit(make_visitor(
     [&] (schema_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
         if (_in_memory_state_machine_enabled) {
-            co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+            // Phase 1: persist mutations to disk and snapshot 'before' state.
+            // Phase 2 (build in-memory schema with correct topology) runs
+            // after the visitor, below.
+            pending_schema = co_await _mm.prepare_schema_change(
+                    locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
         } else {
             // Just write the mutations to system_schema tables without
             // creating in-memory keyspace/table representations.
@@ -337,7 +343,13 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         modules_to_reload = get_modules_to_reload(chng.mutations);
         topology_state_change_hint.emplace();
         if (_in_memory_state_machine_enabled) {
-            co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+            // Phase 1: persist all mutations (schema + topology) to disk and
+            // snapshot 'before' schema state.  topology_transition() will run
+            // below to load the new topology into memory before Phase 2
+            // builds ERMs, ensuring they reflect the correct replica
+            // placement.
+            pending_schema = co_await _mm.prepare_schema_change(
+                    locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
         } else {
             co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
         }
@@ -351,6 +363,11 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     if (_in_memory_state_machine_enabled) {
         if (topology_state_change_hint) {
             co_await _ss.topology_transition(std::move(*topology_state_change_hint));
+        }
+        // Phase 2: build in-memory schema state.  Runs after topology_transition()
+        // so that token_metadata is up-to-date and ERMs are correct.
+        if (pending_schema) {
+            co_await _mm.complete_schema_change(std::move(pending_schema));
         }
         co_await reload_modules(std::move(modules_to_reload));
     }
