@@ -139,7 +139,11 @@ private:
     preprocessed_audit_rules _preprocessed_rules;
 
     std::unique_ptr<storage_helper> _storage_helper_ptr;
-    bool _storage_running = false;
+    // Guards only the startup window: set once when start_storage() finishes and
+    // never reset. The pending-writes gate handles shutdown by draining and
+    // rejecting writes, so this flag just prevents writes from reaching the
+    // storage helper before it is started.
+    bool _storage_started = false;
     seastar::named_gate _pending_writes;
     std::unique_ptr<audit_schema_listener> _schema_listener;
     service::migration_notifier& _migration_notifier;

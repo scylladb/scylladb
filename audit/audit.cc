@@ -267,7 +267,7 @@ future<> audit::start_storage(const db::config& cfg) {
     });
     co_await audit_instance().invoke_on_all([&cfg] (audit& local_audit) -> future<> {
         co_await local_audit._storage_helper_ptr->start(cfg);
-        local_audit._storage_running = true;
+        local_audit._storage_started = true;
     });
 }
 
@@ -276,11 +276,10 @@ future<> audit::stop_storage() {
         return make_ready_future<>();
     }
     return audit_instance().invoke_on_all([] (audit& local_audit) -> future<> {
-        // Close the gate first so in-flight writes are drained and any write
-        // entering afterwards is rejected by try_with_gate, then clear the flag
-        // and stop the helper.
+        // Closing the gate is the single shutdown signal: in-flight writes are
+        // drained and any write entering afterwards is rejected by try_with_gate.
+        // The storage-ready flag is not cleared here; it only guards startup.
         co_await local_audit._pending_writes.close();
-        local_audit._storage_running = false;
         co_await local_audit._storage_helper_ptr->stop();
     });
 }
@@ -345,7 +344,7 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
     const sstring& username = client_state.user() ? client_state.user()->name.value_or(anonymous_username) : no_username;
     socket_address client_ip = client_state.get_client_address().addr();
     socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
-    if (!_storage_running) {
+    if (!_storage_started) {
         on_internal_error_noexcept(logger, fmt::format("Audit log dropped (storage not ready): node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {}",
             node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
             audit_info.query(), client_ip, audit_info.table(), username));
@@ -357,10 +356,20 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
             audit_info.query(), client_ip, audit_info.table(), username);
     }
     return write_to_storage(sinks, audit_info, node_ip, client_ip, cl, username, error)
-        .handle_exception([audit_info, node_ip, client_ip, cl, username, error] (auto ep) {
-            logger.error("Unexpected exception when writing log with: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {} exception {}",
-                node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
-                audit_info.query(), client_ip, audit_info.table(), username, ep);
+        .handle_exception([audit_info, node_ip, client_ip, cl, username, error] (std::exception_ptr ep) {
+            try {
+                std::rethrow_exception(ep);
+            } catch (const seastar::gate_closed_exception&) {
+                // The write raced with stop_storage() closing the gate. No audit
+                // generating request should be in flight once storage stops.
+                on_internal_error_noexcept(logger, fmt::format("Audit log dropped (storage stopped): node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {}",
+                    node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
+                    audit_info.query(), client_ip, audit_info.table(), username));
+            } catch (...) {
+                logger.error("Unexpected exception when writing log with: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {} exception {}",
+                    node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
+                    audit_info.query(), client_ip, audit_info.table(), username, ep);
+            }
     });
 }
 
@@ -400,7 +409,7 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
         return make_ready_future<>();
     }
     socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
-    if (!_storage_running) {
+    if (!_storage_started) {
         on_internal_error_noexcept(logger, fmt::format("Audit login log dropped (storage not ready): node_ip {} client_ip {} username {} error {}",
             node_ip, client_ip, username, error ? "true" : "false"));
         return make_ready_future<>();
@@ -410,9 +419,18 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
             node_ip, client_ip, username, error ? "true" : "false");
     }
     return write_login_to_storage(sinks, username, node_ip, client_ip, error)
-        .handle_exception([username, node_ip, client_ip, error] (auto ep) {
-            logger.error("Unexpected exception when writing login log with: node_ip {} client_ip {} username {} error {} exception {}",
-                node_ip, client_ip, username, error, ep);
+        .handle_exception([username, node_ip, client_ip, error] (std::exception_ptr ep) {
+            try {
+                std::rethrow_exception(ep);
+            } catch (const seastar::gate_closed_exception&) {
+                // The write raced with stop_storage() closing the gate. No audit
+                // generating request should be in flight once storage stops.
+                on_internal_error_noexcept(logger, fmt::format("Audit login log dropped (storage stopped): node_ip {} client_ip {} username {} error {}",
+                    node_ip, client_ip, username, error ? "true" : "false"));
+            } catch (...) {
+                logger.error("Unexpected exception when writing login log with: node_ip {} client_ip {} username {} error {} exception {}",
+                    node_ip, client_ip, username, error, ep);
+            }
     });
 }
 
