@@ -795,6 +795,77 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_parallel(build_mode: str, manager: ManagerClient, object_storage):
+    '''Verify that restore of multiple tables runs in parallel, not sequentially.
+
+    Uses an injection point to block the first restore task, then starts a second
+    restore. If restores run in parallel, the second completes while the first is
+    blocked. If they ran sequentially, the test would timeout.'''
+
+    topology = topo(rf = 1, nodes = 3, racks = 1, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+
+    cql = manager.get_cql()
+
+    num_keys = 10
+    tablet_count = 5
+    tablet_count_for_restore = 8
+    tables = ['test0', 'test1']
+
+    # Create the keyspace, populate both tables, and back them up
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        for cf in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
+            insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ALL
+            await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+
+        snap_name, _ = await take_snapshot(ks, servers, manager, logger)
+
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}/{cf}', ks, cf, object_storage, manager, logger) for cf in tables for s in servers))
+
+    # Restore both tables, verifying they run in parallel
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        for cf in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count_for_restore}, 'max_tablet_count': {tablet_count_for_restore}}};")
+
+        coordinator = servers[1]
+
+        # Enable one_shot injection on all servers — the injection fires on replicas
+        # during download_tablet_sstables, so we must cover all nodes. Only the first
+        # tablet download to hit it will pause (one_shot).
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "pause_tablet_restore", one_shot=True) for s in servers))
+        logs_and_marks = []
+        for s in servers:
+            log = await manager.server_open_log(s.server_id)
+            mark = await log.mark()
+            logs_and_marks.append((log, mark))
+
+        # Start table1 restore and wait for it to hit the injection point on any replica
+        logger.info(f'Restore {tables[0]} via {coordinator.ip_addr} (will be paused by injection)')
+        manifests1 = [f'{s.server_id}/{snap_name}/{tables[0]}/manifest.json' for s in servers]
+        tid1 = await manager.api.restore_tablets(coordinator.ip_addr, ks, tables[0], snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests1)
+        await asyncio.gather(*(log.wait_for("pause_tablet_restore: waiting for message", from_mark=mark) for log, mark in logs_and_marks))
+
+        # Start table2 restore — injection already consumed (one_shot), so it proceeds immediately.
+        # If restores ran sequentially, table2 would never start and we'd timeout.
+        logger.info(f'Restore {tables[1]} via {coordinator.ip_addr} (should proceed without blocking)')
+        manifests2 = [f'{s.server_id}/{snap_name}/{tables[1]}/manifest.json' for s in servers]
+        tid2 = await manager.api.restore_tablets(coordinator.ip_addr, ks, tables[1], snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests2)
+
+        # table2 should complete while table1 is still blocked
+        status2 = await asyncio.wait_for(manager.api.wait_task(coordinator.ip_addr, tid2), timeout=30)
+        assert (status2 is not None) and (status2['state'] == 'done'), f"Restore of {tables[1]} failed: {status2}"
+        logger.info(f'{tables[1]} restore completed while {tables[0]} is still paused — parallelism confirmed')
+
+        # Unblock table1
+        await asyncio.gather(*(manager.api.message_injection(s.ip_addr, "pause_tablet_restore") for s in servers))
+
+        # table1 should now complete
+        status1 = await asyncio.wait_for(manager.api.wait_task(coordinator.ip_addr, tid1), timeout=30)
+        assert (status1 is not None) and (status1['state'] == 'done'), f"Restore of {tables[0]} failed: {status1}"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restore_tablets_vs_migration(build_mode: str, manager: ManagerClient, object_storage):
     '''Check that restore handles tablets migrating around'''
 
