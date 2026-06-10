@@ -255,6 +255,46 @@ future<> migration_manager::merge_schema_from(locator::host_id src, const utils:
     co_await db::schema_tables::merge_schema(_sys_ks, proxy.container(), ss.get()->container(), std::move(mutations));
 }
 
+future<std::unique_ptr<db::schema_tables::schema_applier>>
+migration_manager::prepare_schema_change(locator::host_id src, utils::chunked_vector<canonical_mutation> canonical_mutations) {
+    mlogger.debug("Preparing schema change from {}", src);
+    auto& proxy = _storage_proxy;
+    const auto& db = proxy.get_db().local();
+    auto ss = _ss.get_permit();
+    if (!ss) {
+        co_return nullptr;
+    }
+
+    if (_as.abort_requested()) {
+        throw abort_requested_exception{};
+    }
+
+    utils::chunked_vector<mutation> mutations;
+    mutations.reserve(canonical_mutations.size());
+    try {
+        for (const auto& cm : canonical_mutations) {
+            auto& tbl = db.find_column_family(cm.column_family_id());
+            mutations.emplace_back(cm.to_mutation(tbl.schema()));
+        }
+    } catch (replica::no_such_column_family& e) {
+        mlogger.error("Error while preparing schema change from {}: {}", src, e);
+        throw std::runtime_error(fmt::format("Error while preparing schema change: {}", e));
+    }
+
+    auto ap = std::make_unique<db::schema_tables::schema_applier>(proxy.container(), ss.get()->container(), _sys_ks);
+    co_await ap->prepare_and_persist(std::move(mutations));
+    co_return ap;
+}
+
+future<> migration_manager::complete_schema_change(std::unique_ptr<db::schema_tables::schema_applier> applier) {
+    co_await db::schema_tables::with_merge_lock([&] () -> future<> {
+        co_await applier->update_and_commit();
+        auto version = co_await db::schema_tables::get_group0_schema_version(_sys_ks.local());
+        co_await db::schema_tables::update_schema_version_and_announce(_sys_ks, _storage_proxy.container(), version);
+    });
+    co_await applier->destroy();
+}
+
 future<> migration_notifier::on_schema_change(std::function<void(migration_listener*)> notify, std::function<std::string(std::exception_ptr)> describe_error) {
     return seastar::async([this, notify = std::move(notify), describe_error = std::move(describe_error)] {
         std::exception_ptr ex;
