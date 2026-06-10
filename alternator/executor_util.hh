@@ -53,10 +53,15 @@ using body_writer = noncopyable_function<future<>(output_stream<char>&&)>;
 /// api_error is thrown.
 std::optional<int> get_int_attribute(const rjson::value& value, std::string_view attribute_name);
 
-/// Get the value of a string attribute, or a default value if it is missing.
-/// If the attribute exists, but is not a string, a descriptive api_error is
-/// thrown.
-std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, const char* default_return);
+/// Get the value of a string attribute.
+/// If the value exists and is a string - it's returned.
+/// If the value is missing and `default_return` is supplied, the `default_return` value is returned.
+/// Otherwise a descriptive api_error is thrown.
+std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, std::optional<std::string_view> default_return = std::nullopt);
+
+/// Get the value of a string attribute. If `default_return` is supplied that value is optional and if not found -
+/// `default_return` will be returned (even if it's empty). Otherwise it must be present and non-empty, if not - a descriptive api_error will be thrown.
+std::string get_non_empty_string_attribute(const rjson::value& value, std::string_view attribute_name, std::optional<std::string_view> default_return = std::nullopt);
 
 /// Get the value of a boolean attribute, or a default value if it is missing.
 /// If the attribute exists, but is not a bool, a descriptive api_error is
