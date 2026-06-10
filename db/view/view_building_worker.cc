@@ -540,10 +540,13 @@ future<> view_building_worker::state::flush_base_table(replica::database& db, ta
     }
 
     auto cf = db.find_column_family(base_table_id).shared_from_this();
+    vbw_logger.debug("Awaiting penging writes and streams on base table {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
     co_await when_all(cf->await_pending_writes(), cf->await_pending_streams());
+    vbw_logger.debug("Flushing base table {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
     co_await flush_base(cf, as);
     processing_base_table = base_table_id;
     flushed_views = get_ids_of_all_views(db, base_table_id);
+    vbw_logger.debug("Flushed base table {}.{} for views: {}", cf->schema()->ks_name(), cf->schema()->cf_name(), flushed_views);
 }
 
 future<> view_building_worker::state::clear() {
