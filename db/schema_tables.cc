@@ -21,8 +21,10 @@
 #include "schema/schema_builder.hh"
 #include "utils/map_difference.hh"
 #include "utils/assert.hh"
+#include "utils/on_internal_error.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/to_string.hh"
+#include "utils/overloaded_functor.hh"
 #include <algorithm>
 #include <ranges>
 #include <seastar/coroutine/all.hh>
