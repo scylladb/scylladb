@@ -64,6 +64,12 @@ public:
     void check() {
         return _guard.check();
     }
+
+    /// Returns the abort_source of the session backing this guard.
+    /// Safe because the guard keeps the session alive.
+    seastar::abort_source& abort_source() const noexcept {
+        return _guard.abort_source();
+    }
 };
 
 static_assert(TopologyGuard<session_topology_guard>);
