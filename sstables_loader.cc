@@ -1170,18 +1170,14 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
     sharded<sstables_loader>& _loader;
     table_id _tid;
     sstring _snap_name;
-    sstring _endpoint;
-    sstring _bucket;
 
 public:
     tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
-            table_id tid, sstring snap_name, sstring endpoint, sstring bucket) noexcept
+            table_id tid, sstring snap_name) noexcept
         : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
         , _loader(loader)
         , _tid(std::move(tid))
         , _snap_name(std::move(snap_name))
-        , _endpoint(std::move(endpoint))
-        , _bucket(std::move(bucket))
     {
         _status.progress_units = "batches";
     }
@@ -1205,7 +1201,7 @@ public:
 protected:
     virtual future<> run() override {
         auto& loader = _loader.local();
-        co_await loader._ss.local().restore_tablets(_tid, _snap_name, _endpoint, _bucket);
+        co_await loader._ss.local().restore_tablets(_tid, _snap_name);
 
         auto& db = loader._db.local();
         auto s = db.find_schema(_tid);
@@ -1237,6 +1233,6 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     co_await container().invoke_on(0, [tid, tablet_count] (auto& sl) -> future<> {
         co_await sl._ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
     });
-    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), std::move(endpoint), std::move(bucket));
+    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name));
     co_return task->id();
 }

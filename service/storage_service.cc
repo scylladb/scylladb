@@ -5736,13 +5736,13 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
     });
 }
 
-future<> storage_service::restore_tablets(table_id table, sstring snap_name, sstring endpoint, sstring bucket) {
+future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.restore_tablets(table, snap_name, endpoint, bucket);
+            return ss.restore_tablets(table, snap_name);
         });
     }
 
