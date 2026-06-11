@@ -23,9 +23,11 @@
 #include "db/config.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
 #include "utils/error_injection.hh"
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include "service/topology_guard.hh"
 #include "utils/chain_abort_source.hh"
 #include "utils/exponential_backoff_retry.hh"
 
@@ -312,6 +314,39 @@ future<> groups_manager::wait_for_groups_to_start(lowres_clock::time_point timeo
     }
 }
 
+future<> groups_manager::wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id) {
+    const auto timeout = lowres_clock::now() + std::chrono::minutes(5);
+
+    co_await wait_for_groups_to_start(timeout);
+
+    {
+        const auto it = _raft_groups.find(group_id);
+        if (it == _raft_groups.end()) {
+            throw std::runtime_error(format("No raft group {} for tablet {} on this host", group_id, tablet));
+        }
+        co_await it->second.server_control_op.get_future(timeout);
+    }
+
+    // The group may have been deleted while we waited - the migration was rolled back
+    // and this replica rolled away, or the table was dropped - so look it up again and
+    // hold the gate for the rest of the operation, or state.server would dangle. There
+    // is no scheduling point between the check and hold().
+    const auto it = _raft_groups.find(group_id);
+    if (it == _raft_groups.end() || !it->second.gate || it->second.gate->is_closed() || !it->second.server) {
+        throw std::runtime_error(format("Raft group {} for tablet {} is not running on this host", group_id, tablet));
+    }
+    auto& state = it->second;
+    auto holder = state.gate->hold();
+
+    topology_guard g(session_id);
+
+    co_await utils::get_local_injector().inject("sc_wait_for_snapshot_transfer", utils::wait_for_message(20min));
+
+    abort_on_expiry aoe(timeout);
+    auto sub = utils::chain_abort_source(aoe.abort_source(), g.abort_source());
+    co_await state.server->read_barrier(&aoe.abort_source());
+}
+
 void groups_manager::init_messaging_service() {
     ser::groups_manager_rpc_verbs::register_wait_for_raft_groups_to_start(&_ms,
         [this] (rpc::opt_time_point timeout, raft::server_id dst_id, table_id table) -> future<> {
@@ -321,6 +356,32 @@ void groups_manager::init_messaging_service() {
             co_await _mm.get_group0_barrier().trigger();
             co_await container().invoke_on_all([timeout] (groups_manager& gm) {
                 return gm.wait_for_groups_to_start(*timeout);
+            });
+        }
+    );
+    ser::groups_manager_rpc_verbs::register_wait_for_snapshot_transfer(&_ms,
+        [this] (raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id group_id, utils::UUID session_id) -> future<> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            co_await _mm.get_group0_barrier().trigger();
+
+            const auto dst_shard = [&]() -> shard_id {
+                auto& table = _db.find_column_family(tablet.table);
+                auto erm = table.get_effective_replication_map();
+                const auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(tablet.table);
+                const auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+                if (!trinfo || !trinfo->pending_replica) {
+                    throw std::runtime_error(fmt::format("No pending replica for group {}", group_id));
+                }
+                if (trinfo->pending_replica->host != erm->get_token_metadata().get_my_id()) {
+                    throw std::runtime_error(fmt::format("Tablet {} pending replica {} is not on this host", tablet, *trinfo->pending_replica));
+                }
+                return trinfo->pending_replica->shard;
+            }();
+
+            co_await container().invoke_on(dst_shard, [tablet, group_id, session_id] (groups_manager& gm) {
+                return gm.wait_for_snapshot_transfer(tablet, group_id, service::session_id(session_id));
             });
         }
     );
