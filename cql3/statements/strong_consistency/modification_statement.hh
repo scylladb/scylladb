@@ -34,6 +34,12 @@ public:
     uint32_t get_bound_terms() const override;
 
     bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+
+    // Wraps a regular modification, so it carries user load exactly when the
+    // wrapped statement does.
+    bool should_reclassify_control_connection() const override {
+        return _statement->should_reclassify_control_connection();
+    }
 };
 
 }
