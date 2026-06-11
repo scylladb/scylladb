@@ -66,6 +66,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "repair/row_level.hh"
+#include "transport/cql_protocol_extension.hh"
 #include "utils/assert.hh"
 #include "utils/only_on_shard0.hh"
 #include "utils/cross-shard-barrier.hh"
@@ -204,6 +205,9 @@ private:
             : client_state(service::client_state::external_tag{}, auth_service, &sl_controller, timeout,
                     socket_address(), false, &as)
         {
+            auto exts = client_state.get_protocol_extensions();
+            exts.set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1);
+            client_state.set_protocol_extensions(std::move(exts));
             client_state.set_login(auth::authenticated_user(testing_superuser));
         }
 
@@ -223,9 +227,6 @@ private:
     auto make_query_state() {
         if (_db.local().has_keyspace(ks_name)) {
             _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
-            cql_transport::cql_protocol_extension_enum_set cql_proto_exts;
-            cql_proto_exts.set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1);
-            _core_local.local().client_state.set_protocol_extensions(std::move(cql_proto_exts));
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
