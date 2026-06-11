@@ -1080,26 +1080,30 @@ static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace,
     rjson::value parsed = rjson::parse(std::move(content));
 
     // Basic validation that tablet_count is a power of 2, as expected by our restore process
-    size_t tablet_count = parsed["table"]["tablet_count"].GetUint64();
+    auto& table_obj = rjson::get(parsed, "table");
+    size_t tablet_count = rjson::get<uint64_t>(table_obj, "tablet_count");
+
     if (!std::has_single_bit(tablet_count)) {
         on_internal_error(llog, fmt::format("Invalid tablet_count {} in manifest {}, expected a power of 2", tablet_count, manifest_prefix));
     }
 
     // Extract the necessary fields from the manifest
     // Expected JSON structure documented in docs/dev/object_storage.md
-    auto snapshot_name = rjson::to_sstring(parsed["snapshot"]["name"]);
+    auto& snapshot_obj = rjson::get(parsed, "snapshot");
+    auto snapshot_name = rjson::get<std::string>(snapshot_obj, "name");
     if (snapshot_name != expected_snapshot_name) {
         throw std::runtime_error(fmt::format("Manifest {} belongs to snapshot '{}', expected '{}'",
             manifest_prefix, snapshot_name, expected_snapshot_name));
     }
     if (keyspace.empty()) {
-        keyspace = rjson::to_sstring(parsed["table"]["keyspace_name"]);
+        keyspace = rjson::get<std::string>(table_obj, "keyspace_name");
     }
     if (table.empty()) {
-        table = rjson::to_sstring(parsed["table"]["table_name"]);
+        table = rjson::get<std::string>(table_obj, "table_name");
     }
-    auto datacenter = rjson::to_sstring(parsed["node"]["datacenter"]);
-    auto rack = rjson::to_sstring(parsed["node"]["rack"]);
+    auto& node_obj = rjson::get(parsed, "node");
+    auto datacenter = rjson::get<std::string>(node_obj, "datacenter");
+    auto rack = rjson::get<std::string>(node_obj, "rack");
 
     // Process each sstable entry in the manifest
     // FIXME: cleanup of the snapshot-related rows is needed in case anything throws in here.
@@ -1112,10 +1116,14 @@ static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace,
     }
 
     for (auto& sstable_entry : sstables->GetArray()) {
-        auto id = rjson::to_sstable_id(sstable_entry["id"]);
-        auto first_token = rjson::to_token(sstable_entry["first_token"]);
-        auto last_token = rjson::to_token(sstable_entry["last_token"]);
-        auto toc_name = rjson::to_sstring(sstable_entry["toc_name"]);
+        // rjson::get functions assert if the passed value is not an object
+        if (!sstable_entry.IsObject()) {
+            throw std::runtime_error("Malformed manifest, the entry in the 'sstables' array is not an object");
+        }
+        auto id = rjson::to_sstable_id(rjson::get(sstable_entry, "id"));
+        auto first_token = rjson::to_token(rjson::get(sstable_entry, "first_token"));
+        auto last_token = rjson::to_token(rjson::get(sstable_entry, "last_token"));
+        auto toc_name = rjson::to_sstring(rjson::get(sstable_entry, "toc_name"));
         auto prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
         // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
         // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
