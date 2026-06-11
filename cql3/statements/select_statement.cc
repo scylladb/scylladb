@@ -302,6 +302,12 @@ const sstring& select_statement::keyspace() const {
     return _schema->ks_name();
 }
 
+bool select_statement::should_reclassify_control_connection() const {
+    // A control connection legitimately reads system tables; reading any other
+    // keyspace means it is being used for user load.
+    return _ks_sel == ks_selector::NONSYSTEM;
+}
+
 const sstring& select_statement::column_family() const {
     return _schema->cf_name();
 }
