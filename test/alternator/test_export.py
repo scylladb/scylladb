@@ -341,7 +341,7 @@ def test_export_table_missing_s3_bucket(test_table_s_for_export_only):
         )
 
 # Test that missing S3Bucket is rejected.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla - needs DescribeExport to work")
+@pytest.mark.xfail(reason="Not yet implemented on Scylla - needs async export execution and S3 validation")
 def test_export_table_nonexistant_s3_bucket(test_table_s_for_export_only):
     client = enable_pitr(test_table_s_for_export_only)
     table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
