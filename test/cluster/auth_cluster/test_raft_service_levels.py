@@ -16,8 +16,8 @@ from test.cluster.util import trigger_snapshot, reconnect_driver, \
         find_server_by_host_id
 from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra import ConsistencyLevel
-from cassandra.query import SimpleStatement
-from cassandra.protocol import InvalidRequest, QueryMessage
+from cassandra.query import SimpleStatement, BatchType
+from cassandra.protocol import InvalidRequest, QueryMessage, PrepareMessage, ExecuteMessage, BatchMessage
 from cassandra.auth import PlainTextAuthProvider
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
@@ -512,6 +512,114 @@ async def test_driver_service_level_used_for_driver_queries(manager: ManagerClie
     await cql.run_async(f"CREATE SERVICE LEVEL driver", host=h)
     cql, func = await get_control_connection_query_function(manager)
     await _verify_requests_count_metrics(manager, server, 'sl:driver', 'sl:test', func)
+
+# Some drivers multiplex the control connection with user load, which would leak
+# user queries into sl:driver. Verify that issuing a user statement on the control
+# connection permanently reclassifies it as a regular user connection, regardless
+# of whether the statement arrives as a read or write QUERY, an EXECUTE or a BATCH.
+# Reproduces SCYLLADB-2458.
+async def test_control_connection_reclassified_by_user_load(manager: ManagerClient) -> None:
+    server = await manager.server_add(config=auth_config)
+
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+
+    await cql.run_async("CREATE KEYSPACE demo WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}", host=h)
+    await cql.run_async("CREATE TABLE demo.events (id int PRIMARY KEY, payload text)", host=h)
+
+    def query_trigger(control_connection):
+        control_connection.wait_for_response(QueryMessage("SELECT * FROM demo.events", ConsistencyLevel.ONE))
+
+    def execute_trigger(control_connection):
+        prepared = control_connection.wait_for_response(PrepareMessage("SELECT * FROM demo.events"))
+        control_connection.wait_for_response(ExecuteMessage(prepared.query_id, [], ConsistencyLevel.ONE,
+            result_metadata_id=getattr(prepared, "result_metadata_id", None)))
+
+    def batch_trigger(control_connection):
+        control_connection.wait_for_response(BatchMessage(BatchType.LOGGED,
+            [(False, "INSERT INTO demo.events (id, payload) VALUES (1, 'x')", [])], ConsistencyLevel.ONE))
+
+    def insert_trigger(control_connection):
+        control_connection.wait_for_response(QueryMessage(
+            "INSERT INTO demo.events (id, payload) VALUES (2, 'y')", ConsistencyLevel.ONE))
+
+    # Each statement kind that can leak user load onto a control connection must
+    # reclassify it on its own. A single (non-batch) write and a BATCH take
+    # different code paths, so both are exercised here. Reuse a single cluster and
+    # open a fresh control connection per trigger.
+    for trigger in (query_trigger, execute_trigger, batch_trigger, insert_trigger):
+        await manager.driver_connect() # restart control connection
+        cql = manager.get_cql()
+        control_connection = cql.cluster.control_connection._connection
+
+        logger.info("A fresh control connection serves driver queries in sl:driver")
+        system_query = QueryMessage("SELECT * FROM system.peers", 1)
+        system_func = lambda: control_connection.wait_for_response(system_query)
+        await _verify_requests_count_metrics(manager, server, 'sl:driver', 'sl:default', system_func)
+
+        logger.info("Issuing a user statement on the control connection reclassifies it")
+        await asyncio.to_thread(trigger, control_connection)
+
+        logger.info("The reclassified connection serves further queries in sl:default, not sl:driver")
+        await _verify_requests_count_metrics(manager, server, 'sl:default', 'sl:driver', system_func)
+
+# A well-behaved driver only ever queries system tables on its control connection.
+# Run the queries that the ScyllaDB-supported drivers send on theirs (see
+# https://docs.scylladb.com/stable/versioning/driver-support.html) and verify the
+# connection keeps running in sl:driver - none of them must trigger a reclassification.
+async def test_control_connection_not_reclassified_by_driver_queries(manager: ManagerClient) -> None:
+    server = await manager.server_add(config=auth_config)
+
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    await manager.driver_connect() # restart control connection
+    cql = manager.get_cql()
+    control_connection = cql.cluster.control_connection._connection
+
+    control_connection_queries = [
+        # Local node metadata, read by every supported driver (Python, Java, Go,
+        # Rust, C#, CPP-RS, Node.js) right after opening the control connection.
+        "SELECT * FROM system.local WHERE key='local'",
+        # Peer/topology discovery, read by every supported driver. ScyllaDB has no
+        # system.peers_v2, so all drivers fall back to system.peers.
+        "SELECT * FROM system.peers",
+        # Keyspace metadata, read by every schema-aware driver (Python, Java, Go,
+        # Rust, C#, Node.js).
+        "SELECT * FROM system_schema.keyspaces",
+        # Table metadata, read by every schema-aware driver (Python, Java, Go,
+        # Rust, C#, Node.js).
+        "SELECT * FROM system_schema.tables",
+        # Column metadata, read by every schema-aware driver (Python, Java, Go,
+        # Rust, C#, Node.js).
+        "SELECT * FROM system_schema.columns",
+        # User-defined type metadata (Python, Java, Go, Rust, C#).
+        "SELECT * FROM system_schema.types",
+        # User-defined function metadata (Python, Java, C#).
+        "SELECT * FROM system_schema.functions",
+        # User-defined aggregate metadata (Python, Java, C#).
+        "SELECT * FROM system_schema.aggregates",
+        # Materialized view metadata (Python, Java, Go, C#).
+        "SELECT * FROM system_schema.views",
+        # Secondary index metadata (Python, Java, Go, C#).
+        "SELECT * FROM system_schema.indexes",
+        # Token-range size estimates, read by the Go driver (gocql) for token-aware
+        # range planning.
+        "SELECT * FROM system.size_estimates",
+    ]
+
+    def run_control_connection_queries():
+        for query in control_connection_queries:
+            control_connection.wait_for_response(QueryMessage(query, ConsistencyLevel.ONE))
+
+    logger.info("Running the queries that supported drivers send on the control connection")
+    await asyncio.to_thread(run_control_connection_queries)
+
+    logger.info("The control connection still serves driver queries in sl:driver")
+    system_query = QueryMessage("SELECT * FROM system.peers", 1)
+    system_func = lambda: control_connection.wait_for_response(system_query)
+    await _verify_requests_count_metrics(manager, server, 'sl:driver', 'sl:default', system_func)
 
 # Reproduces scylladb/scylladb#26040
 @pytest.mark.asyncio
