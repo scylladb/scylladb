@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/ondisk.hh"
+#include "replica/logstor/segment_io.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/types.hh"
@@ -31,11 +33,9 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/util/memory-data-source.hh>
 #include <seastar/core/condition-variable.hh>
 #include "replica/logstor/write_buffer.hh"
-#include "serializer_impl.hh"
-#include "idl/logstor.dist.hh"
-#include "idl/logstor.dist.impl.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/serialized_action.hh"
 #include "utils/lister.hh"
@@ -120,20 +120,8 @@ future<log_record> segment::read(log_location loc) {
                                              _id, loc.offset, loc.size, _max_size));
     }
 
-    // Read the serialized record.
-    // the record starts with record_header that we use to find the split between log_record_header and canonical_mutation,
-    // then we read and deserialize the log_record_header and canonical_mutation that follow.
-    return _file.dma_read_exactly<char>(absolute_offset(loc.offset), loc.size).then([] (seastar::temporary_buffer<char> buf) {
-        simple_memory_input_stream buf_stream(buf.begin(), buf.size());
-        auto rh_stream = buf_stream.read_substream(write_buffer::record_header_size);
-        auto rh = ser::deserialize(rh_stream, std::type_identity<write_buffer::record_header>{});
-        auto header_stream = buf_stream.read_substream(rh.header_size);
-        auto data_stream = buf_stream.read_substream(rh.data_size);
-
-        return log_record {
-            .header = ser::deserialize(header_stream, std::type_identity<log_record_header>{}),
-            .mut = ser::deserialize(data_stream, std::type_identity<canonical_mutation>{})
-        };
+    return _file.dma_read_exactly<char>(absolute_offset(loc.offset), loc.size).then([] (temporary_buffer<char> buf) {
+        return deserialize_log_record(simple_memory_input_stream(buf.begin(), buf.size()));
     });
 }
 
@@ -564,41 +552,6 @@ public:
     }
 };
 
-struct segment_header {
-    segment_kind kind;
-    segment_sequence segment_seq;
-
-    struct mixed {};
-    struct full {
-        table_id table;
-        dht::token first_token;
-        dht::token last_token;
-    };
-
-    std::variant<mixed, full> v;
-};
-
-static segment_header make_segment_header(const write_buffer::buffer_header& bh, std::optional<write_buffer::segment_header> sh) {
-    segment_header seg_hdr {
-        .kind = bh.kind,
-        .segment_seq = bh.segment_seq,
-    };
-
-    switch (bh.kind) {
-    case segment_kind::full:
-        seg_hdr.v = segment_header::full {
-            .table = sh->table,
-            .first_token = sh->first_token,
-            .last_token = sh->last_token,
-        };
-        break;
-    case segment_kind::mixed:
-        seg_hdr.v = segment_header::mixed{};
-        break;
-    }
-    return seg_hdr;
-}
-
 class segment_manager_impl {
 
     struct stats {
@@ -656,7 +609,7 @@ class segment_manager_impl {
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
 public:
-    static constexpr size_t block_alignment = segment_manager::block_alignment;
+    static constexpr size_t block_alignment = ondisk::block_alignment;
 
     explicit segment_manager_impl(segment_manager_config);
 
@@ -695,7 +648,6 @@ public:
 
     future<> load_segment(replica::database&, log_segment_id);
     future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, std::function<void(const segment_header&)> on_header);
-    future<std::optional<segment_header>> read_segment_header(log_segment_id);
     future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&);
 
     void trigger_compaction() {
@@ -759,6 +711,8 @@ private:
 
     future<> write_to_separator(write_buffer&, segment_ref, segment_sequence);
     void write_to_separator(table&, log_location prev_loc, log_record, segment_ref);
+
+    future<std::optional<segment_header>> read_segment_header(log_segment_id);
 
     // Sequentially scans one segment and invokes callbacks for the decoded
     // contents.
@@ -988,18 +942,16 @@ future<> segment_manager_impl::write(write_buffer& wb) {
     write_source source = write_source::normal_write;
     auto holder = _async_gate.hold();
 
-    wb.finalize(block_alignment);
+    const auto sealed_size = wb.sealed_size(block_alignment);
 
-    bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.offset_in_buffer());
-
-    if (data.size() > _cfg.segment_size) {
-        throw std::runtime_error(fmt::format( "Write size {} exceeds segment size {}", data.size(), _cfg.segment_size));
+    if (sealed_size > _cfg.segment_size) {
+        throw std::runtime_error(fmt::format( "Write size {} exceeds segment size {}", sealed_size, _cfg.segment_size));
     }
 
     {
         auto sem_units = co_await get_units(_active_segment_write_sem, 1);
 
-        while (!_active_segment || !_active_segment->can_fit(data.size())) {
+        while (!_active_segment || !_active_segment->can_fit(sealed_size)) {
             co_await request_segment_switch();
         }
 
@@ -1017,15 +969,16 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
 
-        wb.write_header(seq_num, std::nullopt);
+        wb.seal(seq_num, std::nullopt, block_alignment);
+        bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.serialized_size());
 
         auto loc = co_await seg->append(data);
         sem_units.return_all();
 
-        desc.on_write(wb.get_net_data_size(), wb.get_record_count());
+        desc.on_write(wb.net_data_size(), wb.record_count());
 
         _stats.bytes_written[static_cast<size_t>(source)] += data.size();
-        _stats.data_bytes_written[static_cast<size_t>(source)] += wb.get_net_data_size();
+        _stats.data_bytes_written[static_cast<size_t>(source)] += wb.net_data_size();
 
         // complete all buffered writes with their individual locations and wait
         // for them to be updated in the index.
@@ -1046,12 +999,10 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 future<> segment_manager_impl::write_full_segment(write_buffer& wb, compaction_group& cg, write_source source) {
     auto holder = _async_gate.hold();
 
-    wb.finalize(block_alignment);
+    const auto sealed_size = wb.sealed_size(block_alignment);
 
-    bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.offset_in_buffer());
-
-    if (data.size() > _cfg.segment_size) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds segment size {}", data.size(), _cfg.segment_size));
+    if (sealed_size > _cfg.segment_size) {
+        throw std::runtime_error(fmt::format("Write size {} exceeds segment size {}", sealed_size, _cfg.segment_size));
     }
 
     auto seg = co_await get_segment(source);
@@ -1059,14 +1010,15 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, compaction_g
 
     logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
 
-    wb.write_header(seg->seq_num(), cg.schema()->id());
+    wb.seal(seg->seq_num(), cg.schema()->id(), block_alignment);
+    bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.serialized_size());
 
     auto loc = co_await seg->append(data);
 
-    desc.on_write(wb.get_net_data_size(), wb.get_record_count());
+    desc.on_write(wb.net_data_size(), wb.record_count());
 
     _stats.bytes_written[static_cast<size_t>(source)] += data.size();
-    _stats.data_bytes_written[static_cast<size_t>(source)] += wb.get_net_data_size();
+    _stats.data_bytes_written[static_cast<size_t>(source)] += wb.net_data_size();
 
     co_await wb.complete_writes(loc);
     co_await seg->stop();
@@ -1246,140 +1198,27 @@ future<> segment_manager_impl::discard_segments(segment_set& ss) {
     });
 }
 
+future<std::optional<segment_header>> segment_manager_impl::read_segment_header(log_segment_id segment_id) {
+    auto in = co_await create_segment_input_stream(segment_id, file_input_stream_options {
+        .buffer_size = block_alignment,
+        .read_ahead = 0,
+    });
+    auto result = co_await ::replica::logstor::read_segment_header(in);
+    co_await in.close();
+    co_return result;
+}
+
 future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
                                 std::function<future<>(const segment_header&)> header_callback,
                                 std::function<want_data(log_location, const log_record_header&)> on_header,
                                 std::function<future<>(log_location, log_record)> on_record) {
-    auto holder = _async_gate.hold();
-
-    auto [file_id, file_offset] = segment_id_to_file_location(segment_id);
-    auto file = co_await _file_mgr.get_file_for_read(file_id);
-    auto fin = make_file_input_stream(std::move(file), file_offset, _cfg.segment_size,
-        file_input_stream_options {
-            .buffer_size = std::min<size_t>(_cfg.segment_size, 128 * 1024),
-            .read_ahead = 1,
+    auto in = co_await create_segment_input_stream(segment_id, seastar::file_input_stream_options {
+        .buffer_size = std::min<size_t>(_cfg.segment_size, 128 * 1024),
+        .read_ahead = 1,
     });
-    size_t current_position = 0;
-    std::optional<segment_sequence> segment_seq;
-
-    logstor_logger.trace("Reading records from segment {} at file {} offset {}",
-                        segment_id, file_id, file_offset);
-
-    while (current_position < _cfg.segment_size) {
-        // Align to block boundary
-        auto skip_bytes = align_up(current_position, block_alignment) - current_position;
-        if (skip_bytes > 0) {
-            co_await fin.skip(skip_bytes);
-            current_position += skip_bytes;
-        }
-
-        if (current_position >= _cfg.segment_size) {
-            break;
-        }
-
-        // read buffer header
-        auto buffer_header_buf = co_await fin.read_exactly(write_buffer::buffer_header_size);
-        current_position += write_buffer::buffer_header_size;
-        if (buffer_header_buf.size() < write_buffer::buffer_header_size) {
-            break;
-        }
-        auto bh = ser::deserialize_from_buffer(buffer_header_buf, std::type_identity<write_buffer::buffer_header>{});
-
-        // if the buffer is invalid then skip the rest of the segment - buffer writes are sequential and serialized.
-        if (!write_buffer::validate_header(bh)) {
-            break;
-        }
-
-        if (!segment_seq) {
-            segment_seq = bh.segment_seq;
-        } else if (bh.segment_seq != *segment_seq) {
-            break;
-        }
-
-        std::optional<write_buffer::segment_header> sh;
-        if (bh.kind == segment_kind::full) {
-            // read segment header
-            auto segment_header_buf = co_await fin.read_exactly(write_buffer::segment_header_size);
-            current_position += write_buffer::segment_header_size;
-            if (segment_header_buf.size() < write_buffer::segment_header_size) {
-                break;
-            }
-            sh = ser::deserialize_from_buffer(segment_header_buf, std::type_identity<write_buffer::segment_header>{});
-        }
-
-        auto seg_hdr = make_segment_header(bh, sh);
-        co_await header_callback(seg_hdr);
-
-        // TODO crc, torn writes
-
-        const auto buffer_data_end_position = current_position + bh.data_size;
-        while (current_position < buffer_data_end_position) {
-            // Read record header
-            const auto record_offset = current_position;
-            auto size_buf = co_await fin.read_exactly(write_buffer::record_header_size);
-            current_position += write_buffer::record_header_size;
-            if (size_buf.size() < write_buffer::record_header_size) {
-                break;
-            }
-            auto rh = ser::deserialize_from_buffer(size_buf, std::type_identity<write_buffer::record_header>{});
-            if (rh.header_size == 0 || rh.header_size + rh.data_size > buffer_data_end_position - current_position) {
-                // invalid record size
-                break;
-            }
-
-            logstor_logger.trace("Found record of size {} bytes in segment {}",
-                                rh.header_size + rh.data_size, segment_id);
-
-            // Read the log_record_header bytes
-            auto header_buf = co_await fin.read_exactly(rh.header_size);
-            current_position += rh.header_size;
-            if (header_buf.size() < rh.header_size) {
-                break;
-            }
-            auto record_header = ser::deserialize_from_buffer(header_buf, std::type_identity<log_record_header>{});
-
-            log_location loc {
-                .segment = segment_id,
-                .offset = static_cast<uint32_t>(record_offset),
-                .size = static_cast<uint32_t>(write_buffer::record_header_size + rh.header_size + rh.data_size)
-            };
-
-            if (on_header(loc, record_header) == want_data::yes) {
-                auto mut_buf = co_await fin.read_exactly(rh.data_size);
-                current_position += rh.data_size;
-                if (mut_buf.size() < rh.data_size) {
-                    break;
-                }
-                auto mut = ser::deserialize_from_buffer(mut_buf, std::type_identity<canonical_mutation>{});
-                co_await on_record(loc, log_record{std::move(record_header), std::move(mut)});
-            } else {
-                // Skip the canonical_mutation bytes without reading them
-                co_await fin.skip(rh.data_size);
-                current_position += rh.data_size;
-            }
-
-            // align up to next record
-            auto padding = align_up(current_position, write_buffer::record_alignment) - current_position;
-            if (padding > 0) {
-                co_await fin.skip(padding);
-                current_position += padding;
-            }
-        }
-
-        if (seg_hdr.kind == segment_kind::full) {
-            // A segment of this kind has only a single buffer
-            break;
-        }
-
-        if (current_position < buffer_data_end_position) {
-            // skip remaining buffer data
-            auto bytes_to_skip = buffer_data_end_position - current_position;
-            co_await fin.skip(bytes_to_skip);
-            current_position += bytes_to_skip;
-        }
-    }
-
-    co_await fin.close();
+    co_await ::replica::logstor::scan_segment(in, segment_id, _cfg.segment_size,
+            std::move(header_callback), std::move(on_header), std::move(on_record));
+    co_await in.close();
 }
 
 void compaction_manager_impl::submit(compaction_group& cg) {
@@ -1476,7 +1315,7 @@ std::vector<log_segment_id> compaction_manager_impl::select_segments_for_compact
         accum_net_data_size += desc.net_data_size(segment_size);
         accum_record_count += desc.record_count;
 
-        auto required_segments = write_buffer::estimate_required_segments(
+        auto required_segments = raw_write_buffer::estimate_required_segments(
             accum_net_data_size, accum_record_count, segment_size);
 
         logstor_logger.trace("Evaluating compaction candidate {} with net data size {} accumulated {} required segments {}",
@@ -1553,7 +1392,7 @@ struct compaction_buffer {
         if (buf->has_data()) {
             flush_count++;
             co_await sm.write_full_segment(*buf, cg, write_source::compaction);
-            logstor_logger.trace("Compaction buffer flushed with {} bytes", buf->get_net_data_size());
+            logstor_logger.trace("Compaction buffer flushed with {} bytes", buf->net_data_size());
         }
         co_await when_all_succeed(pending_updates.begin(), pending_updates.end());
         co_await buf->close();
@@ -1765,7 +1604,7 @@ separator_buffer compaction_manager_impl::allocate_separator_buffer() {
 }
 
 future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref seg_ref, segment_sequence segment_seq_num) {
-    for (auto&& w : wb.records()) {
+    for (auto&& w : wb.records_for_separator()) {
         co_await coroutine::maybe_yield();
 
         auto key = w.writer.record().header.key;
@@ -2028,33 +1867,6 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
         });
 }
 
-future<std::optional<segment_header>> segment_manager_impl::read_segment_header(log_segment_id segment_id) {
-    auto [file_id, file_offset] = segment_id_to_file_location(segment_id);
-    auto file = co_await _file_mgr.get_file_for_read(file_id);
-
-    auto max_header_size = write_buffer::buffer_header_size + write_buffer::segment_header_size;
-    auto header_buf = co_await file.dma_read_exactly<char>(file_offset, max_header_size);
-
-    if (header_buf.size() < max_header_size) {
-        co_return std::nullopt;
-    }
-
-    simple_memory_input_stream bh_stream(header_buf.begin(), write_buffer::buffer_header_size);
-    auto bh = ser::deserialize(bh_stream, std::type_identity<write_buffer::buffer_header>{});
-
-    if (!write_buffer::validate_header(bh)) {
-        co_return std::nullopt;
-    }
-
-    std::optional<write_buffer::segment_header> sh;
-    if (bh.kind == segment_kind::full) {
-        simple_memory_input_stream sh_stream(header_buf.begin() + write_buffer::buffer_header_size, write_buffer::segment_header_size);
-        sh = ser::deserialize(sh_stream, std::type_identity<write_buffer::segment_header>{});
-    }
-
-    co_return make_segment_header(bh, sh);
-}
-
 future<> segment_manager_impl::add_segment_to_compaction_group(replica::database& db, segment_descriptor& desc) {
     auto seg_id = desc_to_segment_id(desc);
     auto maybe_header = co_await read_segment_header(seg_id);
@@ -2207,86 +2019,25 @@ future<> segment_manager::await_pending_writes() {
 
 class segment_data_sink_impl : public data_sink_impl {
     seg_ptr _segment;
-    std::vector<char> _pending_data;
-    std::optional<size_t> _initial_header_size;
-    bool _header_rewritten = false;
-
-    write_buffer::buffer_header read_buffer_header() const {
-        simple_memory_input_stream bh_stream(_pending_data.data(), write_buffer::buffer_header_size);
-        return ser::deserialize(bh_stream, std::type_identity<write_buffer::buffer_header>{});
-    }
-
-    void maybe_parse_initial_header() {
-        if (_initial_header_size || _pending_data.size() < write_buffer::buffer_header_size) {
-            return;
-        }
-
-        auto bh = read_buffer_header();
-        if (!write_buffer::validate_header(bh)) {
-            throw std::runtime_error("Invalid streamed logstor buffer header");
-        }
-
-        size_t header_size = write_buffer::buffer_header_size;
-        if (bh.kind == segment_kind::full) {
-            header_size += write_buffer::segment_header_size;
-        }
-        _initial_header_size = header_size;
-    }
-
-    void rewrite_buffer_header() {
-        auto bh = read_buffer_header();
-
-        logstor_logger.trace("Rewriting buffer header for segment {} seq {} with seq {}", _segment->id(), bh.segment_seq, _segment->seq_num());
-
-        bh.segment_seq = _segment->seq_num();
-        bh.crc = bh.calculate_crc();
-
-        simple_memory_output_stream bh_stream(_pending_data.data(), write_buffer::buffer_header_size);
-        ser::serialize<write_buffer::buffer_header>(bh_stream, bh);
-    }
-
-    future<> flush_pending_data() {
-        if (_pending_data.empty()) {
-            co_return;
-        }
-        co_await _segment->append(bytes_view(reinterpret_cast<const int8_t*>(_pending_data.data()), _pending_data.size()));
-        _pending_data.clear();
-    }
+    streamed_segment_rewriter _rewriter;
 public:
     segment_data_sink_impl(seg_ptr segment)
         : _segment(std::move(segment))
+        , _rewriter(_segment->id(), _segment->seq_num(), [segment = _segment] (bytes_view data) {
+            return segment->append(data).discard_result();
+        })
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
-        for (auto& buf : data) {
-            if (buf.empty()) {
-                continue;
-            }
-
-            if (_header_rewritten) {
-                co_await _segment->append(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), buf.size()));
-                continue;
-            }
-
-            _pending_data.insert(_pending_data.end(), buf.get(), buf.get() + buf.size());
-            maybe_parse_initial_header();
-            if (_initial_header_size && _pending_data.size() >= *_initial_header_size) {
-                rewrite_buffer_header();
-                _header_rewritten = true;
-                co_await flush_pending_data();
-            }
-        }
+        co_await _rewriter.put(data);
     }
 
     virtual future<> close() override {
-        if (!_header_rewritten && !_pending_data.empty()) {
-            throw std::runtime_error("Truncated streamed logstor segment header");
-        }
-        co_return;
+        co_await _rewriter.close();
     }
 
     virtual size_t buffer_size() const noexcept override {
-        return 128 * 1024;
+        return _rewriter.buffer_size();
     }
 };
 

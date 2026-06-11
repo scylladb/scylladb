@@ -19,6 +19,7 @@
 #include <seastar/util/bool_class.hh>
 #include "bytes_fwd.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
+#include "replica/logstor/segment_io.hh"
 #include "replica/logstor/write_buffer.hh"
 #include "replica/logstor/compaction.hh"
 #include "types.hh"
@@ -30,8 +31,6 @@ class database;
 class table;
 
 namespace logstor {
-
-using want_data = seastar::bool_class<class want_data_tag>;
 
 class compaction_manager;
 class segment_set;
@@ -106,7 +105,6 @@ private:
     segment_manager_impl& get_impl() noexcept;
     const segment_manager_impl& get_impl() const noexcept;
 public:
-    static constexpr size_t block_alignment = 4096;
 
     explicit segment_manager(segment_manager_config config);
     ~segment_manager();
