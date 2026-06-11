@@ -31,14 +31,14 @@ def all_tests_are_scylla_only(scylla_only):
     pass
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def test_table_set(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v set<int>",
                         " WITH large_data_guardrails_enabled = true") as table:
         yield table
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def test_table_with_static(cql, test_keyspace):
     with new_test_table(
         cql,
