@@ -317,9 +317,11 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     if (auto warning = db::large_data_soft_violation_warning(violations); !warning.empty()) [[unlikely]] {
         result->add_warning(std::move(warning));
     }
-    if (keys_size_one) {
-        auto&& table = s->table();
-        if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+
+    auto&& table = s->table();
+
+    if (keys_size_one && _may_use_token_aware_routing && table.uses_tablets()) {
+        if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
             auto erm = table.get_effective_replication_map();
             auto tablet_info = erm->check_locality(token, qs.get_client_state().get_original_shard());
             if (tablet_info.has_value()) {
