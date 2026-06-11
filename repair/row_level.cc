@@ -866,6 +866,11 @@ public:
     void clear_session_abort_subscription() {
         _session_abort_sub = {};
     }
+    // Returns the abort_source of the topology session this repair_meta belongs to.
+    // Safe because _topology_guard keeps the session alive for the lifetime of this repair_meta.
+    seastar::abort_source& session_abort_source() const {
+        return _topology_guard.abort_source();
+    }
     const std::optional<repair_sync_boundary>& current_sync_boundary() const {
         return _current_sync_boundary;
     }
@@ -3900,7 +3905,10 @@ repair_service::insert_repair_meta(
         rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
     }
     if (topo_guard != service::null_topology_guard) {
-        auto& session_as = service::get_topology_session_manager().get_session_abort_source(topo_guard);
+        // Obtain the session's abort_source through the guard that rm already
+        // holds (rm->_topology_guard). The guard keeps the session alive, so the
+        // returned reference is safe to use here.
+        auto& session_as = rm->session_abort_source();
         auto sub = session_as.subscribe([this, id, topo_guard] () noexcept {
             auto it = repair_meta_map().find(id);
             if (it == repair_meta_map().end()) {
