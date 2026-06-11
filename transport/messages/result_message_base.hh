@@ -55,6 +55,7 @@ public:
     }
 
     void add_tablet_info(locator::tablet_routing_info info);
+    void add_tablet_info_v2(locator::tablet_routing_info_v2);
 
     const std::optional<std::unordered_map<sstring, bytes>>& custom_payload() const {
         return _custom_payload;

@@ -1707,6 +1707,16 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
     }
+
+    if (client_state.is_protocol_extension_set(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+        auto tablet_version_byte = in.read_byte();
+        if (!tablet_version_byte) {
+            return make_exception_future<cql_server::process_fn_return_type>(std::move(tablet_version_byte).assume_error());
+        }
+        const uint8_t block = tablet_version_byte.assume_value();
+        options.set_tablet_version_block(locator::tablet_version_block{block});
+    }
+
     auto skip_metadata = options.skip_metadata();
 
     if (init_trace && trace_state) {

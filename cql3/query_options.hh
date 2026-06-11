@@ -21,6 +21,7 @@
 #include "utils/result.hh"
 #include "utils/small_vector.hh"
 #include "service/storage_proxy_fwd.hh"
+#include "locator/tablets.hh"
 
 namespace cql3 {
 
@@ -86,6 +87,7 @@ private:
     std::vector<cql3::raw_value_view> _value_views;
     unset_bind_variable_vector _unset;
     const bool _skip_metadata;
+    std::optional<locator::tablet_version_block> _tablet_version_block;
     const specific_options _options;
     std::optional<std::vector<query_options>> _batch_options;
     // We must use the same microsecond-precision timestamp for
@@ -214,6 +216,15 @@ public:
 
     const query_options::specific_options& get_specific_options() const {
         return _options;
+    }
+
+    // Set the tablet_version_block received in an EXECUTE request (TABLETS_ROUTING_V2).
+    void set_tablet_version_block(locator::tablet_version_block block) noexcept {
+        _tablet_version_block = block;
+    }
+
+    std::optional<locator::tablet_version_block> get_tablet_version_block() const noexcept {
+        return _tablet_version_block;
     }
 
     // Mainly for the sake of BatchQueryOptions

@@ -1071,6 +1071,12 @@ struct tablet_routing_info {
     std::pair<dht::token, dht::token> token_range;
 };
 
+struct tablet_routing_info_v2 {
+    tablet_replica_set tablet_replicas;
+    std::pair<dht::token, dht::token> token_range;
+    tablet_version hash;
+};
+
 /// Split a list of ranges, such that conceptually each input range is
 /// intersected with each tablet range.
 /// Tablets are pre-filtered, selecting only tablets that have a replica on the
