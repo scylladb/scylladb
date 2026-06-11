@@ -19,12 +19,9 @@ static const std::map<cql_protocol_extension, seastar::sstring> EXTENSION_NAMES 
     {cql_protocol_extension::LWT_ADD_METADATA_MARK, "SCYLLA_LWT_ADD_METADATA_MARK"},
     {cql_protocol_extension::RATE_LIMIT_ERROR, "SCYLLA_RATE_LIMIT_ERROR"},
     {cql_protocol_extension::TABLETS_ROUTING_V1, "TABLETS_ROUTING_V1"},
-    {cql_protocol_extension::USE_METADATA_ID, "SCYLLA_USE_METADATA_ID"}
+    {cql_protocol_extension::USE_METADATA_ID, "SCYLLA_USE_METADATA_ID"},
+    {cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL, "TABLETS_ROUTING_V2_EXPERIMENTAL"}
 };
-
-cql_protocol_extension_enum_set supported_cql_protocol_extensions() {
-    return cql_protocol_extension_enum_set::full();
-} 
 
 const seastar::sstring& protocol_extension_name(cql_protocol_extension ext) {
     return EXTENSION_NAMES.at(ext);
