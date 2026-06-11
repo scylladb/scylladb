@@ -71,6 +71,12 @@ public:
         [[nodiscard]] bool valid() const {
             return !_session->_closed;
         }
+
+        /// Returns the abort_source of the session this guard belongs to.
+        /// Safe because the guard keeps the session alive.
+        seastar::abort_source& abort_source() const noexcept {
+            return _session->abort_source();
+        }
     };
 
     explicit session(session_id id) : _id(id), _gate("session") {}
@@ -123,10 +129,6 @@ public:
     session_manager();
 
     session::guard enter_session(session_id id);
-
-    /// Returns the abort_source associated with a session.
-    /// Throws if the session does not exist.
-    seastar::abort_source& get_session_abort_source(session_id id);
 
     /// Creates a session on this shard if it doesn't exist yet.
     /// If the session already exists does nothing.
