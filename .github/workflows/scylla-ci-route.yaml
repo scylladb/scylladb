@@ -255,14 +255,28 @@ jobs:
             ARTIFACTS_REQUIRED=false
           fi
 
-          # scylla_gdb: required if any file matches scylla-gdb.py or test/scylla_gdb/*
+          # scylla_gdb: run ONLY the scylla_gdb suite if EVERY changed file matches
+          # scylla-gdb.py or test/scylla_gdb/* (RELENG-638). A PR changing only
+          # scylla-gdb.py is treated the same as one changing only test/scylla_gdb.
           GDB_REQUIRED=false
+          GDB_HAS_FILES=false
+          GDB_ONLY=true
           while IFS= read -r FILE; do
-            if echo "$FILE" | grep -qE '^(scylla-gdb\.py|test/scylla_gdb/)'; then
-              GDB_REQUIRED=true
+            [ -z "$FILE" ] && continue
+            GDB_HAS_FILES=true
+            if ! echo "$FILE" | grep -qE '^(scylla-gdb\.py|test/scylla_gdb/)'; then
+              GDB_ONLY=false
               break
             fi
           done <<< "$ALL_FILES"
+          if [ "$GDB_HAS_FILES" = "true" ] && [ "$GDB_ONLY" = "true" ]; then
+            GDB_REQUIRED=true
+            # Run only the scylla_gdb suite: RUN_UNIT_TEST must be false so scylla-ci
+            # restricts the run to includeTests=scylla_gdb instead of all unit tests.
+            DTEST_REQUIRED=false
+            UNITTEST_REQUIRED=false
+            ARTIFACTS_REQUIRED=false
+          fi
 
           echo "build_required=$BUILD_REQUIRED" >> "$GITHUB_OUTPUT"
           echo "dtest_required=$DTEST_REQUIRED" >> "$GITHUB_OUTPUT"
