@@ -66,6 +66,7 @@
 #include "sstables_loader.hh"
 
 #include "idl/join_node.dist.hh"
+#include "idl/strong_consistency/groups_manager.dist.hh"
 #include "idl/storage_service.dist.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/prepare_response.hh"
@@ -2301,14 +2302,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             rtlogger.info("Skipped tablet streaming ({}) of {} as no pending replica found", trinfo.transition, gid);
                             return make_ready_future<>();
                         }
-                        rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
                         auto dst = trinfo.pending_replica->host;
-                        return do_with(gids, [this, dst] (const auto& gids) {
-                            return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
-                                return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
-                                           dst, _as, raft::server_id(dst.uuid()), gid);
+                        if (is_strong_consistency) {
+                            rtlogger.info("Initiating sc snapshot transfer ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
+                            auto gids_and_group = gids | std::views::transform([&] (const auto& gid) {
+                                return std::make_pair(gid, tmap.get_tablet_raft_info(gid.tablet).group_id);
+                            }) | std::ranges::to<std::vector>();
+
+                            return do_with(gids_and_group, [this, dst, session_id = trinfo.session_id] (const auto& gids_and_group) {
+                                return do_for_each(gids_and_group, [this, dst, session_id] (const auto& gid_and_group) {
+                                    auto [gid, group_id] = gid_and_group;
+                                    return ser::groups_manager_rpc_verbs::send_wait_for_snapshot_transfer(&_messaging,
+                                            dst, _as, raft::server_id(dst.uuid()), gid, group_id, session_id.uuid());
+                                });
                             });
-                        });
+                        } else {
+                            rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
+                            return do_with(gids, [this, dst] (const auto& gids) {
+                                return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
+                                    return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
+                                               dst, _as, raft::server_id(dst.uuid()), gid);
+                                });
+                            });
+                        }
                     })) {
                         if (is_strong_consistency) {
                             // The barrier fences off stale snapshot transfer RPCs, so the

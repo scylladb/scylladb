@@ -218,6 +218,8 @@ public:
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
 
+    future<> wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id);
+
     // Makes sure every raft group whose tablet has a replica on this node has the
     // configuration its current migration stage implies, repairing it if it doesn't.
     //
