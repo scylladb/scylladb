@@ -7533,7 +7533,7 @@ future<> storage_proxy::cancel_write_handlers(noncopyable_function<bool(const ab
             }
         }
         it = next;
-        if (need_preempt() && it != _cancellable_write_handlers_list->end()) {
+        if (it != _cancellable_write_handlers_list->end() && need_preempt()) {
             // Save the iterator position. If the handler is destroyed during yield(),
             // the iterator will be updated to point to the next item in the list.
             //
