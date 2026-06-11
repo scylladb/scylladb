@@ -980,7 +980,10 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             db::consistency_level::LOCAL_QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
     llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);
     if (sst_infos.empty()) {
-        throw std::runtime_error(format("No SSTables found in system_distributed.snapshot_sstables for {}", snapshot_name));
+        // It can happen when the restored table has more tablets than the original.
+        // Some tablets simply have no data in their token range.
+        llog.info("No SSTables found for tablet {}, skipping", tid);
+        co_return;
     }
 
     auto [ fully, partially ] = co_await get_sstables_for_tablet(sst_infos, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
