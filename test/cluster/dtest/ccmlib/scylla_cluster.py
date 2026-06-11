@@ -228,7 +228,9 @@ class ScyllaCluster:
         return self
 
     def flush(self) -> None:
-        self.nodetool("flush")
+        for node in self.nodelist():
+            if node.is_running():
+                node.flush()
 
     @staticmethod
     def debug(message: str) -> None:
