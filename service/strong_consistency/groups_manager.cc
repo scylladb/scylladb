@@ -8,6 +8,8 @@
 
 #include "groups_manager.hh"
 
+#include "locator/tablets.hh"
+#include "raft/raft.hh"
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
@@ -34,6 +36,19 @@ static logging::logger logger("sc_groups_manager");
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
+
+[[maybe_unused]]
+static std::optional<locator::tablet_replica_set> prepare_replicas_for_sc_tablet_version(locator::tablet_replica_set replicas, raft::server_id group_leader) {
+    std::ranges::sort(replicas);
+    const auto leader_host_id = locator::host_id{group_leader.uuid()};
+    auto leader_it = std::ranges::find(replicas, leader_host_id, &tablet_replica::host);
+    if (leader_it == replicas.end()) [[unlikely]] {
+        on_internal_error(logger, seastar::format("Leader ({}) is not among the replicas: {}",
+                leader_host_id, replicas));
+    }
+    std::ranges::rotate(replicas, leader_it);
+    return std::make_optional(std::move(replicas));
+}
 
 class groups_manager::rpc_impl: public service::raft_rpc {
 public:

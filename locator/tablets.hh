@@ -112,7 +112,45 @@ struct tablet_replica {
 
 using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
 
+/// A 64-bit hash computed from a tablet's replica list after ordering it.
+/// Used by TABLETS_ROUTING_V2 to detect when a driver's cached routing is stale.
+///
+/// Tablet version is computed differently for eventually-consistent and
+/// strongly-consistent tablets.
+using tablet_version = utils::tagged_integer<struct tablet_version_tag, uint64_t>;
+
+/// A single-byte encoding of one 4-bit block of a tablet_version.
+/// The high nibble is the block index (0-15), the low nibble is the block's value.
+/// Used in EXECUTE requests to minimize network usage.
+///
+/// Blocks are indexed from the least significant bits to the most significant ones.
+using tablet_version_block = utils::tagged_integer<struct tablet_version_block_tag, uint8_t>;
+
+inline bool compare_tablet_version_block(tablet_version hash, tablet_version_block block) noexcept {
+    uint64_t hash_value = hash.value();
+
+    // Extract the value of the block.
+    const uint8_t block_value = block.value() & 0x0F;
+
+    // Extract the index of the block.
+    const uint8_t block_index = (block.value() & 0xF0) >> 4;
+
+    // Shift the hash so that the block corresponds to the 4 least significant bits.
+    hash_value >>= (block_index * 4);
+
+    // Extract the block value.
+    const uint8_t hash_block = static_cast<uint8_t>(hash_value & 0x0F);
+
+    return hash_block == block_value;
 }
+
+namespace internal {
+
+tablet_version hash_replica_list(const tablet_replica_set&) noexcept;
+
+} // namespace internal
+
+} // namespace locator
 
 namespace std {
 

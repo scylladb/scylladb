@@ -19,8 +19,10 @@
 #include "utils/rjson.hh"
 #include "utils/div_ceil.hh"
 #include "gms/feature_service.hh"
+#include "utils/xx_hasher.hh"
 
 #include <algorithm>
+#include <cstring>
 #include <flat_set>
 #include <iterator>
 #include <chrono>
@@ -34,6 +36,29 @@
 namespace locator {
 
 seastar::logger tablet_logger("tablets");
+
+
+
+namespace internal {
+
+tablet_version hash_replica_list(const tablet_replica_set& replicas) noexcept {
+    xx_hasher hasher{0};
+
+    for (const auto& replica : replicas) {
+        feed_hash(hasher, replica.host);
+        feed_hash(hasher, replica.shard);
+    }
+
+    return tablet_version{hasher.finalize_uint64()};
+}
+
+} // namespace internal
+
+[[maybe_unused]]
+static tablet_replica_set prepare_replicas_for_ec_tablet_version(tablet_replica_set replicas) {
+    std::ranges::sort(replicas);
+    return replicas;
+}
 
 std::pair<tablet_id, std::optional<tablet_id>> tablet_map::sibling_tablets(tablet_id t) const {
     check_tablet_id(t);
