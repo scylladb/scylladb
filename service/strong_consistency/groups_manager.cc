@@ -20,6 +20,7 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "locator/tablet_metadata_guard.hh"
@@ -274,6 +275,52 @@ future<> groups_manager::wait_for_groups_to_start(lowres_clock::time_point timeo
     }
 }
 
+future<> groups_manager::wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id) {
+    auto timeout = lowres_clock::now() + std::chrono::minutes(5);
+
+    co_await wait_for_groups_to_start(timeout);
+
+    auto it = _raft_groups.find(group_id);
+    if (it == _raft_groups.end()) {
+        throw std::runtime_error(format("No raft group {} on this host", group_id));
+    }
+    auto& state = it->second;
+    co_await state.server_control_op.get_future(timeout);
+
+    auto schema = _db.find_schema(tablet.table);
+    if (!schema) {
+        throw replica::no_such_column_family(tablet.table);
+    }
+    auto& table_ref = _db.find_column_family(tablet.table);
+    locator::tablet_metadata_guard guard(table_ref, tablet);
+    auto& tmap = guard.get_tablet_map();
+    auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+    if (!trinfo) {
+        throw std::runtime_error(fmt::format("No transition info for group {}", group_id));
+    }
+    if (trinfo->stage != locator::tablet_transition_stage::sc_snapshot_transfer) {
+        throw std::runtime_error(fmt::format("Tablet {} stage is not at sc_snapshot_transfer", tablet));
+    }
+    if (trinfo->session_id != session_id) {
+        throw std::runtime_error(fmt::format("Tablet {} session mismatch: expected {}, got {}", tablet, session_id, trinfo->session_id));
+    }
+    if (!trinfo->pending_replica) {
+        throw std::runtime_error(fmt::format("Tablet {} has no pending replica", tablet));
+    }
+    const auto this_replica = locator::tablet_replica{
+        .host = guard.get_token_metadata()->get_my_id(),
+        .shard = this_shard_id(),
+    };
+    if (*trinfo->pending_replica != this_replica) {
+        throw std::runtime_error(fmt::format("Tablet {} pending replica {} is not local replica {}", tablet, *trinfo->pending_replica, this_replica));
+    }
+
+    co_await utils::get_local_injector().inject("sc_wait_for_snapshot_transfer", utils::wait_for_message(20min));
+
+    abort_on_expiry aoe(timeout);
+    co_await state.server->read_barrier(&aoe.abort_source());
+}
+
 void groups_manager::init_messaging_service() {
     ser::groups_manager_rpc_verbs::register_wait_for_raft_groups_to_start(&_ms,
         [this] (rpc::opt_time_point timeout, raft::server_id dst_id, table_id table) -> future<> {
@@ -283,6 +330,44 @@ void groups_manager::init_messaging_service() {
             co_await _mm.get_group0_barrier().trigger();
             co_await container().invoke_on_all([timeout] (groups_manager& gm) {
                 return gm.wait_for_groups_to_start(*timeout);
+            });
+        }
+    );
+    ser::groups_manager_rpc_verbs::register_wait_for_snapshot_transfer(&_ms,
+        [this] (raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id group_id, utils::UUID session_id) -> future<> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            co_await _mm.get_group0_barrier().trigger();
+
+            auto schema = _db.find_schema(tablet.table);
+            if (!schema) {
+                throw replica::no_such_column_family(tablet.table);
+            }
+            auto& table_ref = _db.find_column_family(tablet.table);
+            locator::tablet_metadata_guard guard(table_ref, tablet);
+            auto& tmap = guard.get_tablet_map();
+            auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+            if (!trinfo) {
+                throw std::runtime_error(fmt::format("No transition info for group {}", group_id));
+            }
+            if (trinfo->stage != locator::tablet_transition_stage::sc_snapshot_transfer) {
+                throw std::runtime_error(fmt::format("Tablet {} stage is not at sc_snapshot_transfer", tablet));
+            }
+            const auto sid = service::session_id(session_id);
+            if (trinfo->session_id != sid) {
+                throw std::runtime_error(fmt::format("Tablet {} session mismatch: expected {}, got {}", tablet, sid, trinfo->session_id));
+            }
+            if (!trinfo->pending_replica) {
+                throw std::runtime_error(fmt::format("Tablet {} has no pending replica", tablet));
+            }
+            if (trinfo->pending_replica->host != guard.get_token_metadata()->get_my_id()) {
+                throw std::runtime_error(fmt::format("Tablet {} pending replica {} is not on this host", tablet, *trinfo->pending_replica));
+            }
+            const auto dst_shard = trinfo->pending_replica->shard;
+
+            co_await container().invoke_on(dst_shard, [tablet, group_id, sid] (groups_manager& gm) {
+                return gm.wait_for_snapshot_transfer(tablet, group_id, sid);
             });
         }
     );

@@ -202,6 +202,8 @@ public:
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
 
+    future<> wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id);
+
     // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
     // until the raft groups for those tablets are started and ready to serve queries.
     // For the local node, waits directly without an RPC.

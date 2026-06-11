@@ -51,6 +51,7 @@
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/strong_consistency/groups_manager.hh"
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
@@ -66,6 +67,7 @@
 #include "sstables_loader.hh"
 
 #include "idl/join_node.dist.hh"
+#include "idl/strong_consistency/groups_manager.dist.hh"
 #include "idl/storage_service.dist.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/prepare_response.hh"
@@ -132,6 +134,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     replica::database& _db;
     utils::updateable_value<uint32_t> _tablet_load_stats_refresh_interval_in_seconds;
     service::raft_group0& _group0;
+    service::strong_consistency::groups_manager& _groups_manager;
     service::topology_state_machine& _topo_sm;
     db::view::view_building_state_machine& _vb_sm;
     abort_source& _as;
@@ -1595,6 +1598,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // Next migration of the same tablet is guaranteed to use a different instance.
     struct tablet_migration_state {
         background_action_holder streaming;
+        background_action_holder sc_snapshot_transfer;
         background_action_holder rebuild_repair;
         background_action_holder cleanup;
         background_action_holder repair;
@@ -2148,7 +2152,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                     break;
                 case locator::tablet_transition_stage::sc_snapshot_transfer:
-                    if (action_failed(tablet_state.barriers[trinfo.stage]) || utils::get_local_injector().enter("sc_snapshot_transfer_fail")) {
+                    if (action_failed(tablet_state.sc_snapshot_transfer) || utils::get_local_injector().enter("sc_snapshot_transfer_fail")) {
                         std::optional<sstring> rollback;
 
                         if (utils::get_local_injector().enter("sc_snapshot_transfer_move_to_cleanup")) {
@@ -2178,7 +2182,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             break;
                         }
                     }
-                    transition_to_with_barrier(locator::tablet_transition_stage::sc_become_voter);
+                    if (advance_in_background(gid, tablet_state.sc_snapshot_transfer, "sc_snapshot_transfer", [&] () -> future<> {
+                        if (!trinfo.pending_replica) {
+                            rtlogger.info("Skipped sc_snapshot_transfer of {} as no pending replica found", gid);
+                            return make_ready_future<>();
+                        }
+
+                        auto dst = trinfo.pending_replica->host;
+                        auto gids_and_group = gids | std::views::transform([&] (const auto& gid) {
+                            return std::make_pair(gid, tmap.get_tablet_raft_info(gid.tablet).group_id);
+                        }) | std::ranges::to<std::vector>();
+
+                        return do_with(gids_and_group, [this, dst, session_id = trinfo.session_id] (const auto& gids_and_group) {
+                            return do_for_each(gids_and_group, [this, dst, session_id] (const auto& gid_and_group) {
+                                auto [gid, group_id] = gid_and_group;
+                                return ser::groups_manager_rpc_verbs::send_wait_for_snapshot_transfer(&_messaging,
+                                        dst, _as, raft::server_id(dst.uuid()), gid, group_id, session_id.uuid());
+                            });
+                        });
+                    })) {
+                        transition_to(locator::tablet_transition_stage::sc_become_voter);
+                    }
                     break;
                 case locator::tablet_transition_stage::write_both_read_new: /* sc_become_voter */ {
                     utils::get_local_injector().inject("crash-in-tablet-write-both-read-new", [] {
@@ -4362,6 +4386,7 @@ public:
             sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
             netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
             db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
+            service::strong_consistency::groups_manager& groups_manager,
             service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, abort_source& as, raft::server& raft_server,
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
@@ -4374,7 +4399,7 @@ public:
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _tablet_load_stats_refresh_interval_in_seconds(db.get_config().tablet_load_stats_refresh_interval_in_seconds)
-        , _group0(group0), _topo_sm(topo_sm), _vb_sm(vb_sm), _as(as)
+        , _group0(group0), _groups_manager(groups_manager), _topo_sm(topo_sm), _vb_sm(vb_sm), _as(as)
         , _feature_service(feature_service), _lifecycle_notifier(lifecycle_notifier)
         , _sl_controller(sl_controller)
         , _raft(raft_server), _term(raft_server.get_current_term())
@@ -4930,6 +4955,7 @@ future<> topology_coordinator::stop() {
         }
 
         co_await stop_background_action(tablet_state.streaming, gid, [] { return "during streaming"; });
+        co_await stop_background_action(tablet_state.sc_snapshot_transfer, gid, [] { return "during sc_snapshot_transfer"; });
         co_await stop_background_action(tablet_state.cleanup, gid, [] { return "during cleanup"; });
         co_await stop_background_action(tablet_state.rebuild_repair, gid, [] { return "during rebuild_repair"; });
         co_await stop_background_action(tablet_state.repair, gid, [] { return "during repair"; });
@@ -4940,6 +4966,7 @@ future<> run_topology_coordinator(
         seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
         netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
         db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
+        service::strong_consistency::groups_manager& groups_manager,
         service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, seastar::abort_source& as, raft::server& raft,
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
@@ -4952,7 +4979,7 @@ future<> run_topology_coordinator(
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
-            sys_ks, db, group0, topo_sm, vb_sm, as, raft,
+            sys_ks, db, group0, groups_manager, topo_sm, vb_sm, as, raft,
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
             cdc_gens,
