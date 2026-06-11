@@ -394,6 +394,7 @@ add_scylla_test(combined_tests
     statement_restrictions_test.cc
     storage_proxy_test.cc
     tablets_test.cc
+    test_audit.cc
     tracing_test.cc
     user_function_test.cc
     user_types_test.cc

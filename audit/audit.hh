@@ -16,6 +16,7 @@
 #include "audit/audit_rule.hh"
 #include "audit/preprocessed_audit_rules.hh"
 #include <seastar/core/sharded.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/util/log.hh>
 
 #include "enum_set.hh"
@@ -138,7 +139,12 @@ private:
     preprocessed_audit_rules _preprocessed_rules;
 
     std::unique_ptr<storage_helper> _storage_helper_ptr;
-    bool _storage_running = false;
+    // Guards only the startup window: set once when start_storage() finishes and
+    // never reset. The pending-writes gate handles shutdown by draining and
+    // rejecting writes, so this flag just prevents writes from reaching the
+    // storage helper before it is started.
+    bool _storage_started = false;
+    seastar::named_gate _pending_writes;
     std::unique_ptr<audit_schema_listener> _schema_listener;
     service::migration_notifier& _migration_notifier;
 
@@ -156,6 +162,18 @@ private:
     bool rules_may_log(statement_category cat, std::string_view keyspace, std::string_view table) const;
     audit_sink_set sinks_for(const audit_info& audit_info, std::string_view role) const;
     audit_sink_set sinks_for_login(const sstring& username) const;
+    future<> write_to_storage(audit_sink_set sinks,
+                              const audit_info& audit_info,
+                              socket_address node_ip,
+                              socket_address client_ip,
+                              std::optional<db::consistency_level> cl,
+                              const sstring& username,
+                              bool error);
+    future<> write_login_to_storage(audit_sink_set sinks,
+                                    const sstring& username,
+                                    socket_address node_ip,
+                                    socket_address client_ip,
+                                    bool error);
     future<> rebuild_rules();
 public:
     static seastar::sharded<audit>& audit_instance() {

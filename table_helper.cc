@@ -106,6 +106,7 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
         co_return;
     }
 
+    std::exception_ptr eptr;
     try {
         bool success = co_await try_prepare(false, qp, qs, cql3::internal_dialect());
         if (_is_fallback_stmt && _prepared_stmt) {
@@ -115,25 +116,33 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
             co_await try_prepare(true, qp, qs, cql3::internal_dialect()); // Can only return true or exception when preparing the fallback statement
         }
     } catch (...) {
-        auto eptr = std::current_exception();
+        eptr = std::current_exception();
+    }
 
-        // One of the possible causes for an error here could be the table that doesn't exist.
-        //FIXME: discarded future.
-        (void)qp.container().invoke_on(0, [&mm = mm.container(), create_cql = _create_cql] (cql3::query_processor& qp) -> future<> {
+    if (!eptr) {
+        co_return;
+    }
+
+    // One of the possible causes for an error here could be the table that doesn't exist.
+    // Await setup_table() (the group0-dependent metadata recovery) so the future is
+    // covered by the caller's gate and properly waited during shutdown, before group0
+    // is torn down.
+    try {
+        co_await qp.container().invoke_on(0, [&mm = mm.container(), create_cql = _create_cql] (cql3::query_processor& qp) -> future<> {
             co_return co_await table_helper::setup_table(qp, mm.local(), create_cql);
-        }).handle_exception([keyspace = _keyspace, name = _name] (std::exception_ptr ep) {
-            tlogger.debug("Failed to create {}.{} table in best-effort recovery path: {}", keyspace, name, ep);
         });
+    } catch (...) {
+        tlogger.debug("Failed to create {}.{} table in best-effort recovery path: {}", _keyspace, _name, std::current_exception());
+    }
 
-        // We throw the bad_column_family exception because the caller
-        // expects and accounts this type of errors.
-        try {
-            std::rethrow_exception(eptr);
-        } catch (std::exception& e) {
-            throw bad_column_family(_keyspace, _name, e);
-        } catch (...) {
-            throw bad_column_family(_keyspace, _name);
-        }
+    // We throw the bad_column_family exception because the caller
+    // expects and accounts this type of errors.
+    try {
+        std::rethrow_exception(eptr);
+    } catch (std::exception& e) {
+        throw bad_column_family(_keyspace, _name, e);
+    } catch (...) {
+        throw bad_column_family(_keyspace, _name);
     }
 }
 

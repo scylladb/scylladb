@@ -1741,6 +1741,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/statement_restrictions_test.cc',
     'test/boost/storage_proxy_test.cc',
     'test/boost/tablets_test.cc',
+    'test/boost/test_audit.cc',
     'test/boost/tracing_test.cc',
     'test/boost/user_function_test.cc',
     'test/boost/user_types_test.cc',
