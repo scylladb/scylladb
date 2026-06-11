@@ -65,6 +65,10 @@ std::optional<tablet_routing_info> local_effective_replication_map::check_locali
     return std::nullopt;
 }
 
+std::optional<tablet_routing_info_v2> local_effective_replication_map::check_tablet_version(const token&, tablet_version_block) const {
+    return std::nullopt;
+}
+
 bool local_effective_replication_map::has_pending_ranges(locator::host_id endpoint) const {
     return false;
 }
