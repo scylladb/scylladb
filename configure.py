@@ -1454,6 +1454,7 @@ alternator = [
        'alternator/controller.cc',
        'alternator/server.cc',
        'alternator/executor.cc',
+       'alternator/executor_export.cc',
        'alternator/executor_read.cc',
        'alternator/executor_util.cc',
        'alternator/stats.cc',
