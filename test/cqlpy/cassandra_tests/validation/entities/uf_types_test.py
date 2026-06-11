@@ -141,8 +141,68 @@ def test_types_with_and_without_nulls(cql, test_keyspace):
             values[0] = 2
             cql.execute(insert_stmt, values)
 
+            one_null_keys = []
+            for i in range(len(type_defs)):
+                values = [i + 3] + [td.reference_value for td in type_defs]
+                values[i + 1] = None
+                cql.execute(insert_stmt, values)
+                one_null_keys.append(i + 3)
+
             use_wasm = is_scylla_util(cql)
             lang = "wasm" if use_wasm else "java"
+
+            if use_wasm:
+                # On Scylla each CREATE FUNCTION compiles the whole wasm module,
+                # which dominates the test runtime. Instead of 3 functions per
+                # type, create a single function of each kind taking arguments of
+                # all types at once (see test_types_with_and_without_nulls.rs).
+                # This keeps full per-type (de)serialization coverage while cutting
+                # the number of (expensive) compilations from 3*len(type_defs) to 3.
+                columns = ", ".join(td.column_name for td in type_defs)
+                first_type_defs = type_defs[:12]
+                second_type_defs = type_defs[12:]
+                first_columns = ", ".join(td.column_name for td in first_type_defs)
+                second_columns = ", ".join(td.column_name for td in second_type_defs)
+                arg_sig = ", ".join(f"a{i} {td.udf_type}" for i, td in enumerate(type_defs))
+                first_arg_sig = ", ".join(f"a{i} {td.udf_type}" for i, td in enumerate(first_type_defs))
+                second_arg_sig = ", ".join(f"a{i} {td.udf_type}" for i, td in enumerate(second_type_defs))
+                first_ret_tuple = "tuple<" + ", ".join(td.udf_type for td in first_type_defs) + ">"
+                second_ret_tuple = "tuple<" + ", ".join(td.udf_type for td in second_type_defs) + ">"
+
+                fn_identity_1 = unique_name()
+                identity_src_1 = read_function_from_file("test_types_with_and_without_nulls", "check_arg_and_return_1", fn_identity_1)
+                fn_identity_2 = unique_name()
+                identity_src_2 = read_function_from_file("test_types_with_and_without_nulls", "check_arg_and_return_2", fn_identity_2)
+                fn_called = unique_name()
+                called_src = read_function_from_file("test_types_with_and_without_nulls", "called_on_null", fn_called)
+                fn_null = unique_name()
+                null_src = read_function_from_file("test_types_with_and_without_nulls", "returns_null_on_null", fn_null)
+
+                identity_full_1 = f"({first_arg_sig}) CALLED ON NULL INPUT RETURNS {first_ret_tuple} LANGUAGE wasm AS '{identity_src_1}'"
+                identity_full_2 = f"({second_arg_sig}) CALLED ON NULL INPUT RETURNS {second_ret_tuple} LANGUAGE wasm AS '{identity_src_2}'"
+                called_full = f"({arg_sig}) CALLED ON NULL INPUT RETURNS text LANGUAGE wasm AS '{called_src}'"
+                null_full = f"({arg_sig}) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE wasm AS '{null_src}'"
+
+                with new_function(cql, test_keyspace, identity_full_1, fn_identity_1), \
+                     new_function(cql, test_keyspace, identity_full_2, fn_identity_2), \
+                     new_function(cql, test_keyspace, called_full, fn_called), \
+                     new_function(cql, test_keyspace, null_full, fn_null):
+                    expected_1 = tuple(td.reference_value for td in first_type_defs)
+                    got_1 = cql.execute(f"SELECT {fn_identity_1}({first_columns}) FROM {table} WHERE key = 1").one()[0]
+                    assert got_1 == expected_1, f"identity roundtrip mismatch: {got_1} != {expected_1}"
+                    expected_2 = tuple(td.reference_value for td in second_type_defs)
+                    got_2 = cql.execute(f"SELECT {fn_identity_2}({second_columns}) FROM {table} WHERE key = 1").one()[0]
+                    assert got_2 == expected_2, f"identity roundtrip mismatch: {got_2} != {expected_2}"
+
+                    assertRows(execute(cql, table, f"SELECT {fn_called}({columns}) FROM %s WHERE key = 1"), row("called"))
+                    assertRows(execute(cql, table, f"SELECT {fn_called}({columns}) FROM %s WHERE key = 2"), row("called"))
+
+                    assertRows(execute(cql, table, f"SELECT {fn_null}({columns}) FROM %s WHERE key = 1"), row("called"))
+                    assertRows(execute(cql, table, f"SELECT {fn_null}({columns}) FROM %s WHERE key = 2"), row(None))
+                    for key in one_null_keys:
+                        assertRows(execute(cql, table, f"SELECT {fn_called}({columns}) FROM %s WHERE key = {key}"), row("called"))
+                        assertRows(execute(cql, table, f"SELECT {fn_null}({columns}) FROM %s WHERE key = {key}"), row(None))
+                return
 
             for type_def in type_defs:
                 fun_name = unique_name()

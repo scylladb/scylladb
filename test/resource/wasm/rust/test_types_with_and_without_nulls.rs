@@ -2,231 +2,93 @@ use scylla_udf::{export_udf, Time, Timestamp};
 use chrono::NaiveDate;
 use uuid::Uuid;
 
+// The order of arguments must match type_defs in uf_types_test.py.
+type FirstTypes = (
+    Option<Timestamp>,
+    Option<NaiveDate>,
+    Option<Time>,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<i8>,
+    Option<i16>,
+    Option<i32>,
+    Option<i64>,
+    Option<f32>,
+    Option<f64>,
+    Option<bool>,
+);
+
+type SecondTypes = (
+    Option<String>,
+    Option<String>,
+    Option<(i32, String)>,
+);
 
 #[export_udf]
-fn check_arg_and_return_ts(x: Option<Timestamp>) -> Option<Timestamp> {
-    x
+fn check_arg_and_return_1(
+    ts: Option<Timestamp>,
+    dt: Option<NaiveDate>,
+    tim: Option<Time>,
+    uu: Option<Uuid>,
+    tu: Option<Uuid>,
+    ti: Option<i8>,
+    si: Option<i16>,
+    i: Option<i32>,
+    bi: Option<i64>,
+    f: Option<f32>,
+    d: Option<f64>,
+    x: Option<bool>,
+) -> FirstTypes {
+    (ts, dt, tim, uu, tu, ti, si, i, bi, f, d, x)
 }
 
 #[export_udf]
-fn called_on_null_ts(_: Option<Timestamp>) -> Option<String> {
+fn check_arg_and_return_2(
+    a: Option<String>,
+    txt: Option<String>,
+    tup: Option<(i32, String)>,
+) -> SecondTypes {
+    (a, txt, tup)
+}
+
+#[export_udf]
+fn called_on_null(
+    _ts: Option<Timestamp>,
+    _dt: Option<NaiveDate>,
+    _tim: Option<Time>,
+    _uu: Option<Uuid>,
+    _tu: Option<Uuid>,
+    _ti: Option<i8>,
+    _si: Option<i16>,
+    _i: Option<i32>,
+    _bi: Option<i64>,
+    _f: Option<f32>,
+    _d: Option<f64>,
+    _x: Option<bool>,
+    _a: Option<String>,
+    _txt: Option<String>,
+    _tup: Option<(i32, String)>,
+) -> Option<String> {
     Some("called".to_string())
 }
 
 #[export_udf]
-fn returns_null_on_null_ts(_: Timestamp) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_dt(x: Option<NaiveDate>) -> Option<NaiveDate> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_dt(_: Option<NaiveDate>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_dt(_: NaiveDate) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_tim(x: Option<Time>) -> Option<Time> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_tim(_: Option<Time>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_tim(_: Time) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_uu(x: Option<Uuid>) -> Option<Uuid> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_uu(_: Option<Uuid>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_uu(_: Uuid) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_tu(x: Option<Uuid>) -> Option<Uuid> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_tu(_: Option<Uuid>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_tu(_: Uuid) -> String {
-    "called".to_string()
-}
-
-
-#[export_udf]
-fn check_arg_and_return_ti(x: Option<i8>) -> Option<i8> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_ti(_: Option<i8>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_ti(_: i8) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_si(x: Option<i16>) -> Option<i16> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_si(_: Option<i16>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_si(_: i16) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_i(x: Option<i32>) -> Option<i32> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_i(_: Option<i32>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_i(_: i32) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_bi(x: Option<i64>) -> Option<i64> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_bi(_: Option<i64>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_bi(_: i64) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_f(x: Option<f32>) -> Option<f32> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_f(_: Option<f32>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_f(_: f32) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_d(x: Option<f64>) -> Option<f64> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_d(_: Option<f64>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_d(_: f64) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_x(x: Option<bool>) -> Option<bool> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_x(_: Option<bool>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_x(_: bool) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_a(x: Option<String>) -> Option<String> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_a(_: Option<String>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_a(_: String) -> String {
-    "called".to_string()
-}
-
-#[export_udf]
-fn check_arg_and_return_txt(x: Option<String>) -> Option<String> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_txt(_: Option<String>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_txt(_: String) -> String {
-    "called".to_string()
-}
-
-// # TypesTestDef(type, f"frozen<{type}>", "u", null),
-
-#[export_udf]
-fn check_arg_and_return_tup(x: Option<(i32, String)>) -> Option<(i32, String)> {
-    x
-}
-
-#[export_udf]
-fn called_on_null_tup(_: Option<(i32, String)>) -> Option<String> {
-    Some("called".to_string())
-}
-
-#[export_udf]
-fn returns_null_on_null_tup(_: (i32, String)) -> String {
+fn returns_null_on_null(
+    _ts: Timestamp,
+    _dt: NaiveDate,
+    _tim: Time,
+    _uu: Uuid,
+    _tu: Uuid,
+    _ti: i8,
+    _si: i16,
+    _i: i32,
+    _bi: i64,
+    _f: f32,
+    _d: f64,
+    _x: bool,
+    _a: String,
+    _txt: String,
+    _tup: (i32, String),
+) -> String {
     "called".to_string()
 }
