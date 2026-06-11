@@ -116,6 +116,18 @@ public:
         return false;
     }
 
+    // A driver's control connection runs in a dedicated scheduling group and is
+    // only meant to issue the system queries the driver needs to manage itself,
+    // never user load. Returns true when executing this statement means the
+    // connection is being misused for user load, so the CQL server can reclassify
+    // it as a regular user connection and stop using the driver scheduling group.
+    //
+    // There is deliberately no default implementation: every statement type must
+    // classify itself, so a newly introduced statement cannot silently fall
+    // through with the wrong classification. Intermediate classes may implement it
+    // once on behalf of all their sub-classes.
+    virtual bool should_reclassify_control_connection() const = 0;
+
     audit::audit_info* get_audit_info() { return _audit_info.get(); }
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
 

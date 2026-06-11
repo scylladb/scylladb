@@ -80,6 +80,12 @@ const sstring& modification_statement::keyspace() const {
     return s->ks_name();
 }
 
+bool modification_statement::should_reclassify_control_connection() const {
+    // A control connection legitimately writes only to system tables; writing any
+    // other keyspace means it is being used for user load.
+    return _ks_sel == ks_selector::NONSYSTEM;
+}
+
 const sstring& modification_statement::column_family() const {
     return s->cf_name();
 }
