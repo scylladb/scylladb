@@ -241,4 +241,4 @@ public:
     begin_read_result begin_read(abort_source&);
 };
 
-}
+} // namespace service::strong_consistency
