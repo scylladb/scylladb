@@ -38,14 +38,6 @@ session::guard session_manager::enter_session(session_id id) {
     return guard;
 }
 
-seastar::abort_source& session_manager::get_session_abort_source(session_id id) {
-    auto i = _sessions.find(id);
-    if (i == _sessions.end()) {
-        throw std::runtime_error(fmt::format("Session not found: {}", id));
-    }
-    return i->second->abort_source();
-}
-
 void session_manager::create_session(session_id id) {
     auto [i, created] = _sessions.emplace(id, std::make_unique<session>(id));
     if (created) {

@@ -112,7 +112,7 @@ SEASTAR_TEST_CASE(test_session_abort_source_unblocks_drain) {
         BOOST_REQUIRE(guard->valid());
 
         // Subscribe to the session's abort_source (as insert_repair_meta does)
-        auto& session_as = mgr.get_session_abort_source(id);
+        auto& session_as = guard->abort_source();
         BOOST_REQUIRE(!session_as.abort_requested());
 
         bool aborted = false;
@@ -143,9 +143,12 @@ SEASTAR_TEST_CASE(test_session_abort_source_already_closed) {
         auto id = session_id(utils::make_random_uuid());
         mgr.create_session(id);
 
-        mgr.initiate_close_of_sessions_except({});
+        // Hold a guard so we can access the abort_source; the guard keeps the
+        // session alive, which is the precondition for abort_source() access.
+        auto guard = std::make_optional<session::guard>(mgr.enter_session(id));
+        auto& session_as = guard->abort_source();
 
-        auto& session_as = mgr.get_session_abort_source(id);
+        mgr.initiate_close_of_sessions_except({});
         BOOST_REQUIRE(session_as.abort_requested());
 
         // Subscribing after abort returns empty subscription
@@ -156,6 +159,8 @@ SEASTAR_TEST_CASE(test_session_abort_source_already_closed) {
         BOOST_REQUIRE(!sub);
         BOOST_REQUIRE(!called);
 
+        // Release the guard so drain can complete.
+        guard.reset();
         mgr.drain_closing_sessions().get();
     });
 }
@@ -174,7 +179,7 @@ SEASTAR_TEST_CASE(test_session_abort_source_already_closed_requires_immediate_cl
 
         mgr.initiate_close_of_sessions_except({});
 
-        auto& session_as = mgr.get_session_abort_source(id);
+        auto& session_as = guard->abort_source();
         BOOST_REQUIRE(session_as.abort_requested());
 
         bool called = false;
@@ -205,7 +210,7 @@ SEASTAR_TEST_CASE(test_session_abort_source_drain_blocks_without_release) {
         auto guard = std::make_optional<session::guard>(mgr.enter_session(id));
 
         // Subscribe but do NOT release the guard in the callback
-        auto& session_as = mgr.get_session_abort_source(id);
+        auto& session_as = guard->abort_source();
         bool aborted = false;
         auto sub = session_as.subscribe([&] () noexcept {
             aborted = true;
