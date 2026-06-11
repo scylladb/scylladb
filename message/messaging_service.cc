@@ -537,6 +537,27 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
             ci.attach_auxiliary("baddr", broadcast_address);
             ci.attach_auxiliary("src_cpu_id", src_cpu_id);
             ci.attach_auxiliary("max_result_size", max_result_size.value_or(query::result_memory_limiter::maximum_result_size));
+            // Erase stale entries for this peer before inserting the new one.
+            // Connections are removed from rpc::server::_conns on natural TCP teardown,
+            // but _host_connections has no such hook, so stale entries accumulate and
+            // trigger oversized rehash allocations in large clusters (SCYLLADB-2532).
+            {
+                auto [b, e] = _host_connections.equal_range(peer_host_id);
+                while (b != e) {
+                    const auto& conn_ref = b->second;
+                    bool is_live = false;
+                    conn_ref.server.foreach_connection([&](const rpc::server::connection& c) {
+                        if (c.get_connection_id() == conn_ref.conn_id) {
+                            is_live = true;
+                        }
+                    });
+                    if (!is_live) {
+                        b = _host_connections.erase(b);
+                    } else {
+                        ++b;
+                    }
+                }
+            }
             _host_connections.emplace(peer_host_id, connection_ref {
                 .server = ci.server,
                 .conn_id = ci.conn_id,
