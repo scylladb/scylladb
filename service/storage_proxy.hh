@@ -171,6 +171,7 @@ struct storage_proxy_coordinator_query_result {
 struct storage_proxy_coordinator_mutate_options {
     cdc::per_request_options cdc_options;
     node_local_only node_local_only = node_local_only::no;
+    bool bypass_large_data_guardrails = false;
 };
 
 class cas_request;
@@ -844,7 +845,8 @@ public:
     future<bool> cas(schema_ptr schema, cas_shard cas_shard, cas_request& request, lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
-            clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true, cdc::per_request_options cdc_opts = {});
+            clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true, cdc::per_request_options cdc_opts = {},
+            bool bypass_large_data_guardrails = false);
 
     future<> start_hints_manager();
     void allow_replaying_hints() noexcept;

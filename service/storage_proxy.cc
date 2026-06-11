@@ -4289,8 +4289,10 @@ storage_proxy::mutate_with_triggers(utils::chunked_vector<mutation> mutations, d
     bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, coordinator_mutate_options options) {
     warn(unimplemented::cause::TRIGGERS);
 
-    for (const mutation& m : mutations) {
-        m.schema()->table().get_large_data_guardrail()->check_coordinator(*m.schema(), m.partition(), m.key());
+    if (!options.bypass_large_data_guardrails) {
+        for (const mutation& m : mutations) {
+            m.schema()->table().get_large_data_guardrail()->check_coordinator(*m.schema(), m.partition(), m.key());
+        }
     }
 
     if (should_mutate_atomically) {
@@ -6894,7 +6896,8 @@ static mutation_write_failure_exception read_failure_to_write(read_failure_excep
 future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_request& request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges, storage_proxy::coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
-        clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write, cdc::per_request_options cdc_opts) {
+        clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write, cdc::per_request_options cdc_opts,
+        bool bypass_large_data_guardrails) {
 
     auto& table = local_db().find_column_family(schema->id());
     if (table.uses_tablets()) {
@@ -6970,6 +6973,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
         auto l = co_await paxos::paxos_state::get_cas_lock(token, write_timeout);
 
         co_await utils::get_local_injector().inject("cas_timeout_after_lock", write_timeout + std::chrono::milliseconds(100));
+        auto ld_guardrail = bypass_large_data_guardrails ? db::noop_large_data_guardrail::instance() : table.get_large_data_guardrail();
 
         while (true) {
             // Finish the previous PAXOS round, if any, and, as a side effect, compute
@@ -7009,7 +7013,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
                 // since the value we are writing is dummy we may use minimal consistency level for learn
                 handler->set_cl_for_learn(db::consistency_level::ANY);
             } else {
-                table.get_large_data_guardrail()->check_coordinator(
+                ld_guardrail->check_coordinator(
                         *schema, mutation->partition(), mutation->key());
                 paxos::paxos_state::logger.debug("CAS[{}] precondition is met; proposing client-requested updates for {}",
                         handler->id(), ballot);
