@@ -1336,6 +1336,52 @@ static void defer_enabling_streams_block_tablet_merges(schema_builder& builder) 
     builder.with_cdc_options(opts);
 }
 
+// When a table has both a vector index and Alternator Streams, the CDC log
+// must use delta_mode=full (not delta_mode=keys) so that the vector store can
+// read the full column data from CDC log entries. Alternator Streams' view type
+// (KEYS_ONLY, NEW_IMAGE, etc.) is determined by preimage/postimage settings,
+// not by delta_mode, so upgrading delta_mode to full does not affect what
+// streams return to clients.
+// This function upgrades delta_mode to full if needed. It is a no-op if
+// no CDC options are explicitly set, or if postimage is already enabled
+// (which also satisfies the vector store's requirements).
+static void upgrade_cdc_delta_for_vector_index(schema_builder& builder) {
+    auto& exts = builder.get_extensions();
+    auto it = exts.find(cdc::cdc_extension::NAME);
+    if (it == exts.end()) {
+        return; // No explicit CDC options; default delta_mode is already full
+    }
+    auto ext = dynamic_pointer_cast<cdc::cdc_extension>(it->second);
+    throwing_assert(ext);
+    auto opts = ext->get_options();
+    if (opts.postimage() || opts.get_delta_mode() == cdc::delta_mode::full) {
+        return; // Already satisfies vector store requirements
+    }
+    opts.set_delta_mode(cdc::delta_mode::full);
+    builder.with_cdc_options(opts);
+}
+
+// Symmetric to upgrade_cdc_delta_for_vector_index(): when the last vector
+// index is deleted, downgrade delta_mode from full back to keys (if it was
+// upgraded for the vector index and the stream no longer needs full).
+// This is a no-op if postimage is enabled (the stream was driving full delta
+// mode, not the vector index), or if delta is not currently full.
+static void downgrade_cdc_delta_after_vector_index_delete(schema_builder& builder) {
+    auto& exts = builder.get_extensions();
+    auto it = exts.find(cdc::cdc_extension::NAME);
+    if (it == exts.end()) {
+        return; // No explicit CDC options
+    }
+    auto ext = dynamic_pointer_cast<cdc::cdc_extension>(it->second);
+    throwing_assert(ext);
+    auto opts = ext->get_options();
+    if (opts.get_delta_mode() != cdc::delta_mode::full) {
+        return;
+    }
+    opts.set_delta_mode(cdc::delta_mode::keys);
+    builder.with_cdc_options(opts);
+}
+
 // Returns true if the given attribute name is already the target of any vector
 // index on the schema. Analogous to schema::has_index(), but looks up by the
 // indexed attribute name rather than the index name.
@@ -1674,6 +1720,16 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     if (stream_specification && stream_specification->IsObject()) {
         if (executor::add_stream_options(*stream_specification, builder, _proxy)) {
             validate_cdc_log_name_length(builder.cf_name());
+            // If vector index was also enabled, it set up its desired CDC
+            // configuration before the code here overwrote it by its own
+            // desire. In that case we need to re-apply the vector index's
+            // minimum CDC requirements on top of the stream options. In
+            // particular, if the user enable streams with KEYS_ONLY we
+            // need to add delta_mode=full (because the vector store needs
+            // either delta_mode=full or postimage).
+            if (vector_indexes && vector_indexes->Size() > 0) {
+                upgrade_cdc_delta_for_vector_index(builder);
+            }
         }
     }
 
@@ -1916,15 +1972,53 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             schema_builder builder(tab);
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
+            rjson::value* gsi_updates = rjson::find(request, "GlobalSecondaryIndexUpdates");
+            rjson::value* vector_index_updates = rjson::find(request, "VectorIndexUpdates");
+            // DynamoDB rejects combining a GSI or vector index create/delete
+            // with a stream change in the same UpdateTable request. Check this
+            // early, before processing either, so that the error is consistent
+            // regardless of which individual operation would fail on its own.
+            if (stream_specification && stream_specification->IsObject()) {
+                if (gsi_updates && gsi_updates->IsArray() && gsi_updates->Size()) {
+                    co_return api_error::validation("You cannot create or delete index while changing stream status");
+                }
+                if (vector_index_updates && vector_index_updates->IsArray() && vector_index_updates->Size()) {
+                    co_return api_error::validation("You cannot create or delete index while changing stream status");
+                }
+            }
             if (stream_specification && stream_specification->IsObject()) {
                 empty_request = false;
                 if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
                     validate_cdc_log_name_length(builder.cf_name());
+                    // If the table already has a vector index, ensure CDC uses
+                    // delta_mode=full so the vector store can read full column
+                    // data (KEYS_ONLY streams would otherwise set delta_mode=keys).
+                    // Note: Alternator only uses secondary indexes for vector
+                    // search, so any non-empty indices() means a vector index.
+                    if (!tab->indices().empty()) {
+                        upgrade_cdc_delta_for_vector_index(builder);
+                    }
                     // On tablet tables, defer stream enablement and block
                     // tablet merges (see defer_enabling_streams_block_tablet_merges).
                     bool uses_tablets = p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets();
                     if (uses_tablets) {
                         defer_enabling_streams_block_tablet_merges(builder);
+                    }
+                } else {
+                    // Stream is being disabled. If the table has a vector index,
+                    // CDC will remain active for the vector store because
+                    // cdc::cdc_enabled() checks if there is a vector index. But
+                    // we need the CDC options to have enabled=false (CDC is
+                    // explicitly enabled) and delta_mode=full (vector store
+                    // requirement). is_vector_only_cdc() will return true
+                    // with this setting, so DescribeTable/ListStreams will
+                    // not show this CDC as a stream.
+                    if (!tab->indices().empty()) {
+                        cdc::options opts;
+                        opts.enabled(false);
+                        opts.set_delta_mode(cdc::delta_mode::full);
+                        opts.ttl(tab->cdc_options().ttl());
+                        builder.with_cdc_options(opts);
                     }
                 }
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
@@ -1960,7 +2054,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             // Support VectorIndexUpdates to add or delete a vector index,
             // similar to GlobalSecondaryIndexUpdates above. We handle this
             // before builder.build() so we can use builder directly.
-            rjson::value* vector_index_updates = rjson::find(request, "VectorIndexUpdates");
             if (vector_index_updates) {
                 if (!vector_index_updates->IsArray()) {
                     co_return api_error::validation("VectorIndexUpdates must be an array");
@@ -2068,12 +2161,21 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     index_options["similarity_function"] = similarity_function;
                     builder.with_index(index_metadata{index_name, index_options,
                             index_metadata_kind::custom, index_metadata::is_local_index(false)});
+                    // If the table already has CDC-enabled streams using
+                    // delta_mode=keys, upgrade to delta_mode=full so the vector
+                    // store can read full column data from the CDC log.
+                    upgrade_cdc_delta_for_vector_index(builder);
                 } else if (op == "Delete") {
                     if (!tab->has_index(index_name)) {
                         co_return api_error::resource_not_found(fmt::format(
                             "No vector index {} in table {}", index_name, tab->cf_name()));
                     }
                     builder.without_index(index_name);
+                    // If this was the last vector index, and delta=full was set
+                    // for the vector index's benefit, downgrade back to keys.
+                    if (tab->indices().size() == 1) {
+                        downgrade_cdc_delta_after_vector_index_delete(builder);
+                    }
                 } else {
                     // Update operation not yet supported, as we don't yet
                     // have any updatable properties of vector indexes.
@@ -2086,7 +2188,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             std::vector<view_ptr> new_views;
             std::vector<std::string> dropped_views;
 
-            rjson::value* gsi_updates = rjson::find(request, "GlobalSecondaryIndexUpdates");
             if (gsi_updates) {
                 if (!gsi_updates->IsArray()) {
                     co_return api_error::validation("GlobalSecondaryIndexUpdates must be an array");

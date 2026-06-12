@@ -176,6 +176,35 @@ struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
 
 namespace alternator {
 
+// Returns true if the CDC log table that we found NOT belong to an active
+// or disabled Stream, but rather from an active vector index, which also
+// uses CDC. See comments inline for the logic used by this function.
+static bool cdc_is_not_stream(const schema& base) {
+    if (base.cdc_options().enabled() || base.cdc_options().enable_requested()) {
+        // Stream is enabled right right now, or being enabled right now, so
+        // this cdc log definitely belongs to a stream, so return false.
+        return false;
+    }
+    if (!base.indices().empty()) {
+        // After the previous if(), Stream is not enabled right now, and there
+        // is a vector index, so definitely the CDC log we're seeing is for
+        // the vector index, so return true: This CDC log is NOT the CDC log
+        // of a disabled stream, but rather in current use by an active vector
+        // index.
+        // This case can be thought of as a limitation: It means that although
+        // we generally can list (with ListStreams and DescribeTable) streams
+        // which have been disabled, if a stream was disabled on a table with
+        // a vector index, we will not expose it as a disabled stream that can
+        // still be read. Had we done that, it would have been confusing -
+        // this stream is not really disabled, it's still being updated for
+        // the vector index, and the user will see in it continuing updates.
+        return true;
+    }
+    // If we're still here, this is a real disabled stream, and should be
+    // visible to the user as a disabled stream. So return false.
+    return false;
+}
+
 future<alternator::executor::request_return_type> alternator::executor::list_streams(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.list_streams++;
 
@@ -246,10 +275,17 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
         // Use get_base_table instead of is_log_for_some_table because the
         // latter requires CDC to be enabled, but we want to list streams
         // that have been disabled but whose log table still exists (#7239).
-        if (cdc::get_base_table(db.real_database(), ks_name, cf_name)) {
+        auto bs = cdc::get_base_table(db.real_database(), ks_name, cf_name);
+        if (bs) {
+            // CDC may be enabled solely for a vector index, which is not a
+            // user-facing stream. Use cdc_is_not_stream() to detect this
+            // case (same check as in describe_stream).
+            if (cdc_is_not_stream(*bs)) {
+                continue;
+            }
             rjson::value new_entry = rjson::empty_object();
 
-            auto arn = stream_arn{ i->schema(), cdc::get_base_table(db.real_database(), *i->schema()) };
+            auto arn = stream_arn{ i->schema(), bs };
             rjson::add(new_entry, "StreamArn", arn);
             rjson::add(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::add(new_entry, "TableName", rjson::from_string(cdc::base_name(s->cf_name())));
@@ -841,9 +877,11 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     auto& opts = bs->cdc_options();
 
     auto status = "DISABLED";
-    bool stream_disabled = !opts.enabled();
+    // CDC may be enabled solely for a vector index, which is not a user-
+    // facing stream. Use cdc_is_not_stream() to detect this case.
+    bool stream_disabled = !opts.enabled() || cdc_is_not_stream(*bs);
 
-    if (opts.enabled()) {
+    if (!stream_disabled) {
         if (!_cdc_metadata.streams_available()) {
             status = "ENABLING";
         } else {
@@ -1555,6 +1593,12 @@ bool executor::add_stream_options(const rjson::value& stream_specification, sche
 }
 
 void executor::supplement_table_stream_info(rjson::value& descr, const schema& schema, const service::storage_proxy& sp) {
+    // CDC might be enabled despite Streams not being enabled - it's also
+    // possible that a vector index enabled CDC. Use cdc_is_not_stream() to
+    // detect that case and skip reporting a user-facing stream.
+    if (cdc_is_not_stream(schema)) {
+        return;
+    }
     auto& opts = schema.cdc_options();
     // Report stream info when:
     //   1. Log table exists (covers both enabled and disabled-but-readable).
@@ -1568,12 +1612,13 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
         rjson::add(descr, "LatestStreamArn", arn);
         rjson::add(descr, "LatestStreamLabel", rjson::from_string(stream_label(*log_schema)));
 
-        auto stream_desc = rjson::empty_object();
-        rjson::add(stream_desc, "StreamEnabled", opts.enabled());
-
-        stream_view_type mode = cdc_options_to_stream_view_type(opts);
-        rjson::add(stream_desc, "StreamViewType", mode);
-        rjson::add(descr, "StreamSpecification", std::move(stream_desc));
+        if (opts.enabled()) {
+            auto stream_desc = rjson::empty_object();
+            rjson::add(stream_desc, "StreamEnabled", true);
+            stream_view_type mode = cdc_options_to_stream_view_type(opts);
+            rjson::add(stream_desc, "StreamViewType", mode);
+            rjson::add(descr, "StreamSpecification", std::move(stream_desc));
+        }
     } else if (opts.enable_requested()) {
         // DynamoDB returns StreamEnabled=true in StreamSpecification even when
         // the stream status is ENABLING (not yet fully active). We mirror this

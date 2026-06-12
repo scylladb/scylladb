@@ -2335,6 +2335,27 @@ def test_streams_disabled_stream(dynamodb, dynamodbstreams):
                 assert not 'NextShardIterator' in response
         assert nrecords == 1
 
+# Verify that streams of different StreamViewType can be disabled and still
+# be described reporting the expected type (rather than forgetting what was
+# its type).
+@pytest.mark.parametrize('stream_type', ['KEYS_ONLY', 'NEW_IMAGE', 'OLD_IMAGE', 'NEW_AND_OLD_IMAGES'])
+def test_streams_disabled_view_type(dynamodb, dynamodbstreams, stream_type):
+    with create_table_ss(dynamodb, dynamodbstreams, stream_type) as (table, arn):
+        disable_stream(dynamodbstreams, table)
+        # ListStreams should still list the disabled stream's ARN
+        arns = [s['StreamArn'] for s in dynamodbstreams.list_streams(TableName=table.name)['Streams']]
+        assert arn in arns
+        # DescribeStream should report DISABLED status and preserve the StreamViewType
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
+        assert desc['StreamStatus'] == 'DISABLED'
+        assert desc['StreamViewType'] == stream_type
+        # DescribeTable doesn't list a StreamSpecification when the stream is
+        # disabled:
+        table_desc = table.meta.client.describe_table(TableName=table.name)['Table']
+        assert 'StreamSpecification' not in table_desc
+        # But it does still report the correct LatestStreamArn
+        assert table_desc['LatestStreamArn'] == arn
+
 # When streams are enabled for a table, we get a unique ARN which should be
 # unique but not change unless streams are eventually disabled for this table.
 # If this ARN changes unexpectedly, it can confuse existing readers who are
