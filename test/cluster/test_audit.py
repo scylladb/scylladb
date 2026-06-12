@@ -1482,6 +1482,10 @@ class CQLAuditTester(AuditTester):
         with self.assert_exactly_n_audit_entries_were_added(session, 1):
             conn.execute(stmt)
 
+        # Disable tablet balancing before sampling so the chosen tablet can't
+        # be migrated out from under the CL=THREE insert below (SCYLLADB-2527).
+        await self.manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
         audit_partition_servers, insert_server, server_to_stop, query_to_fail, query_fail_count = await self._test_insert_failure_doesnt_report_success_assign_nodes(session=session)
 
         # TODO: remove the loop when scylladb#24473 is fixed
@@ -1491,6 +1495,7 @@ class CQLAuditTester(AuditTester):
                 await self.manager.get_host_id(srv.server_id)
 
         if len(audit_partition_servers) != 3 or server_to_stop is None or insert_server is None:
+            logger.warning("test_insert_failure: no disjoint data/audit replica set found; skipping")
             skip_env("Failed to assign nodes for insert failure test")
 
         for srv in audit_partition_servers:
