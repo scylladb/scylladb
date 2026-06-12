@@ -69,6 +69,7 @@ public:
         uint64_t get_shard_iterator = 0;
         uint64_t export_table_to_point_in_time = 0;
         uint64_t describe_export = 0;
+        uint64_t list_exports = 0;
         uint64_t get_records = 0;
 
 

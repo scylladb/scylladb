@@ -7,15 +7,17 @@
  */
 
 // This file implements the Alternator export operations:
-// ExportTableToPointInTime and DescribeExport.
+// ExportTableToPointInTime, DescribeExport, and ListExports.
 
 #include "alternator/executor.hh"
 
+#include <algorithm>
 #include <chrono>
 #include <fmt/format.h>
 #include <limits>
 #include <optional>
 #include <seastar/core/coroutine.hh>
+#include <vector>
 
 #include "db/system_keyspace.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -175,6 +177,30 @@ static future<std::optional<query::result_set_row>> read_client_token(service::s
     co_return co_await read_system_table_row(proxy, client_state, std::move(permit), db::system_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS, client_token);
 }
 
+static future<std::vector<query::result_set_row>> read_export_summaries(service::storage_proxy& proxy, service::client_state& client_state, service_permit permit,
+        std::optional<std::string_view> table_arn) {
+    auto schema = proxy.data_dictionary().find_table(db::system_keyspace::NAME, db::system_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORT_SUMMARIES).schema();
+    dht::partition_range_vector partition_ranges;
+    if (table_arn) {
+        auto pk = partition_key::from_exploded(*schema, {decompose_text(*table_arn)});
+        partition_ranges.emplace_back(dht::partition_range(dht::decorate_key(*schema, pk)));
+    } else {
+        partition_ranges.emplace_back(dht::partition_range::make_open_ended_both_sides());
+    }
+    auto partition_slice = schema->full_slice();
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice,
+            proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()));
+    auto qr = co_await proxy.query(schema, std::move(command), std::move(partition_ranges), db::consistency_level::LOCAL_QUORUM,
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state));
+    auto rs = query::result_set::from_raw_result(schema, partition_slice, *qr.query_result);
+    std::vector<query::result_set_row> rows;
+    rows.reserve(rs.rows().size());
+    for (const auto& row : rs.rows()) {
+        rows.push_back(row.copy());
+    }
+    co_return rows;
+}
+
 static int64_t timestamp_seconds(const query::result_set_row& row, const sstring& column_name) {
     auto value = row.get<db_clock::time_point>(column_name);
     if (!value) {
@@ -209,6 +235,14 @@ static void add_row_timestamp(rjson::value& export_desc, const query::result_set
     if (seconds != 0) {
         rjson::add(export_desc, response_name, rjson::value(seconds));
     }
+}
+
+static rjson::value make_export_summary(std::string_view export_arn, const query::result_set_row& row) {
+    rjson::value summary = rjson::empty_object();
+    rjson::add(summary, "ExportArn", rjson::from_string(export_arn));
+    rjson::add(summary, "ExportStatus", rjson::from_string(row.get<sstring>("export_status").value_or("IN_PROGRESS")));
+    rjson::add(summary, "ExportType", rjson::from_string(row.get<sstring>("export_type").value_or("FULL_EXPORT")));
+    return summary;
 }
 
 static bool request_json_equal(const rjson::value& lhs, const rjson::value& rhs) {
@@ -538,6 +572,95 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
     } catch (const api_error& e) {
         co_return e;
     }
+    co_return rjson::print(std::move(response));
+}
+
+future<executor::request_return_type> executor::list_exports(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.list_exports++;
+
+    static constexpr int default_max_results = 25;
+    static constexpr int min_max_results = 1;
+    static constexpr int max_max_results = 25;
+
+    int max_results = default_max_results;
+    const rjson::value* max_results_v = rjson::find(request, "MaxResults");
+    if (max_results_v) {
+        if (!max_results_v->IsInt()) {
+            co_return api_error::validation("MaxResults must be an integer");
+        }
+        max_results = max_results_v->GetInt();
+        if (max_results < min_max_results || max_results > max_max_results) {
+            co_return api_error::validation("MaxResults must be greater than 0 and no greater than 25");
+        }
+    }
+
+    std::string_view table_arn;
+    const rjson::value* table_arn_v = rjson::find(request, "TableArn");
+    if (table_arn_v) {
+        if (!table_arn_v->IsString()) {
+            co_return api_error::validation("tableArn parameter: failed to parse - must be a string");
+        }
+        table_arn = rjson::to_string_view(*table_arn_v);
+        if (table_arn.empty() || table_arn.size() > 1024) {
+            co_return api_error::validation("tableArn parameter: failed to parse - must be between 1 and 1024 characters");
+        }
+        try {
+            (void)parse_arn(table_arn, "TableArn", "table", "");
+        } catch (const api_error& e) {
+            co_return api_error::validation(e._msg);
+        } catch (const std::exception& e) {
+            co_return api_error::validation(fmt::format("TableArn: Invalid table ARN `{}` - {}", table_arn, e.what()));
+        }
+    }
+
+    std::string_view next_token;
+    const rjson::value* next_token_v = rjson::find(request, "NextToken");
+    if (next_token_v) {
+        if (!next_token_v->IsString()) {
+            co_return api_error::validation("NextToken must be a string");
+        }
+        next_token = rjson::to_string_view(*next_token_v);
+    }
+
+    maybe_audit(audit_info, audit::statement_category::QUERY, "", "", "ListExports", request);
+
+    auto rows = co_await read_export_summaries(_proxy, client_state, std::move(permit), table_arn.empty() ? std::nullopt : std::optional<std::string_view>(table_arn));
+    std::vector<std::pair<sstring, query::result_set_row>> summaries;
+    summaries.reserve(rows.size());
+    for (auto& row : rows) {
+        auto export_arn = row.get<sstring>("export_arn");
+        if (export_arn) {
+            summaries.emplace_back(std::move(*export_arn), std::move(row));
+        }
+    }
+    std::ranges::sort(summaries, [] (const auto& lhs, const auto& rhs) {
+        return lhs.first > rhs.first;
+    });
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportSummaries", rjson::empty_array());
+    auto& export_summaries = response["ExportSummaries"];
+
+    int emitted = 0;
+    bool has_more = false;
+    std::optional<sstring> last_export_arn;
+    for (const auto& [export_arn, row] : summaries) {
+        if (!next_token.empty() && export_arn >= next_token) {
+            continue;
+        }
+        if (emitted == max_results) {
+            has_more = true;
+            break;
+        }
+        rjson::push_back(export_summaries, make_export_summary(export_arn, row));
+        last_export_arn = export_arn;
+        ++emitted;
+    }
+
+    if (has_more && last_export_arn) {
+        rjson::add(response, "NextToken", rjson::from_string(*last_export_arn));
+    }
+
     co_return rjson::print(std::move(response));
 }
 

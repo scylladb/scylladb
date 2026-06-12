@@ -64,6 +64,7 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             OPERATION(describe_time_to_live, "DescribeTimeToLive")
             OPERATION(get_item, "GetItem")
             OPERATION(list_backups, "ListBackups")
+            OPERATION(list_exports, "ListExports")
             OPERATION(list_global_tables, "ListGlobalTables")
             OPERATION(list_tables, "ListTables")
             OPERATION(list_tags_of_resource, "ListTagsOfResource")
