@@ -1571,7 +1571,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     }
     auto skip_metadata = options.skip_metadata();
 
-    if (init_trace) {
+    if (init_trace && trace_state) {
         tracing::set_page_size(trace_state, options.get_page_size());
         tracing::add_query(trace_state, query.assume_value());
         tracing::set_common_query_parameters(trace_state, options.get_consistency(),
@@ -1669,7 +1669,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     }
     auto skip_metadata = options.skip_metadata();
 
-    if (init_trace) {
+    if (init_trace && trace_state) {
         tracing::set_page_size(trace_state, options.get_page_size());
         tracing::add_query(trace_state, prepared->statement->raw_cql_statement);
         tracing::add_prepared_statement(trace_state, prepared);
@@ -1692,7 +1692,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 
     options.prepare(prepared->bound_names);
 
-    if (init_trace) {
+    if (init_trace && trace_state) {
         tracing::add_prepared_query_options(trace_state, options);
     }
 
@@ -1730,7 +1730,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     modifications.reserve(n.assume_value());
     values.reserve(n.assume_value());
 
-    if (init_trace) {
+    if (init_trace && trace_state) {
         tracing::begin(trace_state, "Execute batch of CQL3 queries", client_state.get_client_address());
     }
 
@@ -1752,7 +1752,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             }
             stmt_ptr = qp.local().get_statement(query.assume_value(), client_state, dialect);
             ps = stmt_ptr->checked_weak_from_this();
-            if (init_trace) {
+            if (init_trace && trace_state) {
                 tracing::add_query(trace_state, query.assume_value());
             }
             break;
@@ -1776,7 +1776,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
                 // authorize a particular prepared statement only once
                 needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
             }
-            if (init_trace) {
+            if (init_trace && trace_state) {
                 tracing::add_query(trace_state, ps->statement->raw_cql_statement);
             }
             break;
@@ -1791,7 +1791,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             return make_exception_future<cql_server::process_fn_return_type>(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
         }
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
-        if (init_trace) {
+        if (init_trace && trace_state) {
             tracing::add_table_name(trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
             tracing::add_prepared_statement(trace_state, ps);
         }
@@ -1827,7 +1827,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
     }
 
-    if (init_trace) {
+    if (init_trace && trace_state) {
         tracing::add_prepared_query_options(trace_state, options);
         tracing::set_common_query_parameters(trace_state, options.get_consistency(),
             options.get_serial_consistency(), options.get_specific_options().timestamp);
