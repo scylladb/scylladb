@@ -1276,6 +1276,13 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
         s1_mark = await s1_log.mark()
 
         logger.info("Force compaction of split sstable containing expired tombstone")
+        # The forced compaction can empty the tablet (gc_grace_seconds=0 purges the
+        # co-located inserts and their tombstones) while the split is in flight. An empty
+        # tablet drives avg_tablet_size to 0, which would otherwise make the load balancer
+        # revoke the already split-ready split instead of finalizing it. Suppress that
+        # cancellation so the split finalizes.
+        await manager.api.enable_injection(servers[0].ip_addr, "skip_resize_cancellation", one_shot=False)
+
         await manager.api.stop_compaction(servers[0].ip_addr, "SPLIT")
         compaction_task = asyncio.create_task(manager.api.keyspace_compaction(servers[0].ip_addr, ks))
 
