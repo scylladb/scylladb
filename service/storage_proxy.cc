@@ -7009,6 +7009,8 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
                 // since the value we are writing is dummy we may use minimal consistency level for learn
                 handler->set_cl_for_learn(db::consistency_level::ANY);
             } else {
+                table.get_large_data_guardrail()->check_coordinator(
+                        *schema, mutation->partition(), mutation->key());
                 paxos::paxos_state::logger.debug("CAS[{}] precondition is met; proposing client-requested updates for {}",
                         handler->id(), ballot);
                 tracing::trace(handler->tr_state, "CAS precondition is met; proposing client-requested updates for {}", ballot);
