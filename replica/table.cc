@@ -3361,6 +3361,10 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     // after the table was started (tablet split, migration or merge) are not covered by
     // the registration done by table::set_compaction_strategy().
     register_backlog_tracker(t.get_compaction_strategy().make_backlog_tracker());
+
+    if (_t.uses_logstor()) {
+        get_logstor_compaction_manager().add(as_logstor_group());
+    }
 }
 
 compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
@@ -3406,15 +3410,16 @@ future<> compaction_group::stop(sstring reason) noexcept {
     for (auto view : all_views()) {
         co_await _t._compaction_manager.stop_ongoing_compactions(reason, view);
     }
-    if (_t.uses_logstor()) {
-        co_await get_logstor_compaction_manager().stop_ongoing_compactions(as_logstor_group());
-    }
     // compaction_manager::stop_ongoing_compactions swallows all encountered errors. So the closed_gate_fut
     // future will not get abandoned.
     co_await std::move(closed_gate_fut);
     auto flush_future = co_await seastar::coroutine::as_future(flush());
+    auto separator_flush_future = co_await coroutine::as_future(flush_separator());
 
-    co_await flush_separator();
+    if (_t.uses_logstor()) {
+        co_await get_logstor_compaction_manager().remove(as_logstor_group());
+    }
+
     co_await _flush_gate.close();
     co_await _sstable_add_gate.close();
     _compaction_disabler_for_views.clear();
@@ -3422,12 +3427,12 @@ future<> compaction_group::stop(sstring reason) noexcept {
     for (auto view : all_views()) {
         co_await _t._compaction_manager.remove(*view, reason);
     }
-    if (_t.uses_logstor()) {
-        co_await get_logstor_compaction_manager().remove(as_logstor_group());
-    }
 
     if (flush_future.failed()) {
         co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
+    }
+    if (separator_flush_future.failed()) {
+        co_await seastar::coroutine::return_exception_ptr(separator_flush_future.get_exception());
     }
 }
 
