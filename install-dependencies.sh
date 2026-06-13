@@ -387,7 +387,6 @@ fi
 
 if ! $FUTURE; then
     fedora_packages+=(
-        toxiproxy
         python3-pytest-sugar
     )
 fi
@@ -491,10 +490,8 @@ else
     echo "Minio server and client are up-to-date, skipping download"
 fi
 
-if $FUTURE ; then
-    toxyproxy_version="v2.12.0"
-    for bin in toxiproxy-cli toxiproxy-server; do
-        curl -fSL -o "/usr/local/bin/${bin}" "https://github.com/Shopify/toxiproxy/releases/download/${toxyproxy_version}/${bin}-linux-$(go_arch)"
-        chmod +x "/usr/local/bin/${bin}"
-    done
-fi
+toxyproxy_version="v2.12.0"
+for bin in toxiproxy-cli toxiproxy-server; do
+    curl -fSL -o "/usr/local/bin/${bin}" "https://github.com/Shopify/toxiproxy/releases/download/${toxyproxy_version}/${bin}-linux-$(go_arch)"
+    chmod +x "/usr/local/bin/${bin}"
+done
