@@ -524,6 +524,10 @@ public:
     separator_buffer allocate_separator_buffer() override;
     future<> flush_separator_buffer(separator_buffer buf, logstor_group&) override;
 
+    void add(logstor_group&) override;
+
+    void submit_all() override;
+
     void submit(logstor_group&) override;
     future<> stop_ongoing_compactions(logstor_group&) override;
     future<> remove(logstor_group&) override;
@@ -536,6 +540,8 @@ private:
     std::vector<log_segment_id> select_segments_for_compaction(const segment_descriptor_hist&);
     future<> do_compact(logstor_group&, abort_source&);
     future<> compact_segments(logstor_group&, std::vector<log_segment_id>);
+    group_compaction_state& get_group_state(logstor_group&);
+    group_compaction_state* find_group_state(logstor_group&) noexcept;
 
 };
 
@@ -700,7 +706,6 @@ class segment_manager_impl {
     std::vector<write_buffer> _separator_buffer_pool;
     std::vector<write_buffer*> _available_separator_buffers;
 
-    std::function<void()> _trigger_compaction_fn;
     std::function<void(segment_sequence)> _trigger_separator_flush_fn;
 
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
@@ -748,12 +753,6 @@ public:
     future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, std::function<void(const segment_header&)> on_header);
     future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&);
 
-    void trigger_compaction() {
-        if (_cfg.compaction_enabled && _trigger_compaction_fn) {
-            _trigger_compaction_fn();
-        }
-    }
-
     void trigger_separator_flush(segment_sequence seq) {
         if (_trigger_separator_flush_fn) {
             _trigger_separator_flush_fn(seq);
@@ -766,10 +765,6 @@ public:
 
     const compaction_manager& get_compaction_manager() const noexcept {
         return _compaction_mgr;
-    }
-
-    void set_trigger_compaction_hook(std::function<void()> fn) {
-        _trigger_compaction_fn = std::move(fn);
     }
 
     void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
@@ -916,6 +911,35 @@ float compaction_manager_impl::current_backlog() const noexcept {
     return logstor_compaction_controller::normalization_factor
             * float(soft_pressure_available_segments - available_segments)
             / std::max<size_t>(1, soft_pressure_available_segments);
+}
+
+compaction_manager_impl::group_compaction_state& compaction_manager_impl::get_group_state(logstor_group& cg) {
+    auto it = _groups.find(&cg);
+    if (it == _groups.end()) {
+        on_internal_error(logstor_logger, format("compaction_state for logstor group {} [{}] does not exist", cg.table_id(), fmt::ptr(&cg)));
+    }
+    return *it->second;
+}
+
+compaction_manager_impl::group_compaction_state* compaction_manager_impl::find_group_state(logstor_group& cg) noexcept {
+    auto it = _groups.find(&cg);
+    return it != _groups.end() ? it->second.get() : nullptr;
+}
+
+void compaction_manager_impl::add(logstor_group& cg) {
+    auto [it, inserted] = _groups.try_emplace(&cg, std::make_unique<group_compaction_state>());
+    if (!inserted) {
+        on_internal_error(logstor_logger, format("compaction_state for logstor group {} [{}] already exists", cg.table_id(), fmt::ptr(&cg)));
+    }
+}
+
+void compaction_manager_impl::submit_all() {
+    if (_async_gate.is_closed() || !_cfg.compaction_enabled) {
+        return;
+    }
+    for (const auto& [cg, _] : _groups) {
+        submit(*cg);
+    }
 }
 
 segment_manager_impl::segment_manager_impl(segment_manager_config config)
@@ -1265,7 +1289,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         }
 
         if (_free_segments.size() < _max_segments.configured * _cfg.trigger_compaction_threshold_percent / 100.0f) {
-            trigger_compaction();
+            _compaction_mgr.submit_all();
         }
 
         // reuse freed segments
@@ -1359,11 +1383,7 @@ void compaction_manager_impl::submit(logstor_group& cg) {
     if (_async_gate.is_closed() || !_cfg.compaction_enabled) {
         return;
     }
-    auto& state_ptr = _groups[&cg];
-    if (!state_ptr) {
-        state_ptr = std::make_unique<group_compaction_state>();
-    }
-    auto& state = *state_ptr;
+    auto& state = get_group_state(cg);
     if (state.running || state.compaction_disabled_counter > 0) {
         return;
     }
@@ -1379,26 +1399,21 @@ void compaction_manager_impl::submit(logstor_group& cg) {
 }
 
 future<> compaction_manager_impl::stop_ongoing_compactions(logstor_group& cg) {
-    auto it = _groups.find(&cg);
-    if (it == _groups.end()) {
+    auto* state = find_group_state(cg);
+    if (!state) {
         co_return;
     }
-    auto& state = *it->second;
-    state.as.request_abort();
-    co_await state.completion.get_future().handle_exception([] (std::exception_ptr) {});
+    state->as.request_abort();
+    co_await state->completion.get_future().handle_exception([] (std::exception_ptr) {});
 }
 
 future<> compaction_manager_impl::remove(logstor_group& cg) {
-    co_await stop_ongoing_compactions(cg);
+    auto disabler = co_await disable_compaction(cg);
     _groups.erase(&cg);
 }
 
 future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor_group& cg) {
-    auto& state_ptr = _groups[&cg];
-    if (!state_ptr) {
-        state_ptr = std::make_unique<group_compaction_state>();
-    }
-    auto& state = *state_ptr;
+    auto& state = get_group_state(cg);
 
     ++state.compaction_disabled_counter;
 
@@ -1414,11 +1429,7 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor
 }
 
 compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor_group& cg) {
-    auto& state_ptr = _groups[&cg];
-    if (!state_ptr) {
-        state_ptr = std::make_unique<group_compaction_state>();
-    }
-    auto& state = *state_ptr;
+    auto& state = get_group_state(cg);
 
     ++state.compaction_disabled_counter;
 
@@ -2127,10 +2138,6 @@ future<log_record> segment_manager::read(log_location location) {
 
 void segment_manager::free_record(log_location location) {
     _impl->free_record(location);
-}
-
-void segment_manager::set_trigger_compaction_hook(std::function<void()> fn) {
-    _impl->set_trigger_compaction_hook(std::move(fn));
 }
 
 void segment_manager::set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {

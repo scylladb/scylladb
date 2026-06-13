@@ -178,6 +178,11 @@ public:
         : _table_id(schema->id())
         , _index(std::move(schema))
         , _cm(cm) {
+        _cm.add(*this);
+    }
+
+    ~test_compaction_group_handle() override {
+        _cm.remove(*this).get();
     }
 
     ::table_id table_id() const noexcept override {
@@ -736,6 +741,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     auto stop_store = seastar::defer([&ls] { ls.stop().get(); });
 
     test_compaction_group_handle cg(schema, ls.get_compaction_manager());
+    auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(cg).get());
 
     auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
     auto pk1_v0 = make_kv_mutation(schema, "pk1", "v1", api::timestamp_type(2));
@@ -774,6 +780,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     BOOST_REQUIRE_EQUAL(old_snapshot.size(), 5u);
     const auto old_segment_ids = snapshot_segment_ids(old_snapshot);
 
+    setup_guard.reset();
     ls.get_compaction_manager().submit(cg);
     auto compaction_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
@@ -845,4 +852,79 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     // Overwritten records do not appear.
     BOOST_REQUIRE_EQUAL(record_counts.count(api::timestamp_type(1)), 0u); // pk0_v0 - stale
     BOOST_REQUIRE_EQUAL(record_counts.count(api::timestamp_type(2)), 0u); // pk1_v0 - stale
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] { ls.stop().get(); });
+
+    test_compaction_group_handle cg(schema, ls.get_compaction_manager());
+    auto compaction_guard = ls.get_compaction_manager().disable_compaction(cg).get();
+
+    auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
+    auto pk1_v0 = make_kv_mutation(schema, "pk1", "v1", api::timestamp_type(2));
+    auto pk2_v0 = make_kv_mutation(schema, "pk2", "v2", api::timestamp_type(3));
+    auto pk0_v1 = make_kv_mutation(schema, "pk0", "v0-new", api::timestamp_type(4));
+    auto pk1_v1 = make_kv_mutation(schema, "pk1", "v1-new", api::timestamp_type(5));
+
+    write_and_flush_segment(ls, cg, pk0_v0);
+    write_and_flush_segment(ls, cg, pk1_v0);
+    write_and_flush_segment(ls, cg, pk2_v0);
+    write_and_flush_segment(ls, cg, pk0_v1);
+    write_and_flush_segment(ls, cg, pk1_v1);
+
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 5u);
+
+    const auto pk0 = primary_index_key{pk0_v1.decorated_key()};
+    const auto pk1 = primary_index_key{pk1_v1.decorated_key()};
+    const auto pk2 = primary_index_key{pk2_v0.decorated_key()};
+
+    auto live_pk0_before = cg.logstor_index().get(pk0);
+    auto live_pk1_before = cg.logstor_index().get(pk1);
+    auto live_pk2_before = cg.logstor_index().get(pk2);
+
+    BOOST_REQUIRE(live_pk0_before);
+    BOOST_REQUIRE(live_pk1_before);
+    BOOST_REQUIRE(live_pk2_before);
+
+    auto snapshot_before = ls.get_segment_manager().make_snapshot(cg).get();
+    const auto segment_ids_before = snapshot_segment_ids(snapshot_before);
+
+    ls.get_compaction_manager().submit(cg);
+
+    auto snapshot_after = ls.get_segment_manager().make_snapshot(cg).get();
+    const auto segment_ids_after = snapshot_segment_ids(snapshot_after);
+
+    BOOST_REQUIRE_EQUAL(snapshot_after.size(), snapshot_before.size());
+    BOOST_REQUIRE(segment_ids_after == segment_ids_before);
+
+    auto live_pk0_after = cg.logstor_index().get(pk0);
+    auto live_pk1_after = cg.logstor_index().get(pk1);
+    auto live_pk2_after = cg.logstor_index().get(pk2);
+
+    BOOST_REQUIRE(live_pk0_after);
+    BOOST_REQUIRE(live_pk1_after);
+    BOOST_REQUIRE(live_pk2_after);
+
+    BOOST_REQUIRE(live_pk0_after->location == live_pk0_before->location);
+    BOOST_REQUIRE(live_pk1_after->location == live_pk1_before->location);
+    BOOST_REQUIRE(live_pk2_after->location == live_pk2_before->location);
+
+    auto actual_pk0 = ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get();
+    auto actual_pk1 = ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get();
+    auto actual_pk2 = ls.read(*schema, cg.logstor_index(), pk2.dk, schema->full_slice()).get();
+
+    BOOST_REQUIRE(actual_pk0);
+    BOOST_REQUIRE(actual_pk1);
+    BOOST_REQUIRE(actual_pk2);
+
+    assert_that(*actual_pk0).is_equal_to(pk0_v1);
+    assert_that(*actual_pk1).is_equal_to(pk1_v1);
+    assert_that(*actual_pk2).is_equal_to(pk2_v0);
 }
