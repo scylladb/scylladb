@@ -1229,7 +1229,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     }
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, schema->logstor_enabled() ? _logstor.get() : nullptr, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     if (is_new) {
@@ -1241,7 +1241,6 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         if (!_logstor) {
             throw std::runtime_error(fmt::format("The table {}.{} is using logstor storage but logstor is not initialized", schema->ks_name(), schema->cf_name()));
         }
-        cf->init_logstor(_logstor.get());
         dblog.info0("Table {}.{} is using logstor storage", schema->ks_name(), schema->cf_name());
     }
 

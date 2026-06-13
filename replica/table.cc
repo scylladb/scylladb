@@ -3344,7 +3344,7 @@ void storage_group::clear_logstor_segments() {
 }
 
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& compaction_manager,
-        sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
+        logstor::logstor* logstor, sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
         locator::effective_replication_map_ptr erm)
     : _schema(std::move(schema))
     , _config(std::move(config))
@@ -3356,6 +3356,8 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
                         )
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
+    , _logstor(logstor)
+    , _logstor_index(_schema->logstor_enabled() ? std::make_unique<logstor::primary_index>(_schema) : nullptr)
     , _sg_manager(make_storage_group_manager())
     , _sstables(make_compound_sstable_set())
     , _sstable_deletion_gate(format("[table {}.{}] sstable_deletion_gate", _schema->ks_name(), _schema->cf_name()))
@@ -3377,6 +3379,13 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _flush_timer([this]{ on_flush_timer(); })
     , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
 {
+    if (_schema->logstor_enabled()) {
+        SCYLLA_ASSERT(_logstor);
+        if (cache_enabled()) {
+            _logstor_index->set_cache_tracker(&_logstor->get_cache_tracker());
+        }
+    }
+
     if (!_config.enable_disk_writes) {
         tlogger.warn("Writes disabled, column family no durable.");
     }
@@ -4864,15 +4873,6 @@ void table::mark_ready_for_writes(db::commitlog* cl) {
         _commitlog = cl;
     }
     _readonly = false;
-}
-
-void table::init_logstor(logstor::logstor* ls) {
-    _logstor = ls;
-    _logstor_index = std::make_unique<logstor::primary_index>(_schema);
-
-    if (cache_enabled()) {
-        _logstor_index->set_cache_tracker(&ls->get_cache_tracker());
-    }
 }
 
 size_t table::get_logstor_memory_usage() const {
