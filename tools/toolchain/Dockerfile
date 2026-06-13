@@ -1,4 +1,4 @@
-FROM registry.fedoraproject.org/fedora:43
+FROM registry.fedoraproject.org/fedora:44
 
 ARG CLANG_BUILD="SKIP"
 ARG CLANG_ARCHIVES
