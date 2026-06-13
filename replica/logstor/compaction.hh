@@ -258,10 +258,13 @@ public:
 
     virtual future<> flush_separator_buffer(separator_buffer, logstor_group&) = 0;
 
+    virtual void add(logstor_group&) = 0;
+    virtual future<> remove(logstor_group&) = 0;
+
+    virtual void submit_all() = 0;
     virtual void submit(logstor_group&) = 0;
 
     virtual future<> stop_ongoing_compactions(logstor_group&) = 0;
-    virtual future<> remove(logstor_group&) = 0;
 
     virtual future<compaction_reenabler> disable_compaction(logstor_group&) = 0;
     virtual compaction_reenabler disable_compaction_no_wait(logstor_group&) = 0;
