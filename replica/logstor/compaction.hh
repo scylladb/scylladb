@@ -327,6 +327,10 @@ public:
 
     virtual future<> flush_separator_buffer(separator_buffer, logstor_group&) = 0;
 
+    virtual void add(logstor_group&) = 0;
+
+    virtual void submit_all() = 0;
+
     virtual void submit(logstor_group&) = 0;
 
     virtual future<> stop_ongoing_compactions(logstor_group&) = 0;

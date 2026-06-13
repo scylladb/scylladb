@@ -319,10 +319,6 @@ future<> logstor::flush_to_separator() {
     co_await _segment_manager.await_pending_writes();
 }
 
-void logstor::set_trigger_compaction_hook(std::function<void()> fn) {
-    _segment_manager.set_trigger_compaction_hook(std::move(fn));
-}
-
 void logstor::set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
     _segment_manager.set_trigger_separator_flush_hook(std::move(fn));
 }

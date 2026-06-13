@@ -3197,6 +3197,9 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _repair_sstable_classifier(std::move(repair_classifier))
     , _logstor_state(t.schema()->logstor_enabled() ? std::make_unique<compaction_group_logstor_state>(*this) : nullptr)
 {
+    if (_logstor_state) {
+        get_logstor_compaction_manager().add(as_logstor_group());
+    }
 }
 
 compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
@@ -3225,12 +3228,14 @@ future<> compaction_group::stop(sstring reason) noexcept {
     if (_async_gate.is_closed()) {
         co_return;
     }
+    std::optional<logstor::compaction_reenabler> logstor_compaction_disabler;
   // FIXME: indentation
   for (auto view : all_views()) {
     co_await _t._compaction_manager.stop_ongoing_compactions(reason, view);
   }
     if (_t.uses_logstor()) {
         co_await get_logstor_compaction_manager().stop_ongoing_compactions(as_logstor_group());
+        logstor_compaction_disabler = co_await get_logstor_compaction_manager().disable_compaction(as_logstor_group());
     }
     co_await _async_gate.close();
     auto flush_future = co_await seastar::coroutine::as_future(flush());
@@ -3240,6 +3245,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
     co_await _sstable_add_gate.close();
   // FIXME: indentation
   _compaction_disabler_for_views.clear();
+    logstor_compaction_disabler.reset();
   co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
   for (auto view : all_views()) {
     co_await _t._compaction_manager.remove(*view, reason);

@@ -971,10 +971,6 @@ database::init_logstor() {
     };
     _logstor = std::make_unique<logstor::logstor>(std::move(cfg), _row_cache_tracker);
 
-    _logstor->set_trigger_compaction_hook([this] {
-        trigger_logstor_compaction(false);
-    });
-
     _logstor->set_trigger_separator_flush_hook([this] (logstor::segment_sequence seq_num) {
         (void)flush_logstor_separator(seq_num);
     });
