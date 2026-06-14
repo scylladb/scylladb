@@ -151,6 +151,7 @@ public:
     gms::feature workload_prioritization { *this, "WORKLOAD_PRIORITIZATION"sv };
     gms::feature colocated_tablets { *this, "COLOCATED_TABLETS"sv };
     gms::feature cdc_with_tablets { *this, "CDC_WITH_TABLETS"sv };
+    gms::feature cdc_block_tablet_merges_for_alternator_streams { *this, "CDC_BLOCK_TABLET_MERGES_FOR_ALTERNATOR_STREAMS"sv };
     gms::feature counters_with_tablets { *this, "COUNTERS_WITH_TABLETS"sv };
     gms::feature file_stream { *this, "FILE_STREAM"sv };
     gms::feature compression_dicts { *this, "COMPRESSION_DICTS"sv };

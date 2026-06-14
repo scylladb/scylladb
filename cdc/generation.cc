@@ -32,6 +32,7 @@
 #include "cdc/cdc_options.hh"
 #include "cdc/generation_service.hh"
 #include "cdc/log.hh"
+#include "gms/feature_service.hh"
 #include "service/migration_listener.hh"
 
 extern logging::logger cdc_log;
@@ -782,8 +783,9 @@ future<> generation_service::garbage_collect_cdc_streams(utils::chunked_vector<c
 
 future<utils::chunked_vector<canonical_mutation>> generation_service::maybe_finalize_pending_stream_enables(const locator::token_metadata& tm, api::timestamp_type ts) {
     utils::chunked_vector<canonical_mutation> muts;
+    const bool tablet_merge_block_feature = _db.features().cdc_block_tablet_merges_for_alternator_streams;
 
-    if (utils::get_local_injector().enter("delay_cdc_stream_finalization")) {
+    if (tablet_merge_block_feature && utils::get_local_injector().enter("delay_cdc_stream_finalization")) {
         co_return std::move(muts);
     }
 
@@ -796,6 +798,12 @@ future<utils::chunked_vector<canonical_mutation>> generation_service::maybe_fina
         // Only tablet tables can have enable_requested set
         if (!tm.tablets().has_tablet_map(id)) {
             co_return;
+        }
+
+        if (!tablet_merge_block_feature) {
+            on_internal_error(cdc_log, format(
+                    "Table {}.{} has pending Alternator Streams enablement before feature CDC_BLOCK_TABLET_MERGES_FOR_ALTERNATOR_STREAMS is cluster-enabled",
+                    s->ks_name(), s->cf_name()));
         }
 
         auto& tmap = tm.tablets().get_tablet_map(id);

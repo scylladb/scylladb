@@ -485,15 +485,24 @@ std::map<sstring, sstring> cdc::options::to_map() const {
         return {};
     }
 
-    return {
+    std::map<sstring, sstring> ret = {
         { "enabled", enabled() ? "true" : "false" },
         { "preimage", fmt::format("{}", _preimage) },
         { "postimage", _postimage ? "true" : "false" },
         { "delta", fmt::format("{}", _delta_mode) },
         { "ttl", std::to_string(_ttl) },
-        { "enable_requested", enable_requested() ? "true" : "false" },
-        { "tablet_merge_blocked", _tablet_merge_blocked ? "true" : "false" },
     };
+    // enable_requested and tablet_merge_blocked are set to true only by feature-gated code.
+    // This feature is CDC_BLOCK_TABLET_MERGES_FOR_ALTERNATOR_STREAMS.
+    // Since absence decodes as false and older nodes throw on unknown CDC option names
+    // regardless of their values, we keep false values absent from the serialized map.
+    if (enable_requested()) {
+        ret.emplace("enable_requested", "true");
+    }
+    if (_tablet_merge_blocked) {
+        ret.emplace("tablet_merge_blocked", "true");
+    }
+    return ret;
 }
 
 sstring cdc::options::to_sstring() const {
