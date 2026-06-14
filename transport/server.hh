@@ -303,10 +303,10 @@ private:
 
     class connection : public generic_server::connection {
         cql_server& _server;
-        socket_address _server_addr;
         fragmented_temporary_buffer::reader _buffer_reader;
-        cql_protocol_version_type _version = 0;
         cql_compression _compression = cql_compression::none;
+        uint16_t _server_port = 0;
+        cql_protocol_version_type _version = 0;
         service::client_state _client_state;
         timer<lowres_clock> _shedding_timer;
         scheduling_group _current_scheduling_group;
