@@ -409,6 +409,7 @@ async def test_migration_rollback(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(reason="SCYLLADB-2207")
 async def test_migration_multinode(manager: ManagerClient):
     """Verify vnodes-to-tablets migration for a single table on a multi-node cluster with rolling restarts.
 
@@ -483,7 +484,8 @@ async def test_migration_multinode(manager: ManagerClient):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
         logger.info("Starting rolling restarts: mark each node for upgrade, restart it, verify reads/writes at CL=QUORUM from every node")
-        for restart_idx, s in enumerate(servers):
+        expected_keys = num_keys
+        for s in servers:
             logger.info(f"Marking node {s.server_id} for tablets migration")
             await manager.api.upgrade_node_to_tablets(s.ip_addr)
 
@@ -504,23 +506,35 @@ async def test_migration_multinode(manager: ManagerClient):
             await reconnect_driver(manager)
             cql, _ = await manager.get_ready_cql(servers)
 
+            # Check for SCYLLADB-2207: issue a full-table scan from each node
+            # while the cluster is in semi-migrated state.
+            range_scan_stmt = SimpleStatement(f"SELECT * FROM {ks}.test")
+            range_scan_stmt.consistency_level = ConsistencyLevel.QUORUM
+            for node in servers:
+                logger.info(f"Running full-table scan with node {node.server_id} as coordinator after restarting node {s.server_id}")
+                host_obj = cql.cluster.metadata.get_host(node.ip_addr)
+                rows = await cql.run_async(range_scan_stmt, host=host_obj)
+                assert len(rows) == expected_keys, \
+                    f"Full-table scan verification failed: node {node.server_id}, expected {expected_keys} rows, got {len(rows)}"
+
             # Run 10 read/write queries from each node at CL=QUORUM to verify
             # correctness. The cluster is in a semi-migrated state, so some
             # nodes use a tablet ERM and some nodes use a vnode ERM.
-            logger.info(f"Running read/write verification from all nodes after restarting node {s.server_id}")
             insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
             insert_stmt.consistency_level = ConsistencyLevel.QUORUM
             select_stmt = cql.prepare(f"SELECT c FROM {ks}.test WHERE pk = ?")
             select_stmt.consistency_level = ConsistencyLevel.QUORUM
             for node_idx, node in enumerate(servers):
+                logger.info(f"Running read/write verification with node {node.server_id} as coordinator after restarting node {s.server_id}")
                 host_obj = cql.cluster.metadata.get_host(node.ip_addr)
-                base_key = num_keys + restart_idx * num_nodes * 10 + node_idx * 10
+                base_key = expected_keys + node_idx * 10
                 for i in range(10):
                     key = base_key + i
                     await cql.run_async(insert_stmt, [key, key], host=host_obj)
                     rows = await cql.run_async(select_stmt, [key], host=host_obj)
                     assert len(rows) == 1 and rows[0].c == key, \
                         f"Read/write verification failed: node {node.server_id}, key {key}"
+            expected_keys += num_nodes * 10
 
         logger.info("Verifying migration status after rolling restarts")
         await verify_migration_status(manager, servers[0], ks,
@@ -548,8 +562,7 @@ async def test_migration_multinode(manager: ManagerClient):
                 f"Expected intended_storage_mode=None for node {row.host_id} after finalization, got '{row.intended_storage_mode}'"
 
         logger.info("Final data integrity check")
-        total_keys = num_keys + num_nodes * num_nodes * 10 # original keys + 10 keys per node inserted during rolling restarts
-        await verify_data_integrity(cql, ks, "test", total_keys)
+        await verify_data_integrity(cql, ks, "test", expected_keys)
 
 
 async def setup_single_node(manager: ManagerClient):
