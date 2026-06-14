@@ -409,7 +409,6 @@ async def test_migration_rollback(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="SCYLLADB-2207")
 async def test_migration_multinode(manager: ManagerClient):
     """Verify vnodes-to-tablets migration for a single table on a multi-node cluster with rolling restarts.
 
