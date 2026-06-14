@@ -3069,19 +3069,19 @@ component_type sstable::component_from_sstring(version_types v, const sstring &s
 
 future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw,
-        integrity_check integrity, integrity_error_handler error_handler) {
+        integrity_check integrity, integrity_error_handler error_handler, bool bypass_cache) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
-    return data_stream(pos, len, permit, std::move(trace_state), history, std::move(options), raw, integrity, std::move(error_handler));
+    return data_stream(pos, len, permit, std::move(trace_state), history, std::move(options), raw, integrity, std::move(error_handler), bypass_cache);
 }
 
 future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
         file_input_stream_options options,
         raw_stream raw, integrity_check integrity,
-        integrity_error_handler error_handler) {
+        integrity_error_handler error_handler, bool bypass_cache) {
 
     file f = make_tracked_file(_data_file, permit);
     if (trace_state) {
@@ -3102,7 +3102,7 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         // across both sequential scans and random-access point reads.
         auto [pcache, pcache_uuid] = _storage->data_page_cache_info(*this);
         std::optional<sstables::chunk_page_cache> chunk_cache;
-        if (pcache) {
+        if (pcache && !bypass_cache) {
             chunk_cache = sstables::chunk_page_cache{
                 .get = [pcache, pcache_uuid](uint64_t off) {
                     return pcache->get_page(pcache_uuid, static_cast<int64_t>(off));

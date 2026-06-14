@@ -801,6 +801,10 @@ public:
         return _out_of_range;
     }
 
+    bool bypass_cache() const {
+        return _slice.options.contains(query::partition_slice::option::bypass_cache);
+    }
+
     // See the RowConsumer concept
     void push_ready_fragments() {
         if (_ready) {

@@ -217,6 +217,10 @@ public:
 
     ~mp_row_consumer_m() {}
 
+    bool bypass_cache() const {
+        return _slice.options.contains(query::partition_slice::option::bypass_cache);
+    }
+
     // See the RowConsumer concept
     void push_ready_fragments() {
         if (auto rto = std::move(_stored_tombstone)) {
@@ -2106,6 +2110,7 @@ public:
 
     const reader_permit& permit() const { return _permit; }
     tracing::trace_state_ptr trace_state() { return {}; }
+    bool bypass_cache() const { return true; }
     uint64_t error_count() const { return _error_count; }
     position_in_partition_view current_position() const { return _current_pos; }
 
