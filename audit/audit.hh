@@ -23,6 +23,7 @@
 
 #include <memory>
 #include <optional>
+#include <set>
 
 namespace db {
 
@@ -56,6 +57,8 @@ namespace audit {
 
 extern logging::logger logger;
 
+using audit_table_set = std::set<std::pair<sstring, sstring>>;
+
 class audit_exception : public std::exception {
     sstring _what;
 public:
@@ -74,6 +77,7 @@ protected:
     sstring _table;
     sstring _query;
     bool _batch; // used only for unpacking batches in CQL, not relevant for Alternator
+    std::optional<audit_table_set> _alternator_batch_tables;
 public:
     audit_info(statement_category cat, sstring keyspace, sstring table, bool batch)
         : _category(cat)
@@ -96,6 +100,10 @@ public:
     const sstring& keyspace() const { return _keyspace; }
     const sstring& table() const { return _table; }
     const sstring& query() const { return _query; }
+    void set_alternator_batch_tables(audit_table_set tables) {
+        _alternator_batch_tables = std::move(tables);
+    }
+    const std::optional<audit_table_set>& alternator_batch_tables() const { return _alternator_batch_tables; }
     sstring category_string() const;
     statement_category category() const { return _category; }
     bool batch() const { return _batch; }
@@ -160,6 +168,7 @@ private:
 
     bool should_log_table(std::string_view keyspace, std::string_view name) const;
     bool rules_may_log(statement_category cat, std::string_view keyspace, std::string_view table) const;
+    audit_sink_set sinks_for_table(statement_category category, std::string_view keyspace, std::string_view table, std::string_view role) const;
     audit_sink_set sinks_for(const audit_info& audit_info, std::string_view role) const;
     audit_sink_set sinks_for_login(const sstring& username) const;
     future<> write_to_storage(audit_sink_set sinks,
@@ -174,6 +183,10 @@ private:
                                     socket_address node_ip,
                                     socket_address client_ip,
                                     bool error);
+    future<> log_with_sinks(audit_sink_set sinks, const audit_info& audit_info, socket_address node_ip, socket_address client_ip,
+            std::optional<db::consistency_level> cl, const sstring& username, bool error);
+    future<> log_alternator_batch(const audit_info& audit_info, std::string_view role, socket_address node_ip, socket_address client_ip,
+            std::optional<db::consistency_level> cl, const sstring& username, bool error);
     future<> rebuild_rules();
 public:
     static seastar::sharded<audit>& audit_instance() {

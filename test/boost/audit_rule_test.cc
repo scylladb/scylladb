@@ -47,6 +47,13 @@ bool role_matches(const sstring& pattern, const sstring& name) {
 
 } // anonymous namespace
 
+namespace audit {
+
+void add_alternator_batch_sink_tables(std::vector<std::pair<audit_sink, audit_table_set>>& sink_tables,
+        audit_sink sink, const std::pair<sstring, sstring>& table);
+
+}
+
 BOOST_AUTO_TEST_CASE(test_parse_audit_rules_json) {
     auto rules = audit::parse_audit_rules_from_json(R"([
         {"sinks":["table"],"categories":["DML","DDL"],"qualified_table_names":["ks.t1"],"roles":["admin"]},
@@ -263,7 +270,7 @@ BOOST_AUTO_TEST_CASE(test_rule_matching_and_sinks) {
     BOOST_CHECK(!audit::matches_rule(rule, audit::statement_category::DML, "ks", "t2", "admin_read"));
     BOOST_CHECK(!audit::matches_rule(rule, audit::statement_category::DML, "ks", "t1", "viewer"));
 
-    // DML with empty keyspace (alternator batch operations) bypasses table matching.
+    // DML with empty keyspace bypasses table matching.
     BOOST_CHECK(audit::matches_rule(rule, audit::statement_category::DML, "", "tbl1|tbl2", "admin_read"));
     BOOST_CHECK(!audit::matches_rule(rule, audit::statement_category::DML, "", "tbl1|tbl2", "viewer"));
 
@@ -308,7 +315,7 @@ SEASTAR_THREAD_TEST_CASE(test_preprocessed_rules_match_fast_and_slow_paths) {
     BOOST_CHECK(ddl_sinks.contains(audit::audit_sink::syslog));
     BOOST_CHECK(!ddl_sinks.contains(audit::audit_sink::table));
 
-    // DML with empty keyspace (alternator batch operations) bypasses table matching.
+    // DML with empty keyspace bypasses table matching.
     // Known role (fast path):
     BOOST_CHECK(rules.matching_sinks(audit::statement_category::DML, "", "tbl1|tbl2", "admin_read").contains(audit::audit_sink::table));
     BOOST_CHECK(!rules.matching_sinks(audit::statement_category::DML, "", "tbl1|tbl2", "viewer"));
@@ -353,4 +360,20 @@ SEASTAR_THREAD_TEST_CASE(test_preprocessed_empty_rules_skip_cache) {
     rules.refresh_rules({make_rule({"table"}, {"DML"}, {"ks.*"}, {"*"})}).get();
     BOOST_CHECK(rules.matching_sinks(audit::statement_category::DML, "ks", "t1", "alice"));
     BOOST_CHECK(rules.matching_sinks(audit::statement_category::DML, "ks", "t3", "charlie"));
+}
+
+BOOST_AUTO_TEST_CASE(test_alternator_batch_sink_tables_aggregate_per_sink) {
+    std::vector<std::pair<audit::audit_sink, audit::audit_table_set>> sink_tables;
+    audit::add_alternator_batch_sink_tables(sink_tables, audit::audit_sink::table, {"ks", "table_only"});
+    audit::add_alternator_batch_sink_tables(sink_tables, audit::audit_sink::table, {"ks", "both_sinks"});
+    audit::add_alternator_batch_sink_tables(sink_tables, audit::audit_sink::syslog, {"ks", "both_sinks"});
+
+    BOOST_REQUIRE_EQUAL(sink_tables.size(), 2u);
+    BOOST_CHECK(sink_tables[0].first == audit::audit_sink::table);
+    BOOST_CHECK_EQUAL(sink_tables[0].second.size(), 2u);
+    BOOST_CHECK(sink_tables[0].second.contains({"ks", "table_only"}));
+    BOOST_CHECK(sink_tables[0].second.contains({"ks", "both_sinks"}));
+    BOOST_CHECK(sink_tables[1].first == audit::audit_sink::syslog);
+    BOOST_CHECK_EQUAL(sink_tables[1].second.size(), 1u);
+    BOOST_CHECK(sink_tables[1].second.contains({"ks", "both_sinks"}));
 }

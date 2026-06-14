@@ -1959,9 +1959,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // from one of the operations will be returned.
     bool some_succeeded = false;
     std::exception_ptr eptr;
-    std::set<sstring> table_names; // for auditing
-    // FIXME: will_log() here doesn't pass keyspace/table, so keyspace-level audit
-    // filtering is bypassed — a batch spanning multiple tables is audited as a whole.
+    audit::audit_table_set audited_table_names;
+    bool only_audited_tables = true;
     bool should_audit = _audit.local_is_initialized() && _audit.local().will_log(audit::statement_category::QUERY);
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Responses", rjson::empty_object());
@@ -1972,7 +1971,11 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         const table_requests& rs = requests[i];
         std::string table = rs.schema->cf_name();
         if (should_audit) {
-            table_names.insert(table);
+            if (_audit.local().will_log(audit::statement_category::QUERY, rs.schema->ks_name(), table)) {
+                audited_table_names.emplace(rs.schema->ks_name(), table);
+            } else {
+                only_audited_tables = false;
+            }
         }
         for (const auto& [_, cks] : rs.requests) {
             auto& fut = *fut_it;
@@ -2030,8 +2033,15 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // but the audit entry records a single CL for the whole batch. We use ANY as a
     // placeholder to indicate "mixed / not applicable".
     // FIXME: Auditing is executed only for a complete success
-    maybe_audit(audit_info, audit::statement_category::QUERY, "",
-                print_names_for_audit(table_names), "BatchGetItem", request, db::consistency_level::ANY);
+    if (!audited_table_names.empty()) {
+        if (!only_audited_tables) {
+            // Filter out non-audited tables from the request body for privacy
+            filter_batch_request_items_by_tbl_name(request, audited_table_names);
+        }
+        auto audit_table_names = print_names_for_audit(audited_table_names);
+        maybe_audit(audit_info, audit::statement_category::QUERY, "",
+                    audit_table_names, "BatchGetItem", request, db::consistency_level::ANY, std::move(audited_table_names));
+    }
     if (!some_succeeded && eptr) {
         co_await coroutine::return_exception_ptr(std::move(eptr));
     }

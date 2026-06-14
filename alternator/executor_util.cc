@@ -556,4 +556,19 @@ body_writer make_streamed(rjson::value&& value) {
     };
 }
 
+void filter_batch_request_items_by_tbl_name(rjson::value& request, const audit::audit_table_set& tbl_name_filter) {
+    rjson::value& items = request["RequestItems"];
+    for (auto it = items.MemberBegin(); it != items.MemberEnd(); ) {
+        auto table_name = rjson::to_string_view(it->name);
+        auto found = std::ranges::any_of(tbl_name_filter, [table_name] (const auto& table) {
+            return table.second == table_name;
+        });
+        if (!found) {
+            it = items.EraseMember(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 } // namespace alternator

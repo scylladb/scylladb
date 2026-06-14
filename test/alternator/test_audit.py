@@ -162,6 +162,11 @@ def _assert_no_audit_entries_for(rows, ks_name=None, table_name=None, category=N
         f"category={category}, but found {len(matching)}: {_simplify_rows(matching)}")
 
 
+def _assert_audit_operation_excludes(row, excluded_fragments):
+    for fragment in excluded_fragments:
+        assert fragment not in row.operation, f"Unexpected substring '{fragment}' found in operation {row.operation}"
+
+
 # system.config stores values as JSON-encoded strings with surrounding quotes.
 # Strip them so that writing back via a parameterized UPDATE doesn't double-quote.
 def _strip_config_quotes(val):
@@ -196,7 +201,7 @@ def alternator_audit_enabled(cql):
         ("ADMIN,AUTH,QUERY,DML,DDL,DCL",),
     )
     yield
-    # Restore previous values of "audit_categories", "audit_keyspaces" in the system.config table and verify the restoration
+    # Restore previous values of audit config keys in the system.config table and verify the restoration
     for name in names:
         if name in original_config_vals:
             original_val = get_original_config_vals(name, "")
@@ -354,6 +359,120 @@ def test_audit_query_batch_operations(dynamodb, cql, alternator_audit_enabled):
         # Each individual Alternator call above must be audited.
         new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=len(expected))
         _assert_audit_entries(new_rows, expected, table_name=table.name)
+
+
+# Test that BatchWriteItem respects audit_tables filtering.
+# When audit_tables is set to a specific table, batch operations should only
+# log entries for that table. A batch touching only non-audited tables should
+# produce no audit entry at all. A batch touching both audited and non-audited
+# tables should only include the audited table in the log entry.
+def test_audit_batch_write_item_respects_table_filter(dynamodb, cql, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_a:
+        with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_b:
+            ks_a = f"alternator_{table_a.name}"
+            # Only audit table_a via audit_tables.
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_tables'",
+                        (f"alternator.{table_a.name}",))
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", ("",))
+            client = table_a.meta.client
+
+            # --- Batch 1: only table_a (audited) ---
+            before_rows = _get_audit_log_rows(cql)
+            client.batch_write_item(RequestItems={
+                table_a.name: [{"PutRequest": {"Item": {"p": "pk_a"}}}]
+            })
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+            _assert_audit_entries(new_rows, [
+                ("DML", "LOCAL_QUORUM", False, "", table_a.name,
+                 ["BatchWriteItem", "pk_a"]),
+            ], table_name=table_a.name)
+
+            # --- Batch 2: only table_b (not audited) ---
+            # Send a fence PutItem to table_a right after so we can wait for
+            # a known entry and then safely assume table_b produced nothing.
+            before_rows = _get_audit_log_rows(cql)
+            client.batch_write_item(RequestItems={
+                table_b.name: [{"PutRequest": {"Item": {"p": "pk_b"}}}]
+            })
+            table_a.put_item(Item={"p": "pk_fence"})
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+            _assert_audit_entries(new_rows, [
+                ("DML", "LOCAL_QUORUM", False, ks_a, table_a.name,
+                 ["PutItem", "pk_fence"]),
+            ], ks_name=ks_a, table_name=table_a.name)
+            _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="DML")
+
+            # --- Batch 3: both tables (only table_a should appear) ---
+            before_rows = _get_audit_log_rows(cql)
+            client.batch_write_item(RequestItems={
+                table_a.name: [{"PutRequest": {"Item": {"p": "pk_a"}}}],
+                table_b.name: [{"PutRequest": {"Item": {"p": "pk_b"}}}],
+            })
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+            _assert_audit_entries(new_rows, [
+                ("DML", "LOCAL_QUORUM", False, "", table_a.name,
+                 ["BatchWriteItem", "pk_a"]),
+            ], table_name=table_a.name)
+            _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="DML")
+            _assert_audit_operation_excludes(new_rows[0], [table_b.name, "pk_b"])
+
+
+# Test that BatchGetItem respects audit_tables filtering.
+# This mirrors test_audit_batch_write_item_respects_table_filter for QUERY
+# batches: only audited tables should appear in the audit row, and the JSON
+# request stored in the operation field should not contain non-audited tables.
+def test_audit_batch_get_item_respects_table_filter(dynamodb, cql, alternator_audit_enabled):
+    with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_a:
+        with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_b:
+            table_a.put_item(Item={"p": "pk_a"})
+            table_b.put_item(Item={"p": "pk_b"})
+
+            ks_a = f"alternator_{table_a.name}"
+            # Only audit table_a via audit_tables.
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_tables'",
+                        (f"alternator.{table_a.name}",))
+            cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", ("",))
+            client = table_a.meta.client
+
+            # --- Batch 1: only table_a (audited) ---
+            before_rows = _get_audit_log_rows(cql)
+            client.batch_get_item(RequestItems={
+                table_a.name: {"Keys": [{"p": "pk_a"}]}
+            })
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+            _assert_audit_entries(new_rows, [
+                ("QUERY", "ANY", False, "", table_a.name,
+                 ["BatchGetItem", "pk_a"]),
+            ], table_name=table_a.name)
+
+            # --- Batch 2: only table_b (not audited) ---
+            # Send a fence GetItem to table_a right after so we can wait for
+            # a known entry and then safely assume table_b produced nothing.
+            before_rows = _get_audit_log_rows(cql)
+            client.batch_get_item(RequestItems={
+                table_b.name: {"Keys": [{"p": "pk_b"}]}
+            })
+            table_a.get_item(Key={"p": "pk_a"})
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+            _assert_audit_entries(new_rows, [
+                ("QUERY", "LOCAL_ONE", False, ks_a, table_a.name,
+                 ["GetItem", "pk_a"]),
+            ], ks_name=ks_a, table_name=table_a.name)
+            _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="QUERY")
+
+            # --- Batch 3: both tables (only table_a should appear) ---
+            before_rows = _get_audit_log_rows(cql)
+            client.batch_get_item(RequestItems={
+                table_a.name: {"Keys": [{"p": "pk_a"}]},
+                table_b.name: {"Keys": [{"p": "pk_b"}]},
+            })
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+            _assert_audit_entries(new_rows, [
+                ("QUERY", "ANY", False, "", table_a.name,
+                 ["BatchGetItem", "pk_a"]),
+            ], table_name=table_a.name)
+            _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="QUERY")
+            _assert_audit_operation_excludes(new_rows[0], [table_b.name, "pk_b"])
 
 
 # Test auditing of DDL operations: CreateTable, UpdateTable (with GSI),
@@ -607,8 +726,8 @@ def test_audit_keyspace_filtering(dynamodb, cql, alternator_audit_enabled):
             table_b.put_item(Item={"p": "pk_b"})
             table_b.get_item(Key={"p": "pk_b"})
             # Positive: PutItem on table_a (correct keyspace) — should be logged.
-            table_a.put_item(Item={"p": "pk_a"})
-            expected = [("DML", "LOCAL_QUORUM", False, ks_a, table_a.name, ["PutItem", "pk_a"])]
+            table_a.put_item(Item={"p": "canary_a"})
+            expected = [("DML", "LOCAL_QUORUM", False, ks_a, table_a.name, ["PutItem", "canary_a"])]
             new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
             _assert_audit_entries(new_rows, expected, ks_a, table_a.name)
             _assert_no_audit_entries_for(new_rows, ks_name=ks_b)
@@ -624,8 +743,9 @@ def test_audit_keyspace_filtering(dynamodb, cql, alternator_audit_enabled):
 def test_audit_error_entry(dynamodb, cql, alternator_audit_enabled):
     with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
         ks_name = f"alternator_{table.name}"
-        # Insert data so the successful GetItem has something to return.
+        # Insert data so the GetItems have something to return.
         table.put_item(Item={"p": "pk_0"})
+        table.put_item(Item={"p": "canary_0"})
         cql.execute("UPDATE system.config SET value=%s WHERE name='audit_keyspaces'", (ks_name,))
         before_rows = _get_audit_log_rows(cql)
         # Negative operation: GetItem with an extra key attribute beyond the schema.
@@ -634,10 +754,10 @@ def test_audit_error_entry(dynamodb, cql, alternator_audit_enabled):
         with pytest.raises(ClientError, match='ValidationException'):
             table.get_item(Key={"p": "pk_0", "bogus": "junk"})
         # Positive operation: normal GetItem — should succeed and produce error=False entry.
-        table.get_item(Key={"p": "pk_0"})
+        table.get_item(Key={"p": "canary_0"})
         expected = [
             ("QUERY", "LOCAL_ONE", True, ks_name, table.name, ["GetItem", "pk_0", "bogus"]),
-            ("QUERY", "LOCAL_ONE", False, ks_name, table.name, ["GetItem", "pk_0"]),
+            ("QUERY", "LOCAL_ONE", False, ks_name, table.name, ["GetItem", "canary_0"]),
         ]
         new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=2)
         _assert_audit_entries(new_rows, expected, ks_name, table.name)
@@ -691,8 +811,8 @@ def test_audit_tables_filtering(dynamodb, cql, alternator_audit_enabled):
             # Negative: PutItem on table_b — should NOT be logged.
             table_b.put_item(Item={"p": "pk_b"})
             # Positive canary: PutItem on table_a — should be logged.
-            table_a.put_item(Item={"p": "pk_a"})
-            expected = [("DML", "LOCAL_QUORUM", False, ks_a, table_a.name, ["PutItem", "pk_a"])]
+            table_a.put_item(Item={"p": "canary_a"})
+            expected = [("DML", "LOCAL_QUORUM", False, ks_a, table_a.name, ["PutItem", "canary_a"])]
             new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
             _assert_audit_entries(new_rows, expected, ks_a, table_a.name)
             _assert_no_audit_entries_for(new_rows, ks_name=ks_b)
@@ -730,11 +850,10 @@ def test_audit_rules_basic_filtering(dynamodb, cql, alternator_audit_enabled):
             _assert_no_audit_entries_for(new_rows, ks_name=ks_b)
 
 
-# Cross-table batch operations pass empty keyspace to the audit path,
-# bypassing qualified_table_names filtering in audit_rules. Verify that a
-# BatchWriteItem is logged even when the rule only targets one of the
-# batch's tables.
-def test_audit_rules_batch_bypass(dynamodb, cql, alternator_audit_enabled):
+# Verify that Alternator's cross-table batch operations respect audit_rules filtering:
+# only matching tables are recorded, and non-matching table data is not
+# leaked into the audit operation text.
+def test_audit_rules_batch_filtering(dynamodb, cql, alternator_audit_enabled):
     with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_a:
         with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_b:
             ks_a = f"alternator_{table_a.name}"
@@ -746,17 +865,35 @@ def test_audit_rules_batch_bypass(dynamodb, cql, alternator_audit_enabled):
                                     "qualified_table_names": [f"{ks_a}.*"], "roles": ["*"]}])
             before_rows = _get_audit_log_rows(cql)
 
-            # Batch spanning two tables — logged regardless of qualified_table_names
-            # because the empty keyspace bypasses the table filter in the rule.
+            # Batch spanning two tables. The rule matches only table_a, so the
+            # audit row should include only table_a and its request body.
             client.batch_write_item(RequestItems={
                 table_a.name: [{"PutRequest": {"Item": {"p": "batch_a"}}}],
                 table_b.name: [{"PutRequest": {"Item": {"p": "batch_b"}}}],
             })
 
             expected = [
-                ("DML", "LOCAL_QUORUM", False, "", f"{table_a.name}|{table_b.name}", ["BatchWriteItem"]),
+                ("DML", "LOCAL_QUORUM", False, "", table_a.name, ["BatchWriteItem", "batch_a"]),
             ]
             new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=len(expected))
             _assert_audit_entries(new_rows, expected)
-            _assert_no_audit_entries_for(new_rows, ks_name=f"alternator_{table_a.name}")
-            _assert_no_audit_entries_for(new_rows, ks_name=f"alternator_{table_b.name}")
+            _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="DML")
+            _assert_audit_operation_excludes(new_rows[0], [table_b.name, "batch_b"])
+
+            # Batch touching only non-matching tables should not produce a batch
+            # audit entry. Use a matching PutItem canary so the test can wait for
+            # a known audit row before checking the negative case.
+            before_rows = _get_audit_log_rows(cql)
+            client.batch_write_item(RequestItems={
+                table_b.name: [{"PutRequest": {"Item": {"p": "batch_b_only"}}}],
+            })
+            table_a.put_item(Item={"p": "canary_a"})
+
+            expected = [
+                ("DML", "LOCAL_QUORUM", False, ks_a, table_a.name, ["PutItem", "canary_a"]),
+            ]
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=len(expected))
+            _assert_audit_entries(new_rows, expected, ks_name=ks_a, table_name=table_a.name)
+            _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="DML")
+            for row in new_rows:
+                _assert_audit_operation_excludes(row, [table_b.name, "batch_b_only"])

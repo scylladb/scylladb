@@ -10,6 +10,7 @@
 #include "audit/audit.hh"
 #include "audit/audit_rule.hh"
 #include "audit/preprocessed_audit_rules.hh"
+#include "utils/rjson.hh"
 #include "db/config.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/query_processor.hh"
@@ -335,15 +336,26 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
     if (!_preprocessed_rules.rules().empty() && client_state.user() && client_state.user()->name) {
         role = *client_state.user()->name;
     }
-    auto sinks = sinks_for(audit_info, role);
-    if (!sinks) {
-        return make_ready_future<>();
-    }
     thread_local static sstring no_username("undefined");
     static const sstring anonymous_username("anonymous");
     const sstring& username = client_state.user() ? client_state.user()->name.value_or(anonymous_username) : no_username;
     socket_address client_ip = client_state.get_client_address().addr();
     socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
+    if (audit_info.alternator_batch_tables()) {
+        return log_alternator_batch(audit_info, role, node_ip, client_ip, cl, username, error);
+    }
+    auto sinks = sinks_for(audit_info, role);
+    if (!sinks) {
+        return make_ready_future<>();
+    }
+    return log_with_sinks(sinks, audit_info, node_ip, client_ip, cl, username, error);
+}
+
+future<> audit::log_with_sinks(audit_sink_set sinks, const audit_info& audit_info, socket_address node_ip, socket_address client_ip,
+        std::optional<db::consistency_level> cl, const sstring& username, bool error) {
+    if (!sinks) {
+        return make_ready_future<>();
+    }
     if (!_storage_started) {
         on_internal_error_noexcept(logger, fmt::format("Audit log dropped (storage not ready): node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {}",
             node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
@@ -370,6 +382,82 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
                     node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
                     audit_info.query(), client_ip, audit_info.table(), username, ep);
             }
+    });
+}
+
+static sstring print_alternator_table_names(const audit_table_set& tables) {
+    sstring res;
+    for (const auto& [_, table] : tables) {
+        if (!res.empty()) {
+            res += "|";
+        }
+        res += table;
+    }
+    return res;
+}
+
+static sstring print_filtered_alternator_batch_query(const audit_info& audit_info, const audit_table_set& tables) {
+    // Alternator audit query strings are built by audit_info::set_query_string()
+    // as "<operation>|<serialized request JSON>".
+    auto sep = audit_info.query().find('|');
+    if (sep == sstring::npos) {
+        return audit_info.query();
+    }
+    auto operation = audit_info.query().substr(0, sep);
+    try {
+        auto request = rjson::parse(std::string_view(audit_info.query()).substr(sep + 1));
+        auto& request_items = request["RequestItems"];
+        for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ) {
+            std::string_view table_name = rjson::to_string_view(it->name);
+            auto found = std::ranges::any_of(tables, [table_name] (const auto& table) {
+                return table.second == table_name;
+            });
+            if (!found) {
+                it = request_items.EraseMember(it);
+            } else {
+                ++it;
+            }
+        }
+        return operation + "|" + rjson::print(request);
+    } catch (...) {
+        // Do not fall back to the unfiltered query: it may contain data for
+        // tables that do not match this audit sink.
+        return operation + "|<batch audit request omitted: unexpected audit query format>";
+    }
+}
+
+void add_alternator_batch_sink_tables(std::vector<std::pair<audit_sink, audit_table_set>>& sink_tables,
+        audit_sink sink, const std::pair<sstring, sstring>& table) {
+    auto it = std::ranges::find_if(sink_tables, [sink] (const auto& entry) {
+        return entry.first == sink;
+    });
+    if (it == sink_tables.end()) {
+        sink_tables.emplace_back(sink, audit_table_set{table});
+    } else {
+        it->second.insert(table);
+    }
+}
+
+future<> audit::log_alternator_batch(const audit_info& ai, std::string_view role, socket_address node_ip, socket_address client_ip,
+        std::optional<db::consistency_level> cl, const sstring& username, bool error) {
+    std::vector<std::pair<audit_sink, audit_table_set>> sink_tables;
+    for (const auto& table : *ai.alternator_batch_tables()) {
+        auto sinks = sinks_for_table(ai.category(), table.first, table.second, role);
+        for (auto sink : sinks) {
+            add_alternator_batch_sink_tables(sink_tables, sink, table);
+        }
+    }
+
+    return do_with(std::move(sink_tables), [this, &ai, node_ip, client_ip, cl, &username, error] (auto& sink_tables) {
+        return do_for_each(sink_tables, [this, &ai, node_ip, client_ip, cl, &username, error] (const auto& entry) {
+            return do_with(::audit::audit_info(ai.category(), sstring(ai.keyspace()), print_alternator_table_names(entry.second), false),
+                    [this, &ai, node_ip, client_ip, cl, &username, error, &entry] (::audit::audit_info& filtered_info) {
+                filtered_info.set_query_string(print_filtered_alternator_batch_query(ai, entry.second));
+                audit_sink_set sinks;
+                sinks.set(entry.first);
+                return log_with_sinks(sinks, filtered_info, node_ip, client_ip, cl, username, error);
+            });
+        });
     });
 }
 
@@ -469,6 +557,24 @@ audit_sink_set audit::sinks_for(const audit_info& audit_info, std::string_view r
     return result;
 }
 
+audit_sink_set audit::sinks_for_table(statement_category category, std::string_view keyspace, std::string_view table, std::string_view role) const {
+    audit_sink_set result;
+    if (_audited_categories.contains(category)
+            && (keyspace.empty()
+                || _audited_keyspaces.find(keyspace) != _audited_keyspaces.cend()
+                || should_log_table(keyspace, table)
+                || category == statement_category::AUTH
+                || category == statement_category::ADMIN
+                || category == statement_category::DCL)) {
+        result.add(_audit_sinks);
+    }
+
+    if (!_preprocessed_rules.rules().empty()) {
+        result.add(_preprocessed_rules.matching_sinks(category, keyspace, table, role));
+    }
+    return result;
+}
+
 audit_sink_set audit::sinks_for_login(const sstring& username) const {
     audit_sink_set result;
     if (_audited_categories.contains(statement_category::AUTH)) {
@@ -493,7 +599,8 @@ bool audit::rules_may_log(statement_category cat, std::string_view keyspace, std
         if (!matches_category(rule, cat)) {
             continue;
         }
-        // If keyspace is empty (e.g., alternator batch), skip table matching and assume the rule may log.
+        // If keyspace is empty (e.g., global operations with no table), skip
+        // table matching and assume the rule may log.
         if (!is_table_scoped_category(cat) || keyspace.empty() || matches_table(rule, keyspace, table)) {
             return true;
         }

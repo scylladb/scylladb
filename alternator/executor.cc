@@ -170,11 +170,15 @@ void executor::maybe_audit(
     std::string_view table_name,
     std::string_view operation_name,
     const rjson::value& request,
-    std::optional<db::consistency_level> cl)
+    std::optional<db::consistency_level> cl,
+    std::optional<audit::audit_table_set> alternator_batch_tables)
 {
-    if (_audit.local_is_initialized() && _audit.local().will_log(category, ks_name, table_name)) {
+    if (_audit.local_is_initialized() && (alternator_batch_tables || _audit.local().will_log(category, ks_name, table_name))) {
         audit_info = std::make_unique<audit::audit_info_alternator>(
             category, sstring(ks_name), sstring(table_name), cl);
+        if (alternator_batch_tables) {
+            audit_info->set_alternator_batch_tables(std::move(*alternator_batch_tables));
+        }
         // FIXME: rjson::print(request) serializes the entire JSON request body, which
         // can be up to 16 MB for BatchWriteItem.
         audit_info->set_query_string(sstring(rjson::print(request)), sstring(operation_name));
@@ -3441,10 +3445,10 @@ future<> executor::do_batch_write(
     }
 }
 
-sstring print_names_for_audit(const std::set<sstring>& names) {
+sstring print_names_for_audit(const audit::audit_table_set& names) {
     sstring res;
     // Might have been useful to loop twice, with the 1st loop learning the total size of the names for the res to then reserve()
-    for(const auto& name : names) {
+    for (const auto& [_, name] : names) {
         if (!res.empty()) {
             res += "|";
         }
@@ -3484,9 +3488,8 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // For each table, we need its stats and schema.
     std::vector<std::pair<lw_shared_ptr<stats>, schema_ptr>> per_table_wcu;
 
-    std::set<sstring> table_names; // for auditing
-    // FIXME: will_log() here doesn't pass keyspace/table, so keyspace-level audit
-    // filtering is bypassed — a batch spanning multiple tables is audited as a whole.
+    audit::audit_table_set audited_table_names;
+    bool only_audited_tables = true;
     bool should_audit = _audit.local_is_initialized() && _audit.local().will_log(audit::statement_category::DML);
     mutation_builders.reserve(request_items.MemberCount());
     per_table_wcu.reserve(request_items.MemberCount());
@@ -3498,7 +3501,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         per_table_stats->api_operations.batch_write_item_histogram.add(it->value.Size());
         tracing::add_alternator_table_name(trace_state, schema->cf_name());
         if (should_audit) {
-            table_names.insert(schema->cf_name());
+            if (_audit.local().will_log(audit::statement_category::DML, schema->ks_name(), schema->cf_name())) {
+                audited_table_names.emplace(schema->ks_name(), schema->cf_name());
+            } else {
+                only_audited_tables = false;
+            }
         }
 
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
@@ -3617,8 +3624,15 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     for (const auto& w : per_table_wcu) {
         w.first->api_operations.batch_write_item_latency.mark(duration);
     }
-    maybe_audit(audit_info, audit::statement_category::DML, "",
-                print_names_for_audit(table_names), "BatchWriteItem", request, db::consistency_level::LOCAL_QUORUM);
+    if (!audited_table_names.empty()) {
+        if (!only_audited_tables) {
+            // Filter out non-audited tables from the request body for privacy
+            filter_batch_request_items_by_tbl_name(request, audited_table_names);
+        }
+        auto audit_table_names = print_names_for_audit(audited_table_names);
+        maybe_audit(audit_info, audit::statement_category::DML, "",
+                    audit_table_names, "BatchWriteItem", request, db::consistency_level::LOCAL_QUORUM, std::move(audited_table_names));
+    }
     co_return rjson::print(std::move(ret));
 }
 
