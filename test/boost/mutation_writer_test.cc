@@ -181,6 +181,43 @@ namespace {
 using classify_by_var_t = std::variant<classify_by_timestamp, classify_by_token_group>;
 
 class test_bucket_writer {
+public:
+    class expected_exception : public std::exception {
+    public:
+        virtual const char* what() const noexcept override {
+            return "expected_exception";
+        }
+    };
+
+    class throw_point {
+        size_t _throw_after = std::numeric_limits<size_t>::max();
+        size_t _count = 0;
+        bool _hit = false;
+
+    public:
+        throw_point() = default; // no throw
+        explicit throw_point(size_t throw_after) : _throw_after(throw_after) { }
+
+        void check_throw(std::source_location sl = std::source_location::current()) {
+            if (++_count >= _throw_after) {
+                _hit = true;
+                testlog.debug("Throw point hit after {} from {} @ {}:{}", _throw_after, sl.function_name(), sl.file_name(), sl.line());
+                throw(expected_exception());
+            }
+        }
+
+        size_t throw_after() const {
+            return _throw_after;
+        }
+
+        bool check_hit_and_advance() {
+            ++_throw_after;
+            _count = 0;
+            return std::exchange(_hit, false);
+        }
+    };
+
+private:
     schema_ptr _schema;
     reader_permit _permit;
     classify_by_var_t _classify;
@@ -192,16 +229,7 @@ class test_bucket_writer {
 
     range_tombstone_change _current_rtc;
 
-    size_t _throw_after;
-    size_t _mutation_consumed = 0;
-
-public:
-    class expected_exception : public std::exception {
-    public:
-        virtual const char* what() const noexcept override {
-            return "expected_exception";
-        }
-    };
+    throw_point* _throw_point = nullptr;
 
 private:
     void check_bucket_id(int64_t bucket_id) {
@@ -266,21 +294,21 @@ private:
         }
     }
 
-    void maybe_throw() {
-        if (_mutation_consumed++ >= _throw_after) {
-            throw(expected_exception());
+    void maybe_throw(std::source_location sl = std::source_location::current()) {
+        if (_throw_point) {
+            _throw_point->check_throw(sl);
         }
     }
 
 public:
     test_bucket_writer(schema_ptr schema, reader_permit permit, classify_by_var_t classify, std::unordered_map<int64_t,
-            utils::chunked_vector<mutation>>& buckets, size_t throw_after = std::numeric_limits<size_t>::max())
+            utils::chunked_vector<mutation>>& buckets, throw_point* tp = nullptr)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _classify(std::move(classify))
         , _buckets(buckets)
         , _current_rtc(position_in_partition::before_all_clustered_rows(), tombstone())
-        , _throw_after(throw_after)
+        , _throw_point(tp)
     { }
     void consume_new_partition(const dht::decorated_key& dk) {
         maybe_throw();
@@ -336,6 +364,7 @@ public:
         return stop_iteration::no;
     }
     void consume_end_of_stream() {
+        maybe_throw();
         BOOST_REQUIRE(!_current_mutation);
     }
 };
@@ -452,11 +481,12 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
 
     std::unordered_map<int64_t, utils::chunked_vector<mutation>> buckets;
 
-    int throw_after = tests::random::get_int(muts.size() - 1);
+    const int throw_after = tests::random::get_int(muts.size() - 1);
+    test_bucket_writer::throw_point tp(throw_after);
     testlog.info("Will raise exception after {}/{} mutations", throw_after, muts.size());
     auto consumer = [&] (mutation_reader bucket_reader) {
         return with_closeable(std::move(bucket_reader), [&] (mutation_reader& rd) {
-            return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets, throw_after));
+            return rd.consume(test_bucket_writer(random_schema.schema(), rd.permit(), classify_fn, buckets, &tp));
         });
     };
 
@@ -591,6 +621,73 @@ SEASTAR_THREAD_TEST_CASE(test_token_group_based_splitting_mutation_writer) {
     testlog.info("Data split into {} buckets: {}", buckets.size(), buckets | std::views::keys | std::ranges::to<std::vector>());
 
     assert_that_segregator_produces_correct_data(buckets, muts, semaphore.make_permit(), random_schema);
+}
+
+// Reproducer for https://scylladb.atlassian.net/browse/SCYLLADB-2397
+// A split compaction interrupted due to abort was exiting with "Dangling queue_reader_handle"
+// instead of propagating the original abort exception cleanly.
+// This test injects an exception at every possible consume call site and verifies that only
+// the expected exception propagates out (never a dangling-handle error).
+SEASTAR_THREAD_TEST_CASE(test_token_group_based_splitting_mutation_writer_abort) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+
+    testlog.info("Random schema:\n{}", random_schema.cql());
+
+    auto muts = tests::generate_random_mutations(
+            random_schema,
+            tests::default_timestamp_generator(),
+            tests::no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(2, 3),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(1, 2)).get();
+
+    testlog.info("Generated {} mutations", muts.size());
+
+    auto classify_fn = [&] (dht::token t) -> mutation_writer::token_group_id {
+        if (muts[0].token() == t) {
+            return 0;
+        }
+        return 1;
+    };
+
+    // Mutations are split into two groups: left and right, see classify_fn above.
+    // Each has its own consumer (writer), which need their own throw point.
+    test_bucket_writer::throw_point tp_left(0);
+    test_bucket_writer::throw_point tp_right(0);
+    do {
+        std::unordered_map<int64_t, utils::chunked_vector<mutation>> buckets;
+
+        auto consumer = [&, i = 0] (mutation_reader reader) mutable {
+            // Mimick compaction use-case, which uses seastar thread for writers
+            return seastar::async([&, reader = std::move(reader)] () mutable {
+                auto close_reader = deferred_close(reader);
+
+                auto* tp = i == 0 ? &tp_left : &tp_right;
+                testlog.debug("Creating consumer for {} with throw-point after {}", i == 0 ? "left" : "right", tp->throw_after());
+                ++i;
+
+                reader.consume(test_bucket_writer(random_schema.schema(), reader.permit(), classify_fn, buckets, tp)).get();
+            });
+        };
+
+        try {
+            segregate_by_token_group(
+                make_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), muts),
+                classify_fn,
+                std::move(consumer)).get();
+        } catch (const test_bucket_writer::expected_exception&) {
+            BOOST_TEST_PASSPOINT();
+        } catch (...) {
+            BOOST_FAIL(fmt::format("Unexpected exception at throw_point_left={}, throw_point_right={}: {}", tp_left.throw_after(), tp_right.throw_after(), std::current_exception()));
+        }
+    } while (tp_left.check_hit_and_advance() || tp_right.check_hit_and_advance());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

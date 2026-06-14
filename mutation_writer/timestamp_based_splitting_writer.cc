@@ -151,10 +151,10 @@ public:
     future<> consume(range_tombstone_change&& rt);
     future<> consume(partition_end&& pe);
 
-    void consume_end_of_stream() {
-        for (auto& b : _buckets) {
-            b.second.consume_end_of_stream();
-        }
+    future<> consume_end_of_stream() {
+        return parallel_for_each(_buckets, [] (auto& b) {
+            return b.second.consume_end_of_stream();
+        });
     }
     void abort(std::exception_ptr ep) {
         for (auto&& b : _buckets) {

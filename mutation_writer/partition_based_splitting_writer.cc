@@ -116,8 +116,8 @@ public:
         return maybe_flush_memtable();
     }
 
-    void consume_end_of_stream() {
-        _bucket_writer.consume_end_of_stream();
+    future<> consume_end_of_stream() {
+        co_await _bucket_writer.consume_end_of_stream();
         if (!_memtable->empty()) {
             _background_memtable_flush = flush_memtable();
         }
