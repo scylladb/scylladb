@@ -2453,6 +2453,106 @@ void cluster_snapshot_operation(scylla_rest_client& client, const bpo::variables
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
 }
 
+using namespace std::string_view_literals;
+
+void cluster_backup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+
+    sstring kn_msg;
+
+    std::vector<sstring> kt_list;
+
+    if (!vm.contains("location")) {
+        throw std::invalid_argument("Missing required parameter \"location\"");
+    }
+
+    if (vm.contains("keyspaces")) {
+        kt_list = vm["keyspaces"].as<std::vector<sstring>>();
+    }
+
+    if (kt_list.size() != 1 && vm.contains("table")) {
+        throw std::invalid_argument("when specifying the table for the backup, you must specify one and only one keyspace");
+    }
+
+    if (kt_list.empty()) {
+        kn_msg = "all keyspaces";
+    } else {
+        params["keyspace"] = fmt::to_string(fmt::join(kt_list.begin(), kt_list.end(), ","));
+        if (vm.contains("table")) {
+            params["table"] = vm["table"].as<sstring>();
+        }
+    }
+
+    if (vm.contains("snapshot")) {
+        params["snapshot"] = vm["snapshot"].as<sstring>();
+    } else {
+        params["snapshot"] = fmt::to_string(db_clock::now().time_since_epoch().count());
+    }
+    params["move_files"] = vm.contains("move-files") ? "true" : "false";
+
+    auto sep = "";
+    std::ostringstream ss;
+    ss << "[";
+    for (auto& location : vm["location"].as<std::vector<sstring>>()) {
+        auto values = std::views::split(location, ","sv) | std::ranges::to<std::vector<sstring>>();
+        if (values.size() < 3) {
+            throw std::invalid_argument(fmt::format("Invalid 'locations' argument: {}", location));
+        }
+        ss << sep << "{\"datacenter\": \"" << values[0] 
+           << "\", \"endpoint\": \"" << values[1]
+           << "\", \"bucket\": \"" << values[2]
+           << "\", \"prefix\": \"" << (values.size() > 3 ? values[3] : "")
+           << "\"}"
+           ;
+        sep = ", ";
+    }
+    ss << "]";
+    auto body = ss.str();
+
+    const auto backup_res = client.post("/storage_service/tablets/backup", params, request_body{ "application/json", body });
+    const auto task_id = rjson::to_string_view(backup_res);
+
+    if (kn_msg.empty()) {
+        kn_msg = params["keyspace"];
+    }
+
+    fmt::print(std::cout, "Requested cluster backup(s) for [{}] with snapshot name [{}] and options {{move_files={}}}, locations={}\n",
+            kn_msg,
+            params["snapshot"],
+            params["move_files"],
+            body
+        );
+    fmt::print(std::cout, "Snapshot directory: {}\n", params["snapshot"]);
+
+    if (vm.contains("nowait")) {
+        fmt::print(R"(The task id of this operation is {}
+Please use the 'task' subcommands to manage the task.
+)",
+                   task_id);
+        return;
+    }
+
+    const auto url = seastar::format("/task_manager/wait_task/{}", task_id);
+    const auto wait_res = client.get(url);
+    const auto& status = wait_res.GetObject();
+    auto state = rjson::to_string_view(status["state"]);
+    fmt::print("{}", state);
+    int exit_code = EXIT_SUCCESS;
+    if (state != "done") {
+        exit_code = EXIT_FAILURE;
+        fmt::print(": {}", rjson::to_string_view(status["error"]));
+    }
+    fmt::print(R"(
+start: {}
+end: {}
+)",
+               rjson::to_string_view(status["start_time"]),
+               rjson::to_string_view(status["end_time"]));
+    if (exit_code != EXIT_SUCCESS) {
+        throw operation_failed_with_status{exit_code};
+    }
+}
+
 void migrate_to_tablets_start_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm["keyspace"].empty()) {
         throw std::invalid_argument("keyspace is required");
@@ -4069,6 +4169,23 @@ For more information, see: {}
                             typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to snapshot", -1),
                         },
                     },
+                    {
+                        "backup",
+                        "Backup a cluster-wide snapshot of specified keyspaces or specified table(s) to remote location",
+fmt::format(R"(
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/backup.html")),
+                        {
+                            typed_option<sstring>("table", "The table(s) to backup, multiple ones can be joined with ','"),
+                            typed_option<sstring>("snapshot,s", "The name of the snapshot to backup. It will be created if it does not exist"),
+                            typed_option<std::vector<sstring>>("location,l", "Tuples of <dc>,<endpoint>,<bucket>[,<prefix>] locations to write backup to. Repeat for each desired dc."),
+                            typed_option<>("nowait", "Don't wait on the backup process"),
+                            typed_option<>("move-files", "Move the SSTable files instead of copying them"),
+                        },
+                        {
+                            typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to backup"),
+                        },
+                    },
                 }
             },
             {
@@ -4081,7 +4198,10 @@ For more information, see: {}
                     },
                     {
                         "snapshot", { cluster_snapshot_operation }
-                    }
+                    },
+                    {
+                        "backup", { cluster_backup_operation }
+                    },
                 }
             }
         },
