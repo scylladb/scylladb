@@ -2425,7 +2425,7 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_internode_and_intra_merge_colocatio
     cfg.db_config->rf_rack_valid_keyspaces.set(true);
 
     do_with_cql_env_thread([] (auto& e) {
-        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::trace);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::trace);
         topology_builder topo(e);
 
         // RackA: NodeA (overloaded), NodeB (underloaded)
@@ -3619,7 +3619,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_colocated_tablets) {
     // load balancing is expected to move one pair of co-located tablets to the
     // other host while maintaining co-location of each pair.
 
-    logging::logger_registry().set_logger_level("load_balancer", logging::log_level::trace);
+    scoped_logger_level lb_log("load_balancer", seastar::log_level::trace);
 
     unsigned shard_count = 2;
 
@@ -4212,7 +4212,7 @@ SEASTAR_THREAD_TEST_CASE(test_drain_with_forced_capacity_based_balancing_with_in
     cfg.db_config->force_capacity_based_balancing.set(true);
 
     do_with_cql_env_thread([] (auto& e) {
-        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
         topology_builder topo(e);
 
         auto host1 = topo.add_node(node_state::removing, 8);
@@ -4826,7 +4826,7 @@ SEASTAR_THREAD_TEST_CASE(test_size_based_load_balancing_table_load) {
     //     1.2   |  10000 |          539
     auto cfg = tablet_cql_test_config();
     do_with_cql_env_thread([&] (auto& e) {
-        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
 
         topology_builder topo(e);
 
@@ -5022,7 +5022,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_ignores_hosts_with_incomplete_stats)
     // This checks that nodes with incomplete stats are not included in load balancing.
     do_with_cql_env_thread([] (auto& e) {
 
-        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
 
         topology_builder topo(e);
         auto host1 = topo.add_node(node_state::normal, 2);
@@ -5081,7 +5081,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_does_not_balance_with_missing_tablet
     // This checks that the balancer will not issue migrations with incomplete tablet sizes
     do_with_cql_env_thread([] (auto& e) {
 
-        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
 
         topology_builder topo(e);
         auto host1 = topo.add_node(node_state::normal, 2);
@@ -5117,7 +5117,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_does_not_balance_with_missing_tablet
 
 SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
     do_with_cql_env_thread([] (auto& e) {
-        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::trace);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::trace);
         topology_builder topo(e);
 
         unsigned shard_count = 2;
@@ -5953,7 +5953,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
 
 SEASTAR_THREAD_TEST_CASE(test_drain_node_without_capacity) {
     do_with_cql_env_thread([] (auto& e) {
-        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
 
         topology_builder topo(e);
 
@@ -5994,7 +5994,7 @@ SEASTAR_THREAD_TEST_CASE(test_intranode_balance_threshold) {
     // Set the balance threshold explicitly
     cfg.db_config->size_based_balance_threshold_percentage.set(1.0);
     do_with_cql_env_thread([] (auto& e) {
-        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
 
         topology_builder topo(e);
 
@@ -6404,7 +6404,7 @@ SEASTAR_THREAD_TEST_CASE(test_ensure_node_for_load_sketch) {
     // not have the larger node in its _nodes member hash map. This will cause an std::out_of_bounds
     // exception when load_sketch::pick() is called with the host_id of the larger node.
     do_with_cql_env_thread([] (auto& e) {
-        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
 
         topology_builder topo(e);
 
