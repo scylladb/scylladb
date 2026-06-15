@@ -17,6 +17,7 @@
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
+#include "db/large_data_handler.hh"
 #include "tracing/trace_state.hh"
 #include "utils/unique_view.hh"
 
@@ -294,7 +295,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
                                                                                                                                permit = query_state.get_permit()] (utils::chunked_vector<mutation> ms) mutable {
         return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit));
-    }).then([guardrail_state, cl] (coordinator_result<> res) {
+    }).then([guardrail_state, cl] (coordinator_result<db::large_data_violation_type> res) {
         if (!res) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
@@ -304,11 +305,14 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
             result->add_warning(format("Using write consistency level {} listed on the "
                                        "write_consistency_levels_warned is not recommended.", cl));
         }
+        if (auto warning = db::large_data_soft_violation_warning(res.value()); !warning.empty()) {
+            result->add_warning(std::move(warning));
+        }
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(result));
     });
 }
 
-future<coordinator_result<>> batch_statement::execute_without_conditions(
+future<coordinator_result<db::large_data_violation_type>> batch_statement::execute_without_conditions(
         query_processor& qp,
         utils::chunked_vector<mutation> mutations,
         db::consistency_level cl,
@@ -403,8 +407,14 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     auto* request_ptr = request.get();
     return qp.proxy().cas(schema, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([this, request = std::move(request)] (bool is_applied) {
-        return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([this, request = std::move(request)] (service::storage_proxy::cas_result cas_result) {
+        auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, cas_result.is_applied);
+        // Surface any coordinator-side large data guardrail soft limit violations
+        // detected during the LWT to the client as a CQL warning.
+        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) {
+            result->add_warning(std::move(warning));
+        }
+        return result;
     });
 }
 
