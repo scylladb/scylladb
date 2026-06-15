@@ -970,7 +970,7 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
         }
         writer.EndObject();
         writer.Key("chunk_len");
-        writer.Uint(compression.chunk_len);
+        writer.Uint(compression.uncompressed_chunk_length());
         writer.Key("data_len");
         writer.Uint64(compression.data_len);
         writer.Key("offsets");

@@ -280,7 +280,7 @@ compression::locate(uint64_t position, const compression::segmented_offsets::acc
 std::map<sstring, sstring> options_from_compression(const compression& c) {
     std::map<sstring, sstring> result;
     result.emplace(compression_parameters::SSTABLE_COMPRESSION, sstring(c.name.value.begin(), c.name.value.end()));
-    result.emplace(compression_parameters::CHUNK_LENGTH_KB, to_sstring(c.chunk_len / 1024));
+    result.emplace(compression_parameters::CHUNK_LENGTH_KB, to_sstring(c.uncompressed_chunk_length() / 1024));
     for (const auto& [k, v] : c.options.elements) {
         auto k_str = sstring(k.value.begin(), k.value.end());
         auto v_str = sstring(v.value.begin(), v.value.end());
