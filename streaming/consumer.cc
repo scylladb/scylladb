@@ -70,6 +70,15 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                 return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cfg, encoding_stats{}).then([sst] {
                     return sst->open_data();
+                }).handle_exception([sst] (std::exception_ptr ep) -> future<> {
+                    // Synchronously remove partial SSTable files before the
+                    // error propagates.  Without this, the shared_sstable
+                    // destructor triggers sstables_manager::deactivate() which
+                    // runs destroy() as a fire-and-forget background task,
+                    // leaving temporary files visible to callers that check the
+                    // filesystem right after the operation fails.
+                    co_await sst->unlink();
+                    std::rethrow_exception(ep);
                 }).then([cf, sst, offstrategy, origin, on_sstable_written, cfg] -> future<std::vector<sstables::shared_sstable>> {
                     auto on_add = [sst, origin, on_sstable_written, cfg] (sstables::shared_sstable loading_sst) -> future<> {
                         if (on_sstable_written) {
