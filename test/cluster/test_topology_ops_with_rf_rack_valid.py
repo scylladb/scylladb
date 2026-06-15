@@ -345,3 +345,74 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClie
     # Remove node from r3 (unlisted rack) - should succeed
     # This doesn't affect RF-rack validity since r3 is not in the keyspace's rack list
     await remove_node(servers[2])
+
+
+@pytest.mark.parametrize("op", ["remove", "decommission"])
+@pytest.mark.parametrize("scenario", ["last_in_dc", "last_in_rack"])
+async def test_remove_last_node_in_dc_violating_rf_rack(manager: ManagerClient, op: str, scenario: str):
+    """
+    Test that removing the last node in a DC or rack is rejected when a
+    tablet-based keyspace replicates to that DC/rack, and that the removal
+    succeeds after a corrective ALTER KEYSPACE.
+
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-572:
+    Removing the last node of a DC triggered an assertion:
+      "Precondition violated: DC 'dc1' is part of the passed replication strategy,
+       but it is not known by the passed locator::token_metadata_ptr"
+
+    Scenarios:
+    - last_in_dc: 2-DC cluster (dc1: 2 nodes, dc2: 1 node), keyspace replicated
+      on both DCs. Removing the only node in dc2 is rejected, then ALTER KEYSPACE
+      to remove dc2 from replication allows the removal to succeed.
+    - last_in_rack: 1-DC cluster with 2 racks (r1: 2 nodes, r2: 1 node),
+      keyspace with rack list ['r1', 'r2']. Removing the only node in r2 is
+      rejected, then ALTER KEYSPACE to drop r2 from the rack list allows the
+      removal to succeed.
+    """
+    cfg = {'rf_rack_valid_keyspaces': True}
+    cmdline = ['--logger-log-level', 'tablets=debug', '--logger-log-level', 'raft_topology=debug']
+
+    if scenario == "last_in_dc":
+        # Create cluster: dc1 with 2 nodes (different racks), dc2 with 1 node
+        servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, property_file=[
+            {"dc": "dc1", "rack": "r1"},
+            {"dc": "dc1", "rack": "r2"},
+            {"dc": "dc2", "rack": "r1"},
+        ])
+        cql = manager.get_cql()
+        await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2'], 'dc2': ['r1']} AND tablets = {'enabled': true}")
+        target_server = servers[2]
+        alter_stmt = "ALTER KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2'], 'dc2': 0}"
+    else:
+        # Create cluster: 1 DC with 2 racks (r1: 2 nodes, r2: 1 node)
+        servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, property_file=[
+            {"dc": "dc1", "rack": "r1"},
+            {"dc": "dc1", "rack": "r1"},
+            {"dc": "dc1", "rack": "r2"},
+        ])
+        cql = manager.get_cql()
+        await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2']} AND tablets = {'enabled': true}")
+        target_server = servers[2]
+        alter_stmt = "ALTER KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1']}"
+
+    await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v int)")
+
+    # Try to remove the last node in dc2 / rack r2 - should be rejected
+    if op == "remove":
+        await manager.server_stop_gracefully(target_server.server_id)
+        await manager.api.exclude_node(servers[0].ip_addr, [await manager.get_host_id(target_server.server_id)])
+        await manager.remove_node(servers[0].server_id, target_server.server_id,
+                expected_error=f"node {op} rejected: Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid")
+    elif op == "decommission":
+        await manager.decommission_node(target_server.server_id,
+                expected_error=f"node {op} rejected: Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid")
+
+    # Corrective action: ALTER KEYSPACE to remove the DC/rack from replication
+    await cql.run_async(alter_stmt)
+
+    # Retry the removal - should now succeed
+    if op == "remove":
+        # Node is already stopped and excluded from the first attempt
+        await manager.remove_node(servers[0].server_id, target_server.server_id)
+    elif op == "decommission":
+        await manager.decommission_node(target_server.server_id)

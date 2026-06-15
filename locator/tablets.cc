@@ -1779,6 +1779,23 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
             break;
     }
 
+    // If a DC was eliminated from dc_rack_map but is still referenced by the
+    // replication strategy, throw a clear error instead of hitting the
+    // on_internal_error assertion in the static helper.
+    // Reproduces: https://scylladb.atlassian.net/browse/SCYLLADB-572
+    if (ars.uses_tablets() && ars.get_type() == replication_strategy_type::network_topology) {
+        const auto& nts = *static_cast<const network_topology_strategy*>(std::addressof(ars));
+        for (const auto& dc : nts.get_datacenters()) {
+            if (!dc_rack_map.contains(dc)) {
+                throw std::invalid_argument(std::format(
+                        "The keyspace '{}' is required to be RF-rack-valid. "
+                        "That condition is violated because DC '{}' is part of the replication strategy, "
+                        "but would have no remaining nodes after this operation.",
+                        ks, std::string_view(dc)));
+            }
+        }
+    }
+
     assert_rf_rack_valid_keyspace(ks, tmptr, ars,
         dc_rack_map,
         [&tmptr, &op] (host_id host) {
