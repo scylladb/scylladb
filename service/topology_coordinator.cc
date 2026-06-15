@@ -1876,6 +1876,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             .last_token  = dht::token::to_int64(tmap.get_last_token(gid.tablet)),
                             .table_uuid  = gid.table,
                         };
+                        auto request_type = tinfo.repair_task_info.request_type;
+                        if (utils::get_local_injector().enter("skip_tablet_repair_rpc")) {
+                            rtlogger.info("Skipped tablet repair host={} tablet={} request_type={} due to error injection", dst, gid, request_type);
+                            tablet_state.repair_time = db_clock::now();
+                            co_return;
+                        }
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
                         auto session_id = utils::get_local_injector().enter("handle_tablet_migration_repair_random_session") ?
                             service::session_id::create_random_id() : trinfo->session_id;
