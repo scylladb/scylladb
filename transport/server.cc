@@ -30,6 +30,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/try_future.hh>
 #include <seastar/net/byteorder.hh>
@@ -82,6 +83,12 @@ using coordinator_result = exceptions::coordinator_result<T>;
 namespace cql_transport {
 
 static logging::logger clogger("cql_server");
+
+static api::timestamp_type lowres_server_timestamp() {
+    auto since_epoch = std::chrono::duration_cast<std::chrono::microseconds>(
+            seastar::lowres_system_clock::now().time_since_epoch());
+    return (since_epoch + get_clocks_offset()).count();
+}
 
 /**
  * Skip registering CQL metrics for these SGs - these are internal scheduling groups that are not supposed to handle CQL
@@ -290,6 +297,13 @@ void cql_sg_stats::register_metrics()
             sm::make_histogram("cql_request_latency_histogram", [this] { return to_metrics_histogram(_request_latency); },
                               sm::description("A histogram of transport-level CQL request latencies (in microseconds), "
                                               "measuring from the start of request processing until the response is written to the socket."),
+                              {{"scheduling_group_name", cur_sg_name}}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
+    );
+
+    transport_metrics.emplace_back(
+            sm::make_histogram("cql_client_timestamp_drift_histogram", [this] { return to_metrics_histogram(_client_timestamp_drift); },
+                              sm::description("A histogram of the drift in microseconds between the client-provided CQL timestamp and the server time at request arrival. "
+                                              "Useful for detecting transport delays before requests reach the CQL server."),
                               {{"scheduling_group_name", cur_sg_name}}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()
     );
 
@@ -508,6 +522,7 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
         opcode,
         req.cql_version,
         req.dialect,
+        api::missing_timestamp,
         std::move(req.cached_fn_calls),
         handling_node_bounce::yes));
 
@@ -952,7 +967,7 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
     }
 }
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, uint8_t flags, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit) {
+    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, uint8_t flags, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit, api::timestamp_type request_start_timestamp) {
     using auth_state = service::client_state::auth_state;
 
     auto cqlop = static_cast<cql_binary_opcode>(op);
@@ -978,7 +993,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
-    return futurize_invoke([this, cqlop, stream, flags, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state] () mutable {
+    return futurize_invoke([this, cqlop, stream, flags, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state, request_start_timestamp] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
@@ -1028,7 +1043,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         case cql_binary_opcode::EXECUTE:
         case cql_binary_opcode::BATCH:
             return _server.process(stream, std::move(in), client_state, std::move(permit), trace_state, cqlop,
-                                            _version, get_dialect());
+                                            _version, get_dialect(), request_start_timestamp);
         default:                               return make_exception_future<process_fn_return_type>(exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop))));
         }
     }).then_wrapped([this, cqlop, &cql_stats, stream, &client_state, linearization_buffer = std::move(linearization_buffer), trace_state] (future<process_fn_return_type> f) {
@@ -1182,6 +1197,7 @@ future<> cql_server::connection::process_request() {
 
         auto& f = *maybe_frame;
         auto request_start_time = db::timeout_clock::now();
+        auto request_start_timestamp = lowres_server_timestamp();
 
         const bool allow_shedding = _client_state.get_workload_type() == service::client_state::workload_type::interactive;
         if (allow_shedding && _shed_incoming_requests) {
@@ -1259,14 +1275,14 @@ future<> cql_server::connection::process_request() {
             ++_server._stats.requests_blocked_memory;
         }
 
-        return fut.then_wrapped([this, length = f.length, flags = f.flags, op, stream, tracing_requested, request_start_time] (auto mem_permit_fut) {
+        return fut.then_wrapped([this, length = f.length, flags = f.flags, op, stream, tracing_requested, request_start_time, request_start_timestamp] (auto mem_permit_fut) {
           if (mem_permit_fut.failed()) {
               // Ignore semaphore errors - they are expected if load shedding took place
               mem_permit_fut.ignore_ready_future();
               return make_ready_future<>();
           }
           semaphore_units<> mem_permit = mem_permit_fut.get();
-          return this->read_and_decompress_frame(length, flags).then([this, op, stream, flags, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit)), request_start_time] (fragmented_temporary_buffer buf) mutable {
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, flags, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit)), request_start_time, request_start_timestamp] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._stats.requests_served;
             ++_server._stats.requests_serving;
@@ -1292,8 +1308,8 @@ future<> cql_server::connection::process_request() {
                     op == uint8_t(cql_binary_opcode::BATCH));
 
             future<foreign_ptr<std::unique_ptr<cql_server::response>>> request_process_future = should_paralelize ?
-                    _process_request_stage(this, istream, op, stream, flags, seastar::ref(_client_state), tracing_requested, mem_permit) :
-                    process_request_one(istream, op, stream, flags, seastar::ref(_client_state), tracing_requested, mem_permit);
+                    _process_request_stage(this, istream, op, stream, flags, seastar::ref(_client_state), tracing_requested, mem_permit, request_start_timestamp) :
+                    process_request_one(istream, op, stream, flags, seastar::ref(_client_state), tracing_requested, mem_permit, request_start_timestamp);
 
             future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave), stream, request_start_time] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
                 try {
@@ -1549,11 +1565,21 @@ static inline cql_server::result_with_foreign_response_ptr convert_error_message
     return std::move(*dynamic_cast<messages::result_message::exception*>(msg)).get_exception();
 }
 
+static void record_client_timestamp_drift(cql_sg_stats& sg_stats, bool init_trace, api::timestamp_type server_ts, api::timestamp_type client_ts) {
+    // record the metric only when timestamp is provided and
+    // it's initial node and shard (forwarding and bouncing are excluded)
+    if (!init_trace || client_ts == api::missing_timestamp) {
+        return;
+    }
+    auto drift = std::abs(server_ts - client_ts);
+    sg_stats._client_timestamp_drift.add_micro(drift);
+}
+
 static future<cql_server::process_fn_return_type>
 process_query_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
-        cql3::dialect dialect) {
+        cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp) {
     utils::result_with_exception_ptr<utils::chunked_string> query = in.read_long_chunked_string();
     if (!query) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(query).assume_error());
@@ -1566,6 +1592,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     }
     q_state->options = std::move(o).assume_value();
     auto& options = *q_state->options;
+    record_client_timestamp_drift(sg_stats, init_trace, request_start_timestamp, options.get_specific_options().timestamp);
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
     }
@@ -1626,7 +1653,7 @@ static future<cql_server::process_fn_return_type>
 process_execute_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
-        cql3::dialect dialect) {
+        cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp) {
     utils::result_with_exception_ptr<bytes> cache_key_bytes = in.read_short_bytes();
     if (!cache_key_bytes) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(cache_key_bytes).assume_error());
@@ -1664,6 +1691,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     }
     q_state->options = std::move(o).assume_value();
     auto& options = *q_state->options;
+    record_client_timestamp_drift(sg_stats, init_trace, request_start_timestamp, options.get_specific_options().timestamp);
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
     }
@@ -1713,7 +1741,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 static future<cql_server::process_fn_return_type>
 process_batch_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
-        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, cql3::dialect dialect) {
+        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp) {
     const utils::result_with_exception_ptr<int8_t> type = in.read_byte();
     if (!type) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(type).assume_error());
@@ -1823,6 +1851,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     }
     q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*o.assume_value()), std::move(values)));
     auto& options = *q_state->options;
+    record_client_timestamp_drift(sg_stats, init_trace, request_start_timestamp, options.get_specific_options().timestamp);
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
     }
@@ -1867,7 +1896,7 @@ static bytes_ostream copy_istream(fragmented_temporary_buffer::istream is) {
 future<cql_server::process_fn_return_type>
 cql_server::process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
         tracing::trace_state_ptr trace_state, cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect,
-        cql3::computed_function_values cached_fn_calls, handling_node_bounce bounced)
+        api::timestamp_type request_start_timestamp, cql3::computed_function_values cached_fn_calls, handling_node_bounce bounced)
 {
     fragmented_temporary_buffer::istream is = in.get_stream();
 
@@ -1887,8 +1916,9 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
     co_await utils::get_local_injector().inject("transport_cql_request_pause", utils::wait_for_message(60s));
 
     bool init_trace = (bool)!bounced; // If the request was bounced, we already started the trace in the handler
+    auto& sg_stats = get_cql_sg_stats();
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,
-        version, permit, trace_state, init_trace, {}, dialect));
+        version, permit, trace_state, init_trace, {}, dialect, sg_stats, request_start_timestamp));
     while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
         auto shard = (*bounce_msg)->target_shard();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
@@ -1899,13 +1929,14 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
             auto sg = _config.bounce_request_smp_service_group;
             auto gcs = client_state.move_to_other_shard();
             auto gt = tracing::global_trace_state_ptr(trace_state);
-            msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version] (cql_server& server) -> future<process_fn_return_type> {
+            msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version, request_start_timestamp] (cql_server& server) -> future<process_fn_return_type> {
                 bytes_ostream linearization_buffer;
                 request_reader in(is, linearization_buffer);
                 auto local_client_state = gcs.get(&server._abort_source);
                 auto local_trace_state = gt.get();
+                auto& local_sg_stats = server.get_cql_sg_stats();
                 co_return co_await process_fn(local_client_state, server._query_processor, in, stream, version,
-                        /* FIXME */empty_service_permit(), std::move(local_trace_state), false, cached_vals, dialect);
+                        /* FIXME */empty_service_permit(), std::move(local_trace_state), false, cached_vals, dialect, local_sg_stats, request_start_timestamp);
             });
         } else {
             // Node bounce

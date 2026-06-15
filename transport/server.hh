@@ -33,6 +33,7 @@
 #include "generic_server.hh"
 #include "service/query_state.hh"
 #include "cql3/query_options.hh"
+#include "mutation/timestamp.hh"
 #include "cql3/dialect.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/chunked_vector.hh"
@@ -160,6 +161,12 @@ struct cql_sg_stats {
     // to the socket. This captures processing time and time waiting in the
     // response write queue, complementing storage-proxy-level latency.
     utils::time_estimated_histogram _request_latency;
+
+    // Histogram of the drift (in microseconds) between the client-provided
+    // CQL timestamp and the server time at request arrival. It is per
+    // scheduling group rather than per opcode, since the drift reflects the
+    // app/network path more than the kind of operation.
+    utils::time_estimated_histogram _client_timestamp_drift;
 private:
     bool _use_metrics = false;
     seastar::metrics::metric_groups _metrics;
@@ -323,7 +330,8 @@ private:
                 uint8_t,
                 service::client_state&,
                 tracing_request_type,
-                service_permit>;
+                service_permit,
+                api::timestamp_type>;
         static thread_local execution_stage_type _process_request_stage;
     public:
         connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units);
@@ -338,7 +346,7 @@ private:
     private:
         friend class process_request_executor;
 
-        future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, uint8_t flags, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, uint8_t flags, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit, api::timestamp_type request_start_timestamp);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
         utils::result_with_exception<cql_binary_frame_v3, exceptions::protocol_exception, class cql_frame_error> parse_frame(temporary_buffer<char> buf) const;
@@ -374,7 +382,8 @@ private:
     // Helper functions to encapsulate bounce processing for query, execute and batch verbs
     future<process_fn_return_type>
     process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state,
-            cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect, cql3::computed_function_values cached_fn_calls = {}, handling_node_bounce bounced = handling_node_bounce::no);
+            cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect, api::timestamp_type request_start_timestamp,
+            cql3::computed_function_values cached_fn_calls = {}, handling_node_bounce bounced = handling_node_bounce::no);
 
     friend class type_codec;
 
