@@ -69,6 +69,19 @@ public:
     typed_option(const char* name, const char* description) : basic_option(name, description) { }
 };
 
+template <typename T>
+class typed_option<std::vector<T>> : public basic_option {
+    int _count;
+    void add_option(boost::program_options::options_description& opts) const override {
+        opts.add_options()(name, boost::program_options::value<std::vector<T>>()->multitoken(), description);
+    }
+    app_template::positional_option to_positional_option() const override {
+        return {name, boost::program_options::value<std::vector<T>>(), description, _count};
+    }
+public:
+    typed_option(const char* name, const char* description, int count = -1) : basic_option(name, description), _count(count) {}
+};
+
 class operation_option {
     shared_ptr<basic_option> _opt; // need copy to support convenient range declaration of std::vector<option>
 

@@ -26,14 +26,6 @@ using namespace tools::utils;
 
 namespace bpo = boost::program_options;
 
-namespace std {
-// required by boost::lexical_cast<std::string>(vector<string>), which is in turn used
-// by boost::program_option for printing out the default value of an option
-static std::ostream& operator<<(std::ostream& os, const std::vector<std::string>& v) {
-    return os << fmt::format("{}", v);
-}
-}
-
 namespace {
 
 const auto app_name = "local-file-key-generator";
