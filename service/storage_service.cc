@@ -5256,10 +5256,10 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup/cleanup_target", tablet));
             }
         }
-        co_await _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks, &vbw = _view_building_worker] (replica::database& db) {
+        co_await _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks, &vbw = _view_building_worker] (replica::database& db) -> future<> {
             auto& table = db.find_column_family(tablet.table);
-            vbw.local().cleanup_staging_sstables(table.get_effective_replication_map(), tablet.table, tablet.tablet);
-            return table.cleanup_tablet(db, sys_ks.local(), tablet.tablet);
+            co_await vbw.local().cleanup_staging_sstables(table.get_effective_replication_map(), tablet.table, tablet.tablet);
+            co_await table.cleanup_tablet(db, sys_ks.local(), tablet.tablet);
         });
         co_return tablet_operation_result();
     });

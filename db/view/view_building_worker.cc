@@ -208,6 +208,9 @@ future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstabl
 }
 
 future<> view_building_worker::run_staging_sstables_registrator() {
+    co_await utils::get_local_injector().inject("view_building_worker_pause_before_starting_staging_registrator",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
@@ -781,10 +784,32 @@ void view_building_worker::load_sstables(table_id table_id, std::vector<sstables
     });
 }
 
-void view_building_worker::cleanup_staging_sstables(locator::effective_replication_map_ptr erm, table_id table_id, locator::tablet_id tid) {
+future<> view_building_worker::cleanup_staging_sstables(locator::effective_replication_map_ptr erm, table_id table_id, locator::tablet_id tid) {
     auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(table_id);
     auto tablet_range = tablet_map.get_token_range(tid);
 
+    // Remove entries from the shard-0 registration queue.
+    // Without this, a pending entry in `_sstables_to_register` would be moved into
+    // `_staging_sstables` by the registrator after cleanup deletes the tablet's storage,
+    // causing an infinite ENOENT retry loop (SCYLLADB-2312).
+    co_await container().invoke_on(0, [table_id, tablet_range] (view_building_worker& vbw0) -> future<> {
+        auto lock = co_await get_units(vbw0._staging_sstables_mutex, 1, vbw0._as);
+        auto it = vbw0._sstables_to_register.find(table_id);
+        if (it == vbw0._sstables_to_register.end()) {
+            co_return;
+        }
+        auto old_size = it->second.size();
+        std::erase_if(it->second, [&] (auto& info) {
+            return tablet_range.contains(info.last_token, dht::token_comparator());
+        });
+        if (old_size != it->second.size()) {
+            vbw_logger.info("cleanup_staging_sstables: removed {} entries from _sstables_to_register for table {}",
+                old_size - it->second.size(), table_id);
+        }
+    });
+
+    // Remove from local shard staging list.
+    auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
     auto [first, last] = std::ranges::remove_if(_staging_sstables[table_id], [&] (auto& sst) {
         auto sst_last_token = sst->get_last_decorated_key().token();
         return tablet_range.contains(sst_last_token, dht::token_comparator());
