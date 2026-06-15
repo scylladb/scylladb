@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "utils/log.hh"
+#include "utils/error_injection.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_registry.hh"
@@ -417,9 +418,15 @@ future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
     auto& storage = ssts.front()->get_storage();
     auto ctx = co_await storage.atomic_delete_prepare(ssts);
 
-    co_await coroutine::parallel_for_each(ssts, [] (shared_sstable sst) {
-        return sst->unlink(sstables::storage::sync_dir::no);
+    utils::get_local_injector().inject("delete_atomically_after_prepare",
+            [] { throw std::runtime_error("delete_atomically_after_prepare"); });
+
+    co_await coroutine::parallel_for_each(ssts, [&ctx] (shared_sstable sst) {
+        return sst->unlink(&ctx);
     });
+
+    utils::get_local_injector().inject("delete_atomically_after_unlink",
+            [] { throw std::runtime_error("delete_atomically_after_unlink"); });
 
     co_await storage.atomic_delete_complete(std::move(ctx));
 }

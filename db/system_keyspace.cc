@@ -30,6 +30,7 @@
 #include "schema/schema_builder.hh"
 #include "mutation/timestamp.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/hashers.hh"
 #include "utils/log.hh"
 #include <seastar/core/enum.hh>
@@ -3488,6 +3489,24 @@ future<> system_keyspace::sstables_registry_update_entry_status(table_id tid, lo
     static const auto req = format("UPDATE system.{} SET status = ? WHERE table_id = ? AND node_owner = ? AND generation = ?", SSTABLES_REGISTRY);
     slogger.trace("Updating {}.{}.{} -> status={} in {}", tid, node_owner, gen, status, SSTABLES_REGISTRY);
     co_await execute_cql(req, status, tid.id, node_owner.uuid(), gen).discard_result();
+}
+
+future<> system_keyspace::sstables_registry_batch_update_entry_status(table_id tid, locator::host_id node_owner, const std::vector<sstables::generation_type>& gens, sstring status) {
+    slogger.trace("Batch updating {} entries for {}.{} -> status={} in {}", gens.size(), tid, node_owner, status, SSTABLES_REGISTRY);
+    // Build a single mutation directly and batch all updates
+    // together to ensure atomicity, we touch a single partition.
+    auto s = sstables_registry();
+    auto ts = api::new_timestamp();
+    auto status_cdef = s->get_column_definition("status");
+    SCYLLA_ASSERT(status_cdef);
+    mutation m(s, partition_key::from_exploded(*s, {data_value(tid.id).serialize_nonnull(), data_value(node_owner.uuid()).serialize_nonnull()}));
+    for (auto& gen : gens) {
+        auto& row = m.partition().clustered_row(*s, clustering_key::from_singular(*s, data_value(gen)));
+        row.cells().apply(*status_cdef, atomic_cell::make_live(*status_cdef->type, ts, status_cdef->type->decompose(status)));
+    }
+    utils::get_local_injector().inject("batch_update_entry_status_before_apply",
+            [] { throw std::runtime_error("batch_update_entry_status_before_apply"); });
+    co_await apply_mutation(std::move(m));
 }
 
 future<> system_keyspace::sstables_registry_update_entry_state(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstables::sstable_state state) {

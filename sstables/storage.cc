@@ -93,7 +93,7 @@ public:
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
-    virtual future<> wipe(const sstable& sst, sync_dir) noexcept override;
+    virtual future<> wipe(const sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
@@ -508,7 +508,8 @@ static inline fs::path parent_path(const sstring& fname) {
     return fs::canonical(fs::path(fname)).parent_path();
 }
 
-future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
+future<> filesystem_storage::wipe(const sstable& sst, const atomic_delete_context* ctx) noexcept {
+    auto sync = ctx ? sync_dir::no : sync_dir::yes;
     // We must be able to generate toc_filename()
     // in order to delete the sstable.
     // Running out of memory here will terminate.
@@ -665,7 +666,7 @@ public:
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
-    future<> wipe(const sstable& sst, sync_dir) noexcept override;
+    future<> wipe(const sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept override;
     future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
@@ -848,7 +849,7 @@ future<> object_storage_base::change_state(const sstable& sst, sstable_state sta
     co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.manager().get_local_host_id(), sst.generation(), state);
 }
 
-future<> object_storage_base::wipe(const sstable& sst, sync_dir) noexcept {
+future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_context* ctx) noexcept {
     // FIXME: unlike filesystem_storage::wipe, this implementation does not
     // catch exceptions from delete_object / sstables_registry calls and may
     // return an exceptional future, breaking the contract documented on
@@ -856,7 +857,9 @@ future<> object_storage_base::wipe(const sstable& sst, sync_dir) noexcept {
     auto& sstables_registry = sst.manager().sstables_registry();
     auto node_owner = sst.manager().get_local_host_id();
 
-    co_await sstables_registry.update_entry_status(owner(), node_owner, sst.generation(), status_removing);
+    if (!ctx) {
+        co_await sstables_registry.update_entry_status(owner(), node_owner, sst.generation(), status_removing);
+    }
 
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
         co_await delete_object(make_object_name(sst, type));
@@ -865,8 +868,13 @@ future<> object_storage_base::wipe(const sstable& sst, sync_dir) noexcept {
     co_await sstables_registry.delete_entry(owner(), node_owner, sst.generation());
 }
 
-future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>&) const {
-    // FIXME -- need atomicity, see #13567
+future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
+    std::vector<generation_type> gens;
+    gens.reserve(ssts.size());
+    for (auto& sst : ssts) {
+        gens.push_back(sst->generation());
+    }
+    co_await ssts.front()->manager().sstables_registry().batch_update_entry_status(owner(), ssts.front()->manager().get_local_host_id(), gens, status_removing);
     co_return atomic_delete_context{};
 }
 

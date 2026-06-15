@@ -4699,7 +4699,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     }));
     rebuild_statistics();
 
-    co_await coroutine::parallel_for_each(per_cg_remove, [&] (auto& entry) {
+    co_await coroutine::parallel_for_each(per_cg_remove, [&] (auto& entry) -> future<> {
         auto& removed = entry.second;
         std::vector<sstables::shared_sstable> del;
         del.reserve(removed.size());
@@ -4710,7 +4710,15 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             erase_sstable_cleanup_state(r.sst);
             del.emplace_back(std::move(r.sst));
         }
-        return delete_sstables_atomically(permit, std::move(del));
+        // Truncate may discard a large number of sstables. Deleting them all
+        // in a single atomic batch could produce an oversized mutation in the
+        // sstables registry.
+        // Split into chunks, FIXME: truncation is not expected to be atomic for now.
+        static constexpr size_t max_atomic_delete_chunk = 100;
+        for (auto chunk_view : del | std::views::chunk(max_atomic_delete_chunk)) {
+            auto chunk = chunk_view | std::views::as_rvalue | std::ranges::to<std::vector>();
+            co_await delete_sstables_atomically(permit, std::move(chunk));
+        }
     });
     co_return rp;
 }
