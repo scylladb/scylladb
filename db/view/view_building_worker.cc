@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "db/view/view_building_worker.hh"
+#include "db/view/view_building_task_mutation_builder.hh"
 #include "db/view/view_consumer.hh"
 #include "dht/token.hh"
 #include "replica/database.hh"
@@ -273,8 +274,8 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     shards.erase(0); // We're already holding shard0 lock
     auto locks = co_await lock_staging_mutex_on_multiple_shards(std::move(shards));
 
-    utils::chunked_vector<canonical_mutation> cmuts;
     auto guard = co_await _group0.client().start_operation(_as);
+    view_building_task_mutation_builder builder(guard.write_timestamp());
     auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
     for (auto& [table_id, sst_infos]: _sstables_to_register) {
         for (auto& sst_info: sst_infos) {
@@ -282,12 +283,13 @@ future<> view_building_worker::create_staging_sstable_tasks() {
                 utils::UUID_gen::get_time_UUID(), view_building_task::task_type::process_staging, false,
                 table_id, ::table_id{}, {my_host_id, sst_info.shard}, sst_info.last_token
             };
-            auto mut = co_await _sys_ks.make_view_building_task_mutation(guard.write_timestamp(), task);
-            cmuts.emplace_back(std::move(mut));
+            builder.set_task(task);
+            vbw_logger.trace("Creating process staging task: {} with ID: {} for replica: {}", task, task.id, task.replica);
         }
     }
 
-    vbw_logger.debug("Creating {} process_staging view_building_tasks", cmuts.size());
+    utils::chunked_vector<canonical_mutation> cmuts;
+    cmuts.emplace_back(builder.build());
     auto cmd = _group0.client().prepare_command(service::write_mutations{std::move(cmuts)}, guard, "create view building tasks");
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
 
