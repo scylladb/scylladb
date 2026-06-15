@@ -346,9 +346,17 @@ def test_collection_rejects_after_flush(cql, test_keyspace):
         schema = "pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)"
         with new_test_table(cql, test_keyspace, schema,
                 extra=" WITH large_data_guardrails_enabled = true") as tbl:
-            build_large_collection(cql, tbl, pk=1, ck=0, num_elements=60)
-            nodetool.flush(cql, tbl)
+            # Build element-by-element (each UPDATE adds 1 element, so
+            # future coordinator-side guardrails won't reject).  Disable
+            # the fail threshold during setup to prevent memtable-level
+            # rejection while the collection grows past the limit.
+            with config_value_context(cql,
+                    'large_collection_elements_fail_threshold', '0'):
+                build_large_collection(cql, tbl, pk=1, ck=0, num_elements=60)
+                nodetool.flush(cql, tbl)
 
+            # Fail threshold restored to 50.  SSTable index has the
+            # 60-element collection, memtable cache was cleared by flush.
             insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, s) VALUES (?, ?, ?)")
             with pytest.raises(WriteFailure, match=REJECT_COLLECTION_RE):
                 cql.execute(insert, [1, 0, {0}])
@@ -622,10 +630,14 @@ def test_each_guardrail_rejects_independently(cql, test_keyspace):
             cql.execute(insert_v2, [2, 0, bytes(600 * 1024)])
 
             # pk=3: 60-element collection; row and partition tiny.
-            update_s = cql.prepare(
-                f"UPDATE {tbl} SET s = s + ? WHERE pk = ? AND ck = ?")
-            for i in range(60):
-                cql.execute(update_s, [{i}, 3, 0])
+            # Build element-by-element.  Disable the collection fail
+            # threshold during setup to prevent memtable-level rejection.
+            with config_value_context(cql,
+                    'large_collection_elements_fail_threshold', '0'):
+                update_s = cql.prepare(
+                    f"UPDATE {tbl} SET s = s + ? WHERE pk = ? AND ck = ?")
+                for i in range(60):
+                    cql.execute(update_s, [{i}, 3, 0])
 
             nodetool.flush(cql, tbl)
 
@@ -649,3 +661,128 @@ def test_each_guardrail_rejects_independently(cql, test_keyspace):
             cql.execute(insert_v1, [3, 0, b"\x00"])
             # Different CK in pk=3 succeeds.
             cql.execute(insert_s, [3, 99, {999}])
+
+
+# ---------------------------------------------------------------------------
+# Memtable-level detection — row size
+# ---------------------------------------------------------------------------
+
+
+def test_row_size_rejects_from_memtable(cql, test_keyspace):
+    """A row exceeding the hard limit in the memtable (no flush) must be
+    rejected on the next write to the same (pk, ck)."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_row_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_row_fail_threshold_mb', '1'))
+
+        schema = "pk int, ck int, v1 blob, v2 blob, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            # First write succeeds (large_data_cache_tracker caches the size).
+            make_large_row(cql, tbl, pk=1, ck=0,
+                           value_size_bytes=1200 * 1024)
+
+            # No flush — memtable cache must trigger rejection.
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, v1) VALUES (?, ?, ?)")
+            with pytest.raises(WriteFailure, match=REJECT_ROW_RE):
+                cql.execute(insert, [1, 0, b"\x00"])
+
+            # Different CK succeeds.
+            cql.execute(insert, [1, 99, b"\x00"])
+            # Different partition succeeds.
+            cql.execute(insert, [2, 0, b"\x00"])
+
+
+def test_row_size_warns_from_memtable(cql, test_keyspace, logfile):
+    """A row above the soft limit in the memtable (no flush) must produce
+    a warning on the next write to the same row."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_large_row_warning_threshold_mb', '1'))
+        cfg.enter_context(config_value_context(cql,
+            'large_row_fail_threshold_mb', '10'))
+
+        schema = "pk int, ck int, v1 blob, v2 blob, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            make_large_row(cql, tbl, pk=1, ck=0,
+                           value_size_bytes=1200 * 1024)
+
+            # No flush — memtable cache should trigger a warning.
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, v1) VALUES (?, ?, ?)")
+            cql.execute(insert, [1, 0, b"\x00"])
+
+            wait_for_log(logfile, WARN_RE, timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Memtable-level detection — collection element count
+# ---------------------------------------------------------------------------
+
+
+def test_collection_rejects_from_memtable(cql, test_keyspace):
+    """A collection exceeding the element-count hard limit in the memtable
+    (no flush) must be rejected on a subsequent write to the same (pk, ck).
+    The set is grown across two sub-threshold writes so each passes the
+    coordinator-side guardrail; a fresh insert is not a merge, so it does not
+    cache the collection, but the merge of the second write into the memtable
+    row caches the combined count.  The third write is then rejected."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_collection_elements_count_warning_threshold', '50'))
+        cfg.enter_context(config_value_context(cql,
+            'large_collection_elements_fail_threshold', '50'))
+
+        schema = "pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, s) VALUES (?, ?, ?)")
+            update = cql.prepare(f"UPDATE {tbl} SET s = s + ? WHERE pk = ? AND ck = ?")
+            # Write 1: create the row with 30 elements (< 50) — passes the
+            # coordinator guardrail; a fresh row is not a merge, so the
+            # collection is not cached yet.
+            cql.execute(update, [set(range(30)), 1, 0])
+            # Write 2: add 30 more (< 50 in this mutation) — passes the
+            # coordinator guardrail, but the merge into the memtable row
+            # produces a 60-element set that on_collection_merged caches.
+            cql.execute(update, [set(range(30, 60)), 1, 0])
+
+            # Write 3: check() finds the cached count → rejected.
+            with pytest.raises(WriteFailure, match=REJECT_COLLECTION_RE):
+                cql.execute(update, [{998}, 1, 0])
+
+            # Different CK succeeds.
+            cql.execute(insert, [1, 99, {0}])
+            # Different partition succeeds.
+            cql.execute(insert, [2, 0, {0}])
+
+
+def test_collection_warns_from_memtable(cql, test_keyspace, logfile):
+    """A collection above the soft limit in the memtable (no flush) must
+    produce a warning on a subsequent write to the same (pk, ck).
+    The set is grown across two sub-threshold writes so the coordinator-side
+    guardrail never warns; the merge of the second write caches the count,
+    and the third write triggers the memtable-level warning."""
+    with ExitStack() as cfg:
+        cfg.enter_context(config_value_context(cql,
+            'compaction_collection_elements_count_warning_threshold', '50'))
+        cfg.enter_context(config_value_context(cql,
+            'large_collection_elements_fail_threshold', '10000'))
+
+        schema = "pk int, ck int, s set<int>, PRIMARY KEY (pk, ck)"
+        with new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true") as tbl:
+            update = cql.prepare(f"UPDATE {tbl} SET s = s + ? WHERE pk = ? AND ck = ?")
+            # Write 1: create the row with 30 elements (< 50) — coordinator
+            # does not warn; a fresh row is not a merge, so it is not cached.
+            cql.execute(update, [set(range(30)), 1, 0])
+            # Write 2: add 30 more (< 50 in this mutation) — coordinator does
+            # not warn, but the merge caches the combined 60-element count.
+            cql.execute(update, [set(range(30, 60)), 1, 0])
+
+            # Write 3: check() finds the cached count → memtable warning.
+            cql.execute(update, [{998}, 1, 0])
+
+            wait_for_log(logfile, WARN_RE, timeout=5)

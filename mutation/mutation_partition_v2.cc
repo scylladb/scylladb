@@ -10,6 +10,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "mutation_partition_v2.hh"
+#include "db/large_data_cache_tracker.hh"
 #include "keys/clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
@@ -115,7 +116,8 @@ void mutation_partition_v2::apply(const schema& s, mutation_partition_v2&& p, ca
 }
 
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const schema& p_s, mutation_partition_v2&& p, cache_tracker* tracker,
-        mutation_application_stats& app_stats, preemption_check need_preempt, apply_resume& res, is_evictable evictable) {
+        mutation_application_stats& app_stats, preemption_check need_preempt, apply_resume& res, is_evictable evictable,
+        db::large_data_cache_tracker* ld_tracker) {
 #ifdef SEASTAR_DEBUG
     SCYLLA_ASSERT(_schema_version == s.version());
     SCYLLA_ASSERT(p._schema_version == p_s.version());
@@ -471,9 +473,9 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
                             (i->range_tombstone() + i->row().deleted_at().regular());
                 memory::on_alloc_point();
                 if (same_schema) [[likely]] {
-                    i->apply_monotonically(s, std::move(src_e));
+                    i->apply_monotonically(s, std::move(src_e), ld_tracker);
                 } else {
-                    i->apply_monotonically(s, p_s, std::move(src_e));
+                    i->apply_monotonically(s, p_s, std::move(src_e), ld_tracker);
                 }
             }
             ++app_stats.row_hits;
@@ -484,6 +486,9 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
             this_sentinel = std::move(s2);
         }
         // All operations above up to each insert_before() must be noexcept.
+        if (ld_tracker && !lb_i->dummy()) {
+            ld_tracker->on_row_merged(s, *lb_i);
+        }
         if (prev_compacted && lb_i != _rows.begin()) {
             maybe_drop(s, tracker, std::prev(lb_i), app_stats);
         }

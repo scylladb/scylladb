@@ -416,8 +416,8 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
 }
 
 void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, const schema& s, const mutation_partition_v2& mp, const schema& mp_schema,
-        mutation_application_stats& app_stats) {
-    apply(r, cleaner, s, mutation_partition_v2(mp_schema, mp), mp_schema, app_stats);
+        mutation_application_stats& app_stats, db::large_data_cache_tracker* tracker) {
+    apply(r, cleaner, s, mutation_partition_v2(mp_schema, mp), mp_schema, app_stats, tracker);
 }
 
 void partition_entry::apply(logalloc::region& r,
@@ -425,14 +425,15 @@ void partition_entry::apply(logalloc::region& r,
            const schema& s,
            const mutation_partition& mp,
            const schema& mp_schema,
-           mutation_application_stats& app_stats) {
+           mutation_application_stats& app_stats,
+           db::large_data_cache_tracker* tracker) {
     auto mp_v1 = mutation_partition(mp_schema, mp);
     mp_v1.make_fully_continuous();
-    apply(r, c, s, mutation_partition_v2(mp_schema, std::move(mp_v1)), mp_schema, app_stats);
+    apply(r, c, s, mutation_partition_v2(mp_schema, std::move(mp_v1)), mp_schema, app_stats, tracker);
 }
 
 void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, const schema& s, mutation_partition_v2&& mp, const schema& mp_schema,
-        mutation_application_stats& app_stats) {
+        mutation_application_stats& app_stats, db::large_data_cache_tracker* tracker) {
     // A note about app_stats: it may happen that mp has rows that overwrite other rows
     // in older partition_version. Those overwrites will be counted when their versions get merged.
     if (s.version() != mp_schema.version()) {
@@ -450,7 +451,8 @@ void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, cons
                       app_stats,
                       default_preemption_check(),
                       res,
-                      is_evictable::no) == stop_iteration::yes) {
+                      is_evictable::no,
+                      tracker) == stop_iteration::yes) {
                 current_allocator().destroy(new_version);
                 return;
             } else {

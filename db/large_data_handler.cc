@@ -15,6 +15,8 @@
 #include "keys/keys.hh"
 #include "mutation/mutation_partition.hh"
 #include "mutation/atomic_cell.hh"
+#include "mutation/mutation_partition_v2.hh"
+#include "mutation/atomic_cell_or_collection.hh"
 #include "mutation/collection_mutation.hh"
 #include "replica/exceptions.hh"
 #include "exceptions/exceptions.hh"
@@ -25,6 +27,20 @@
 static logging::logger large_data_logger("large_data");
 
 namespace db {
+
+size_t row_key::hash::operator()(const row_key& k) const noexcept {
+    return utils::hash_combine(
+        std::hash<bytes_view>{}(bytes_view(k.pk)),
+        std::hash<bytes_view>{}(bytes_view(k.ck)));
+}
+
+size_t collection_key::hash::operator()(const collection_key& k) const noexcept {
+    return utils::hash_combine(
+        utils::hash_combine(
+            std::hash<bytes_view>{}(bytes_view(k.pk)),
+            std::hash<bytes_view>{}(bytes_view(k.ck))),
+        std::hash<column_id>{}(k.col));
+}
 
 namespace {
 constexpr uint64_t MB = 1024 * 1024;
@@ -189,8 +205,15 @@ void large_data_guardrail::register_sstable(sstables::shared_sstable sst) {
     _index.register_sstable(std::move(sst));
 }
 
+void large_data_guardrail::on_flush() {
+    _memtable_row_cache.clear();
+    _memtable_collection_cache.clear();
+}
+
 void large_data_guardrail::rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) {
     _index.rebuild(sstables);
+    _memtable_row_cache.clear();
+    _memtable_collection_cache.clear();
 }
 
 void large_data_guardrail::check(const schema& s, const mutation_partition& mp,
@@ -239,14 +262,21 @@ void large_data_guardrail::check_rows_and_collections(const schema& s, bytes_vie
 
 void large_data_guardrail::check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
         bytes_view ck_bytes, const clustering_key_prefix* ck) const {
-    auto row_size = _index.lookup_row(pk_bytes, ck_bytes);
-    if (!row_size) [[likely]] {
+    const uint64_t fail = uint64_t(_cfg.row_size_fail_threshold_mb()) * MB;
+    const uint64_t warn = uint64_t(_cfg.row_size_warn_threshold_mb()) * MB;
+    auto row_size_opt = _index.lookup_row(pk_bytes, ck_bytes);
+    uint64_t row_size = row_size_opt.value_or(0);
+    if (ck) {
+        auto it = _memtable_row_cache.find(row_key{bytes(pk_bytes), bytes(ck_bytes)});
+        if (it != _memtable_row_cache.end()) {
+            row_size = std::max(row_size, it->second);
+        }
+    }
+    if (row_size == 0) [[likely]] {
         return;
     }
-    enforce_threshold<guardrail_source::replica>(s, *row_size,
-        uint64_t(_cfg.row_size_fail_threshold_mb()) * MB,
-        uint64_t(_cfg.row_size_warn_threshold_mb()) * MB,
-        "row size",
+    enforce_threshold<guardrail_source::replica>(s, row_size,
+        fail, warn, "row size",
         [&] { return seastar::format("clustering_key={}",
             ck ? seastar::format("{}", ck->with_schema(s)) : sstring()); });
 }
@@ -258,11 +288,19 @@ void large_data_guardrail::check_collection_element_count(const schema& s, bytes
         return;
     }
     auto col_bytes = to_bytes(cdef.name_as_text());
-    auto count = _index.lookup_collection(pk_bytes, ck_bytes, bytes_view(col_bytes));
-    if (!count) [[likely]] {
+    auto count_opt = _index.lookup_collection(pk_bytes, ck_bytes, bytes_view(col_bytes));
+    uint64_t count = count_opt.value_or(0);
+    if (ck) {
+        auto it = _memtable_collection_cache.find(
+            collection_key{bytes(pk_bytes), bytes(ck_bytes), cdef.id});
+        if (it != _memtable_collection_cache.end()) {
+            count = std::max(count, it->second);
+        }
+    }
+    if (count == 0) [[likely]] {
         return;
     }
-    enforce_threshold<guardrail_source::replica>(s, *count,
+    enforce_threshold<guardrail_source::replica>(s, count,
         uint64_t(_cfg.collection_elements_fail_threshold()),
         uint64_t(_cfg.collection_elements_warn_threshold()),
         "collection element count",
@@ -327,6 +365,81 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
             check_collection(cdef, cell);
         });
     }
+}
+
+void large_data_cache_tracker::on_row_merged(const schema& s, const rows_entry& row) noexcept {
+    try {
+        constexpr uint64_t MB = 1024 * 1024;
+        const uint64_t row_warn = uint64_t(_cfg.row_size_warn_threshold_mb()) * MB;
+        const uint64_t row_fail = uint64_t(_cfg.row_size_fail_threshold_mb()) * MB;
+
+        auto ck_bytes = row.key().view().representation().linearize();
+
+        if (row_warn > 0 || row_fail > 0) {
+            size_t row_size = row.memory_usage(s);
+            uint64_t threshold = row_warn > 0 ? row_warn : row_fail;
+            if (row_size >= threshold) {
+                _row_cache.insert_or_assign(row_key{_pk_bytes, ck_bytes}, row_size);
+            }
+        }
+
+        // Flush buffered collection observations from on_collection_merged().
+        for (auto& pc : _pending_collections) {
+            _collection_cache.insert_or_assign(
+                collection_key{_pk_bytes, ck_bytes, pc.id}, pc.count);
+        }
+        _pending_collections.clear();
+    } catch (...) {
+        // noexcept: a failure here only means the memtable-level cache is not
+        // updated, so a large row may slip past the guardrail until the next
+        // SSTable flush rebuilds the on-disk index.
+        large_data_logger.warn("Failed to update memtable-level large-row cache; "
+            "large rows may slip past the guardrail until the next SSTable flush: {}",
+            std::current_exception());
+        _pending_collections.clear();
+    }
+}
+
+void large_data_cache_tracker::on_collection_merged(const column_definition& cdef,
+        const atomic_cell_or_collection& merged_cell) noexcept {
+    try {
+        const uint64_t coll_warn = uint64_t(_cfg.collection_elements_warn_threshold());
+        const uint64_t coll_fail = uint64_t(_cfg.collection_elements_fail_threshold());
+
+        if (coll_warn == 0 && coll_fail == 0) {
+            return;
+        }
+
+        auto cmv = merged_cell.as_collection_mutation();
+        uint32_t count = cmv.size();
+        uint64_t threshold = coll_warn > 0 ? coll_warn : coll_fail;
+        if (count >= threshold) {
+            _pending_collections.push_back({cdef.id, count});
+        }
+    } catch (...) {
+        // noexcept: see on_row_merged().  A failure here only means a large
+        // collection may slip past the guardrail until the next SSTable flush.
+        large_data_logger.warn("Failed to record collection size for memtable-level "
+            "large-collection cache; large collections may slip past the guardrail "
+            "until the next SSTable flush: {}", std::current_exception());
+    }
+}
+
+large_data_cache_tracker* large_data_guardrail::get_memtable_cache_tracker(const schema& s,
+        partition_key_view pk) {
+    constexpr uint64_t MB = 1024 * 1024;
+    const uint64_t row_warn = uint64_t(_cfg.row_size_warn_threshold_mb()) * MB;
+    const uint64_t row_fail = uint64_t(_cfg.row_size_fail_threshold_mb()) * MB;
+    const uint64_t coll_warn = uint64_t(_cfg.collection_elements_warn_threshold());
+    const uint64_t coll_fail = uint64_t(_cfg.collection_elements_fail_threshold());
+
+    if (row_warn == 0 && row_fail == 0 && coll_warn == 0 && coll_fail == 0) {
+        return nullptr;
+    }
+
+    auto sst_key = sstables::key::from_partition_key(s, pk);
+    _tracker.set_partition_key(sst_key.get_bytes());
+    return &_tracker;
 }
 
 sstring large_data_handler::sst_filename(const sstables::sstable& sst) {
