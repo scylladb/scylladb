@@ -16,7 +16,8 @@ namespace aws {
  */
 class sts_assume_role_credentials_provider final : public aws_credentials_provider {
 public:
-    sts_assume_role_credentials_provider(const std::string& _host, unsigned _port, bool _is_secured); // For tests
+    sts_assume_role_credentials_provider(const std::string& _host, unsigned _port, bool _is_secured,
+            retry_strategy_factory retry_factory); // For tests
     sts_assume_role_credentials_provider(const std::string& _region, const std::string& _role_arn);
     [[nodiscard]] const char* get_name() const override { return "sts_assume_role_credentials_provider"; }
 
@@ -32,6 +33,7 @@ private:
     unsigned port{443};
     static constexpr unsigned session_duration{43200};
     bool is_secured{true};
+    retry_strategy_factory _retry_factory;
 };
 
 } // namespace aws

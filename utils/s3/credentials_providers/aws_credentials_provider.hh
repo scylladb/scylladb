@@ -8,9 +8,16 @@
 
 #pragma once
 #include "utils/s3/creds.hh"
+#include <functional>
+#include <memory>
 #include <seastar/core/future.hh>
 
+namespace seastar::http { class retry_strategy; }
+
 namespace aws {
+
+using retry_strategy_factory = std::function<std::unique_ptr<seastar::http::retry_strategy>()>;
+
 /*
  * Abstract class for retrieving AWS credentials. Create a derived class from this to allow various methods of retrieving credentials.
  */

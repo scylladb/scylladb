@@ -928,21 +928,21 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     auto port = std::stoul(tests::getenv_safe("MOCK_S3_SERVER_PORT"));
     tmpdir tmp;
 
-    auto sts_provider = std::make_unique<aws::sts_assume_role_credentials_provider>(host, port, false);
+    auto sts_provider = std::make_unique<aws::sts_assume_role_credentials_provider>(host, port, false, make_test_retry_strategy);
     auto creds = sts_provider->get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "STS_EXAMPLE_ACCESS_KEY_ID");
     BOOST_REQUIRE_EQUAL(creds.secret_access_key, "STS_EXAMPLE_SECRET_ACCESS_KEY");
     BOOST_REQUIRE_EQUAL(creds.session_token.contains("STS_SESSIONTOKEN"), true);
 
-    auto md_provider = std::make_unique<aws::instance_profile_credentials_provider>(host, port);
+    auto md_provider = std::make_unique<aws::instance_profile_credentials_provider>(host, port, make_test_retry_strategy);
     creds = md_provider->get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "INSTANCE_FROFILE_EXAMPLE_ACCESS_KEY_ID");
     BOOST_REQUIRE_EQUAL(creds.secret_access_key, "INSTANCE_FROFILE_EXAMPLE_SECRET_ACCESS_KEY");
     BOOST_REQUIRE_EQUAL(creds.session_token.contains("INSTANCE_FROFILE_SESSIONTOKEN"), true);
 
     aws::aws_credentials_provider_chain provider_chain;
-    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(host, port, false))
-        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>(host, port));
+    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(host, port, false, make_test_retry_strategy))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>(host, port, make_test_retry_strategy));
     creds = provider_chain.get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "STS_EXAMPLE_ACCESS_KEY_ID");
     BOOST_REQUIRE_EQUAL(creds.secret_access_key, "STS_EXAMPLE_SECRET_ACCESS_KEY");
@@ -952,8 +952,8 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE(creds1.expires_at - creds.expires_at >= 1s);
 
     provider_chain = {};
-    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false))
-        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>(host, port));
+    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false, [] { return std::make_unique<test_retry_strategy>(1); }))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>(host, port, make_test_retry_strategy));
     creds = provider_chain.get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "INSTANCE_FROFILE_EXAMPLE_ACCESS_KEY_ID");
     BOOST_REQUIRE_EQUAL(creds.secret_access_key, "INSTANCE_FROFILE_EXAMPLE_SECRET_ACCESS_KEY");
@@ -963,8 +963,8 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE(creds1.expires_at - creds.expires_at >= 1s);
 
     provider_chain = {};
-    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false))
-        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>("0.0.0.0", 0));
+    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false, [] { return std::make_unique<test_retry_strategy>(1); }))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>("0.0.0.0", 0, [] { return std::make_unique<test_retry_strategy>(1); }));
     creds = provider_chain.get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "");
     BOOST_REQUIRE_EQUAL(creds.secret_access_key, "");

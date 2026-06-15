@@ -23,12 +23,14 @@ namespace aws {
 
 static logging::logger sts_logger("sts");
 
-sts_assume_role_credentials_provider::sts_assume_role_credentials_provider(const std::string& _host, unsigned _port, bool _is_secured)
-    : sts_host(_host), port(_port), is_secured(_is_secured) {
+sts_assume_role_credentials_provider::sts_assume_role_credentials_provider(const std::string& _host, unsigned _port, bool _is_secured,
+        retry_strategy_factory retry_factory)
+    : sts_host(_host), port(_port), is_secured(_is_secured), _retry_factory(std::move(retry_factory)) {
 }
 
 sts_assume_role_credentials_provider::sts_assume_role_credentials_provider(const std::string& _region, const std::string& _role_arn)
-    : sts_host(seastar::format("sts.{}.amazonaws.com", _region)), role_arn(_role_arn) {
+    : sts_host(seastar::format("sts.{}.amazonaws.com", _region)), role_arn(_role_arn)
+    , _retry_factory([] { return std::make_unique<default_aws_retry_strategy>(); }) {
 }
 
 future<> sts_assume_role_credentials_provider::reload() {
@@ -45,7 +47,7 @@ future<> sts_assume_role_credentials_provider::update_credentials() {
     req.set_query_param("RoleSessionName", format("{}", utils::make_random_uuid()));
     req.set_query_param("RoleArn", role_arn);
     http::client http_client(
-        std::make_unique<utils::http::dns_connection_factory>(sts_host, port, is_secured, sts_logger), 1, 1024, std::make_unique<default_aws_retry_strategy>());
+        std::make_unique<utils::http::dns_connection_factory>(sts_host, port, is_secured, sts_logger), 1, 1024, _retry_factory());
     co_await http_client.make_request(
         std::move(req),
         [this](const http::reply&, input_stream<char>&& in) -> future<> {
