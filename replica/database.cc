@@ -1649,6 +1649,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
         .collection_elements_warn_threshold = db_config.compaction_collection_elements_count_warning_threshold,
         .cell_size_fail_threshold_mb = db_config.large_cell_fail_threshold_mb,
         .cell_size_warn_threshold_mb = db_config.compaction_large_cell_warning_threshold_mb,
+        .cql_warnings_enabled = db_config.large_data_cql_warnings,
     };
 
     return cfg;

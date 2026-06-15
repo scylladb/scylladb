@@ -60,6 +60,9 @@ struct guardrail_config {
     // Cell thresholds (coordinator-side only — checked from mutation content)
     utils::updateable_value<uint32_t> cell_size_fail_threshold_mb;
     utils::updateable_value<uint32_t> cell_size_warn_threshold_mb;
+    // When true, coordinator-side soft limit violations are surfaced to the
+    // client as CQL warnings in the response frame (see large_data_cql_warnings).
+    utils::updateable_value<bool> cql_warnings_enabled;
 };
 
 // Tracker for mutation_partition_v2::apply_monotonically().
