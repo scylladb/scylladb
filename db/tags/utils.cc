@@ -11,7 +11,6 @@
 #include "db/tags/extension.hh"
 #include "schema/schema_builder.hh"
 #include "schema/schema_registry.hh"
-#include <seastar/core/on_internal_error.hh>
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
 
@@ -20,22 +19,14 @@ static logging::logger tlogger("tags");
 namespace db {
 
 const std::map<sstring, sstring>* get_tags_of_table(schema_ptr schema) {
-    auto it = schema->extensions().find(tags_extension::NAME);
-    if (it == schema->extensions().end()) {
-        return nullptr;
-    }
-    auto tags_ext = static_pointer_cast<tags_extension>(it->second);
-    return &tags_ext->tags();
+    auto tags_ext = get_schema_extension<tags_extension>(schema->extensions(), tags_extension::NAME);
+    return tags_ext ? &tags_ext->tags() : nullptr;
 }
 
 std::optional<std::string> find_tag(const schema& s, const sstring& tag) {
-    auto it1 = s.extensions().find(tags_extension::NAME);
-    if (it1 == s.extensions().end()) {
-        return std::nullopt;
-    }
-    auto ext = dynamic_pointer_cast<tags_extension>(it1->second);
+    auto ext = get_schema_extension<tags_extension>(s.extensions(), tags_extension::NAME);
     if (!ext) {
-        on_internal_error(tlogger, fmt::format("tag extension found in table {}.{}, but has wrong type", s.ks_name(), s.cf_name()));
+        return std::nullopt;
     }
     const std::map<sstring, sstring>& tags_map = ext->tags();
     auto it2 = tags_map.find(tag);

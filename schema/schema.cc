@@ -1668,6 +1668,12 @@ schema_ptr schema_builder::build() & {
     return build(new_raw);
 }
 
+void schema_extension_cast_failed(const sstring& name) {
+    on_internal_error(dblog, format(
+            "Failed to decode {} from the schema extensions. The table schema may have been written by a newer Scylla version.",
+            name));
+}
+
 schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
     if (_static_props.use_schema_commitlog) {
         if (!_static_props.use_null_sharder) {
@@ -1712,15 +1718,17 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
     prepare_dense_schema(new_raw);
 
     // cache `paxos_grace_seconds` value for fast access through the schema object, which is immutable
-    if (auto it = new_raw._props.extensions.find(db::paxos_grace_seconds_extension::NAME); it != new_raw._props.extensions.end()) {
-        new_raw._props._paxos_grace_seconds =
-            dynamic_pointer_cast<db::paxos_grace_seconds_extension>(it->second)->get_paxos_grace_seconds();
+    if (auto ext = get_schema_extension<db::paxos_grace_seconds_extension>(
+                new_raw._props.extensions,
+                db::paxos_grace_seconds_extension::NAME)) {
+        new_raw._props._paxos_grace_seconds = ext->get_paxos_grace_seconds();
     }
 
     // cache the `per_partition_rate_limit` parameters for fast access through the schema object.
-    if (auto it = new_raw._props.extensions.find(db::per_partition_rate_limit_extension::NAME); it != new_raw._props.extensions.end()) {
-        new_raw._per_partition_rate_limit_options =
-            dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second)->get_options();
+    if (auto ext = get_schema_extension<db::per_partition_rate_limit_extension>(
+                new_raw._props.extensions,
+                db::per_partition_rate_limit_extension::NAME)) {
+        new_raw._per_partition_rate_limit_options = ext->get_options();
     }
 
     if (_static_props.use_null_sharder) {
@@ -1777,20 +1785,18 @@ void schema_builder::set_properties(schema::user_properties props) {
 
 const cdc::options& schema::user_properties::get_cdc_options() const {
     static const cdc::options default_cdc_options;
-    const auto& schema_extensions = extensions;
 
-    if (auto it = schema_extensions.find(cdc::cdc_extension::NAME); it != schema_extensions.end()) {
-        return dynamic_pointer_cast<cdc::cdc_extension>(it->second)->get_options();
+    if (auto ext = get_schema_extension<cdc::cdc_extension>(extensions, cdc::cdc_extension::NAME)) {
+        return ext->get_options();
     }
     return default_cdc_options;
 }
 
 const ::tombstone_gc_options& schema::user_properties::get_tombstone_gc_options() const {
     static const ::tombstone_gc_options default_tombstone_gc_options;
-    const auto& schema_extensions = extensions;
 
-    if (auto it = schema_extensions.find(tombstone_gc_extension::NAME); it != schema_extensions.end()) {
-        return dynamic_pointer_cast<tombstone_gc_extension>(it->second)->get_options();
+    if (auto ext = get_schema_extension<tombstone_gc_extension>(extensions, tombstone_gc_extension::NAME)) {
+        return ext->get_options();
     }
     return default_tombstone_gc_options;
 }
