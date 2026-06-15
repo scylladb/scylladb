@@ -295,7 +295,8 @@ mutation make_mutation_with_tombstone(schema_ptr s) {
 db::guardrail_config make_coordinator_config(
         uint32_t cell_fail_mb = 0, uint32_t cell_warn_mb = 0,
         uint32_t row_fail_mb = 0, uint32_t row_warn_mb = 0,
-        uint32_t collection_fail = 0, uint32_t collection_warn = 0) {
+        uint32_t collection_fail = 0, uint32_t collection_warn = 0,
+        bool cql_warnings_enabled = false) {
     return db::guardrail_config{
         .partition_size_fail_threshold_mb = utils::updateable_value<uint32_t>(0),
         .partition_size_warn_threshold_mb = utils::updateable_value<uint32_t>(0),
@@ -307,11 +308,17 @@ db::guardrail_config make_coordinator_config(
         .collection_elements_warn_threshold = utils::updateable_value<uint32_t>(collection_warn),
         .cell_size_fail_threshold_mb = utils::updateable_value<uint32_t>(cell_fail_mb),
         .cell_size_warn_threshold_mb = utils::updateable_value<uint32_t>(cell_warn_mb),
+        .cql_warnings_enabled = utils::updateable_value<bool>(cql_warnings_enabled),
     };
 }
 
 void coordinator_check(const db::large_data_guardrail& g, const mutation& m) {
     g.check_coordinator(*m.schema(), m.partition(), m.key());
+}
+
+// Runs the coordinator check collecting soft limit violations.
+db::large_data_violation_type coordinator_soft_violations(const db::large_data_guardrail& g, const mutation& m) {
+    return g.check_coordinator(*m.schema(), m.partition(), m.key());
 }
 
 schema_ptr make_set_schema() {
@@ -561,6 +568,109 @@ BOOST_AUTO_TEST_CASE(test_per_table_guardrails_disabled_by_default) {
         .with_column("v", bytes_type)
         .build();
     BOOST_REQUIRE(!s->large_data_guardrails_enabled());
+}
+
+// ---------------------------------------------------------------------------
+// CQL warning (soft limit) tests
+// ---------------------------------------------------------------------------
+
+// Warning string builder
+
+BOOST_AUTO_TEST_CASE(test_soft_violation_warning_empty_when_no_bits) {
+    BOOST_REQUIRE(db::large_data_soft_violation_warning(db::large_data_violation_type::none).empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_soft_violation_warning_single_category) {
+    BOOST_REQUIRE_EQUAL(
+        db::large_data_soft_violation_warning(db::large_data_violation_type::row),
+        "Large data guardrail: Soft limit violation for row");
+    BOOST_REQUIRE_EQUAL(
+        db::large_data_soft_violation_warning(db::large_data_violation_type::cell),
+        "Large data guardrail: Soft limit violation for cell");
+    BOOST_REQUIRE_EQUAL(
+        db::large_data_soft_violation_warning(db::large_data_violation_type::collection),
+        "Large data guardrail: Soft limit violation for collection");
+}
+
+BOOST_AUTO_TEST_CASE(test_soft_violation_warning_multiple_categories_in_order) {
+    // Regardless of how the categories were combined, the listed order is
+    // row, cell, collection.
+    auto cell_and_collection = db::large_data_violation_type::collection | db::large_data_violation_type::cell;
+    BOOST_REQUIRE_EQUAL(
+        db::large_data_soft_violation_warning(cell_and_collection),
+        "Large data guardrail: Soft limit violation for cell, collection");
+
+    auto all = db::large_data_violation_type::row | db::large_data_violation_type::cell
+        | db::large_data_violation_type::collection;
+    BOOST_REQUIRE_EQUAL(
+        db::large_data_soft_violation_warning(all),
+        "Large data guardrail: Soft limit violation for row, cell, collection");
+}
+
+// Soft limit bitmask tracking
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_cell_soft_limit_sets_bit) {
+    auto s = make_simple_schema();
+    // cell warn at 1MB, no hard limit; warnings enabled.
+    auto cfg = make_coordinator_config(0, 1 /* cell_warn_mb */, 0, 0, 0, 0, true);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, MB + 1);
+    BOOST_REQUIRE(coordinator_soft_violations(g, m) == db::large_data_violation_type::cell);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_row_soft_limit_sets_bit) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(0, 0, 0, 1 /* row_warn_mb */, 0, 0, true);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, MB + 1);
+    auto violations = coordinator_soft_violations(g, m);
+    BOOST_REQUIRE((violations & db::large_data_violation_type::row) == db::large_data_violation_type::row);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_collection_soft_limit_sets_bit) {
+    auto s = make_set_schema();
+    auto cfg = make_coordinator_config(0, 0, 0, 0, 0, 100 /* collection_warn */, true);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_set(s, 101);
+    BOOST_REQUIRE(coordinator_soft_violations(g, m) == db::large_data_violation_type::collection);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_soft_limit_below_threshold_sets_no_bit) {
+    auto s = make_simple_schema();
+    auto cfg = make_coordinator_config(0, 1 /* cell_warn_mb */, 0, 0, 0, 0, true);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, 100);
+    BOOST_REQUIRE(coordinator_soft_violations(g, m) == db::large_data_violation_type::none);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_soft_limit_suppressed_when_warnings_disabled) {
+    auto s = make_simple_schema();
+    // Soft cell limit is crossed but CQL warnings are disabled -> nothing set.
+    auto cfg = make_coordinator_config(0, 1 /* cell_warn_mb */, 0, 0, 0, 0, false);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, MB + 1);
+    BOOST_REQUIRE(coordinator_soft_violations(g, m) == db::large_data_violation_type::none);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_soft_limit_accumulates_multiple_categories) {
+    auto s = make_set_schema();
+    // Both the row (the set's serialized size) and the collection element count
+    // cross their soft limits in a single mutation.
+    auto cfg = make_coordinator_config(0, 0, 0, 1 /* row_warn_mb */, 0, 100 /* collection_warn */, true);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_set(s, 101);
+    auto violations = coordinator_soft_violations(g, m);
+    BOOST_REQUIRE((violations & db::large_data_violation_type::collection) == db::large_data_violation_type::collection);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_coordinator_soft_limit_hard_limit_still_throws) {
+    auto s = make_simple_schema();
+    // Hard cell limit set; warnings enabled. Hard limit must still throw.
+    auto cfg = make_coordinator_config(1 /* cell_fail_mb */, 0, 0, 0, 0, 0, true);
+    db::large_data_guardrail g(std::move(cfg));
+    auto m = make_mutation_with_cell(s, MB + 1);
+    BOOST_REQUIRE_THROW(g.check_coordinator(*m.schema(), m.partition(), m.key()),
+            exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
