@@ -22,7 +22,13 @@ namespace aws {
 
 static logging::logger ec2_md_logger("ec2_metadata");
 
-instance_profile_credentials_provider::instance_profile_credentials_provider(const std::string& _host, unsigned _port) : ec2_metadata_ip(_host), port(_port) {
+instance_profile_credentials_provider::instance_profile_credentials_provider()
+    : _retry_factory([] { return std::make_unique<default_aws_retry_strategy>(); }) {
+}
+
+instance_profile_credentials_provider::instance_profile_credentials_provider(const std::string& _host, unsigned _port,
+        retry_strategy_factory retry_factory)
+    : ec2_metadata_ip(_host), port(_port), _retry_factory(std::move(retry_factory)) {
 }
 
 future<> instance_profile_credentials_provider::reload() {
@@ -35,7 +41,7 @@ future<> instance_profile_credentials_provider::update_credentials() {
     http::client http_client(std::make_unique<utils::http::dns_connection_factory>(ec2_metadata_ip, port, false, ec2_md_logger),
                                            1,
                                            1_MiB,
-                                           std::make_unique<default_aws_retry_strategy>());
+                                           _retry_factory());
     auto req = http::request::make("PUT", ec2_metadata_ip, "/latest/api/token");
     req._headers["x-aws-ec2-metadata-token-ttl-seconds"] = format("{}", session_duration);
 
