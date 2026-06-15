@@ -452,6 +452,11 @@ large_row_fail_threshold_mb: 20
 # Set to 0 to disable.
 large_cell_fail_threshold_mb: 2
 
+# When true, soft limit violations detected by the coordinator-side large data
+# guardrail check are reported to the client as CQL warnings in the response
+# frame. When false, only server-side logging is performed.
+large_data_cql_warnings: true
+
 # Log a warning when row number is larger than this value
 # compaction_rows_count_warning_threshold: 100000
 
