@@ -55,6 +55,14 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const std::
 incremental_backlog_tracker::incremental_backlog_tracker(incremental_compaction_strategy_options options) : _options(std::move(options)) {}
 
 double incremental_backlog_tracker::backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
+    if (_backlog_dirty) {
+        auto result = calculate_sstables_backlog_contribution(_all, _options, _threshold);
+        _total_backlog_bytes = result.total_backlog_bytes;
+        _sstables_backlog_contribution = result.sstables_backlog_contribution;
+        _sstable_runs_contributing_backlog = std::move(result.sstable_runs_contributing_backlog);
+        _backlog_dirty = false;
+    }
+
     inflight_component compacted = compacted_backlog(oc);
 
     // Bail out if effective backlog is zero
@@ -83,7 +91,6 @@ void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::s
     auto all = _all;
     auto total_bytes = _total_bytes;
     auto threshold = _threshold;
-    auto backlog_calculation_result = incremental_backlog_tracker::backlog_calculation_result{};
     for (auto&& sst : new_ssts) {
     if (sst->data_size() > 0) {
         // note: we don't expect failed insertions since each sstable will be inserted once
@@ -94,23 +101,15 @@ void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::s
     }
     }
 
-    bool exhausted_input_run = false;
     for (auto&& sst : old_ssts) {
     if (sst->data_size() > 0) {
         auto run_identifier = sst->run_identifier();
         all[run_identifier].erase(sst);
         if (all[run_identifier].all().empty()) {
             all.erase(run_identifier);
-            exhausted_input_run = true;
         }
         total_bytes -= sst->data_size();
     }
-    }
-    // Backlog contribution will only be refreshed when an input SSTable run was exhausted by
-    // compaction, so to avoid doing it for each exhausted fragment, which would be both
-    // overkill and expensive.
-    if (exhausted_input_run) {
-        backlog_calculation_result = calculate_sstables_backlog_contribution(all, _options, threshold);
     }
 
     // commit calculations
@@ -118,12 +117,9 @@ void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::s
         _all = std::move(all);
         _total_bytes = total_bytes;
         _threshold = threshold;
-
-        if (exhausted_input_run) {
-            _total_backlog_bytes = backlog_calculation_result.total_backlog_bytes;
-            _sstables_backlog_contribution = backlog_calculation_result.sstables_backlog_contribution;
-            _sstable_runs_contributing_backlog = std::move(backlog_calculation_result.sstable_runs_contributing_backlog);
-        }
+        // Defer backlog contribution recalculation to the next backlog() call,
+        // avoiding O(N^2) cost when many sstables are added in a batch (e.g. boot).
+        _backlog_dirty = true;
     });
 }
 
