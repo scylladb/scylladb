@@ -2,6 +2,7 @@
 #include "raft/raft.hh"
 #include "replication.hh"
 #include "utils/error_injection.hh"
+#include "test/lib/error_injection.hh"
 #include <seastar/util/defer.hh>
 
 #ifdef SEASTAR_DEBUG
@@ -264,9 +265,7 @@ static void test_add_entry_load_snapshot_before_wait_aux(raft::wait_type type, b
     auto fut = server.add_entry(create_command(42), type, nullptr);
 
     // Wait for add_entry(42) to reach the injection point.
-    while (utils::get_local_injector().is_enabled("block_raft_add_entry_before_wait_for_entry")) {
-        seastar::thread::yield();
-    }
+    wait_for_injection_enter("block_raft_add_entry_before_wait_for_entry").get();
 
     // Wait for the entry to be applied.
     server.read_barrier(nullptr).get();
