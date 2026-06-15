@@ -37,6 +37,7 @@ private:
     std::optional<cql3::expr::expression> _timeout;
     std::optional<sstring> _service_level;
     std::optional<cql3::expr::expression> _concurrency;
+    bool _bypass_large_data_guardrails = false;
 public:
     static std::unique_ptr<attributes> none();
 private:
@@ -44,7 +45,8 @@ private:
                std::optional<cql3::expr::expression>&& time_to_live,
                std::optional<cql3::expr::expression>&& timeout,
                std::optional<sstring> service_level,
-               std::optional<cql3::expr::expression>&& concurrency);
+               std::optional<cql3::expr::expression>&& concurrency,
+               bool bypass_large_data_guardrails);
 public:
     bool is_timestamp_set() const;
 
@@ -55,6 +57,8 @@ public:
     bool is_service_level_set() const;
 
     bool is_concurrency_set() const;
+
+    bool is_bypass_large_data_guardrails() const;
 
     int64_t get_timestamp(int64_t now, const query_options& options);
 
@@ -75,6 +79,7 @@ public:
         std::optional<cql3::expr::expression> timeout;
         std::optional<sstring> service_level;
         std::optional<cql3::expr::expression> concurrency;
+        bool bypass_large_data_guardrails = false;
 
         std::unique_ptr<attributes> prepare(data_dictionary::database db, const sstring& ks_name, const sstring& cf_name) const;
     private:

@@ -334,7 +334,8 @@ modification_statement::execute_without_condition(query_processor& qp, service::
         }
 
         return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write(), {
-            .node_local_only = options.get_specific_options().node_local_only
+            .node_local_only = options.get_specific_options().node_local_only,
+            .bypass_large_data_guardrails = this->attrs->is_bypass_large_data_guardrails()
         });
     });
 }
@@ -451,7 +452,8 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
 
     return qp.proxy().cas(s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (bool is_applied) mutable {
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout, true, {},
+            attrs->is_bypass_large_data_guardrails()).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (bool is_applied) mutable {
         auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
         if (tablet_info) {
             result->add_tablet_info(std::move(*tablet_info));

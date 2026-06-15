@@ -337,12 +337,12 @@ public:
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, const std::optional<tracing::trace_info>& trace_info,
             const frozen_mutation& m, const host_id_vector_replica_set& forward, gms::inet_address reply_to_ip, locator::host_id reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info,
-            fencing_token fence) {
+            fencing_token fence, bool skip_large_data_guardrails = false) {
         inet_address_vector_replica_set forward_ips;
         return ser::storage_proxy_rpc_verbs::send_mutation(
                 &_ms, std::move(addr), timeout,
                 m, get_forward_ips_if_needed(forward), reply_to_ip, shard,
-                response_id, trace_info, rate_limit_info, fence, forward, reply_to);
+                response_id, trace_info, rate_limit_info, fence, forward, reply_to, skip_large_data_guardrails);
     }
 
     future<> send_hint_mutation(
@@ -700,23 +700,25 @@ private:
             rpc::optional<std::optional<tracing::trace_info>> trace_info,
             rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt,
             rpc::optional<fencing_token> fence,
-            rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id) {
+            rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id,
+            rpc::optional<bool> skip_large_data_guardrails_opt) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
+        auto skip_large_data_guardrails = skip_large_data_guardrails_opt.value_or(false);
 
         auto schema_version = in.schema_version();
         return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, std::move(forward_id), reply_to_id, shard, response_id,
                 trace_info ? *trace_info : std::nullopt,
                 fence.value_or(fencing_token{}),
-                /* apply_fn */ [smp_grp, rate_limit_info] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
+                /* apply_fn */ [smp_grp, rate_limit_info, skip_large_data_guardrails] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
                         clock_type::time_point timeout) {
-                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
+                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info, skip_large_data_guardrails);
                 },
-                /* forward_fn */ [this, rate_limit_info] (shared_ptr<storage_proxy>& p, locator::host_id addr, clock_type::time_point timeout, const frozen_mutation& m,
+                /* forward_fn */ [this, rate_limit_info, skip_large_data_guardrails] (shared_ptr<storage_proxy>& p, locator::host_id addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
                         const std::optional<tracing::trace_info>& trace_info, fencing_token fence) {
-                    return send_mutation(addr, timeout, trace_info, m, {}, ip, reply_to, shard, response_id, rate_limit_info, fence);
+                    return send_mutation(addr, timeout, trace_info, m, {}, ip, reply_to, shard, response_id, rate_limit_info, fence, skip_large_data_guardrails);
                 });
     }
 
@@ -732,7 +734,7 @@ private:
 
         return receive_mutation_handler(_sp._hints_write_smp_service_group, cinfo, t, std::move(in),
             std::move(forward), std::move(reply_to), shard, response_id, std::move(trace_info),
-            std::monostate(), fence, std::move(forward_id), std::move(reply_to_id));
+            std::monostate(), fence, std::move(forward_id), std::move(reply_to_id), rpc::optional<bool>{});
     }
 
     future<rpc::no_wait_type> handle_paxos_learn(
@@ -1395,11 +1397,11 @@ public:
             tracing::trace_state_ptr tr_state) = 0;
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm) = 0;
+            const locator::effective_replication_map& erm, bool skip_large_data_guardrails) = 0;
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            fencing_token fence) = 0;
+            fencing_token fence, bool skip_large_data_guardrails) = 0;
     virtual bool is_shared() = 0;
     size_t size() const {
         return _size;
@@ -1442,24 +1444,25 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm) override {
+            const locator::effective_replication_map& erm, bool skip_large_data_guardrails) override {
         const auto my_id = sp.my_host_id(erm);
         auto m = _mutations[my_id];
         if (m) {
             tracing::trace(tr_state, "Executing a mutation locally");
-            return sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info);
+            return sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info, skip_large_data_guardrails);
         }
         return make_ready_future<>();
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence, bool skip_large_data_guardrails) override {
         auto m = _mutations[ep];
         if (m) {
             tracing::trace(tr_state, "Sending a mutation to /{}", ep);
             return sp.remote().send_mutation(ep, timeout, tracing::make_trace_info(tr_state),
                     *m, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(),
-                    response_id, rate_limit_info, fence);
+                    response_id, rate_limit_info, fence, skip_large_data_guardrails);
         }
         sp.got_response(response_id, ep, std::nullopt);
         return make_ready_future<>();
@@ -1497,18 +1500,18 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm) override {
+            const locator::effective_replication_map& erm, bool skip_large_data_guardrails) override {
         tracing::trace(tr_state, "Executing a mutation locally");
-        return sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info);
+        return sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info, skip_large_data_guardrails);
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            fencing_token fence) override {
+            fencing_token fence, bool skip_large_data_guardrails) override {
         tracing::trace(tr_state, "Sending a mutation to /{}", ep);
         return sp.remote().send_mutation(ep, timeout, tracing::make_trace_info(tr_state),
                 *_mutation, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(),
-                response_id, rate_limit_info, fence);
+                response_id, rate_limit_info, fence, skip_large_data_guardrails);
     }
     virtual bool is_shared() override {
         return true;
@@ -1528,7 +1531,7 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm) override {
+            const locator::effective_replication_map& erm, bool /*skip_large_data_guardrails*/) override {
         if (current_scheduling_group() != debug::streaming_scheduling_group) {
             on_internal_error(dblog, format("attempted to apply hint in {} scheduling group", current_scheduling_group().name()));
         }
@@ -1538,7 +1541,8 @@ public:
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence, bool /*skip_large_data_guardrails*/) override {
         return sp.remote().send_hint_mutation(ep, timeout, tr_state,
                 *_mutation, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(), response_id, rate_limit_info, fence);
     }
@@ -1662,14 +1666,15 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm) override {
+            const locator::effective_replication_map& erm, bool /*skip_large_data_guardrails*/) override {
         tracing::trace(tr_state, "Executing a learn locally");
         // TODO: Enforce per partition rate limiting in paxos
         return paxos::paxos_state::learn(sp, sp.remote().paxos_store(), _schema, *_proposal, timeout, tr_state);
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence, bool /*skip_large_data_guardrails*/) override {
         tracing::trace(tr_state, "Sending a learn to /{}", ep);
         // TODO: Enforce per partition rate limiting in paxos
         return sp.remote().send_paxos_learn(ep, timeout, tracing::make_trace_info(tr_state),
@@ -1725,6 +1730,7 @@ protected:
     timer<storage_proxy::clock_type> _expire_timer;
     service_permit _permit; // holds admission permit until operation completes
     db::per_partition_rate_limit::info _rate_limit_info;
+    bool _skip_large_data_guardrails = false;
     db::view::update_backlog _view_backlog; // max view update backlog of all participating targets
     utils::small_vector<gate::holder, 2> _holders;
 
@@ -1807,6 +1813,9 @@ public:
 
     void set_cdc_operation_result_tracker(lw_shared_ptr<cdc::operation_result_tracker> tracker) {
         _cdc_operation_result_tracker = std::move(tracker);
+    }
+    void set_skip_large_data_guardrails(bool skip) {
+        _skip_large_data_guardrails = skip;
     }
 
     // While delayed, a request is not throttled.
@@ -1984,7 +1993,7 @@ public:
             _proxy->my_host_id(erm),
             [this, timeout, tr_state = std::move(tr_state)]() mutable {
                 return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
-                    _rate_limit_info, *_effective_replication_map_ptr);
+                    _rate_limit_info, *_effective_replication_map_ptr, _skip_large_data_guardrails);
             });
     }
     future<> apply_remotely(locator::host_id ep, const host_id_vector_replica_set& forward,
@@ -1992,7 +2001,7 @@ public:
             tracing::trace_state_ptr tr_state) {
         return _mutation_holder->apply_remotely(*_proxy, ep, forward,
             response_id, timeout, std::move(tr_state), _rate_limit_info,
-            storage_proxy::get_fence(*_effective_replication_map_ptr));
+            storage_proxy::get_fence(*_effective_replication_map_ptr), _skip_large_data_guardrails);
     }
     const schema_ptr& get_schema() const {
         return _mutation_holder->schema();
@@ -2885,7 +2894,7 @@ future<result<>> storage_proxy::response_wait(storage_proxy::response_id_type id
 result<storage_proxy::response_id_type> storage_proxy::make_write_response_handler(locator::effective_replication_map_ptr ermp,
                              db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
                              host_id_vector_replica_set targets, const host_id_vector_topology_change& pending_endpoints, host_id_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
-                             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable cancellable)
+                             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable cancellable, bool skip_large_data_guardrails)
 {
     shared_ptr<abstract_write_response_handler> h;
     auto& rs = ermp->get_replication_strategy();
@@ -2897,6 +2906,7 @@ result<storage_proxy::response_id_type> storage_proxy::make_write_response_handl
     } else {
         h = ::make_shared<write_response_handler>(shared_from_this(), std::move(ermp), cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info, cancellable);
     }
+    h->set_skip_large_data_guardrails(skip_large_data_guardrails);
     return bo::success(register_response_handler(std::move(h)));
 }
 
@@ -3813,7 +3823,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     db::assure_sufficient_live_nodes(cl, *erm, live_endpoints, pending_endpoints);
 
     return make_write_response_handler(std::move(erm), cl, type, std::move(mh), std::move(live_endpoints), pending_endpoints,
-            std::move(dead_endpoints), std::move(tr_state), get_stats(), std::move(permit), rate_limit_info, cancellable);
+            std::move(dead_endpoints), std::move(tr_state), get_stats(), std::move(permit), rate_limit_info, cancellable, options.bypass_large_data_guardrails);
 }
 
 /**
@@ -4289,8 +4299,10 @@ storage_proxy::mutate_with_triggers(utils::chunked_vector<mutation> mutations, d
     bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, coordinator_mutate_options options) {
     warn(unimplemented::cause::TRIGGERS);
 
-    for (const mutation& m : mutations) {
-        m.schema()->table().get_large_data_guardrail()->check_coordinator(*m.schema(), m.partition(), m.key());
+    if (!options.bypass_large_data_guardrails) {
+        for (const mutation& m : mutations) {
+            m.schema()->table().get_large_data_guardrail()->check_coordinator(*m.schema(), m.partition(), m.key());
+        }
     }
 
     if (should_mutate_atomically) {
@@ -6896,7 +6908,8 @@ static mutation_write_failure_exception read_failure_to_write(read_failure_excep
 future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_request& request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges, storage_proxy::coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
-        clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write, cdc::per_request_options cdc_opts) {
+        clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write, cdc::per_request_options cdc_opts,
+        bool bypass_large_data_guardrails) {
 
     auto& table = local_db().find_column_family(schema->id());
     if (table.uses_tablets()) {
@@ -6972,6 +6985,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
         auto l = co_await paxos::paxos_state::get_cas_lock(token, write_timeout);
 
         co_await utils::get_local_injector().inject("cas_timeout_after_lock", write_timeout + std::chrono::milliseconds(100));
+        auto ld_guardrail = bypass_large_data_guardrails ? db::noop_large_data_guardrail::instance() : table.get_large_data_guardrail();
 
         while (true) {
             // Finish the previous PAXOS round, if any, and, as a side effect, compute
@@ -7011,7 +7025,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
                 // since the value we are writing is dummy we may use minimal consistency level for learn
                 handler->set_cl_for_learn(db::consistency_level::ANY);
             } else {
-                table.get_large_data_guardrail()->check_coordinator(
+                ld_guardrail->check_coordinator(
                         *schema, mutation->partition(), mutation->key());
                 paxos::paxos_state::logger.debug("CAS[{}] precondition is met; proposing client-requested updates for {}",
                         handler->id(), ballot);

@@ -671,6 +671,7 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
       ( usingTimestampTimeoutClause[attrs] )?
       K_WHERE wclause=whereClause
       ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions { cond_opt = std::move(conditions); } ))?
+      ( K_BYPASS K_LARGE_DATA_GUARDRAILS { attrs->bypass_large_data_guardrails = true; } )?
       {
           return std::make_unique<raw::delete_statement>(cf,
                                             std::move(attrs),
@@ -2208,6 +2209,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_JSON
         | K_CACHE
         | K_BYPASS
+        | K_LARGE_DATA_GUARDRAILS
         | K_LIKE
         | K_PER
         | K_PARTITION
@@ -2414,6 +2416,7 @@ K_EMPTY:       E M P T Y;
 
 K_BYPASS:      B Y P A S S;
 K_CACHE:       C A C H E;
+K_LARGE_DATA_GUARDRAILS: L A R G E '_' D A T A '_' G U A R D R A I L S;
 
 K_PER:         P E R;
 K_PARTITION:   P A R T I T I O N;

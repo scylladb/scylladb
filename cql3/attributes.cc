@@ -20,14 +20,15 @@
 namespace cql3 {
 
 std::unique_ptr<attributes> attributes::none() {
-    return std::unique_ptr<attributes>{new attributes{{}, {}, {}, {}, {}}};
+    return std::unique_ptr<attributes>{new attributes{{}, {}, {}, {}, {}, false}};
 }
 
 attributes::attributes(std::optional<cql3::expr::expression>&& timestamp,
                        std::optional<cql3::expr::expression>&& time_to_live,
                        std::optional<cql3::expr::expression>&& timeout,
                        std::optional<sstring> service_level,
-                       std::optional<cql3::expr::expression>&& concurrency)
+                       std::optional<cql3::expr::expression>&& concurrency,
+                       bool bypass_large_data_guardrails)
     : _timestamp_unset_guard(timestamp)
     , _timestamp{std::move(timestamp)}
     , _time_to_live_unset_guard(time_to_live)
@@ -35,6 +36,7 @@ attributes::attributes(std::optional<cql3::expr::expression>&& timestamp,
     , _timeout{std::move(timeout)}
     , _service_level(std::move(service_level))
     , _concurrency{std::move(concurrency)}
+    , _bypass_large_data_guardrails{bypass_large_data_guardrails}
 { }
 
 bool attributes::is_timestamp_set() const {
@@ -55,6 +57,10 @@ bool attributes::is_service_level_set() const {
 
 bool attributes::is_concurrency_set() const {
     return bool(_concurrency);
+}
+
+bool attributes::is_bypass_large_data_guardrails() const {
+    return _bypass_large_data_guardrails;
 }
 
 int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
@@ -188,7 +194,7 @@ std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database d
         verify_no_aggregate_functions(*concurrency, "USING clause");
     }
 
-    return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to), std::move(service_level), std::move(conc)}};
+    return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to), std::move(service_level), std::move(conc), bypass_large_data_guardrails}};
 }
 
 lw_shared_ptr<column_specification> attributes::raw::timestamp_receiver(const sstring& ks_name, const sstring& cf_name) const {
