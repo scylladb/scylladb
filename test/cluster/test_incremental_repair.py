@@ -882,7 +882,7 @@ async def test_tablet_incremental_repair_table_drop_compaction_group_gone(manage
 # on the affected replica leading to data resurrection.
 
 class _LeadershipTransferred(Exception):
-    """Raised when leadership transferred to servers[1] during the test, requiring a retry."""
+    """Raised when coordinator interference requires retrying the race-window test."""
     pass
 
 async def _setup_table_for_race_window(manager, servers, cql):
@@ -952,8 +952,10 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     coord_mark = await coord_log.mark()
 
     # Hold the race window open: prevent the coordinator from committing
-    # end_repair + sstables_repaired_at=2 to Raft.
-    await manager.api.enable_injection(coord_serv.ip_addr, "delay_end_repair_update", one_shot=False)
+    # end_repair + sstables_repaired_at=2 to Raft.  Enable the injection on
+    # every node so the window remains held even if leadership changes while
+    # servers[1] is restarted.
+    await inject_error_on(manager, "delay_end_repair_update", servers)
 
     repair_response = await manager.api.tablet_repair(
         servers[0].ip_addr, ks, "test", token,
@@ -983,6 +985,13 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     pos, _ = await coord_log.wait_for("Finished tablet repair host=", from_mark=coord_mark)
     post_marks_pos, _ = await coord_log.wait_for("Finished tablet repair host=", from_mark=pos)
 
+    # From this point on, any additional tablet repair RPC for this repair stage
+    # is a residual re-repair.  Skip it deterministically so it cannot flush
+    # post-repair memtables and contaminate the repaired set while this test is
+    # exercising the compaction race window.  Enable it everywhere so a new
+    # coordinator after servers[1] restarts is covered too.
+    await inject_error_on(manager, "skip_tablet_repair_rpc", servers)
+
     # --- Race window is open ---
     # Write post-repair keys 20-29.  All nodes receive the writes into their memtables
     # (RF=3, hinted handoff disabled).
@@ -1007,20 +1016,25 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     # With the classifier fix: S1' has repaired_at==sstables_repaired_at+1 and the tablet
     # is still in the `repair` stage, so it is classified REPAIRING (compaction disabled),
     # and the merge never happens.
+    await manager.server_update_config(target.server_id, "error_injections_at_startup",
+                                       ["delay_end_repair_update", "skip_tablet_repair_rpc"])
     await manager.server_stop_gracefully(target.server_id)
     await manager.server_start(target.server_id)
+    await manager.server_remove_config_option(target.server_id, "error_injections_at_startup")
     await manager.servers_see_each_other(servers)
 
-    # Check if leadership transferred during the restart.  Any coordinator
-    # change (not just to servers[1]) can trigger a residual re-repair that
-    # flushes memtables on all replicas and marks post-repair data as repaired,
-    # masking the bug this test detects.
+    # Check if leadership transferred during the restart.  This used to make
+    # the attempt invalid because a new coordinator could close the race window
+    # or re-run the repair RPC.  The test now enables delay_end_repair_update
+    # and skip_tablet_repair_rpc on all nodes, so a new coordinator remains
+    # under the same controls.  Keep tracking the current coordinator for logs.
     new_coord = await get_topology_coordinator(manager)
     if new_coord != coord:
-        await manager.api.disable_injection(coord_serv.ip_addr, "delay_end_repair_update")
-        await manager.api.wait_task(servers[0].ip_addr, task_id)
-        raise _LeadershipTransferred(
-            f"topology coordinator changed from {coord} to {new_coord} after restart")
+        logger.warning(f"Topology coordinator changed from {coord} to {new_coord} after restart")
+        coord = new_coord
+        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        coord_log = await manager.server_open_log(coord_serv.server_id)
+        post_marks_pos = await coord_log.mark()
 
     # Even without a coordinator change, check if the coordinator initiated a
     # residual re-repair (e.g. after seeing tablets stuck in the repair stage
@@ -1029,7 +1043,8 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     rerepair_matches = await coord_log.grep("Initiating tablet repair host=", from_mark=post_marks_pos)
     if rerepair_matches:
         logger.warning(f"Coordinator initiated residual re-repair post-restart: {rerepair_matches[0][1]}")
-        await manager.api.disable_injection(coord_serv.ip_addr, "delay_end_repair_update")
+        await inject_error_off(manager, "delay_end_repair_update", servers)
+        await inject_error_off(manager, "skip_tablet_repair_rpc", servers)
         await manager.api.wait_task(servers[0].ip_addr, task_id)
         raise _LeadershipTransferred(
             "coordinator initiated residual re-repair after restart")
@@ -1051,15 +1066,17 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
         rerepair_matches = await coord_log.grep("Initiating tablet repair host=", from_mark=post_marks_pos)
         if rerepair_matches:
             logger.warning(f"Coordinator initiated residual re-repair during poll: {rerepair_matches[0][1]}")
-            await manager.api.disable_injection(coord_serv.ip_addr, "delay_end_repair_update")
+            await inject_error_off(manager, "delay_end_repair_update", servers)
+            await inject_error_off(manager, "skip_tablet_repair_rpc", servers)
             await manager.api.wait_task(servers[0].ip_addr, task_id)
             raise _LeadershipTransferred(
                 "coordinator initiated residual re-repair during compaction poll")
         await asyncio.sleep(1)
 
     # --- Release the race window ---
-    await manager.api.disable_injection(coord_serv.ip_addr, "delay_end_repair_update")
+    await inject_error_off(manager, "delay_end_repair_update", servers)
     await manager.api.wait_task(servers[0].ip_addr, task_id)
+    await inject_error_off(manager, "skip_tablet_repair_rpc", servers)
 
     # Final re-repair check after injection release: the coordinator may have
     # queued a re-repair that only executes once the injection is lifted.
@@ -1143,17 +1160,19 @@ async def test_incremental_repair_race_window_promotes_unrepaired_data(manager: 
     # coordinator check and the restart, the coordinator change masks the bug.
     # Detect and retry with a fresh keyspace.
     max_attempts = 5
+    retry_reasons = []
     for attempt in range(1, max_attempts + 1):
         try:
             current_key = await _do_race_window_promotes_unrepaired_data(
                 manager, servers, cql, ks, 'all', scylla_path, current_key)
             return
         except _LeadershipTransferred as e:
+            retry_reasons.append(str(e))
             logger.warning(f"Attempt {attempt}/{max_attempts}: {e}.  Retrying.")
             ks, current_key = await _setup_table_for_race_window(manager, servers, cql)
 
-    pytest.fail(f"Leadership kept transferring to servers[1] after {max_attempts} attempts; "
-                "could not run the test without coordinator interference.")
+    pytest.fail(f"Could not run the test without coordinator interference after {max_attempts} attempts. "
+                f"Retry reasons: {retry_reasons}")
 
 # ----------------------------------------------------------------------------
 # Tombstone GC safety tests
