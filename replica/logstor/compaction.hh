@@ -329,9 +329,10 @@ public:
 
     virtual void add(logstor_group&) = 0;
 
-    virtual void submit_all() = 0;
+    virtual void schedule_auto_compaction() = 0;
 
     virtual void submit(logstor_group&) = 0;
+    virtual future<> submit_and_wait(logstor_group&) = 0;
 
     virtual future<> stop_ongoing_compactions(logstor_group&) = 0;
     virtual future<> remove(logstor_group&) = 0;
