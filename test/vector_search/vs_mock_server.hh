@@ -122,6 +122,14 @@ public:
         search_response_delay(delay);
     }
 
+    const std::vector<request>& index_status_requests() const {
+        return _index_status_requests;
+    }
+
+    void next_index_status_response(response response) {
+        _next_index_status_response = std::move(response);
+    }
+
 private:
     static response default_response(mode m) {
         if (m == mode::bm25) {
@@ -174,12 +182,29 @@ private:
         co_return rep;
     }
 
+    seastar::future<std::unique_ptr<seastar::http::reply>> handle_index_status_request(
+            std::unique_ptr<seastar::http::request> req, std::unique_ptr<seastar::http::reply> rep) {
+        request r{.path = INDEXES_PATH + "/" + req->get_path_param("path"),
+                .body = co_await util::read_entire_stream_contiguous(*req->content_stream)};
+        _index_status_requests.push_back(std::move(r));
+        rep->set_status(_next_index_status_response.status);
+        rep->write_body("json", _next_index_status_response.body);
+        co_return rep;
+    }
+
     void set_routes(seastar::httpd::routes& r) {
         r.add(seastar::httpd::operation_type::POST, seastar::httpd::url(INDEXES_PATH).remainder("path"),
                 new seastar::httpd::function_handler(
                         [this](std::unique_ptr<seastar::http::request> req,
                                 std::unique_ptr<seastar::http::reply> rep) -> seastar::future<std::unique_ptr<seastar::http::reply>> {
                             return handle_search_request(std::move(req), std::move(rep));
+                        },
+                        "json"));
+        r.add(seastar::httpd::operation_type::GET, seastar::httpd::url(INDEXES_PATH).remainder("path"),
+                new seastar::httpd::function_handler(
+                        [this](std::unique_ptr<seastar::http::request> req,
+                                std::unique_ptr<seastar::http::reply> rep) -> seastar::future<std::unique_ptr<seastar::http::reply>> {
+                            return handle_index_status_request(std::move(req), std::move(rep));
                         },
                         "json"));
         r.add(seastar::httpd::operation_type::GET, seastar::httpd::url("/api/v1/status").remainder("status"),
@@ -197,9 +222,11 @@ private:
     std::unique_ptr<seastar::httpd::http_server> _http_server;
     std::vector<request> _search_requests;
     std::vector<request> _status_requests;
+    std::vector<request> _index_status_requests;
     response _next_search_response = default_response(_mode);
     std::chrono::seconds _search_response_delay = std::chrono::seconds(0);
     response _next_status_response{seastar::http::reply::status_type::ok, rjson::quote_json_string("SERVING")};
+    response _next_index_status_response{seastar::http::reply::status_type::ok, R"({"status":"SERVING","count":0,"build_progress":100.0})"};
     const seastar::sstring INDEXES_PATH = "/api/v1/indexes";
     seastar::httpd::http_server::server_credentials_ptr _credentials;
 };
