@@ -67,9 +67,40 @@ class AuditRowMustNotExistError(Exception):
 class AuditTester:
     audit_default_settings = {"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
 
-    def __init__(self, manager: ManagerClient):
+    def __init__(self, manager: ManagerClient, rules_mode: bool = False):
         self.manager = manager
         self._prev_config_keys: set[str] = set()
+        # When True, legacy audit_categories/keyspaces/tables config is
+        # translated into an equivalent audit_rules entry so the same auditing
+        # intent is exercised through the granular rules path.
+        self.rules_mode = rules_mode
+
+    def _legacy_config_as_rules(self, target_config: dict[str, Any]) -> dict[str, Any]:
+        """Translate legacy audit_categories/keyspaces/tables into an equivalent
+        single audit_rules entry, routed to the globally enabled sinks. The
+        legacy filters are cleared so only the rule drives auditing.
+
+        audit_rules is set as a native list (not a JSON string): the server
+        config path serializes it to YAML, matching how the dedicated
+        audit_rules tests pass it.
+        """
+        cfg = dict(target_config)
+        sinks = [s.strip() for s in (cfg.get("audit") or "").split(",") if s.strip() and s.strip() != "none"]
+        categories = [c.strip() for c in cfg.get("audit_categories", "").split(",") if c.strip()]
+        patterns = [f"{ks.strip()}.*" for ks in cfg.get("audit_keyspaces", "").split(",") if ks.strip()]
+        patterns += [t.strip() for t in cfg.get("audit_tables", "").split(",") if t.strip()]
+        for key in ("audit_categories", "audit_keyspaces", "audit_tables"):
+            cfg[key] = ""
+        if sinks and categories:
+            cfg["audit_rules"] = [{
+                "sinks": sinks,
+                "categories": categories,
+                "qualified_table_names": patterns,
+                "roles": ["*"],
+            }]
+        else:
+            cfg["audit_rules"] = []
+        return cfg
 
     def _build_server_config(self, target_config: dict[str, str],
                              enable_compact_storage: bool,
@@ -189,7 +220,9 @@ class AuditTester:
                 config=cfg, property_file=property_file[0],
                 cmdline=cmdline, start=False, connect_driver=False)
             # Start it with an explicit self-seed so it doesn't try the dead IP.
-            await self.manager.server_start(first.server_id, seeds=[first.ip_addr])
+            # Defer the driver connection so it can be made with auth below.
+            await self.manager.server_start(first.server_id, seeds=[first.ip_addr],
+                                            connect_driver=False)
             server_infos = [first]
             if len(property_file) > 1:
                 rest = await self.manager.servers_add(
@@ -198,6 +231,7 @@ class AuditTester:
                     cmdline=cmdline,
                     driver_connect_opts=connect_opts)
                 server_infos.extend(rest)
+            await self.manager.driver_connect(**connect_opts)
         else:
             server_infos = await self.manager.servers_add(
                 servers_num=len(property_file), config=cfg,
@@ -224,6 +258,8 @@ class AuditTester:
             List of server IP addresses.
         """
         target_config = helper.update_audit_settings(audit_settings)
+        if self.rules_mode:
+            target_config = self._legacy_config_as_rules(target_config)
         absent_keys = self._prev_config_keys - target_config.keys()
         auth_provider = PlainTextAuthProvider(username=user, password=password or "") if user else None
         expected_servers = len(property_file) if property_file else rf
@@ -558,8 +594,8 @@ class CQLAuditTester(AuditTester):
 
     AUDIT_LOG_QUERY = "SELECT * FROM audit.audit_log"
 
-    def __init__(self, manager: ManagerClient, helper: AuditBackend | None = None):
-        super().__init__(manager)
+    def __init__(self, manager: ManagerClient, helper: AuditBackend | None = None, rules_mode: bool = False):
+        super().__init__(manager, rules_mode=rules_mode)
         self.server_addresses: list[str] = []
         self.helper: AuditBackend | None = helper
 
@@ -2448,9 +2484,19 @@ class CQLAuditTester(AuditTester):
 
 # AuditBackendTable, no auth, rf=1
 
-async def test_audit_table_noauth(manager: ManagerClient):
+# Run the behavioral audit tests under both the legacy
+# audit_categories/keyspaces/tables config and an equivalent audit_rules
+# config, so the granular rules path is verified to produce the same results.
+verify_legacy_and_rules = pytest.mark.parametrize("rules_mode", [
+    pytest.param(False, id="legacy"),
+    pytest.param(True, id="rules"),
+])
+
+
+@verify_legacy_and_rules
+async def test_audit_table_noauth(manager: ManagerClient, rules_mode: bool):
     """Table backend, no auth, single node — groups all tests that share this config."""
-    t = CQLAuditTester(manager)
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_using_non_existent_keyspace(AuditBackendTable)
     await t._test_audit_keyspace(AuditBackendTable)
     await t._test_audit_keyspace_extra_parameter(AuditBackendTable)
@@ -2474,9 +2520,10 @@ async def test_audit_table_noauth(manager: ManagerClient):
 
 # AuditBackendTable, auth (cassandra), rf=1
 
-async def test_audit_table_auth(manager: ManagerClient):
+@verify_legacy_and_rules
+async def test_audit_table_auth(manager: ManagerClient, rules_mode: bool):
     """Table backend, auth enabled, single node."""
-    t = CQLAuditTester(manager)
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_user_password_masking(AuditBackendTable)
     await t._test_negative_audit_records_auth()
     await t._test_negative_audit_records_admin()
@@ -2490,9 +2537,10 @@ async def test_audit_table_auth(manager: ManagerClient):
 
 # AuditBackendTable, auth (cassandra), rf=3
 
-async def test_audit_table_auth_multinode(manager: ManagerClient):
+@verify_legacy_and_rules
+async def test_audit_table_auth_multinode(manager: ManagerClient, rules_mode: bool):
     """Table backend, auth enabled, multi-node (rf=3)."""
-    t = CQLAuditTester(manager)
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_negative_audit_records_ddl()
 
 
@@ -2528,19 +2576,22 @@ async def test_audit_categories_invalid_standalone(manager: ManagerClient):
     await CQLAuditTester(manager)._test_audit_categories_invalid()
 
 
+# No verify_legacy_and_rules, because it's a replica failure test, so it's enough to test it in one mode
 async def test_insert_failure_standalone(manager: ManagerClient):
     """7-node topology, audit=table, no auth — standalone due to unique topology."""
     await CQLAuditTester(manager)._test_insert_failure_doesnt_report_success()
 
 
-async def test_service_level_statements_standalone(manager: ManagerClient):
+@verify_legacy_and_rules
+async def test_service_level_statements_standalone(manager: ManagerClient, rules_mode: bool):
     """audit=table, auth, cmdline=--smp 1 — standalone due to special cmdline."""
-    await CQLAuditTester(manager)._test_service_level_statements()
+    await CQLAuditTester(manager, rules_mode=rules_mode)._test_service_level_statements()
 
 
-async def test_audit_maintenance_socket_user_creation(manager: ManagerClient):
+@verify_legacy_and_rules
+async def test_audit_maintenance_socket_user_creation(manager: ManagerClient, rules_mode: bool):
     """Verify that creating a superuser via the maintenance socket is audited."""
-    t = CQLAuditTester(manager)
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_audit_maintenance_socket_user_creation(manager, AuditBackendTable)
     Syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
     await t._test_audit_maintenance_socket_user_creation(manager, Syslog)
@@ -2548,9 +2599,10 @@ async def test_audit_maintenance_socket_user_creation(manager: ManagerClient):
 
 # AuditBackendSyslog, no auth, rf=1
 
-async def test_audit_syslog_noauth(manager: ManagerClient):
+@verify_legacy_and_rules
+async def test_audit_syslog_noauth(manager: ManagerClient, rules_mode: bool):
     """Syslog backend, no auth, single node."""
-    t = CQLAuditTester(manager)
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
     Syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
     await t._test_using_non_existent_keyspace(Syslog)
     await t._test_audit_keyspace(Syslog)
@@ -2567,9 +2619,10 @@ async def test_audit_syslog_noauth(manager: ManagerClient):
 
 # AuditBackendSyslog, auth, rf=1
 
-async def test_audit_syslog_auth(manager: ManagerClient):
+@verify_legacy_and_rules
+async def test_audit_syslog_auth(manager: ManagerClient, rules_mode: bool):
     """Syslog backend, auth enabled, single node."""
-    t = CQLAuditTester(manager)
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
     Syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
     await t._test_user_password_masking(Syslog)
     await t._test_role_password_masking(Syslog)
@@ -2578,9 +2631,10 @@ async def test_audit_syslog_auth(manager: ManagerClient):
 
 # AuditBackendComposite, no auth, rf=1
 
-async def test_audit_composite_noauth(manager: ManagerClient):
+@verify_legacy_and_rules
+async def test_audit_composite_noauth(manager: ManagerClient, rules_mode: bool):
     """Composite backend (table+syslog), no auth, single node."""
-    t = CQLAuditTester(manager)
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
     Composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_path)
     await t._test_using_non_existent_keyspace(Composite)
     await t._test_audit_keyspace(Composite)
@@ -2597,9 +2651,10 @@ async def test_audit_composite_noauth(manager: ManagerClient):
 
 # AuditBackendComposite, auth, rf=1
 
-async def test_audit_composite_auth(manager: ManagerClient):
+@verify_legacy_and_rules
+async def test_audit_composite_auth(manager: ManagerClient, rules_mode: bool):
     """Composite backend (table+syslog), auth enabled, single node."""
-    t = CQLAuditTester(manager)
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
     Composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_path)
     await t._test_user_password_masking(Composite)
     await t._test_role_password_masking(Composite)
@@ -2704,41 +2759,17 @@ async def test_upgrade_preserves_ddl_audit_for_tables(
     )
 
 
-async def test_audit_rules_matching(manager: ManagerClient):
-    """Tests for audit_rules behaviors not expressible with audit_categories/audit_keyspaces/audit_tables."""
+async def test_audit_rules(manager: ManagerClient):
+    """Behaviors specific to audit_rules that the legacy config cannot express."""
     await CQLAuditTester(manager)._test_audit_rules_matching()
-
-
-async def test_audit_rules_auth_empty_tables(manager: ManagerClient):
-    """AUTH category with empty qualified_table_names."""
-    await CQLAuditTester(manager)._test_audit_rules_auth_with_empty_tables()
-
-
-async def test_audit_rules_liveupdate(manager: ManagerClient):
-    """audit_rules can be live-updated."""
     await CQLAuditTester(manager)._test_audit_rules_liveupdate()
-
-
-async def test_audit_rules_sink_routing(manager: ManagerClient):
-    """audit_rules route events to the configured sinks."""
     await CQLAuditTester(manager)._test_audit_rules_sink_routing()
-
-
-async def test_audit_rules_role_filtering(manager: ManagerClient):
-    """audit_rules match the authenticated role."""
-    await CQLAuditTester(manager)._test_audit_rules_role_filtering()
-
-
-async def test_audit_rules_cache_notifications(manager: ManagerClient):
-    """Role and schema changes update audit rule caches."""
-    await CQLAuditTester(manager)._test_audit_rules_cache_notifications()
-
-
-async def test_audit_rules_cache_notifications_mv(manager: ManagerClient):
-    """Materialized view create/drop updates audit rule caches."""
-    await CQLAuditTester(manager)._test_audit_rules_cache_notifications_mv()
-
-
-async def test_audit_rules_sink_mismatch_warning(manager: ManagerClient):
-    """Rule sinks must be enabled by the global audit config."""
     await CQLAuditTester(manager)._test_audit_rules_sink_mismatch_warning()
+
+
+async def test_audit_rules_with_auth(manager: ManagerClient):
+    """audit_rules behaviors that require authentication: role filtering and cache notifications."""
+    await CQLAuditTester(manager)._test_audit_rules_role_filtering()
+    await CQLAuditTester(manager)._test_audit_rules_auth_with_empty_tables()
+    await CQLAuditTester(manager)._test_audit_rules_cache_notifications()
+    await CQLAuditTester(manager)._test_audit_rules_cache_notifications_mv()
