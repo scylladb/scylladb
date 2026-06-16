@@ -28,6 +28,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/http/client.hh>
 #include <seastar/http/request.hh>
 #include <seastar/net/dns.hh>
@@ -279,6 +280,47 @@ bool should_vector_store_service_be_disabled(std::vector<sstring> const& uris) {
     return uris.empty() || uris[0].empty();
 }
 
+using index_status = vector_search::vector_store_client::index_status;
+using index_node_status = vector_search::vector_store_client::index_node_status;
+using index_state = vector_search::vector_store_client::index_state;
+
+auto index_status_from_string(std::string_view sv) -> index_status {
+    if (sv == "SERVING") {
+        return index_status::serving;
+    }
+    if (sv == "BOOTSTRAPPING") {
+        return index_status::bootstrapping;
+    }
+    if (sv == "INITIALIZING") {
+        return index_status::initializing;
+    }
+    return index_status::unknown;
+}
+
+/// Parse the body of a GET /api/v1/indexes/{ks}/{idx}/status reply. Any
+/// problem reading or parsing the body yields a status of `unknown`.
+auto parse_index_state(rjson::chunked_content&& content) -> index_state {
+    auto result = index_state{.status = index_status::unknown};
+    try {
+        auto json = rjson::parse(std::move(content));
+        const auto* status = rjson::find(json, "status");
+        if (status && status->IsString()) {
+            result.status = index_status_from_string(rjson::to_string_view(*status));
+        }
+        const auto* count = rjson::find(json, "count");
+        if (count && count->IsUint64()) {
+            result.count = count->GetUint64();
+        }
+        const auto* progress = rjson::find(json, "build_progress");
+        if (progress && progress->IsNumber()) {
+            result.build_progress = progress->GetDouble();
+        }
+    } catch (...) {
+        return index_state{.status = index_status::unknown};
+    }
+    return result;
+}
+
 auto parse_uris(std::string_view uris_csv) -> std::vector<uri> {
     std::vector<uri> ret;
     auto uris = utils::split_comma_separated_list(uris_csv);
@@ -404,26 +446,39 @@ struct vector_store_client::impl {
         if (!resp || resp->status != status_type::ok) {
             co_return index_status::unknown;
         }
-        try {
-            auto json = rjson::parse(std::move(resp->content));
-            const auto* status = rjson::find(json, "status");
-            if (!status || !status->IsString()) {
-                co_return index_status::unknown;
+        co_return parse_index_state(std::move(resp->content)).status;
+    }
+
+    auto get_index_status_per_node(keyspace_name keyspace, index_name name, abort_source& as) -> future<std::vector<index_node_status>> {
+        using node_role = vector_store_client::node_role;
+        using node_connectivity = vector_store_client::node_connectivity;
+
+        std::vector<node_entry> nodes;
+        collect_nodes(nodes, node_role::primary, _primary_uris, _primary_clients);
+        collect_nodes(nodes, node_role::secondary, _secondary_uris, _secondary_clients);
+
+        // Query the reachable nodes concurrently, so that the overall latency
+        // is bound by the slowest node rather than by the sum of all of them.
+        auto path = format("/api/v1/indexes/{}/{}/status", keyspace, name);
+        co_await coroutine::parallel_for_each(nodes, [&](node_entry& n) -> future<> {
+            if (!n.status.endpoint || n.status.endpoint->connectivity != node_connectivity::up) {
+                co_return;
             }
-            auto sv = rjson::to_string_view(*status);
-            if (sv == "SERVING") {
-                co_return index_status::serving;
+            auto resp = co_await n.client->request(operation_type::GET, path, std::nullopt, as);
+            if (!resp || resp->status != status_type::ok) {
+                // A failed request may have marked the node unreachable.
+                n.status.endpoint->connectivity = n.client->is_up() ? node_connectivity::up : node_connectivity::down;
+                co_return;
             }
-            if (sv == "BOOTSTRAPPING") {
-                co_return index_status::bootstrapping;
-            }
-            if (sv == "INITIALIZING") {
-                co_return index_status::initializing;
-            }
-            co_return index_status::unknown;
-        } catch (...) {
-            co_return index_status::unknown;
+            n.status.state = parse_index_state(std::move(resp->content));
+        });
+
+        std::vector<index_node_status> ret;
+        ret.reserve(nodes.size());
+        for (auto& n : nodes) {
+            ret.push_back(std::move(n.status));
         }
+        co_return ret;
     }
 
     auto post_to_index(std::string_view op, http_path path, json_content content, abort_source& as) -> future<std::expected<reply_content, ann_error>> {
@@ -516,6 +571,75 @@ struct vector_store_client::impl {
 
         co_return std::unexpected{service_unavailable{}};
     }
+
+    struct node_entry {
+        index_node_status status;
+        seastar::lw_shared_ptr<client> client;
+    };
+
+    /// Append one entry per known node of the given role. Each configured URI
+    /// contributes one entry per resolved address (up/down depending on the
+    /// client's reachability), or a single entry without an endpoint when no address has
+    /// been resolved for it yet.
+    ///
+    /// Reads only what the background DNS refresh has resolved so far, never
+    /// resolving on demand, so that a host which cannot be resolved does not
+    /// delay the caller. Such a host is reported as `unknown` until a later
+    /// refresh resolves it.
+    ///
+    /// Must not preempt: it iterates the live client vector, which the DNS
+    /// refresh replaces. The clients it keeps in `out` are reference counted,
+    /// so they stay alive (and unclosed) after the refresh drops them.
+    static void collect_nodes(std::vector<node_entry>& out, vector_store_client::node_role role, const std::vector<uri>& uris, const clients& cs) {
+        using node_connectivity = vector_store_client::node_connectivity;
+        for (const auto& uri : uris) {
+            bool found = false;
+            for (const auto& c : cs.current()) {
+                const auto& ep = c->endpoint();
+                if (ep.host != uri.host || ep.port != uri.port) {
+                    continue;
+                }
+                // The same endpoint may be configured both as a primary and as
+                // a secondary node; report it once, under the first role.
+                if (std::ranges::any_of(out, [&](const node_entry& n) {
+                        return n.status.endpoint && n.status.endpoint->ip == ep.ip && n.status.port == ep.port;
+                    })) {
+                    found = true;
+                    continue;
+                }
+                found = true;
+                out.push_back(node_entry{
+                        .status = index_node_status{
+                                .role = role,
+                                .host = uri.host,
+                                .port = uri.port,
+                                .endpoint = resolved_endpoint{
+                                        .ip = ep.ip,
+                                        .connectivity = c->is_up() ? node_connectivity::up : node_connectivity::down,
+                                },
+                                .state = index_state{.status = index_status::unknown},
+                        },
+                        .client = c,
+                });
+            }
+            // An unresolved host listed both as a primary and as a secondary
+            // node is likewise reported once, under the first role.
+            if (!found && std::ranges::none_of(out, [&](const node_entry& n) {
+                    return !n.status.endpoint && n.status.host == uri.host && n.status.port == uri.port;
+                })) {
+                out.push_back(node_entry{
+                        .status = index_node_status{
+                                .role = role,
+                                .host = uri.host,
+                                .port = uri.port,
+                                .endpoint = std::nullopt,
+                                .state = index_state{.status = index_status::unknown},
+                        },
+                });
+            }
+        }
+    }
+
 };
 
 vector_store_client::vector_store_client(config const& cfg)
@@ -546,6 +670,11 @@ auto vector_store_client::is_disabled() const -> bool {
 
 auto vector_store_client::get_index_status(keyspace_name keyspace, index_name name, abort_source& as) -> future<index_status> {
     return _impl->get_index_status(std::move(keyspace), std::move(name), as);
+}
+
+auto vector_store_client::get_index_status_per_node(keyspace_name keyspace, index_name name, abort_source& as)
+        -> future<std::vector<index_node_status>> {
+    return _impl->get_index_status_per_node(std::move(keyspace), std::move(name), as);
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
@@ -597,3 +726,56 @@ unsigned vector_store_client_tester::truststore_reload_count(vector_store_client
 }
 
 } // namespace vector_search
+
+/// The names used by the vector store in its status replies, see
+/// index_status_from_string().
+auto fmt::formatter<vector_search::vector_store_client::index_status>::format(
+        vector_search::vector_store_client::index_status status, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    using index_status = vector_search::vector_store_client::index_status;
+    std::string_view name;
+    switch (status) {
+    case index_status::unknown:
+        name = "UNKNOWN";
+        break;
+    case index_status::initializing:
+        name = "INITIALIZING";
+        break;
+    case index_status::bootstrapping:
+        name = "BOOTSTRAPPING";
+        break;
+    case index_status::serving:
+        name = "SERVING";
+        break;
+    }
+    return formatter<string_view>::format(name, ctx);
+}
+
+auto fmt::formatter<vector_search::vector_store_client::node_role>::format(
+        vector_search::vector_store_client::node_role role, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    using node_role = vector_search::vector_store_client::node_role;
+    std::string_view name;
+    switch (role) {
+    case node_role::primary:
+        name = "primary";
+        break;
+    case node_role::secondary:
+        name = "secondary";
+        break;
+    }
+    return formatter<string_view>::format(name, ctx);
+}
+
+auto fmt::formatter<vector_search::vector_store_client::node_connectivity>::format(
+        vector_search::vector_store_client::node_connectivity c, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    using node_connectivity = vector_search::vector_store_client::node_connectivity;
+    std::string_view name;
+    switch (c) {
+    case node_connectivity::up:
+        name = "up";
+        break;
+    case node_connectivity::down:
+        name = "down";
+        break;
+    }
+    return formatter<string_view>::format(name, ctx);
+}
