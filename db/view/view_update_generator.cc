@@ -291,15 +291,16 @@ void view_update_generator::do_abort() noexcept {
 
 future<> view_update_generator::drain() {
     co_await _proxy.local().abort_view_writes();
-    co_await _gate.close();
+    if (!_gate.is_closed()) {
+        co_await _gate.close();
+    }
 }
 
 future<> view_update_generator::stop() {
     _db.unplug_view_update_generator();
     do_abort();
-    return std::move(_started).then([this] {
-        _registration_sem.broken();
-    });
+    co_await std::exchange(_started, make_ready_future<>());
+    _registration_sem.broken();
 }
 
 bool view_update_generator::should_throttle() const {
