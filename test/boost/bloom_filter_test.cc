@@ -214,44 +214,25 @@ SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimates) {
             optimal_filter->add(key::from_partition_key(*schema.get(), pk.key()).get_bytes());
         }
 
-        // Create sstables with bad partition estimates and verify that the bloom filter was either rebuilt or not depending on the resize criterias.
-        auto do_test = [&] (int estimated_partition_count, bool expect_rebuild, std::string origin = "") {
-            // create sstable with the estimated partition count
+        // Create sstables with bad partition estimates and verify the filter matches optimal.
+        auto do_test = [&] (int estimated_partition_count, std::string origin = "") {
             auto sst = make_sstable_easy(env, make_mutation_reader_from_mutations(schema, env.make_reader_permit(), mutations),
                                          env.manager().configure_writer(origin), version, estimated_partition_count);
 
             auto filter1 = static_cast<utils::filter::bloom_filter*>(sstables::test(sst).get_filter().get());
-
-            // Note: sstables with BTI indexes (i.e. with `!has_summary_and_index(version)`)
-            // currently ignore the partition count estimate,
-            // and instead they always build the bloom filter
-            // in a second pass over the keys (actually: hashes of keys)
-            // after the count is known.
-            // So their bloom filters always have optimal size and don't need the rebuild mechanism.
-            if (!expect_rebuild && has_summary_and_index(version)) {
-                // Verify that the filter was not rebuilt
-                BOOST_REQUIRE_EQUAL(filter1->bits().memory_size(),
-                    utils::i_filter::get_filter_size(estimated_partition_count, schema->bloom_filter_fp_chance()));
-                return;
-            }
-
-            // Verify that the filter was rebuilt into the optimal size
             auto filter2 = static_cast<utils::filter::bloom_filter*>(optimal_filter.get());
             BOOST_REQUIRE_EQUAL(filter1->memory_size(), filter2->memory_size());
             BOOST_REQUIRE_EQUAL(filter1->bits().size(), filter2->bits().size());
             BOOST_REQUIRE(filter1->bits().get_storage() == filter2->bits().get_storage());
         };
 
-        // Expect rebuild if the estimate is either too low or too large
-        do_test(actual_partition_count / 10, true);
-        do_test(actual_partition_count * 10, true);
-
-        // Verify rebuild is skipped if certain criteria are not met
-        do_test(actual_partition_count + 500, false); // |curr_size(13132) - optimal_size(12508)| < 1KB
-        do_test(actual_partition_count - 500, false); // |curr_size(11884) - optimal_size(12508)| < 1KB
-        do_test(actual_partition_count - 900, false); // |curr_size(11388) - optimal_size(12508)| < 10% of curr_size(11388)
-        do_test(actual_partition_count + 2500, false); // curr_size(15636) not optimal but < 16K
-        do_test(actual_partition_count * 2, false, "garbage_collection"); // curr_size is too large(25012) but origin is garbage_collection
+        do_test(actual_partition_count / 10);
+        do_test(actual_partition_count * 10);
+        do_test(actual_partition_count + 500);
+        do_test(actual_partition_count - 500);
+        do_test(actual_partition_count - 900);
+        do_test(actual_partition_count + 2500);
+        do_test(actual_partition_count * 2, "garbage_collection");
       }
     });
 };
@@ -430,17 +411,11 @@ SEASTAR_TEST_CASE(test_components_memory_reclaim_threshold_liveupdateness) {
     });
 }
 
-// Test the "delayed filter" mechanism used by trie-indexed sstables,
-// where the writer writes hashes to TemporaryHashes.db,
-// and only at the end of the stream a bloom filter is built from the hashes.
-//
-// The test creates two sstables: one `me` sstable with a perfect partition count estimate,
-// and one `ms` sstable with a bad partition count estimate.
-// It expects both sstables to end up with identical bloom filters after the end of the writer stream.
+// Test the "delayed filter" mechanism for all sstable formats with a Filter component.
+// Both `me` (exact estimate) and `ms` (bad estimate) must produce identical bloom filters.
 SEASTAR_TEST_CASE(test_rebuild_from_temporary_hashes) {
     return test_env::do_with_async([] (test_env& env) {
         const float bloom_filter_fp_chance = 0.01;
-        const float approx_expected_filter_bytes_per_element = 1.25;
         auto s = schema_builder(this_smp_shard_count(), "ks", "test_rebuild_from_temporary_hashes")
                 .with_column("pk", long_type, column_kind::partition_key)
                 .set_bloom_filter_fp_chance(bloom_filter_fp_chance)
@@ -479,14 +454,8 @@ SEASTAR_TEST_CASE(test_rebuild_from_temporary_hashes) {
             }
         }
 
-        // Sanity check. We expect the `me` sstable to be building the filter online,
-        // and we expect `ms` sstables to defer the filter building until the end of the stream.
-        // This is a sanity check that we are actually testing the rebuild mechanism,
-        // not a property that we want to preserve.
-        uint64_t size_check_leeway_bytes = 16;
-        BOOST_REQUIRE(sstables::test(sst_perfect_estimate).get_filter());
-        BOOST_REQUIRE_GT(sst_perfect_estimate->filter_memory_size() + size_check_leeway_bytes, size_t(approx_expected_filter_bytes_per_element * n_partitions / 2));
-        BOOST_REQUIRE_LT(sst_perfect_estimate->filter_memory_size(), size_t(approx_expected_filter_bytes_per_element * n_partitions * 2) + size_check_leeway_bytes);
+        // Sanity check: both filters must be null until consume_end_of_stream builds them.
+        BOOST_REQUIRE_EQUAL(sstables::test(sst_perfect_estimate).get_filter(), nullptr);
         BOOST_REQUIRE_EQUAL(sstables::test(sst_temporary_hashes).get_filter(), nullptr);
 
         for (auto wr : {std::ref(sst_perfect_estimate_wr), std::ref(sst_temporary_hashes_wr)}) {
@@ -506,3 +475,52 @@ SEASTAR_TEST_CASE(test_rebuild_from_temporary_hashes) {
         }
     });
 }
+
+// Regression test for a crash when writing an sstable whose schema has
+// bloom_filter_fp_chance == 1.0 (so the sstable has no Filter component).
+//
+// Reads dereference sstable::_components->filter unconditionally (see
+// filter_has_key()). When loading such an sstable from disk, read_filter()
+// installs an always_present_filter so the pointer is never null. The writer
+// path must establish the same invariant: after consume_end_of_stream() the
+// freshly-written, not-yet-reloaded sstable (which is the object the flush /
+// cache-population path uses directly) must have a non-null filter.
+//
+// Note: this deliberately does NOT go through make_sstable_easy(), because that
+// reloads the sstable via load()/read_filter() afterwards, which would mask a
+// null filter left behind by the writer.
+SEASTAR_TEST_CASE(test_write_with_no_bloom_filter_leaves_usable_filter) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = schema_builder(ss.schema())
+                .set_bloom_filter_fp_chance(1.0)
+                .build();
+
+        auto pkeys = ss.make_pkeys(10);
+        utils::chunked_vector<mutation> mutations;
+        for (const auto& pk : pkeys) {
+            auto mut = mutation(s, pk);
+            mut.partition().apply_insert(*s, ss.make_ckey(1), ss.new_timestamp());
+            mutations.push_back(std::move(mut));
+        }
+
+        for (const auto version : {sstable_version_types::me, sstable_version_types::ms}) {
+            auto sst = env.make_sstable(s, version);
+            // Write the sstable directly, without a subsequent load(), so that we
+            // observe exactly the in-memory state produced by the writer.
+            sst->write_components(make_mutation_reader_from_mutations(s, env.make_reader_permit(), mutations),
+                                  mutations.size(), s, env.manager().configure_writer(), encoding_stats{}).get();
+
+            BOOST_REQUIRE(!sst->has_component(sstables::component_type::Filter));
+            // The writer must leave a non-null (always-present) filter behind.
+            BOOST_REQUIRE(sstables::test(sst).get_filter() != nullptr);
+
+            // The read path must be usable without crashing, and an
+            // always-present filter must report every key as present.
+            for (const auto& pk : pkeys) {
+                BOOST_REQUIRE(sstables::test(sst).filter_has_key(*s, pk));
+            }
+        }
+    });
+}
+

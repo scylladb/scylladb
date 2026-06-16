@@ -723,13 +723,16 @@ private:
     future<> read_filter(sstable_open_config cfg = {});
 
     void write_filter();
-    // Rebuild a bloom filter from the index with the given number of
-    // partitions, if the partition estimate provided during bloom
-    // filter initialisation was not good.
-    // This should be called only before an sstable is sealed.
-    void maybe_rebuild_filter_from_index(uint64_t num_partitions);
 
     void build_delayed_filter(uint64_t num_partitions);
+
+    // Make sure `_components->filter` is non-null, installing an
+    // always-present filter if it isn't. The rest of the code (e.g.
+    // filter_has_key()) assumes the filter pointer is never null, so this
+    // must be called before a freshly-written sstable is used for reads.
+    // Mirrors the invariant that read_filter() establishes when loading an
+    // sstable that has no Filter component.
+    void ensure_filter();
 
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
