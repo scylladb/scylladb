@@ -6545,7 +6545,7 @@ class scylla_prepared_statements(gdb.Command):
             try:
                 return raw_stmt.decode("utf-8", "replace")
             except Exception:
-                gdb.write("try_decode(): falied to decode raw statement: {}\n".format(e))
+                gdb.write("try_decode(): failed to decode raw statement: {}\n".format(e))
                 return str(raw_stmt)
 
         qp = sharded(gdb.parse_and_eval("debug::the_query_processor").dereference()).local()

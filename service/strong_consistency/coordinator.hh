@@ -27,7 +27,7 @@ class groups_manager;
 // Classifies a strongly consistent read based on the CQL consistency level.
 //
 // linearizable: the read is forwarded to the raft leader, where read_barrier()
-//   is performed locally. This we we read the most up-to-date aplied data.
+//   is performed locally. This way we read the most up-to-date applied data.
 //   Currently mapped from CL=QUORUM (the default).
 //
 // non_linearizable: the read is performed on the local replica without
