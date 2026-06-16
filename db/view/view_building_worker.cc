@@ -157,6 +157,8 @@ future<> view_building_worker::do_drain() {
     }
     co_await _staging_sstables_mutex.wait();
     _staging_sstables_mutex.broken();
+    co_await _started_staging_tasks_mutex.wait();
+    _started_staging_tasks_mutex.broken();
     _sstables_to_register_event.broken();
     if (this_shard_id() == 0) {
         auto sstable_registrator = std::exchange(_staging_sstables_registrator, make_ready_future<>());
@@ -402,6 +404,7 @@ future<> view_building_worker::run_view_building_state_observer() {
 
             co_await update_built_views();
             co_await check_for_aborted_tasks();
+            co_await clear_started_staging_tasks();
             _as.check();
 
             read_apply_mutex_holder.return_all();
@@ -422,6 +425,30 @@ future<> view_building_worker::run_view_building_state_observer() {
             }
         }
     }
+}
+
+// Removes entries from `_started_staging_tasks` which are already removed from view building state machine
+future<> view_building_worker::clear_started_staging_tasks() {
+    auto lock = co_await get_units(_started_staging_tasks_mutex, 1, _as);
+    for (auto it = _started_staging_tasks.begin(); it != _started_staging_tasks.end(); ) {
+        auto& replica = it->first;
+        auto& ids = it->second;
+        for (auto ids_it = ids.begin(); ids_it != ids.end(); ) {
+            if (_vb_state_machine.building_state.get_task(ids_it->first, replica, ids_it->second)) {
+                ++ids_it;
+            } else {
+                ids_it = ids.erase(ids_it);
+            }
+        }
+
+        if (ids.empty()) {
+            it = _started_staging_tasks.erase(it);
+        } else {
+            ++it;
+        }
+        co_await coroutine::maybe_yield();
+    }
+
 }
 
 // Compares tablet-based views entries in `system.view_build_status_v2`(group0 table)
@@ -600,6 +627,19 @@ future<> view_building_worker::batch::abort() {
     });
 }
 
+future<> view_building_worker::batch::log_started_process_staging_tasks() {
+    if (tasks.begin()->second.type != view_building_task::task_type::process_staging) {
+        co_return;
+    }
+
+    auto replica = tasks.begin()->second.replica;
+    auto ids = tasks | std::views::values | std::views::transform([] (auto& task) { return std::make_pair(task.base_id, task.id); }) | std::ranges::to<std::vector>();
+    co_await _vbw.invoke_on(0, [ids = std::move(ids), replica] (view_building_worker& shard0_vbw) -> future<> {
+        auto lock = co_await get_units(shard0_vbw._started_staging_tasks_mutex, 1, shard0_vbw._as);
+        shard0_vbw._started_staging_tasks[replica].insert_range(ids);
+    });
+}
+
 future<> view_building_worker::batch::do_work() {
     if (this_shard_id() != replica.shard) {
         on_internal_error(vbw_logger, fmt::format("view_building_worker::batch::do_work() should be executed on tasks shard "));
@@ -634,6 +674,7 @@ future<> view_building_worker::batch::do_work() {
                 co_await _vbw.local().do_build_range(base_id, views_ids, last_token, as);
                 break;
             case view_building_task::task_type::process_staging:
+                co_await log_started_process_staging_tasks();
                 co_await _vbw.local().do_process_staging(base_id, last_token);
                 break;
             }
