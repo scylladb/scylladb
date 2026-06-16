@@ -326,6 +326,64 @@ BOOST_AUTO_TEST_CASE(test_remove_suffix) {
     }
 }
 
+// Verifies that the move constructor updates the first chunk's backref
+// to point to the new _begin field. Regression test for a bug introduced
+// in 53e0dc7530 ("bytes_ostream: base on managed_bytes") where the move
+// constructor failed to update backref, causing heap corruption when
+// bytes_ostream objects are relocated (e.g., by chunked_vector migration).
+BOOST_AUTO_TEST_CASE(test_move_constructor_updates_backref) {
+    // Create a multi-chunk bytes_ostream
+    bytes_ostream buf;
+    append_sequence(buf, 1024);
+
+    // Verify precondition: buf has chunks
+    auto* first_chunk = buf.begin().extract_implementation().current_chunk;
+    BOOST_REQUIRE(first_chunk != nullptr);
+    BOOST_REQUIRE(first_chunk->backref != nullptr);
+    BOOST_REQUIRE_EQUAL(first_chunk->backref->ptr, first_chunk);
+
+    // Move to a new location
+    bytes_ostream buf2(std::move(buf));
+
+    // The first chunk's backref must now point to buf2's _begin, not buf's
+    auto* chunk_after_move = buf2.begin().extract_implementation().current_chunk;
+    BOOST_REQUIRE(chunk_after_move != nullptr);
+    BOOST_REQUIRE(chunk_after_move->backref != nullptr);
+    // Without the fix, backref still points to buf._begin which was zeroed
+    // by std::exchange, so backref->ptr would be nullptr
+    BOOST_REQUIRE_EQUAL(chunk_after_move->backref->ptr, chunk_after_move);
+
+    // Verify data integrity
+    assert_sequence(buf2, 1024);
+}
+
+// Simulate what chunked_vector migration does: move bytes_ostream objects
+// to a new memory location and overwrite the old location.
+// Without the backref fix, this causes a dangling pointer.
+BOOST_AUTO_TEST_CASE(test_backref_survives_relocation) {
+    alignas(bytes_ostream) char old_storage[sizeof(bytes_ostream)];
+
+    // Construct in controlled memory
+    auto* old_buf = new (old_storage) bytes_ostream();
+    append_sequence(*old_buf, 1024);
+
+    // Move to a new location (simulates chunked_vector migration)
+    bytes_ostream new_buf(std::move(*old_buf));
+    old_buf->~bytes_ostream();
+
+    // Overwrite old memory (simulates allocator reusing the freed chunk)
+    memset(old_storage, 0xde, sizeof(old_storage));
+
+    // Verify backref invariant still holds
+    auto* first_chunk = new_buf.begin().extract_implementation().current_chunk;
+    BOOST_REQUIRE(first_chunk != nullptr);
+    BOOST_REQUIRE(first_chunk->backref != nullptr);
+    BOOST_REQUIRE_EQUAL(first_chunk->backref->ptr, first_chunk);
+
+    // Verify data is still intact
+    assert_sequence(new_buf, 1024);
+}
+
 BOOST_AUTO_TEST_CASE(test_conversion_to_managed_bytes) {
     bytes_ostream buf;
     append_sequence(buf, 1024);
