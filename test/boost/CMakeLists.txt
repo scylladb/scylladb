@@ -350,6 +350,7 @@ add_scylla_test(combined_tests
     cql_query_large_test.cc
     cql_query_like_test.cc
     cql_query_test.cc
+    cql_ddl_test.cc
     database_test.cc
     data_listeners_test.cc
     disk_space_monitor_test.cc

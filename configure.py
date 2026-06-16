@@ -1697,6 +1697,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/cql_query_large_test.cc',
     'test/boost/cql_query_like_test.cc',
     'test/boost/cql_query_test.cc',
+    'test/boost/cql_ddl_test.cc',
     'test/boost/database_test.cc',
     'test/boost/data_listeners_test.cc',
     'test/boost/disk_space_monitor_test.cc',
