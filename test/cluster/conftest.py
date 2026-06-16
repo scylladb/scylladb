@@ -77,8 +77,6 @@ async def decode_backtrace(build_mode: str, input: str):
 
 
 def pytest_addoption(parser):
-    parser.addoption('--manager-api', action='store',
-                     help='Manager unix socket path')
     add_cql_connection_options(parser)
     add_s3_options(parser)
     parser.addoption('--skip-internet-dependent-tests', action='store_true', default=False,
@@ -164,34 +162,31 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bo
 
 
 @pytest.fixture(scope="module")
-async def manager_api_sock_path(request: pytest.FixtureRequest, testpy_test: Test | None) -> AsyncGenerator[str]:
-    if testpy_test is None:
-        yield request.config.getoption("--manager-api")
-    else:
-        test_uname = testpy_test.uname
-        clusters = testpy_test.suite.clusters
-        base_dir = str(testpy_test.suite.log_dir)
-        sock_path = f"{tempfile.mkdtemp(prefix='manager-', dir='/tmp')}/api"
+async def manager_api_sock_path(request: pytest.FixtureRequest, testpy_test: Test) -> AsyncGenerator[str]:
+    test_uname = testpy_test.uname
+    clusters = testpy_test.suite.clusters
+    base_dir = str(testpy_test.suite.log_dir)
+    sock_path = f"{tempfile.mkdtemp(prefix='manager-', dir='/tmp')}/api"
 
-        start_event = Event()
-        stop_event = Event()
+    start_event = Event()
+    stop_event = Event()
 
-        async def run_manager() -> None:
-            mgr = ScyllaClusterManager(test_uname=test_uname, clusters=clusters, base_dir=base_dir, sock_path=sock_path)
-            await mgr.start()
-            start_event.set()
-            try:
-                await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
-            finally:
-                await mgr.stop()
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(asyncio.run, run_manager())
-            start_event.wait()
+    async def run_manager() -> None:
+        mgr = ScyllaClusterManager(test_uname=test_uname, clusters=clusters, base_dir=base_dir, sock_path=sock_path)
+        await mgr.start()
+        start_event.set()
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
+        finally:
+            await mgr.stop()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, run_manager())
+        start_event.wait()
 
-            yield sock_path
+        yield sock_path
 
-            stop_event.set()
-            future.result()
+        stop_event.set()
+        future.result()
 
 
 @pytest.fixture(scope="module")
