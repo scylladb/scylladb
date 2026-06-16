@@ -311,6 +311,8 @@ public:
         return _uses_secondary_indexing;
     }
 
+    bool has_bm25_restriction() const;
+
     const expr::expression& get_partition_key_restrictions() const {
         return _partition_key_restrictions;
     }

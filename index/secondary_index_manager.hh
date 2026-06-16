@@ -87,6 +87,7 @@ public:
     };
 
     supports_expression_v supports_expression(const column_definition& cdef, const cql3::expr::oper_t op) const;
+    supports_expression_v supports_bm25_expression(const column_definition& cdef) const;
     supports_expression_v supports_subscript_expression(const column_definition& cdef, const cql3::expr::oper_t op) const;
     const index_metadata& metadata() const;
     const sstring& target_column() const {

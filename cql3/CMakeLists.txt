@@ -51,6 +51,7 @@ target_sources(cql3
     statements/strong_consistency/modification_statement.cc
     statements/strong_consistency/statement_helpers.cc
     functions/vector_similarity_fcts.cc
+    functions/scoring_fcts.cc
     statements/cf_prop_defs.cc
     statements/cf_statement.cc
     statements/authentication_statement.cc
@@ -81,6 +82,7 @@ target_sources(cql3
     statements/prune_materialized_view_statement.cc
     statements/batch_statement.cc
     statements/select_statement.cc
+    statements/external_search/fulltext_indexed_table_select_statement.cc
     statements/external_search/vector_indexed_table_select_statement.cc
     statements/external_search/filter.cc
     statements/use_statement.cc

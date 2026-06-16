@@ -407,7 +407,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         bool bypass_cache = false;
         auto attrs = std::make_unique<cql3::attributes::raw>();
         expression wclause = conjunction{};
-        bool is_ann_ordering = false;
+        bool is_similarity_ordering = false;
     }
     : K_SELECT (
                 ( (K_JSON K_DISTINCT)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
@@ -422,7 +422,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
              )
       ( K_WHERE w=whereClause { wclause = std::move(w); } )?
       ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
-      ( K_ORDER K_BY orderByClause[orderings, is_ann_ordering] ( ',' orderByClause[orderings, is_ann_ordering] )* )?
+      ( K_ORDER K_BY orderByClause[orderings, is_similarity_ordering] ( ',' orderByClause[orderings, is_similarity_ordering] )* )?
       ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = std::move(rows); } )?
       ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
@@ -487,17 +487,27 @@ whereClause returns [uexpression clause]
         { clause = conjunction{std::move(terms)}; }
     ;
 
-orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool& is_ann_ordering]
+orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool& is_similarity_ordering]
     @init{
         raw::select_statement::ordering ordering = raw::select_statement::ordering::ascending;
         std::optional<expression> ann_ordering;
     }
-    : c=cident (K_ANN K_OF t=term {ann_ordering=std::move(t);})? (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })?
+    : f=functionName fc_args=selectionFunctionArgs
+    {
+        if (!orderings.empty()) {
+            throw exceptions::invalid_request_exception(
+                format("{} ordering does not support any other ordering", f));
+        }
+        is_similarity_ordering = true;
+        expression func_expr = function_call{std::move(f), std::move(fc_args)};
+        orderings.emplace_back(nullptr, raw::select_statement::scoring_function_ordering{std::move(func_expr)});
+    }
+    | c=cident (K_ANN K_OF t=term {ann_ordering=std::move(t);})? (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })?
     {
         if (!ann_ordering) {
-            if (is_ann_ordering) {
+            if (is_similarity_ordering) {
                 throw exceptions::invalid_request_exception(
-                    "ANN ordering does not support any other ordering");
+                    "Similarity ordering does not support any other ordering");
             }
             orderings.emplace_back(c, ordering);
         } else {
@@ -506,15 +516,15 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool
                     "Descending ANN ordering is not supported");
             }
             if (!orderings.empty()) {
-                if (is_ann_ordering) {
+                if (is_similarity_ordering) {
                     throw exceptions::invalid_request_exception(
-                        "Cannot specify more than one ANN ordering");
+                        "Cannot specify more than one similarity ordering");
                 } else {
                     throw exceptions::invalid_request_exception(
                         "ANN ordering does not support any other ordering");
                 }
             }
-            is_ann_ordering = true;
+            is_similarity_ordering = true;
             orderings.emplace_back(c, ann_ordering.value());
         }
     }
@@ -1895,36 +1905,46 @@ relation returns [uexpression e]
         oper_t rt;
         nesting_guard guard(*this);
     }
-    : name=cident type=relationType t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t)); }
-
-    | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
+    : K_TOKEN l=tupleOfIdentifiers type=relationType t=term
         {
           $e = binary_operator(
             function_call{functions::function_name::native_function("token"), std::move(l.elements)},
             type,
             std::move(t));
         }
-    | name=cident K_IS K_NOT K_NULL {
-          $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, make_untyped_null()); }
-    | name=cident K_IN marker1=marker
-        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker1)); }
-    | name=cident K_IN in_values=singleColumnInValues
-        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
-        collection_constructor {
-            .style = collection_constructor::style_type::list_or_vector,
-            .elements = std::move(in_values)
-        }); }
-    | name=cident K_NOT K_IN marker1=marker
-        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN, std::move(marker1)); }
-    | name=cident K_NOT K_IN in_values=singleColumnInValues
-        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN,
-        collection_constructor {
-            .style = collection_constructor::style_type::list_or_vector,
-            .elements = std::move(in_values)
-        }); }
-    | name=cident K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
-        t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, rt, std::move(t)); }
-    | name=cident '[' key=term ']' type=relationType t=term { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t)); }
+    | name=cident
+      ( ('.' fn=allowedFunctionName)? fn_args=selectionFunctionArgs type=relationType t=term
+        {
+          sstring ks = fn.empty() ? "" : name->text();
+          sstring fname = fn.empty() ? name->text() : std::move(fn);
+          $e = binary_operator(
+            function_call{functions::function_name{std::move(ks), std::move(fname)}, std::move(fn_args)},
+            type,
+            std::move(t));
+        }
+      | type=relationType t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t)); }
+      | K_IS K_NOT K_NULL {
+            $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, make_untyped_null()); }
+      | K_IN marker1=marker
+          { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker1)); }
+      | K_IN in_values=singleColumnInValues
+          { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
+          collection_constructor {
+              .style = collection_constructor::style_type::list_or_vector,
+              .elements = std::move(in_values)
+          }); }
+      | K_NOT K_IN marker1=marker
+          { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN, std::move(marker1)); }
+      | K_NOT K_IN in_values=singleColumnInValues
+          { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN,
+          collection_constructor {
+              .style = collection_constructor::style_type::list_or_vector,
+              .elements = std::move(in_values)
+          }); }
+      | K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
+          t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, rt, std::move(t)); }
+      | '[' key=term ']' type=relationType t=term { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t)); }
+      )
     | ids=tupleOfIdentifiers
       ( K_IN
           ( '(' ')'

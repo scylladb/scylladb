@@ -12,6 +12,7 @@
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -2049,6 +2050,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
     bool is_ann_query = ann_ordering_info_opt.has_value();
 
+    std::optional<bm25_ordering_info> bm25_ordering_info_opt = get_bm25_ordering_info(db, schema, _parameters, ctx);
+    bool has_bm25_ordering = bm25_ordering_info_opt.has_value();
+
     if (prepared_selectors.empty() && (!_group_by_columns.empty() || (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled))) {
         // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
         // empty, below we choose selection::wildcard() for SELECT *, and either:
@@ -2067,6 +2071,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     for (auto& ps : prepared_selectors) {
+        if (expr::is_bm25_function_call(ps.expr)) {
+            throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause");
+        }
         expr::fill_prepare_context(ps.expr, ctx);
     }
 
@@ -2110,8 +2117,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
 
-    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query,
+    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query || has_bm25_ordering,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()));
+
+    bool is_fts_query = restrictions->has_bm25_restriction() || has_bm25_ordering;
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(*schema, *selection, *restrictions);
@@ -2121,10 +2130,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     auto orderings = _parameters->orderings();
 
-    if (!orderings.empty() && !is_ann_query) {
+    if (!orderings.empty() && !is_ann_query && !is_fts_query) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
-            if constexpr (!std::is_same_v<T, select_statement::ann_vector>) {
+            if constexpr (!std::is_same_v<T, select_statement::ann_vector> && !std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
                 throwing_assert(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
@@ -2137,7 +2146,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     std::vector<sstring> warnings;
-    if (!is_ann_query) {
+    if (!is_ann_query && !is_fts_query) {
         check_needs_filtering(*restrictions, cfg.strict_allow_filtering(), warnings);
         ensure_filtering_columns_retrieval(db, *selection, *restrictions);
     }
@@ -2238,6 +2247,22 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
                 std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(ann_ordering_info_opt->_prepared_ann_ordering),
                 prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, ann_ordering_info_opt->_index, std::move(prepared_attrs));
+    } else if (is_fts_query) {
+        stmt = fulltext_indexed_table_select_statement::prepare(
+            db,
+            schema,
+            ctx.bound_variables_size(),
+            _parameters,
+            std::move(selection),
+            std::move(restrictions),
+            std::move(group_by_cell_indices),
+            is_reversed_,
+            std::move(ordering_comparator),
+            prepare_limit(db, ctx, _limit),
+            prepare_limit(db, ctx, _per_partition_limit),
+            stats,
+            std::move(bm25_ordering_info_opt),
+            std::move(prepared_attrs));
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
                 db,

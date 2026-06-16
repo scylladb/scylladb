@@ -214,6 +214,17 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     // Perform basic initial checks
     preliminary_binop_vaidation_checks(restriction);
 
+    // Scoring function: validate the first arg is a column on the unprepared expression.
+    // BM25 is pure, so prepare_binary_operator constant-folds BM25(literal, ...) by calling
+    // execute() before the post-prepare validation block is reached.
+    if (const auto* fc = as_if<function_call>(&restriction.lhs)) {
+        if (is_scoring_function_call(*fc)) {
+            if (fc->args.empty() || !as_if<unresolved_identifier>(&fc->args[0])) {
+                throw exceptions::invalid_request_exception("First argument to a scoring function must be a column");
+            }
+        }
+    }
+
     // Prepare the restriction
     binary_operator prepared_binop = prepare_binary_operator(restriction, db, *schema);
     expr::verify_no_aggregate_functions(prepared_binop, "WHERE clause");
@@ -254,6 +265,23 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
         // Token restriction
         std::vector<const column_definition*> column_defs = to_column_definitions(as<function_call>(prepared_binop.lhs).args);
         validate_token_relation(column_defs, prepared_binop.op, *schema);
+    } else if (auto function = as_if<function_call>(&prepared_binop.lhs)) {
+        // Function call restriction (e.g., BM25(column, query_term) > 0).
+        // Note: the token() function is handled by the previous branch, 
+        // so the only function-call restrictions allowed here are scoring functions.
+        if (!is_scoring_function_call(*function)) {
+            throw exceptions::invalid_request_exception("Only the token function and scoring functions are supported in function-call restrictions");
+        }
+        if (prepared_binop.op != oper_t::GT) {
+            throw exceptions::invalid_request_exception(format("Unsupported \"{}\" relation for scoring function restriction, only \">\" is supported", prepared_binop.op));
+        }
+
+        // Only BM25(col, query) > 0 is supported; reject non-zero thresholds and bind markers
+        auto* rhs_const = as_if<constant>(&prepared_binop.rhs);
+        if (!rhs_const || rhs_const->is_null()
+                || rhs_const->view().deserialize<float>(*float_type) != 0.0f) {
+            throw exceptions::invalid_request_exception("Scoring function comparison value must be the literal 0");
+        }
     } else {
         // Anything else
         throw exceptions::invalid_request_exception(
