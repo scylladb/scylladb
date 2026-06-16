@@ -32,6 +32,10 @@ namespace netw {
 class messaging_service;
 }
 
+namespace vector_search {
+class vector_store_client;
+}
+
 namespace db {
 
 class config;
@@ -45,6 +49,7 @@ future<> initialize_virtual_tables(
     sharded<db::system_keyspace>&,
     sharded<service::tablet_allocator>&,
     sharded<netw::messaging_service>&,
+    sharded<vector_search::vector_store_client>&,
     db::config&,
     gms::feature_service&);
 
