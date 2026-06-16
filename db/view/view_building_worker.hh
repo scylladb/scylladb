@@ -88,6 +88,7 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
         sharded<view_building_worker>& _vbw;
 
         future<> do_work();
+        future<> log_started_process_staging_tasks();
     };
 
     friend class batch;
@@ -139,6 +140,8 @@ private:
     semaphore _staging_sstables_mutex = semaphore(1);
     std::unordered_map<table_id, std::vector<staging_sstable_task_info>> _sstables_to_register;
     std::unordered_map<table_id, std::vector<sstables::shared_sstable>> _staging_sstables;
+    semaphore _started_staging_tasks_mutex = semaphore(1);
+    std::unordered_map<locator::tablet_replica, std::set<std::pair<table_id, utils::UUID>>> _started_staging_tasks;
     future<> _staging_sstables_registrator = make_ready_future<>();
 
 public:
@@ -167,6 +170,7 @@ private:
 
     future<> run_view_building_state_observer();
     future<> update_built_views();
+    future<> clear_started_staging_tasks();
 
     dht::token_range get_tablet_token_range(table_id table_id, dht::token last_token);
     future<> do_build_range(table_id base_id, std::vector<table_id> views_ids, dht::token last_token, abort_source& as);
