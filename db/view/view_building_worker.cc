@@ -283,14 +283,50 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     auto uuid_gen = _vb_state_machine.building_state.make_task_uuid_generator(guard.write_timestamp());
     view_building_task_mutation_builder builder(guard.write_timestamp(), std::move(uuid_gen));
     auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
+    auto started_tasks_lock = co_await get_units(_started_staging_tasks_mutex, 1, _as);
     for (auto& [table_id, sst_infos]: _sstables_to_register) {
+        std::set<std::pair<shard_id, dht::token>> new_tasks;
+        auto task_exists = [&, this] (shard_id shard, dht::token last_token) {
+            if (new_tasks.contains({shard, last_token})) {
+                // We're already creating a task for this tablet replica
+                return true;
+            }
+
+            if (!_vb_state_machine.building_state.tasks_state.contains(table_id)) {
+                return false;
+            }
+            auto& tasks_for_table = _vb_state_machine.building_state.tasks_state.at(table_id);
+            for (auto& [replica, tasks]: tasks_for_table) {
+                if (replica.host != my_host_id || replica.shard != shard) {
+                    continue;
+                }
+                for (auto& staging_task: tasks.staging_tasks) {
+                    if (_started_staging_tasks[replica].contains(std::make_pair(table_id, staging_task.first))) {
+                        // This view building tasks is already started, we cannot attach this staging sstable to it
+                        continue;
+                    }
+                    if (staging_task.second.last_token == last_token && !staging_task.second.aborted) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+
         for (auto& sst_info: sst_infos) {
+            if (task_exists(sst_info.shard, sst_info.last_token)) {
+                vbw_logger.debug("Process staging task for replica {} already exists, skipping...", locator::tablet_replica{my_host_id, sst_info.shard});
+                continue;
+            }
+
             view_building_task task {
                 builder.new_id(), view_building_task::task_type::process_staging, false,
                 table_id, ::table_id{}, {my_host_id, sst_info.shard}, sst_info.last_token
             };
             builder.set_task(task);
-            vbw_logger.trace("Creating process staging task: {} with ID: {} for replica: {}", task, task.id, task.replica);
+            vbw_logger.debug("Creating process staging task: {} with ID: {} for replica: {}", task, task.id, task.replica);
+            new_tasks.insert({sst_info.shard, sst_info.last_token});
         }
     }
 
