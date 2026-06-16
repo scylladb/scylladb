@@ -39,6 +39,7 @@
 #include "test/lib/proc_utils.hh"
 #include "test/lib/aws_kms_fixture.hh"
 #include "test/lib/azure_kms_fixture.hh"
+#include "test/lib/gcp_kms_fixture.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/system_keyspace.hh"
@@ -1165,37 +1166,9 @@ SEASTAR_TEST_CASE(test_user_info_encryption_dont_allow_per_table_encryption) {
     * GCP_LOCATION - set to test location
 */
 
-struct gcp_test_env {
-    std::string key_name;
-    std::string location;
-    std::string project_id; 
-    std::string user_1_creds;
-    std::string user_2_creds;
-};
-
-static future<> gcp_test_helper(std::function<future<>(const tmpdir&, const gcp_test_env&)> f) {
-    gcp_test_env env {
-        .key_name = get_var_or_default("GCP_KEY_NAME", "test_ring/test_key"),
-        .location = get_var_or_default("GCP_LOCATION", "global"),
-        .project_id = get_var_or_default("GCP_PROJECT_ID", "scylla-kms-test"),
-        .user_1_creds = get_var_or_default("GCP_USER_1_CREDENTIALS", ""),
-        .user_2_creds = get_var_or_default("GCP_USER_2_CREDENTIALS", ""),
-    };
-
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_provider, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
     tmpdir tmp;
-
-    if (env.user_1_creds.empty()) {
-        BOOST_ERROR("No 'GCP_USER_1_CREDENTIALS' provided");
-    }
-    if (env.user_2_creds.empty()) {
-        BOOST_ERROR("No 'GCP_USER_2_CREDENTIALS' provided");
-    }
-
-    co_await f(tmp, env);
-}
-
-SEASTAR_TEST_CASE(test_gcp_provider, *check_run_test_decorator("ENABLE_GCP_TEST")) {
-    co_await gcp_test_helper([](const tmpdir& tmp, const gcp_test_env& gcp) -> future<> {
+    {
         auto yaml = fmt::format(R"foo(
             gcp_hosts:
                 gcp_test:
@@ -1203,24 +1176,27 @@ SEASTAR_TEST_CASE(test_gcp_provider, *check_run_test_decorator("ENABLE_GCP_TEST"
                     gcp_project_id: {1}
                     gcp_location: {2}
                     gcp_credentials_file: {3}
+                    endpoint: '{4}'
                     )foo"
-            , gcp.key_name, gcp.project_id, gcp.location, gcp.user_1_creds
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_1_credentials, endpoint
         );
 
         co_await test_provider("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
-    });
+    }
 }
 
-SEASTAR_TEST_CASE(test_gcp_provider_with_master_key_in_cf, *check_run_test_decorator("ENABLE_GCP_TEST")) {
-    co_await gcp_test_helper([](const tmpdir& tmp, const gcp_test_env& gcp) -> future<> {
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_provider_with_master_key_in_cf, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+    tmpdir tmp;
+    {
         auto yaml = fmt::format(R"foo(
             gcp_hosts:
                 gcp_test:
                     gcp_project_id: {1}
                     gcp_location: {2}
                     gcp_credentials_file: {3}
+                    endpoint: '{4}'
                     )foo"
-            , gcp.key_name, gcp.project_id, gcp.location, gcp.user_1_creds
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_1_credentials, endpoint
         );
 
         // should fail
@@ -1241,18 +1217,19 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_master_key_in_cf, *check_run_test_decor
         }
 
         // should be ok
-        co_await test_provider(fmt::format("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", gcp.key_name)
+        co_await test_provider(fmt::format("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", gcp_key_name)
             , tmp, yaml
             );
-    });
+    }
 }
 
 /**
  * Verify that trying to access key materials with a user w/o permissions to encrypt/decrypt using cloudkms
  * fails.
 */
-SEASTAR_TEST_CASE(test_gcp_provider_with_invalid_user, *check_run_test_decorator("ENABLE_GCP_TEST")) {
-    co_await gcp_test_helper([](const tmpdir& tmp, const gcp_test_env& gcp) -> future<> {
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_provider_with_invalid_user, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+    tmpdir tmp;
+    {
         auto yaml = fmt::format(R"foo(
             gcp_hosts:
                 gcp_test:
@@ -1260,8 +1237,9 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_invalid_user, *check_run_test_decorator
                     gcp_project_id: {1}
                     gcp_location: {2}
                     gcp_credentials_file: {3}
+                    endpoint: '{4}'
                     )foo"
-            , gcp.key_name, gcp.project_id, gcp.location, gcp.user_2_creds
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_2_credentials, endpoint
         );
 
         // should fail
@@ -1269,16 +1247,17 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_invalid_user, *check_run_test_decorator
             co_await test_provider("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
             , std::exception
         );
-    });
+    }
 }
 
 /**
  * Verify that impersonation of an allowed service account works. User1 can encrypt, but we run 
  * as User2. However, impersonating user1 will allow us do it ourselves.
 */
-SEASTAR_TEST_CASE(test_gcp_provider_with_impersonated_user, *check_run_test_decorator("ENABLE_GCP_TEST")) {
-    co_await gcp_test_helper([](const tmpdir& tmp, const gcp_test_env& gcp) -> future<> {
-        auto buf = co_await read_text_file_fully(sstring(gcp.user_1_creds));
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_provider_with_impersonated_user, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+    tmpdir tmp;
+    {
+        auto buf = co_await read_text_file_fully(sstring(gcp_user_1_credentials));
         auto json = rjson::parse(std::string_view(buf.begin(), buf.end()));
         auto user1 = rjson::get<std::string>(json, "client_email");
 
@@ -1290,12 +1269,14 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_impersonated_user, *check_run_test_deco
                     gcp_location: {2}
                     gcp_credentials_file: {3}
                     gcp_impersonate_service_account: {4}
+                    gcp_iam_endpoint_override: '{5}'
+                    endpoint: '{6}'
                     )foo"
-            , gcp.key_name, gcp.project_id, gcp.location, gcp.user_2_creds, user1
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_2_credentials, user1, gcp_iam_endpoint_override, endpoint
         );
 
         co_await test_provider("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
-    });
+    }
 }
 
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
