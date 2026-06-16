@@ -11,6 +11,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/json/json_elements.hh>
 #include <seastar/core/reactor.hh>
@@ -18,9 +19,13 @@
 #include "cdc/generation_service.hh"
 #include "cdc/log.hh"
 #include "cdc/metadata.hh"
+#include "cql3/statements/index_target.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/virtual_table.hh"
+#include "index/secondary_index.hh"
+#include "index/secondary_index_manager.hh"
+#include "index/vector_index.hh"
 #include "partition_slice_builder.hh"
 #include "db/virtual_tables.hh"
 #include "db/size_estimates_virtual_reader.hh"
@@ -40,12 +45,14 @@
 #include "sstables/sstables.hh"
 #include "locator/load_sketch.hh"
 #include "types/list.hh"
+#include "types/map.hh"
 #include "types/types.hh"
 #include "utils/build_id.hh"
 #include "utils/log.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/paxos_state.hh"
 #include "idl/storage_proxy.dist.hh"
+#include "vector_search/vector_store_client.hh"
 
 using namespace locator;
 
@@ -136,6 +143,237 @@ public:
         for (auto& m : muts) {
             mutation_sink(m.unfreeze(schema()));
         }
+    }
+};
+
+class custom_indexes_table : public memtable_filling_virtual_table {
+private:
+    replica::database& _db;
+    sharded<vector_search::vector_store_client>& _vsc;
+
+    // Description of a single external custom index (vector or fulltext)
+    // discovered in the local schema.
+    struct custom_index_desc {
+        sstring keyspace_name;
+        sstring index_name;
+        sstring index_type;
+        // Vector indexes only.
+        std::optional<int32_t> dimensions;
+        std::optional<sstring> similarity_function;
+        // Remaining (non key-distinguishing) index options, e.g. quantization
+        // and HNSW tuning parameters.
+        std::map<sstring, sstring> options;
+    };
+
+public:
+    custom_indexes_table(replica::database& db, sharded<vector_search::vector_store_client>& vsc)
+            : memtable_filling_virtual_table(build_schema())
+            , _db(db), _vsc(vsc) {
+        // The data is per external-service node (not per shard) and is
+        // produced on a single shard only (see the with_sharder(1, 0) below),
+        // so let the base class filter foreign-shard partitions.
+        _shard_aware = false;
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "custom_indexes");
+        return schema_builder(1, system_keyspace::NAME, "custom_indexes", std::make_optional(id))
+            .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+            .with_column("index_name", utf8_type, column_kind::clustering_key)
+            .with_column("address", utf8_type, column_kind::clustering_key)
+            .with_column("port", int32_type, column_kind::clustering_key)
+            .with_column("host", utf8_type)
+            .with_column("role", utf8_type)
+            .with_column("index_type", utf8_type)
+            .with_column("node_status", utf8_type)
+            .with_column("index_state", utf8_type)
+            .with_column("build_progress", float_type)
+            .with_column("size", long_type)
+            .with_column("dimensions", int32_type)
+            .with_column("similarity_function", utf8_type)
+            .with_column("options", map_type_impl::get_instance(utf8_type, utf8_type, false))
+            .with_sharder(1, 0) // shard0-only: queries one set of external-service nodes per read
+            .set_comment("Per-node status of external custom indexes (vector and fulltext)")
+            .with_hash_version()
+            .build();
+    }
+
+    // Collect all external custom indexes (vector, fulltext) known to the
+    // local schema.
+    std::vector<custom_index_desc> collect_custom_indexes() const {
+        std::vector<custom_index_desc> indexes;
+        _db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+            auto s = table->schema();
+            for (const index_metadata& im : s->indices()) {
+                auto custom = secondary_index::secondary_index_manager::get_custom_class(im);
+                if (!custom) {
+                    continue;
+                }
+                custom_index_desc desc;
+                desc.keyspace_name = s->ks_name();
+                desc.index_name = im.name();
+                desc.index_type = sstring((*custom)->index_type_name());
+                if (secondary_index::vector_index::is_vector_index(im)) {
+                    desc.dimensions = secondary_index::vector_index::get_dimensions(im, *s);
+                    desc.similarity_function = secondary_index::vector_index::get_similarity_function(im);
+                }
+                for (const auto& [key, value] : im.options()) {
+                    if (key == "dimensions" || key == "similarity_function"
+                            || key == index::secondary_index::custom_class_option_name
+                            || key == cql3::statements::index_target::target_option_name) {
+                        // Reported via dedicated columns, or internal bookkeeping.
+                    } else {
+                        desc.options.emplace(key, value);
+                    }
+                }
+                indexes.push_back(std::move(desc));
+            }
+        });
+        return indexes;
+    }
+
+    static std::string_view role_to_string(vector_search::vector_store_client::node_role role) {
+        using node_role = vector_search::vector_store_client::node_role;
+        switch (role) {
+        case node_role::primary:
+            return "primary";
+        case node_role::secondary:
+            return "secondary";
+        }
+        return "unknown";
+    }
+
+    static std::string_view connectivity_to_string(vector_search::vector_store_client::node_connectivity c) {
+        using node_connectivity = vector_search::vector_store_client::node_connectivity;
+        switch (c) {
+        case node_connectivity::up:
+            return "up";
+        case node_connectivity::down:
+            return "down";
+        case node_connectivity::unknown:
+            return "unknown";
+        }
+        return "unknown";
+    }
+
+    static std::optional<std::string_view> index_state_to_string(vector_search::vector_store_client::index_status status) {
+        using index_status = vector_search::vector_store_client::index_status;
+        switch (status) {
+        case index_status::initializing:
+            return "INITIALIZING";
+        case index_status::bootstrapping:
+            return "BOOTSTRAPPING";
+        case index_status::serving:
+            return "SERVING";
+        case index_status::unknown:
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    // Clustering key value identifying the node. Prefer the resolved IP so
+    // that a hostname resolving to multiple addresses produces one row per
+    // node; fall back to the configured host name while it is unresolved.
+    static sstring node_address(const vector_search::vector_store_client::node_info& node) {
+        return node.ip ? format("{}", *node.ip) : node.host;
+    }
+
+    future<> execute(std::function<void(mutation)> mutation_sink, const query_restrictions& qr, reader_permit permit) override {
+        using node_connectivity = vector_search::vector_store_client::node_connectivity;
+        using node_info = vector_search::vector_store_client::node_info;
+
+        auto indexes = collect_custom_indexes();
+        // Only produce rows for the partitions (keyspaces) the query asks for.
+        std::erase_if(indexes, [&] (const custom_index_desc& index) {
+            auto pk = partition_key::from_single_value(*schema(), data_value(index.keyspace_name).serialize_nonnull());
+            return !contains_key(qr.partition_range(), dht::decorate_key(*schema(), std::move(pk)));
+        });
+        if (indexes.empty()) {
+            co_return;
+        }
+
+        // Bound the time spent querying the external-service nodes by the
+        // read timeout.
+        abort_on_expiry aoe(permit.timeout());
+        auto& as = aoe.abort_source();
+
+        auto& vsc = _vsc.local();
+        auto nodes = co_await vsc.get_nodes(as);
+        // The same endpoint may be configured both as a primary and as a
+        // secondary node; keep the first (primary) entry so that each row
+        // has a single role.
+        std::vector<node_info> unique_nodes;
+        for (auto& node : nodes) {
+            if (std::ranges::none_of(unique_nodes, [&] (const node_info& n) {
+                    return n.port == node.port && node_address(n) == node_address(node);
+                })) {
+                unique_nodes.push_back(std::move(node));
+            }
+        }
+
+        struct row_desc {
+            const custom_index_desc* index;
+            const node_info* node;
+        };
+        std::vector<row_desc> rows;
+        rows.reserve(indexes.size() * unique_nodes.size());
+        for (const auto& index : indexes) {
+            for (const auto& node : unique_nodes) {
+                rows.push_back({&index, &node});
+            }
+        }
+
+        // Query the per-(index, node) build state concurrently so that the
+        // read latency is bound by the slowest node rather than by the sum
+        // of all the requests.
+        co_await max_concurrent_for_each(rows, 16, [&] (const row_desc& r) -> future<> {
+            const auto& index = *r.index;
+            const auto& node = *r.node;
+            auto pk = partition_key::from_single_value(*schema(), data_value(index.keyspace_name).serialize_nonnull());
+            auto ckey = clustering_key::from_exploded(*schema(), {
+                    data_value(index.index_name).serialize_nonnull(),
+                    data_value(node_address(node)).serialize_nonnull(),
+                    data_value(int32_t(node.port)).serialize_nonnull()});
+            mutation m(schema(), std::move(pk));
+            row& cr = m.partition().clustered_row(*schema(), ckey).cells();
+
+            set_cell(cr, "host", node.host);
+            set_cell(cr, "role", sstring(role_to_string(node.role)));
+            set_cell(cr, "index_type", index.index_type);
+            set_cell(cr, "node_status", sstring(connectivity_to_string(node.connectivity)));
+            if (index.dimensions) {
+                set_cell(cr, "dimensions", *index.dimensions);
+            }
+            if (index.similarity_function) {
+                set_cell(cr, "similarity_function", *index.similarity_function);
+            }
+            if (!index.options.empty()) {
+                auto map_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+                std::vector<std::pair<data_value, data_value>> entries;
+                entries.reserve(index.options.size());
+                for (const auto& [key, value] : index.options) {
+                    entries.emplace_back(data_value(key), data_value(value));
+                }
+                set_cell(cr, "options", make_map_value(map_type, map_type_impl::native_type(std::move(entries))));
+            }
+
+            // Only query reachable nodes for the per-index build state.
+            // A reachable node always has a resolved IP.
+            if (node.connectivity == node_connectivity::up) {
+                auto status = co_await vsc.get_index_status_on(*node.ip, node.port, index.keyspace_name, index.index_name, as);
+                if (auto state = index_state_to_string(status.status)) {
+                    set_cell(cr, "index_state", sstring(*state));
+                }
+                if (status.build_progress) {
+                    set_cell(cr, "build_progress", float(*status.build_progress));
+                }
+                if (status.count) {
+                    set_cell(cr, "size", int64_t(*status.count));
+                }
+            }
+
+            mutation_sink(std::move(m));
+        });
     }
 };
 
@@ -2086,6 +2324,7 @@ future<> initialize_virtual_tables(
         sharded<db::system_keyspace>& sys_ks,
         sharded<service::tablet_allocator>& tablet_allocator,
         sharded<netw::messaging_service>& ms,
+        sharded<vector_search::vector_store_client>& vsc,
         db::config& cfg,
         gms::feature_service& feat) {
     co_await smp::invoke_on_all([&] () -> future<> {
@@ -2110,6 +2349,7 @@ future<> initialize_virtual_tables(
         co_await add_table(std::make_unique<tablet_sizes>(tablet_allocator, dist_db, dist_raft_gr, ms));
         co_await add_table(std::make_unique<cdc_timestamps_table>(db, dist_ss.local()));
         co_await add_table(std::make_unique<cdc_streams_table>(db, dist_ss.local()));
+        co_await add_table(std::make_unique<custom_indexes_table>(db, vsc));
 
         db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks.local())));
         db.find_column_family(system_keyspace::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
