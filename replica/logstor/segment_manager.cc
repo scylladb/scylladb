@@ -1436,7 +1436,7 @@ void compaction_manager_impl::submit(compaction_group& cg) {
     state.as = {};
     state.completion = shared_future(with_gate(_async_gate,
         [this, &cg, &state] -> future<> {
-            return do_compact(cg, state.as).then([&state] {
+            return do_compact(cg, state.as).finally([&state] {
                 state.running = false;
             });
         }
@@ -1450,7 +1450,8 @@ future<> compaction_manager_impl::stop_ongoing_compactions(compaction_group& cg)
     }
     auto& state = *it->second;
     state.as.request_abort();
-    co_await state.completion.get_future();
+    auto f = co_await coroutine::as_future(state.completion.get_future());
+    f.ignore_ready_future();
 }
 
 future<> compaction_manager_impl::remove(compaction_group& cg) {
@@ -1468,7 +1469,8 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(compact
     ++state.compaction_disabled_counter;
 
     // Wait for any ongoing compaction to finish before disabling
-    co_await state.completion.get_future();
+    auto f = co_await coroutine::as_future(state.completion.get_future());
+    f.ignore_ready_future();
 
     co_return compaction_reenabler([this, &cg] {
         auto it = _groups.find(&cg);
