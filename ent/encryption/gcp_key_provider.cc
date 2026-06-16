@@ -52,6 +52,7 @@ shared_ptr<key_provider> gcp_key_provider_factory::get_provider(encryption_conte
 
     oov.gcp_credentials_file = opts("gcp_credentials_file");
     oov.gcp_impersonate_service_account = opts("gcp_impersonate_service_account");
+    oov.gcp_iam_endpoint_override = opts("gcp_iam_endpoint_override");
 
     if (!gcp_host) {
         throw std::invalid_argument("gcp_host must be provided");
