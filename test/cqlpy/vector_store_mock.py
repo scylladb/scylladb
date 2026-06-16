@@ -11,6 +11,7 @@ Provides VectorStoreMock - a minimal HTTP server for handling both ANN
 from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
 import threading
 
 
@@ -41,6 +42,8 @@ class VectorStoreMock:
         self._next_ann_response = Response()
         self._next_bm25_response = BM25Response()
         self._next_status_response = Response(status=200, body='"SERVING"')
+        # Maps "{keyspace}/{index}" -> Response for per-index status queries.
+        self._index_status_responses: dict[str, Response] = {}
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -75,6 +78,11 @@ class VectorStoreMock:
         with self._lock:
             self._next_status_response = Response(status=status, body=body)
 
+    def set_index_status(self, keyspace: str, index: str, status: str, count: int, build_progress: float) -> None:
+        body = json.dumps({"status": status, "count": count, "build_progress": build_progress})
+        with self._lock:
+            self._index_status_responses[f"{keyspace}/{index}"] = Response(status=200, body=body)
+
     def reset(self) -> None:
         with self._lock:
             self._ann_requests.clear()
@@ -83,6 +91,7 @@ class VectorStoreMock:
             self._next_ann_response = Response()
             self._next_bm25_response = BM25Response()
             self._next_status_response = Response(status=200, body='"SERVING"')
+            self._index_status_responses.clear()
 
     def _handle_ann(self, request: Request, send_response: Callable[[Response], None]) -> None:
         with self._lock:
@@ -101,6 +110,18 @@ class VectorStoreMock:
             self._status_requests.append(request)
             response = self._next_status_response
         send_response(response)
+
+    def _handle_index_status(self, path: str, send_response: Callable[[Response], None]) -> None:
+        # Per-index status: /api/v1/indexes/{keyspace}/{index}/status
+        prefix = "/api/v1/indexes/"
+        suffix = "/status"
+        key = path[len(prefix):-len(suffix)]
+        with self._lock:
+            response = self._index_status_responses.get(key)
+        if response is not None:
+            send_response(response)
+        else:
+            send_response(Response(status=404, body="index not found"))
 
     def start(self, host: str):
         mock = self
@@ -125,6 +146,8 @@ class VectorStoreMock:
                 if self.path == "/api/v1/status":
                     req = Request(path=self.path, body="")
                     mock._handle_status(req, self._send_response)
+                elif self.path.startswith("/api/v1/indexes/") and self.path.endswith("/status"):
+                    mock._handle_index_status(self.path, self._send_response)
                 else:
                     self.send_response(404)
                     self.end_headers()
