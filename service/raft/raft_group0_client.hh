@@ -80,6 +80,22 @@ public:
     {}
 };
 
+// Thrown when a guard's history entry may have been GC'd — apply status unknown.
+// Unlike group0_concurrent_modification ("definitely not applied, safe to retry"),
+// this exception signals UNKNOWN status — the command may or may not have been applied.
+// CQL callers (query_processor.cc) must catch and convert to exceptions::server_exception.
+// Internal callers (topology coordinator, migration manager, etc.) need not catch —
+// each caller's outer driving loop handles unexpected failures by restarting the operation.
+// See: https://github.com/scylladb/scylladb/issues/28082
+class group0_hard_timeout : public std::runtime_error {
+public:
+    group0_hard_timeout()
+        : std::runtime_error("The outcome of this statement is unknown. "
+                             "It may or may not have been applied. "
+                             "Retrying the statement may be necessary.")
+    {}
+};
+
 // Singleton that exists only on shard zero. Used to post commands to group zero
 class raft_group0_client {
     service::raft_group_registry& _raft_gr;
@@ -91,7 +107,7 @@ class raft_group0_client {
     semaphore _read_apply_mutex = semaphore(1);
     semaphore _operation_mutex = semaphore(1);
 
-    gc_clock::duration _history_gc_duration = gc_clock::duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::weeks{1})};
+    gc_clock::duration _history_gc_duration = gc_clock::duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::hours{1})};
 
     std::unordered_map<utils::UUID, std::optional<service::broadcast_tables::query_result>> _results;
 

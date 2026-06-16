@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <functional>
 #include <optional>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_any.hh>
@@ -27,6 +28,7 @@
 #include "utils/assert.hh"
 #include "utils/to_string.hh"
 #include "db/system_keyspace.hh"
+#include "mutation/timestamp.hh"
 #include "replica/tablets.hh"
 #include "gms/gossiper.hh"
 
@@ -201,6 +203,34 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
         // dropping the guard releases `_group0_operation_mutex`, allowing other operations
         // on this node to proceed
     } ();
+
+    // Pre-check: throw group0_hard_timeout if the guard's state ID is older than
+    // (gc_window - safety_margin) relative to now — history entry may have been GC'd,
+    // apply status is unknown. Unlike group0_concurrent_modification, do NOT retry.
+    // See: https://github.com/scylladb/scylladb/issues/28082
+    //
+    // The 5-minute safety margin prevents a race: with gc_window=60min, a guard created
+    // at T=0 and held until T=56min would pass the check (56min < 55min is false), but
+    // after the Raft add_entry round-trip (up to 60s) the history entry could expire
+    // before group0_history_contains() is called. The margin ensures we reject guards
+    // that are too close to the GC boundary to be safely verified.
+    //
+    // Skip when gc_window <= safety_margin to avoid spurious throws.
+    constexpr int64_t delta_micros = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::minutes(5)).count(); // 5-minute safety margin
+    const auto gc_micros = std::chrono::duration_cast<std::chrono::microseconds>(
+                               _history_gc_duration).count();
+    if (gc_micros > delta_micros) {
+        const auto new_ts = utils::UUID_gen::micros_timestamp(new_group0_state_id);
+        const auto now_ts = api::new_timestamp();
+        if (new_ts < now_ts - gc_micros + delta_micros) {
+            throw group0_hard_timeout{};
+        }
+    } else if (gc_micros > 0) { // value of 0 means skipped intentionally (in tests)
+        static thread_local logger::rate_limit rl{std::chrono::hours{1}};
+        logger.log(log_level::warn, rl, "group0_history_gc_duration ({}) is below the 5-minute safety margin; "
+                        "GC pre-check disabled.", _history_gc_duration);
+    }
 
     if (!(co_await _sys_ks.group0_history_contains(new_group0_state_id))) {
         // The command was applied but the history table does not contain the new group 0 state ID.
