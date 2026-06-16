@@ -52,11 +52,11 @@ class PythonTestSuite(TestSuite):
                which would delete the log file and directory - we might want to preserve
                these if it came from a failed test.
             """
+            await cluster.stop()
             for srv in cluster.servers.values():
                 if srv.log_file is not None:
                     srv.log_file.close()
                 srv.maintenance_socket_dir.cleanup()
-            await cluster.stop()
             # Close API client to release connector resources
             if cluster.api is not None:
                 cluster.api.close()
