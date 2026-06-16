@@ -82,7 +82,6 @@ class TestSuite(ABC):
     suites: dict[str, TestSuite] = {}
 
     artifacts: ArtifactRegistry
-    hosts: HostRegistry
 
     _next_id = collections.defaultdict(int) # (test_key -> id)
 
@@ -188,7 +187,6 @@ def init_testsuite_globals() -> None:
     """Create global objects required for a test run."""
 
     TestSuite.artifacts = ArtifactRegistry()
-    TestSuite.hosts = HostRegistry()
 
 
 def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) -> None:
@@ -265,8 +263,6 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     )
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
-
-    TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
 
     mock_s3_server = MockS3Server(
         host=await hosts.lease_host(),

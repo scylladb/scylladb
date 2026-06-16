@@ -1120,11 +1120,12 @@ class ScyllaCluster:
         version: Optional[ScyllaVersionDescription]
         server_encryption: str
 
-    def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
-                 host_registry: HostRegistry, replicas: int,
+    def __init__(self,
+                 logger: Union[logging.Logger, logging.LoggerAdapter],
+                 replicas: int,
                  create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
         self.logger = logger
-        self.host_registry = host_registry
+        self.host_registry = HostRegistry()
         self.leased_ips = set[IPAddress]()
         self.name = str(uuid.uuid1())
         self.replicas = replicas

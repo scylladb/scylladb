@@ -33,6 +33,7 @@ from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, HOST_ID
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
     SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
+from test.pylib.host_registry import HostRegistry
 from test.pylib.scylla_cluster import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.suite.base import (
@@ -285,7 +286,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
 
     init_testsuite_globals()
-    TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
+    TestSuite.artifacts.add_exit_artifact(None, HostRegistry().cleanup)
 
     # Run stuff just once for the main pytest process (not in xdist workers).
     if not is_xdist_worker:

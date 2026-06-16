@@ -102,7 +102,7 @@ class PythonTestSuite(TestSuite):
             return server
 
         async def create_cluster(logger: Union[logging.Logger, logging.LoggerAdapter]) -> ScyllaCluster:
-            cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server)
+            cluster = ScyllaCluster(logger, cluster_size, create_server)
 
             async def stop() -> None:
                 await cluster.stop()
