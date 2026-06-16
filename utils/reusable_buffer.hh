@@ -287,7 +287,7 @@ public:
     reusable_buffer(period_type period)
         : _decay_period(period)
     {
-        if (engine_is_ready()) { // To accomodate BOOST_AUTO_TEST_CASE which have no reactor setup
+        if (engine_is_ready()) { // To accommodate BOOST_AUTO_TEST_CASE which have no reactor setup
             _decay_timer.set_callback([this] {decay();});
             _decay_timer.arm_periodic(_decay_period);
         }
