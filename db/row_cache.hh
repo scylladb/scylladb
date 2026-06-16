@@ -409,6 +409,11 @@ public:
     mutation_reader make_nonpopulating_reader(schema_ptr s, reader_permit permit, const dht::partition_range& range,
             const query::partition_slice& slice, tracing::trace_state_ptr ts);
 
+    bool empty() const {
+        // Last entry is dummy one, used for continuity tracking
+        return _partitions.begin() == std::prev(_partitions.end());
+    }
+
     const stats& stats() const { return _stats; }
 public:
     // Populate cache from given mutation, which must be fully continuous.
