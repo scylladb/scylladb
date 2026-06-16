@@ -89,12 +89,15 @@ public:
 
     /// The operational status of a single vector index, as reported by the vector store.
     enum class index_status {
-        /// The index is not yet ready: initializing, not yet discovered, or the
-        /// vector store is unreachable.
-        creating,
+        /// The status could not be determined: the vector store is unreachable,
+        /// the index is not known to it yet, or the reply could not be parsed.
+        unknown,
+        /// The index has been discovered and is being initialized, but the
+        /// initial table scan has not started yet.
+        initializing,
         /// The index is performing the initial full scan of the base table
         /// (backfilling). Queries may be served but results are incomplete.
-        backfilling,
+        bootstrapping,
         /// The index has completed the initial scan and is fully operational.
         serving,
     };

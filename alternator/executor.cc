@@ -631,7 +631,7 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
                 rjson::add(entry, "IndexStatus", "ACTIVE");
             } else {
                 rjson::add(entry, "IndexStatus", "CREATING");
-                if (vstatus == index_status::backfilling) {
+                if (vstatus == index_status::bootstrapping) {
                     rjson::add(entry, "Backfilling", rjson::value(true));
                 }
             }

@@ -347,29 +347,32 @@ struct vector_store_client::impl {
             -> future<vector_store_client::index_status> {
         using index_status = vector_store_client::index_status;
         if (is_disabled()) {
-            co_return index_status::creating;
+            co_return index_status::unknown;
         }
         auto path = format("/api/v1/indexes/{}/{}/status", keyspace, name);
         auto resp = co_await request(operation_type::GET, std::move(path), std::nullopt, as);
         if (!resp || resp->status != status_type::ok) {
-            co_return index_status::creating;
+            co_return index_status::unknown;
         }
         try {
             auto json = rjson::parse(std::move(resp->content));
             const auto* status = rjson::find(json, "status");
             if (!status || !status->IsString()) {
-                co_return index_status::creating;
+                co_return index_status::unknown;
             }
             auto sv = rjson::to_string_view(*status);
             if (sv == "SERVING") {
                 co_return index_status::serving;
             }
             if (sv == "BOOTSTRAPPING") {
-                co_return index_status::backfilling;
+                co_return index_status::bootstrapping;
             }
-            co_return index_status::creating;
+            if (sv == "INITIALIZING") {
+                co_return index_status::initializing;
+            }
+            co_return index_status::unknown;
         } catch (...) {
-            co_return index_status::creating;
+            co_return index_status::unknown;
         }
     }
 
