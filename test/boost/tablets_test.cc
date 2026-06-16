@@ -1965,19 +1965,21 @@ future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 }
 
 static
-future<group0_guard> save_token_metadata(cql_test_env& e, group0_guard guard) {
+future<group0_guard> save_token_metadata(cql_test_env& e, group0_guard guard,
+        locator::tablet_metadata_change_hint hint = {}) {
     auto& stm = e.local_db().get_shared_token_metadata();
     auto tm = stm.get();
 
     e.get_topology_state_machine().local()._topology.version = tm->get_version();
 
     co_await save_tablet_metadata(e.local_db(), tm->tablets(), guard.write_timestamp());
+
     utils::chunked_vector<frozen_mutation> muts;
     muts.push_back(freeze(topology_mutation_builder(guard.write_timestamp())
                                   .set_version(tm->get_version())
                                   .build().to_mutation(db::system_keyspace::topology())));
     co_await e.local_db().apply(muts, db::no_timeout);
-    co_await e.get_storage_service().local().update_tablet_metadata({});
+    co_await e.get_storage_service().local().update_tablet_metadata(hint);
 
     // Need a new guard to make sure later changes use later timestamp.
     // Also, so that the table layer processes the changes we persisted, which is important for splits.
@@ -1988,7 +1990,8 @@ future<group0_guard> save_token_metadata(cql_test_env& e, group0_guard guard) {
 }
 
 static
-future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migration_plan& plan, shared_load_stats* load_stats) {
+future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migration_plan& plan,
+        shared_load_stats* load_stats, bool use_resize_hint = false) {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
     auto old_tm = stm.get();
@@ -2013,7 +2016,14 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
 
     if (changed) {
         // Need to reload on each resize because table object expects tablet count to change by a factor of 2.
-        guard = co_await save_token_metadata(e, std::move(guard));
+        locator::tablet_metadata_change_hint hint;
+        if (use_resize_hint) {
+            // Avoid a full re-read of all tablet metadata by hinting only the resized tables.
+            for (auto id : plan.resize_plan().finalize_resize) {
+                hint.tables[id] = {id, {}, true};
+            }
+        }
+        guard = co_await save_token_metadata(e, std::move(guard), std::move(hint));
 
         if (load_stats) {
             auto new_tm = stm.get();
@@ -2106,7 +2116,8 @@ void do_rebalance_tablets(cql_test_env& e,
                           shared_load_stats* load_stats = nullptr,
                           std::unordered_set<host_id> skiplist = {},
                           std::function<bool(const migration_plan&)> stop = nullptr,
-                          bool auto_split = false)
+                          bool auto_split = false,
+                          bool use_resize_hint = false)
 {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
@@ -2131,6 +2142,7 @@ void do_rebalance_tablets(cql_test_env& e,
 
         if (auto_split && load_stats) {
             bool reload = false;
+            locator::tablet_metadata_change_hint hint;
             auto& tm = *stm.get();
             for (const auto& [table, tmap]: tm.tablets().all_tables_ungrouped()) {
                 if (std::holds_alternative<resize_decision::split>(tmap->resize_decision().way)) {
@@ -2138,17 +2150,22 @@ void do_rebalance_tablets(cql_test_env& e,
                         testlog.debug("set_split_ready_seq_number({}, {})", table, tmap->resize_decision().sequence_number);
                         load_stats->set_split_ready_seq_number(table, tmap->resize_decision().sequence_number);
                         reload = true;
+                        if (use_resize_hint) {
+                            hint.tables[table] = {table, {}, true};
+                        }
                     }
                 }
             }
 
             // Need to order split-ack before split finalization, storage_group assumes that.
+            // When use_resize_hint=false, hint is empty → full re-read (default).
+            // When use_resize_hint=true, hint covers only changed tables → fast incremental update.
             if (reload) {
-                guard = save_token_metadata(e, std::move(guard)).get();
+                guard = save_token_metadata(e, std::move(guard), std::move(hint)).get();
             }
         }
 
-        handle_resize_finalize(e, guard, plan, load_stats).get();
+        handle_resize_finalize(e, guard, plan, load_stats, use_resize_hint).get();
     }
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
 }
@@ -2188,7 +2205,8 @@ void rebalance_tablets(cql_test_env& e,
                        shared_load_stats* load_stats = nullptr,
                        std::unordered_set<host_id> skiplist = {},
                        std::function<bool(const migration_plan&)> stop = nullptr,
-                       bool auto_split = true) {
+                       bool auto_split = true,
+                       bool use_resize_hint = false) {
     abort_source as;
     testlog.debug("rebalance_tablets(): start");
 
@@ -2204,7 +2222,7 @@ void rebalance_tablets(cql_test_env& e,
         load_stats = &local_stats;
     }
 
-    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split);
+    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split, use_resize_hint);
     testlog.debug("rebalance_tablets(): rebalanced");
 
     // We should not introduce inconsistency between on-disk state and in-memory state
@@ -5274,7 +5292,7 @@ SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) 
             BOOST_REQUIRE(load.get_shard_minmax_tablet_count(host1).max() <= 415);
         }
 
-        rebalance_tablets(e, &load_stats);
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, /* use_resize_hint= */ true);
 
         {
             load_sketch load(stm.get(), load_stats.get());
