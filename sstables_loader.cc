@@ -40,6 +40,8 @@
 #include "sstables/object_storage_client.hh"
 #include "utils/rjson.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "replica/schema_describe_helper.hh"
+#include "replica/tablets.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -1231,7 +1233,27 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     // TODO: update state when all restored...
     co_await sth.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix, db::snapshot_state::remote);
 
-    co_await container().invoke_on(0, [tid, tablet_count] (auto& sl) -> future<> {
+    co_await container().invoke_on(0, [tid, tablet_count, snap_name, keyspace, table] (auto& sl) -> future<> {
+        // Save the original schema of the table in system_distributed.snapshot_cql_table,
+        // so that the restore process can reconstruct the original table schema after attaching the downloaded sstables to the table.
+        auto schema = sl._db.local().find_schema(tid);
+        auto schema_desc = schema->describe(replica::make_schema_describe_helper(schema, sl._db.local().as_data_dictionary()), cql3::describe_option::STMTS);
+        auto create_stmt = schema_desc.create_statement.value().linearize();
+        db::snapshot_table_helper table_helper(sl._sys_dist_ks.qp());
+        bool schema_exists = true;
+        try {
+            schema_exists = !(co_await table_helper.get_snapshot_tables(snap_name, keyspace, table)).empty();
+        } catch (...) {
+            schema_exists = false;
+        }
+        if (!schema_exists) {
+            co_await table_helper.insert_snapshot_tables(std::vector{db::snapshot_table_entry{.snapshot_name = snap_name,
+                                                                                              .keyspace_name = keyspace,
+                                                                                              .table_name = table,
+                                                                                              .table_id = tid,
+                                                                                              .type = db::snapshot_table_type::cql_table,
+                                                                                              .table_schema = create_stmt}});
+        }
         co_await sl._ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
     });
     auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name));
