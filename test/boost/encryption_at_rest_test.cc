@@ -1289,6 +1289,38 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_provider_with_impersonated_user, local_gcp_km
     }
 }
 
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_network_error, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+    tmpdir tmp;
+    std::string host;
+
+    if (endpoint.empty()) { 
+        host = "https://cloudkms.googleapis.com";
+        // TODO: cannot run a proxy here, because REST calls to
+        // GCP are dependent on proper HTTP host headers (for virt host resolve)
+        // Need to build a real http proxy for this to work
+        BOOST_TEST_MESSAGE("Cannot run network proxy for actual GCP endpoint. Skipping test.");
+        co_return;
+    } else {
+        host = endpoint;
+    }
+
+    co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
+        auto yaml = fmt::format(R"foo(
+            gcp_hosts:
+                gcp_test:
+                    master_key: {0}
+                    gcp_project_id: {1}
+                    gcp_location: {2}
+                    gcp_credentials_file: {3}
+                    endpoint: http://{4}
+                    key_cache_expiry: 1ms
+                    )foo"
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_1_credentials, proxy.address()
+        );
+        return std::make_tuple(scopts_map({ { "key_provider", "GcpKeyProviderFactory" }, { "gcp_host", "gcp_test" } }), yaml);
+    });
+}
+
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
 // but there is no infrastructure for that atm.
 
