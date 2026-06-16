@@ -41,6 +41,8 @@
 #include "utils/rjson.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "table_helper.hh"
+#include "replica/schema_describe_helper.hh"
+#include "replica/tablets.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -1258,8 +1260,21 @@ protected:
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, utils::chunked_vector<sstring> manifests) {
     auto tablet_count = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, snap_name, std::move(manifests));
 
-    co_await container().invoke_on(0, [tid, tablet_count] (auto& sl) -> future<> {
+    co_await container().invoke_on(0, [tid, tablet_count, snap_name, keyspace, table] (auto& sl) -> future<> {
+        // Save the original schema of the table in system_distributed.snapshot_cql_table,
+        // so that the restore process can reconstruct the original table schema after attaching the downloaded sstables to the table.
         auto schema = sl._db.local().find_schema(tid);
+        auto schema_desc = schema->describe(replica::make_schema_describe_helper(schema, sl._db.local().as_data_dictionary()), cql3::describe_option::STMTS);
+        auto create_stmt = schema_desc.create_statement.value().linearize();
+        bool schema_exists = true;
+        try {
+            co_await sl._sys_dist_ks.get_snapshot_cql_table_schema(snap_name, keyspace, table);
+        } catch (const std::runtime_error&) {
+            schema_exists = false;
+        }
+        if (!schema_exists) {
+            co_await sl._sys_dist_ks.insert_snapshot_cql_table(snap_name, keyspace, table, schema->is_view(), create_stmt);
+        }
         co_await sl._ss.local().alter_table_with_tablet_hints(schema, tablet_count, tablet_count);
     });
     auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), std::move(endpoint), std::move(bucket));
