@@ -347,7 +347,8 @@ class ScyllaServer:
         xdist_worker_id = get_xdist_worker_id()
         # this variable needed to make a cleanup after server is not needed anymore
         self.maintenance_socket_dir = tempfile.TemporaryDirectory(
-            prefix=f"scylladb-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}-test.py-"
+            prefix=f"scylladb-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}-test.py-",
+            ignore_cleanup_errors=True,
         )
         self.maintenance_socket_path = f"{self.maintenance_socket_dir.name}/cql.m"
         # Unix socket for receiving sd_notify messages from Scylla
