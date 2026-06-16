@@ -9,6 +9,8 @@ on:
       - '**/CMakeLists.txt'
       - 'cmake/**'
       - 'scripts/compare_build_systems.py'
+      - 'tools/toolchain/**'
+      - 'install-dependencies.sh'
   workflow_dispatch:
 
 permissions:
