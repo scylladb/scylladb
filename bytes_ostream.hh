@@ -186,6 +186,9 @@ public:
         , _size(o._size)
         , _initial_chunk_size(o._initial_chunk_size)
     {
+        if (_begin) {
+            _begin->backref = &_begin;
+        }
         o._current = nullptr;
         o._size = 0;
     }
