@@ -2323,6 +2323,7 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  # experimental APIs that we use are only present there.
                  maybe_static(True, '-lzstd'),
                  maybe_static(True, '-llz4'),
+                 maybe_static(args.staticboost, '-lboost_container'),
                  maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc -licui18n'),
                  '-lxxhash',
                  '-ldeflate',
@@ -2366,6 +2367,25 @@ kmipc_lib = f'{kmipc_dir}/lib/libkmip.a'
 if os.path.exists(kmipc_lib):
     libs += f' {kmipc_lib}'
     user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
+
+cpp_jwt_encryption_sources = [
+    'ent/encryption/azure_host.cc',
+    'ent/encryption/azure_key_provider.cc',
+    'ent/encryption/encrypted_file_impl.cc',
+    'ent/encryption/encryption.cc',
+    'ent/encryption/encryption_config.cc',
+    'ent/encryption/gcp_host.cc',
+    'ent/encryption/gcp_key_provider.cc',
+    'ent/encryption/kmip_host.cc',
+    'ent/encryption/kmip_key_provider.cc',
+    'ent/encryption/kms_host.cc',
+    'ent/encryption/kms_key_provider.cc',
+    'ent/encryption/local_file_provider.cc',
+    'ent/encryption/replicated_key_provider.cc',
+    'ent/encryption/symmetric_key.cc',
+    'ent/encryption/system_key.cc',
+    'ent/encryption/utils.cc',
+]
 
 def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags = [
@@ -3092,6 +3112,8 @@ def create_build_system(args):
         mode_config['cxxflags'] += f' {extra_cxxflags}'
 
         mode_config['per_src_extra_cxxflags']['release.cc'] = ' '.join(get_release_cxxflags(scylla_product, scylla_version, scylla_release))
+        for src in cpp_jwt_encryption_sources:
+            mode_config['per_src_extra_cxxflags'][src] = '-DCPP_JWT_USE_VENDORED_NLOHMANN_JSON'
 
     prepare_advanced_optimizations(modes=modes, build_modes=build_modes, args=args)
 
