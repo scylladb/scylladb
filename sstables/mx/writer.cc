@@ -552,9 +552,6 @@ private:
     // of keys to a temporary file, and later (after Data.db is written,
     // but before the sstable is sealed) we build the bloom filter from that.
     //
-    // (Ideally this mechanism should only be used if the optimal size of the
-    // filter can't be well estimated in advance. As of this writing we use
-    // this mechanism every time the Index component isn't being written).
     bool _delayed_filter = true;
     // The writer of the temporary file used when `_delayed_filter` is true.
     std::unique_ptr<file_writer> _hashes_writer;
@@ -876,14 +873,11 @@ public:
         _sst.open_sstable(cfg.origin);
         _sst.create_data().get();
         _compression_enabled = !_sst.has_component(component_type::CRC);
-        _delayed_filter = _sst.has_component(component_type::Filter) && !_sst.has_component(component_type::Index);
+        _delayed_filter = _sst.has_component(component_type::Filter);
         init_file_writers();
         _sst._shards = { shard };
 
         _cfg.monitor->on_write_started(_data_writer->offset_tracker());
-        if (!_delayed_filter) {
-            _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _sst._schema->bloom_filter_fp_chance(), utils::filter_format::m_format);
-        }
         _pi_write_m.promoted_index_block_size = cfg.promoted_index_block_size;
         _pi_write_m.promoted_index_auto_scale_threshold = cfg.promoted_index_auto_scale_threshold;
         _index_sampling_state.summary_byte_cost = _cfg.summary_byte_cost;
@@ -1077,9 +1071,10 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
             seastar::cpu_to_le(_current_murmur_hash.hash()[1])
         };
         _hashes_writer->write(reinterpret_cast<const char*>(hash.data()), sizeof(hash));
-    } else {
-        _sst._components->filter->add(_current_murmur_hash);
     }
+    // Otherwise the sstable has no Filter component (bloom_filter_fp_chance == 1.0)
+    // and there is no per-partition bloom filter to populate during the pass.
+    // An always-present filter is installed at end-of-stream by ensure_filter().
     _collector.add_key(bytes_view(*_partition_key));
     _num_partitions_consumed++;
 
@@ -1830,9 +1825,15 @@ void writer::consume_end_of_stream() {
   }
 
     if (_delayed_filter) {
+        // The sstable has a Filter component: build the bloom filter now, from
+        // the murmur hashes collected during the main pass, using the exact
+        // partition count.
         _sst.build_delayed_filter(_num_partitions_consumed);
     } else {
-        _sst.maybe_rebuild_filter_from_index(_num_partitions_consumed);
+        // No Filter component (bloom_filter_fp_chance == 1.0). Install an
+        // always-present filter so that reads, which dereference the filter
+        // pointer unconditionally, are safe. This mirrors read_filter().
+        _sst.ensure_filter();
     }
     _sst.write_filter();
     _sst.write_statistics();

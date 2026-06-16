@@ -544,9 +544,8 @@ future<> filesystem_storage::wipe(const sstable& sst, const atomic_delete_contex
             // during SSTable writing and removed before sealing.  If the write
             // failed before sealing, the file may still be on disk and must be
             // cleaned up explicitly.
-            // The component is only defined for the `ms` sstable format; for
-            // older formats it is absent from the component map and looking up
-            // its filename would throw std::out_of_range.
+            // The component is not defined for the oldest (`ka`/`la`) sstable formats;
+            // use contains() to avoid std::out_of_range on those.
             // Use file_exists() to avoid a C++ exception on the common path
             // where the file was already removed before sealing.
             if (sstable_version_constants::get_component_map(sst.get_version()).contains(component_type::TemporaryHashes)) {
