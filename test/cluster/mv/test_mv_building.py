@@ -365,7 +365,7 @@ async def test_do_not_finish_view_builder_with_nodes_down(manager: ManagerClient
         build_status = await cql.run_async(
             f"SELECT * FROM system.view_build_status_v2 WHERE keyspace_name = '{ks}' AND view_name = 'mv_cf_view'",
             host=cql.cluster.metadata.get_host(servers[0].ip_addr))
-        assert len(build_status) > 0 and build_status[0].status != 'SUCCESS', \
+        assert len(build_status) > 0 and any(bs.status != 'SUCCESS' for bs in build_status), \
             "View builder should still be in progress while nodes are down"
 
         # Restart the stopped nodes
