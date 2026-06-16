@@ -50,6 +50,15 @@ public:
 
     seastar::future<get_clients_result> get_clients(seastar::abort_source& as);
 
+    /// The currently resolved per-endpoint clients. Empty when DNS has not
+    /// resolved any address yet. Does not trigger a refresh and never blocks.
+    ///
+    /// This is a reference to the live vector, which handle_changed() replaces
+    /// on every DNS refresh: the caller must not preempt while iterating it.
+    const clients_vec& current() const {
+        return _clients;
+    }
+
     void timeout(std::chrono::milliseconds timeout) {
         _timeout = timeout;
     }

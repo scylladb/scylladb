@@ -14,23 +14,23 @@
 #include "error.hh"
 #include "utils/rjson.hh"
 #include <chrono>
+#include <cstdint>
 #include <expected>
 #include <functional>
+#include <optional>
 #include <variant>
 #include <vector>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/http/reply.hh>
+#include <seastar/net/inet_address.hh>
 
 class schema;
 namespace db {
 class config;
-}
-
-namespace seastar::net {
-class inet_address;
 }
 
 namespace vector_search {
@@ -104,6 +104,58 @@ public:
 
     /// Query the vector store for the current status of a specific vector index.
     auto get_index_status(keyspace_name keyspace, index_name name, abort_source& as) -> future<index_status>;
+
+    /// The role of a vector store node, derived from which configuration list
+    /// (vector_store_primary_uri / vector_store_secondary_uri) it came from.
+    enum class node_role {
+        primary,
+        secondary,
+    };
+
+    /// Connectivity of a vector store node from the perspective of this Scylla
+    /// node, i.e. whether this node can reach and query it.
+    enum class node_connectivity {
+        /// The node is reachable and can be queried.
+        up,
+        /// The node has been resolved but is currently considered unreachable.
+        down,
+        /// The node's address has not been resolved yet, so its reachability is
+        /// not known.
+        unknown,
+    };
+
+    /// What a single vector store node reports about a single index.
+    struct index_state {
+        /// `unknown` when the node was not queried, does not know the index,
+        /// or returned an unparsable reply.
+        index_status status;
+        /// Number of vectors currently indexed. Empty when not available.
+        std::optional<uint64_t> count;
+        /// Backfill progress in the range [0, 100]. Empty when not available.
+        std::optional<double> build_progress;
+    };
+
+    /// The state of one index on one known vector store node.
+    struct index_node_status {
+        node_role role;
+        host_name host;
+        port_number port;
+        /// Empty while the host has not been resolved.
+        std::optional<seastar::net::inet_address> ip;
+        node_connectivity connectivity;
+        index_state state;
+    };
+
+    /// The state of the given index on every known vector store node: one
+    /// entry per resolved address of every configured URI, plus one `unknown`
+    /// entry for each configured host that has not been resolved yet.
+    ///
+    /// Only reachable nodes are queried; the others carry a default (unknown)
+    /// state. The node list is built from what the background DNS refresh has
+    /// resolved so far, so the call never resolves on demand and cannot block
+    /// on it; a host configured since the last refresh, or one that cannot be
+    /// resolved, is reported as `unknown`.
+    auto get_index_status_per_node(keyspace_name keyspace, index_name name, abort_source& as) -> future<std::vector<index_node_status>>;
 
     /// Request the vector store service for the primary keys of the nearest
     /// neighbors. Each returned primary_key has its similarity field set to
