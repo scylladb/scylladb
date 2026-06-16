@@ -72,7 +72,7 @@ namespace utils::gcp {
     };
 
     struct impersonated_service_account_credentials {
-        impersonated_service_account_credentials(std::string principal, google_credentials&&);
+        impersonated_service_account_credentials(std::string principal, google_credentials&&, std::string iam_endpoint_override = {});
         impersonated_service_account_credentials(const rjson::value&);
 
         std::vector<std::string> delegates;
