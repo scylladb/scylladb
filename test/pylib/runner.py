@@ -29,7 +29,8 @@ import yaml
 from _pytest.junitxml import xml_key
 
 
-from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, HOST_ID
+from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID
+from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
     SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
@@ -38,10 +39,8 @@ from test.pylib.scylla_cluster import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.suite.base import (
     PYTEST_TESTS_LOGS_FOLDER,
-    TestSuite,
     get_testpy_test,
     prepare_environment,
-    init_testsuite_globals,
 )
 from test.pylib.util import get_modes_to_run, scale_timeout_by_mode
 
@@ -271,33 +270,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Confi
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    # test.py starts S3 mock and create/cleanup testlog by itself. Also, if we run with --collect-only option,
-    # we don't need this stuff.
-    global _system_resource_monitor
-    gather_metrics = session.config.getoption("--gather-metrics")
-    temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
-    save_log_on_success = session.config.getoption("--save-log-on-success")
-    toxiproxy_byte_limit = session.config.getoption("--byte-limit")
-    collect_only = session.config.getoption("--collect-only")
-    if TEST_RUNNER != "pytest" or collect_only:
+    if session.config.getoption("--collect-only"):
         return
+
+    artifacts.init()
+    artifacts.add_exit_artifact(None, HostRegistry().cleanup)
 
     # Check if this is an xdist worker
     is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
 
-    init_testsuite_globals()
-    TestSuite.artifacts.add_exit_artifact(None, HostRegistry().cleanup)
+    gather_metrics = session.config.getoption("--gather-metrics")
+    temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
 
     # Run stuff just once for the main pytest process (not in xdist workers).
     if not is_xdist_worker:
-        temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
-
         prepare_environment(
             tempdir_base=temp_dir,
             modes=get_modes_to_run(session.config),
             gather_metrics=gather_metrics,
-            save_log_on_success=save_log_on_success,
-            toxiproxy_byte_limit=toxiproxy_byte_limit,
+            save_log_on_success=session.config.getoption("--save-log-on-success"),
+            toxiproxy_byte_limit= session.config.getoption("--byte-limit"),
         )
     if gather_metrics:
         # In the master process, set up the cgroup hierarchy if test.py hasn't done it already.
@@ -308,9 +300,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         # System-wide resource metrics (CPU%, memory) are identical from any process.
         # Only the master needs to record them.
         if not is_xdist_worker:
+            global _system_resource_monitor
             _system_resource_monitor = SystemResourceMonitor(temp_dir)
             _system_resource_monitor.start()
-
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -357,6 +349,9 @@ def pytest_runtest_logreport(report):
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
+    if session.config.getoption("--collect-only"):
+        return
+
     global _system_resource_monitor
     if _system_resource_monitor:
         _system_resource_monitor.stop()
@@ -376,9 +371,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
     if is_xdist_worker:
         return
-    # we only clean up when running with pure pytest
-    if getattr(TestSuite, "artifacts", None) is not None:
-        asyncio.run(TestSuite.artifacts.cleanup_before_exit())
+
+    asyncio.run(artifacts.cleanup_before_exit())
 
     # Modify exit code to reflect the number of failed tests for easier detection in CI.
     maxfail = session.config.getoption("maxfail")

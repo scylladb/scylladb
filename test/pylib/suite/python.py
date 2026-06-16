@@ -14,6 +14,7 @@ from functools import cache
 from typing import TYPE_CHECKING
 
 from test import path_to
+from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.pool import Pool
 from test.pylib.scylla_cluster import ScyllaCluster, ScyllaServer, merge_cmdline_options, get_current_version_description
 from test.pylib.suite.base import Test, TestSuite
@@ -109,14 +110,14 @@ class PythonTestSuite(TestSuite):
 
             # Suite artifacts are removed when
             # the entire suite ends successfully.
-            self.artifacts.add_suite_artifact(self, stop)
+            artifacts.add_suite_artifact(self, stop)
             if not self.options.save_log_on_success:
                 # If a test fails, we might want to keep the data dirs.
                 async def uninstall() -> None:
                     await cluster.uninstall()
 
-                self.artifacts.add_suite_artifact(self, uninstall)
-            self.artifacts.add_exit_artifact(self, stop)
+                artifacts.add_suite_artifact(self, uninstall)
+            artifacts.add_exit_artifact(self, stop)
 
             await cluster.install_and_start()
             # If cluster failed to start, raise the exception immediately

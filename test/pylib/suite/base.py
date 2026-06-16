@@ -24,7 +24,7 @@ import universalasync
 import yaml
 
 from test import TEST_DIR, TEST_RUNNER
-from test.pylib.artifact_registry import ArtifactRegistry
+from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.host_registry import HostRegistry
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
@@ -80,8 +80,6 @@ class TestSuite(ABC):
     # All existing test suites, one suite per path/mode.
 
     suites: dict[str, TestSuite] = {}
-
-    artifacts: ArtifactRegistry
 
     _next_id = collections.defaultdict(int) # (test_key -> id)
 
@@ -183,12 +181,6 @@ class Test:
         self.time_end: float = 0
 
 
-def init_testsuite_globals() -> None:
-    """Create global objects required for a test run."""
-
-    TestSuite.artifacts = ArtifactRegistry()
-
-
 def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) -> None:
     # Ensure the dir exists.
     dirname.mkdir(parents=True, exist_ok=True)
@@ -252,7 +244,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     async def make_async_finalize():
         finalize()
 
-    TestSuite.artifacts.add_exit_artifact(None, make_async_finalize)
+    artifacts.add_exit_artifact(None, make_async_finalize)
     ms = MinioServer(
         tempdir_base=str(tempdir_base),
         address=await hosts.lease_host(),
@@ -262,7 +254,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         ),
     )
     await ms.start()
-    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+    artifacts.add_exit_artifact(None, ms.stop)
 
     mock_s3_server = MockS3Server(
         host=await hosts.lease_host(),
@@ -273,7 +265,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         ),
     )
     await mock_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
+    artifacts.add_exit_artifact(None, mock_s3_server.stop)
 
     minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
     proxy_s3_server = S3ProxyServer(
@@ -288,7 +280,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         ),
     )
     await proxy_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
+    artifacts.add_exit_artifact(None, proxy_s3_server.stop)
 
 def find_suite_config(path: pathlib.Path, config_filename: str) -> pathlib.Path:
     for directory in (path.joinpath("_") if path.is_dir() else path).absolute().relative_to(TEST_DIR).parents:
