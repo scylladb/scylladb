@@ -93,8 +93,9 @@ utils::gcp::service_account_credentials::service_account_credentials(const rjson
     , quota_project_id(rjson::get_opt<std::string>(v, "refresh_token").value_or(""))
 {}
 
-utils::gcp::impersonated_service_account_credentials::impersonated_service_account_credentials(std::string principal, google_credentials&& c)
-    : target_principal(std::move(principal))
+utils::gcp::impersonated_service_account_credentials::impersonated_service_account_credentials(std::string principal, google_credentials&& c, std::string iam_endpoint_override_in)
+    : iam_endpoint_override(std::move(iam_endpoint_override_in))
+    , target_principal(std::move(principal))
     , source_credentials(std::make_unique<google_credentials>(std::move(c))) 
 {}
 
