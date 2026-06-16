@@ -288,15 +288,24 @@ void view_update_generator::do_abort() noexcept {
 }
 
 future<> view_update_generator::drain() {
+<<<<<<< HEAD
     return _proxy.local().abort_view_writes();
+||||||| parent of cd2b1a8691 (view_update_generator: make drain/stop re-entrant)
+    co_await _proxy.local().abort_view_writes();
+    co_await _gate.close();
+=======
+    co_await _proxy.local().abort_view_writes();
+    if (!_gate.is_closed()) {
+        co_await _gate.close();
+    }
+>>>>>>> cd2b1a8691 (view_update_generator: make drain/stop re-entrant)
 }
 
 future<> view_update_generator::stop() {
     _db.unplug_view_update_generator();
     do_abort();
-    return std::move(_started).then([this] {
-        _registration_sem.broken();
-    });
+    co_await std::exchange(_started, make_ready_future<>());
+    _registration_sem.broken();
 }
 
 bool view_update_generator::should_throttle() const {
