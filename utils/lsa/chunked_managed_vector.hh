@@ -20,9 +20,105 @@
 #include <iterator>
 #include <utility>
 #include <algorithm>
+#include <bit>
 #include <stdexcept>
 
 namespace lsa {
+
+// A directory of chunk pointers kept entirely in LSA memory.
+//
+// chunked_managed_vector keeps a directory of pointers to its managed chunks.
+// Storing the whole directory in a single managed_vector would, for large
+// vectors, require a contiguous LSA allocation exceeding logalloc's max managed
+// object size. To avoid that, the directory is split into fixed-size blocks so
+// that each block's allocation stays within the limit. All storage stays in LSA
+// (and thus relocatable); only the top-level block array approaches the limit,
+// which happens once the vector grows into the multi-GB range.
+template <typename T>
+class managed_chunk_directory {
+    using block = managed_vector<T>;
+    // Keep each block's allocation within logalloc's limit, rounded down to a
+    // power of two so that operator[] uses shifts and masks instead of division
+    // and remainder.
+    static constexpr size_t block_capacity = std::bit_floor((logalloc::max_managed_object_size - block::metadata_size()) / sizeof(T));
+    static_assert(block_capacity >= 1);
+    managed_vector<block, 1> _blocks;
+    size_t _size = 0;
+public:
+    size_t size() const { return _size; }
+    bool empty() const { return _size == 0; }
+    T& operator[](size_t i) { return _blocks[i / block_capacity][i % block_capacity]; }
+    const T& operator[](size_t i) const { return _blocks[i / block_capacity][i % block_capacity]; }
+    T& back() { return (*this)[_size - 1]; }
+    // Ensure the directory can hold n entries without further allocation.
+    // Interior blocks are always filled to block_capacity, so only the last
+    // needed block may be partially reserved. By materializing the blocks and
+    // reserving storage within them, subsequent push_back()s up to n don't
+    // allocate.
+    void reserve(size_t n) {
+        size_t nblocks = (n + block_capacity - 1) / block_capacity;
+        if (nblocks <= _blocks.size()) {
+            // Already have the blocks; top up the last needed one if n grew
+            // within it.
+            if (nblocks > 0) {
+                size_t bi = nblocks - 1;
+                _blocks[bi].reserve(std::min(block_capacity, n - bi * block_capacity));
+            }
+            return;
+        }
+        _blocks.reserve(nblocks);
+        // The current last block becomes an interior block, so reserve it fully.
+        if (!_blocks.empty()) {
+            _blocks.back().reserve(block_capacity);
+        }
+        while (_blocks.size() < nblocks) {
+            size_t bi = _blocks.size();
+            _blocks.emplace_back();
+            _blocks.back().reserve(std::min(block_capacity, n - bi * block_capacity));
+        }
+    }
+    void push_back(T value) {
+        size_t bi = _size / block_capacity;
+        if (bi == _blocks.size()) {
+            _blocks.emplace_back();
+        }
+        auto& b = _blocks[bi];
+        if (b.size() == b.capacity()) {
+            // Not reserved ahead: grow geometrically but never past
+            // block_capacity, so managed_vector's own growth can't overshoot
+            // the block and exceed logalloc's limit.
+            b.reserve(std::min(block_capacity, std::max<size_t>(b.capacity() * 2, 1)));
+        }
+        b.emplace_back(std::move(value));
+        ++_size;
+    }
+    void pop_back() {
+        size_t bi = (_size - 1) / block_capacity;
+        _blocks[bi].pop_back();
+        --_size;
+        // Drop the active block (and any reserved blocks above it) once empty.
+        if (_blocks[bi].empty()) {
+            while (_blocks.size() > bi) {
+                _blocks.pop_back();
+            }
+        }
+    }
+    // Clears the directory and releases all memory so it can be destroyed under any allocator.
+    void clear_and_release() noexcept {
+        for (auto& b : _blocks) {
+            b.clear_and_release();
+        }
+        _blocks.clear_and_release();
+        _size = 0;
+    }
+    size_t external_memory_usage() const {
+        size_t n = _blocks.external_memory_usage();
+        for (const auto& b : _blocks) {
+            n += b.external_memory_usage();
+        }
+        return n;
+    }
+};
 
 template <typename T>
 class chunked_managed_vector {
@@ -30,7 +126,7 @@ class chunked_managed_vector {
     static constexpr size_t max_contiguous_allocation = logalloc::max_managed_object_size - chunk_ptr::metadata_size();
     static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move constructible");
     // Each chunk holds max_chunk_capacity() items, except possibly the last
-    managed_vector<chunk_ptr, 1> _chunks;
+    managed_chunk_directory<chunk_ptr> _chunks;
     size_t _size = 0;
     size_t _capacity = 0;
 public:
@@ -170,7 +266,7 @@ public:
 public:
     template <class ValueType>
     class iterator_type {
-        const chunk_ptr* _chunks;
+        const chunked_managed_vector* _owner = nullptr;
         size_t _i;
     public:
         using iterator_category = std::random_access_iterator_tag;
@@ -180,12 +276,12 @@ public:
         using reference = ValueType&;
     private:
         pointer addr() const {
-            return &const_cast<chunk_ptr*>(_chunks)[_i / max_chunk_capacity()][_i % max_chunk_capacity()];
+            return &const_cast<chunked_managed_vector*>(_owner)->_chunks[_i / max_chunk_capacity()][_i % max_chunk_capacity()];
         }
-        iterator_type(const chunk_ptr* chunks, size_t i) : _chunks(chunks), _i(i) {}
+        iterator_type(const chunked_managed_vector* owner, size_t i) : _owner(owner), _i(i) {}
     public:
         iterator_type() = default;
-        iterator_type(const iterator_type<std::remove_const_t<ValueType>>& x) : _chunks(x._chunks), _i(x._i) {} // needed for iterator->const_iterator conversion
+        iterator_type(const iterator_type<std::remove_const_t<ValueType>>& x) : _owner(x._owner), _i(x._i) {} // needed for iterator->const_iterator conversion
         reference operator*() const {
             return *addr();
         }
@@ -248,12 +344,12 @@ public:
 public:
     const T& front() const { return *cbegin(); }
     T& front() { return *begin(); }
-    iterator begin() { return iterator(_chunks.data(), 0); }
-    iterator end() { return iterator(_chunks.data(), _size); }
-    const_iterator begin() const { return const_iterator(_chunks.data(), 0); }
-    const_iterator end() const { return const_iterator(_chunks.data(), _size); }
-    const_iterator cbegin() const { return const_iterator(_chunks.data(), 0); }
-    const_iterator cend() const { return const_iterator(_chunks.data(), _size); }
+    iterator begin() { return iterator(this, 0); }
+    iterator end() { return iterator(this, _size); }
+    const_iterator begin() const { return const_iterator(this, 0); }
+    const_iterator end() const { return const_iterator(this, _size); }
+    const_iterator cbegin() const { return const_iterator(this, 0); }
+    const_iterator cend() const { return const_iterator(this, _size); }
     std::reverse_iterator<iterator> rbegin() { return std::reverse_iterator(end()); }
     std::reverse_iterator<iterator> rend() { return std::reverse_iterator(begin()); }
     std::reverse_iterator<const_iterator> rbegin() const { return std::reverse_iterator(end()); }
