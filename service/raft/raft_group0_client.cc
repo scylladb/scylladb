@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <functional>
 #include <optional>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_any.hh>
@@ -26,6 +27,7 @@
 #include "utils/assert.hh"
 #include "utils/to_string.hh"
 #include "db/system_keyspace.hh"
+#include "mutation/timestamp.hh"
 #include "replica/tablets.hh"
 
 
@@ -208,11 +210,23 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
         // on this node to proceed
     } ();
 
-    if (!(co_await _sys_ks.group0_history_contains(new_group0_state_id))) {
-        // The command was applied but the history table does not contain the new group 0 state ID.
-        // This means `apply` skipped the change due to previous state ID mismatch.
+    // If the row exists, the command was applied — done, regardless of elapsed time.
+    // Must check before any clock, or a slow add_entry() (e.g. stalled Raft leader) can misclassify success as timeout.
+    if (co_await _sys_ks.group0_history_contains(new_group0_state_id)) {
+        co_return;
+    }
+
+    // Row absent: classify by whether our state ID is still inside the GC window (`now_ts` taken here, right after
+    // the read, to keep this check as tight as possible):
+    // - not yet GC-eligible: row can't have been cleared, so it was never written (apply() skipped it) — retryable group0_concurrent_modification.
+    // - otherwise: ambiguous (written-then-GC'd vs never-written) — not safe to retry, group0_hard_timeout instead.
+    const auto gc_micros = std::chrono::duration_cast<std::chrono::microseconds>(_history_gc_duration).count();
+    const auto new_ts = utils::UUID_gen::micros_timestamp(new_group0_state_id);
+    const auto now_ts = api::new_timestamp();
+    if (new_ts > now_ts - gc_micros) {
         throw group0_concurrent_modification{};
     }
+    throw group0_hard_timeout{};
 }
 
 future<> raft_group0_client::add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as) {
