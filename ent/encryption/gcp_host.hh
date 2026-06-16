@@ -35,6 +35,8 @@ public:
         T gcp_credentials_file;
         // Optional service account (email address) to impersonate
         T gcp_impersonate_service_account;
+        // Optional service account iam_endpoint_override
+        T gcp_iam_endpoint_override;
     };
 
     using credentials_source = t_credentials_source<std::string>;
@@ -42,6 +44,10 @@ public:
     struct host_options : public credentials_source {
         std::string gcp_project_id;
         std::string gcp_location;
+
+        // Optional. Mainly for mock testing.
+        // Default is the official google base service url for KMS
+        std::string endpoint;
 
         // GCP KMS Key to encrypt data keys with. Format: <keychain>/<keyname>
         std::string master_key;

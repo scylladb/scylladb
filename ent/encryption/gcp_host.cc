@@ -43,6 +43,7 @@
 #include "utils/UUID_gen.hh"
 #include "utils/rjson.hh"
 #include "utils/gcp/gcp_credentials.hh"
+#include "utils/http.hh"
 #include "marshal_exception.hh"
 #include "db/config.hh"
 
@@ -53,7 +54,7 @@ logger gcp_log("gcp");
 
 namespace encryption {
 bool operator==(const gcp_host::credentials_source& k1, const gcp_host::credentials_source& k2) {
-    return k1.gcp_credentials_file == k2.gcp_credentials_file && k1.gcp_impersonate_service_account == k2.gcp_impersonate_service_account;
+    return k1.gcp_credentials_file == k2.gcp_credentials_file && k1.gcp_impersonate_service_account == k2.gcp_impersonate_service_account && k1.gcp_iam_endpoint_override == k2.gcp_iam_endpoint_override;
 }
 }
 
@@ -61,19 +62,21 @@ template<>
 struct fmt::formatter<encryption::gcp_host::credentials_source> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const encryption::gcp_host::credentials_source& d, fmt::format_context& ctxt) const {
-        return fmt::format_to(ctxt.out(), "{{ gcp_credentials_file = {}, gcp_impersonate_service_account = {} }}", d.gcp_credentials_file, d.gcp_impersonate_service_account);
+        return fmt::format_to(ctxt.out(), "{{ gcp_credentials_file = {}, gcp_impersonate_service_account = {}, gcp_iam_endpoint_override = {} }}", d.gcp_credentials_file, d.gcp_impersonate_service_account, d.gcp_iam_endpoint_override);
     }
 };
 
 template<> 
 struct std::hash<encryption::gcp_host::credentials_source> {
     size_t operator()(const encryption::gcp_host::credentials_source& a) const {
-        return utils::tuple_hash{}(std::tie(a.gcp_credentials_file, a.gcp_impersonate_service_account));
+        return utils::tuple_hash{}(std::tie(a.gcp_credentials_file, a.gcp_impersonate_service_account, a.gcp_iam_endpoint_override));
     }
 };
 
 using namespace utils::gcp;
 using namespace rest;
+
+static constexpr char GCP_KMS_DEFAULT_ENDPOINT[] = "https://cloudkms.googleapis.com";
 
 class encryption::gcp_host::impl {
 public:
@@ -95,7 +98,11 @@ public:
             .max_size = std::numeric_limits<size_t>::max(),
             .expiry = options.key_cache_expiry.value_or(default_expiry),
             .refresh = options.key_cache_refresh.value_or(default_refresh)}, gcp_log, std::bind_front(&impl::find_key, this))
-    {}
+    {
+        if (_options.endpoint.empty()) {
+            _options.endpoint = GCP_KMS_DEFAULT_ENDPOINT;
+        }
+    }
     ~impl() = default;
 
     future<> init();
@@ -155,7 +162,7 @@ private:
 
     shared_ptr<tls::certificate_credentials> _certs;
 
-    std::unordered_map<credentials_source, google_credentials> _cached_credentials;
+    std::unordered_map<credentials_source, std::optional<google_credentials>> _cached_credentials;
 
     utils::loading_cache<attr_cache_key, key_and_id_type, 2, utils::loading_cache_reload_enabled::yes,
         utils::simple_entry_size<key_and_id_type>, attr_cache_key_hash> _attr_cache;
@@ -181,6 +188,7 @@ future<std::tuple<shared_ptr<encryption::symmetric_key>, encryption::gcp_host::i
         .src = {
             .gcp_credentials_file = get_option(oov, &option_override::gcp_credentials_file, _options.gcp_credentials_file),
             .gcp_impersonate_service_account = get_option(oov, &option_override::gcp_impersonate_service_account, _options.gcp_impersonate_service_account),
+            .gcp_iam_endpoint_override = get_option(oov, &option_override::gcp_iam_endpoint_override, _options.gcp_iam_endpoint_override),
         },
         .master_key = get_option(oov, &option_override::master_key, _options.master_key),
         .info = info,
@@ -210,6 +218,7 @@ future<shared_ptr<encryption::symmetric_key>> encryption::gcp_host::impl::get_ke
         .src = {
             .gcp_credentials_file = get_option(oov, &option_override::gcp_credentials_file, _options.gcp_credentials_file),
             .gcp_impersonate_service_account = get_option(oov, &option_override::gcp_impersonate_service_account, _options.gcp_impersonate_service_account),
+            .gcp_iam_endpoint_override = get_option(oov, &option_override::gcp_iam_endpoint_override, _options.gcp_iam_endpoint_override),
         },
         .id = id,
     };
@@ -233,15 +242,18 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
     auto i = _cached_credentials.find(src);
     if (i == _cached_credentials.end()) {
         try {
-            auto c = !src.gcp_credentials_file.empty()
-                ? co_await google_credentials::from_file(src.gcp_credentials_file)
-                : co_await google_credentials::get_default_credentials()
-                ;
-            if (!src.gcp_credentials_file.empty()) {
+            std::optional<google_credentials> c;
+            if (src.gcp_credentials_file.empty()) {
+                c = co_await google_credentials::get_default_credentials();
+            } else if (src.gcp_credentials_file != "none") {
+                c = co_await google_credentials::from_file(src.gcp_credentials_file);
                 gcp_log.trace("Loaded credentials from {}", src.gcp_credentials_file);
             }
-            if (!src.gcp_impersonate_service_account.empty()) {
-                c = google_credentials(impersonated_service_account_credentials(src.gcp_impersonate_service_account, std::move(c)));
+            if (!src.gcp_impersonate_service_account.empty() && c) {
+                c = google_credentials(impersonated_service_account_credentials(src.gcp_impersonate_service_account
+                    , std::move(*c)
+                    , src.gcp_iam_endpoint_override
+                ));
             }
             i = _cached_credentials.emplace(src, std::move(c)).first;
         } catch (...) {
@@ -260,6 +272,9 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
     bool do_backoff = false;
     bool did_auth_retry = false;
 
+    std::vector<key_value> headers;
+    std::string bearer;
+
     for (int retry = 0; ; ++retry) {
         if (std::exchange(do_backoff, false)) {
             co_await exr.retry(_as);
@@ -268,12 +283,17 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
         bool refreshing = true;
 
         try {
-            co_await creds.refresh(KMS_SCOPE, _certs);
+            if (creds) {
+                bearer.clear();
+                co_await creds->refresh(KMS_SCOPE, _certs);
+                bearer = utils::gcp::format_bearer(creds->token);
+            }
             refreshing = false;
-
-            auto res = co_await send_request(uri, _certs, body, httpd::operation_type::POST, key_values({
-                { utils::gcp::AUTHORIZATION, utils::gcp::format_bearer(creds.token) },
-            }), &_as);
+            if (!bearer.empty()) {
+                headers.resize(1);
+                headers[0] = { utils::gcp::AUTHORIZATION, bearer };
+            }
+            auto res = co_await send_request(uri, _certs, body, httpd::operation_type::POST, headers, &_as);
             co_return res;
         } catch (httpd::unexpected_status_error& e) {
             gcp_log.debug("{}: Got unexpected response: {}", uri, e.status());
@@ -311,7 +331,7 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
     }
 }
 
-static constexpr char GCP_KMS_QUERY_TEMPLATE[] = "https://cloudkms.googleapis.com/v1/projects/{}/locations/{}/keyRings/{}/cryptoKeys/{}:{}";
+static constexpr char GCP_KMS_QUERY_TEMPLATE[] = "{}/v1/projects/{}/locations/{}/keyRings/{}/cryptoKeys/{}:{}";
 
 future<> encryption::gcp_host::impl::init() {
     if (_initialized) {
@@ -420,6 +440,7 @@ future<encryption::gcp_host::impl::key_and_id_type> encryption::gcp_host::impl::
 
     auto key = make_shared<symmetric_key>(info);
     auto url = fmt::format(GCP_KMS_QUERY_TEMPLATE, 
+        _options.endpoint,
         _options.gcp_project_id,
         _options.gcp_location,
         keyring,
@@ -468,6 +489,7 @@ future<bytes> encryption::gcp_host::impl::find_key(const id_cache_key& k) {
     std::string enc(id.begin() + pos + 1, id.end());
 
     auto url = fmt::format(GCP_KMS_QUERY_TEMPLATE, 
+        _options.endpoint,
         _options.gcp_project_id,
         _options.gcp_location,
         keyring,
@@ -493,6 +515,7 @@ encryption::gcp_host::gcp_host(encryption_context& ctxt, const std::string& name
         host_options opts;
         map_wrapper<std::unordered_map<sstring, sstring>> m(map);
 
+        opts.endpoint = m("endpoint").value_or("");
         opts.master_key = m("master_key").value_or("");
 
         opts.gcp_project_id = m("gcp_project_id").value_or(""); 
@@ -500,6 +523,7 @@ encryption::gcp_host::gcp_host(encryption_context& ctxt, const std::string& name
 
         opts.gcp_credentials_file = m("gcp_credentials_file").value_or("");
         opts.gcp_impersonate_service_account = m("gcp_impersonate_service_account").value_or("");
+        opts.gcp_iam_endpoint_override = m("gcp_iam_endpoint_override").value_or("");
 
         opts.certfile = m("certfile").value_or("");
         opts.keyfile = m("keyfile").value_or("");
@@ -539,7 +563,7 @@ template<>
 struct fmt::formatter<encryption::gcp_host::impl::attr_cache_key> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const encryption::gcp_host::impl::attr_cache_key& d, fmt::format_context& ctxt) const {
-        return fmt::format_to(ctxt.out(), "{},{},{}", d.master_key, d.src.gcp_credentials_file, d.src.gcp_impersonate_service_account);
+        return fmt::format_to(ctxt.out(), "{},{},{},{}", d.master_key, d.src.gcp_credentials_file, d.src.gcp_impersonate_service_account, d.src.gcp_iam_endpoint_override);
     }
 };
 
@@ -547,6 +571,6 @@ template<>
 struct fmt::formatter<encryption::gcp_host::impl::id_cache_key> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const encryption::gcp_host::impl::id_cache_key& d, fmt::format_context& ctxt) const {
-        return fmt::format_to(ctxt.out(), "{},{},{}", d.id, d.src.gcp_credentials_file, d.src.gcp_impersonate_service_account);
+        return fmt::format_to(ctxt.out(), "{},{},{},{}", d.id, d.src.gcp_credentials_file, d.src.gcp_impersonate_service_account, d.src.gcp_iam_endpoint_override);
     }
 };
