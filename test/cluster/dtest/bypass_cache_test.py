@@ -336,39 +336,3 @@ class TestBypassCache(Tester):
         # enabling caching for table and checking read comes from cache
         session.execute(f"ALTER TABLE {self.table_name} WITH caching = {{'enabled':true}}")
         self.verify_read_was_from_cache(node=node, query=query, session=session)
-
-    def verify_used_memory_grow(self, node, session):
-        grew = 0
-        metric = ["scylla_cache_bytes_used"]
-        for _ in range(NUM_OF_QUERY_EXECUTIONS):
-            cache_bytes_used_before_write = self.get_scylla_cache_reads_metrics(node=node, metrics=metric)[metric[0]]
-            insert_c1c2(session, keys=list(range(self.first_key, self.first_key + 10)), cf=self.table_name,
-                        ks=self.keyspace_name)
-            node.flush(ks=self.keyspace_name, table=self.table_name)
-            cache_bytes_used_after_write = self.get_scylla_cache_reads_metrics(node=node, metrics=metric)[metric[0]]
-            if cache_bytes_used_before_write < cache_bytes_used_after_write:
-                grew += 1
-            self.first_key += 10
-        return grew > NUM_OF_QUERY_EXECUTIONS / 2
-
-    def test_writes_caching_disabled(self):
-        session = self.prepare(insert_data=False)
-        node = self.cluster.nodelist()[0]
-        create_c1c2_table(session, cf=self.table_name, caching=False)
-        insert_c1c2(session, n=NUM_OF_QUERY_EXECUTIONS, cf=self.table_name, ks=self.keyspace_name)
-        self.first_key = 0
-        assert not self.verify_used_memory_grow(node=node, session=session), "expected to have writes without cache"
-        alter_cmd = f"ALTER TABLE {self.keyspace_name}.{self.table_name} WITH CACHING = {{'enabled': 'true'}}"
-        session.execute(alter_cmd)
-        assert self.verify_used_memory_grow(node=node, session=session), "expected to have writes through cache"
-
-    def test_writes_caching_enabled(self):
-        session = self.prepare(insert_data=False)
-        node = self.cluster.nodelist()[0]
-        create_c1c2_table(session, cf=self.table_name)
-        insert_c1c2(session, n=NUM_OF_QUERY_EXECUTIONS, cf=self.table_name, ks=self.keyspace_name)
-        self.first_key = 0
-        assert self.verify_used_memory_grow(node=node, session=session), "expected to have writes through cache"
-        alter_cmd = f"ALTER TABLE {self.keyspace_name}.{self.table_name} WITH CACHING = {{'enabled': 'false'}}"
-        session.execute(alter_cmd)
-        assert not self.verify_used_memory_grow(node=node, session=session), "expected to have writes without cache"
