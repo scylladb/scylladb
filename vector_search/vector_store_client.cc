@@ -199,16 +199,6 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         auto const& sim_val = similarity_arr[idx];
         if (sim_val.IsNumber()) {
             keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, sim_val.GetFloat()});
-        } else if (sim_val.IsNull()) {
-            // JSON does not support infinite values, and serde_json serializes
-            // both +inf and -inf as null. This can only happen with the
-            // DOT_PRODUCT similarity function when the dot product overflows
-            // float32 (very high magnitude vectors). Since we can't distinguish
-            // +inf from -inf here, we use +inf as a conservative approximation
-            // (the item will be ranked highly, which is appropriate for a very
-            // large positive dot product; the -inf case is very unlikely in
-            // practice).
-            keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, std::numeric_limits<float>::infinity()});
         } else {
             vslogger.error("Vector Store returned invalid JSON: 'similarity_scores[{}]'={} is not a number", idx, rjson::print(sim_val));
             return std::unexpected{service_reply_format_error{}};

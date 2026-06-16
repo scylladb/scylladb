@@ -2766,15 +2766,9 @@ def test_query_vectorsearch_return_similarity_dot_product_overflow(vs, needs_vec
 # a score much larger than 1, the mildly similar item around 1, and the
 # highly dissimilar item should have a large negative score.
 #
-# This test reproduces a bug in the vector store: When the similarity score
-# overflows the 32-bit calculation, it returns the same value "null" for both
-# +infinity and -infinity. Alternator currently assumes it's +infinity
-# (because only the results with the *highest* scores are returned from the
-# query), but in test like this one when we inspect all the items and their
-# scores, we can catch this discrepancy - the -inf result also gets
-# incorrectly returned as +inf. This test is marked xfail until the bug is
-# fixed.
-@pytest.mark.xfail(reason='vector store returns same "null" similarity for both +inf and -inf')
+# This test used to reproduce a bug in the vector store: When the similarity score
+# overflowed the 32-bit calculation, it returned the same value "null" for both
+# +infinity and -infinity.
 def test_query_vectorsearch_return_similarity_dot_product_overflow2(vs, needs_vector_store):
     BIG = 1e38  # Near FLT_MAX; dot product BIG * BIG overflows float32
     with new_test_table(vs,
