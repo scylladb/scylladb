@@ -19,7 +19,8 @@ import pytest
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 
-from .util import new_test_table, unique_name
+from .util import config_value_context, new_test_table, unique_name
+
 
 
 def wait_for_vector_store_node_recovery(cql, table, vector_store_mock):
@@ -212,6 +213,53 @@ def test_vector_search_ann_with_restricted_key_column_not_selected(cql, test_key
                 assert list(result) == [(8,), (7,)]
 
 
+# Poll system.custom_indexes until a row matching the predicate appears,
+# or the timeout elapses. Returns the matching row, or None on timeout.
+def _wait_for_vector_store_index_row(cql, keyspace, index, predicate, timeout=30):
+    deadline = time.monotonic() + timeout
+    last_rows = []
+    while time.monotonic() < deadline:
+        rows = list(cql.execute(
+            "SELECT * FROM system.custom_indexes "
+            f"WHERE keyspace_name = '{keyspace}' AND index_name = '{index}'"))
+        last_rows = rows
+        for row in rows:
+            if predicate(row):
+                return row
+        time.sleep(0.5)
+    # Help debugging on failure by surfacing what was actually observed.
+    print(f"last observed rows for {keyspace}.{index}: {last_rows}")
+    return None
+
+
+# The system.custom_indexes virtual table reports, per vector store node,
+# the state of each vector index. For a serving index the row exposes the index
+# state, build progress, size and schema-derived metadata (dimensions,
+# similarity function).
+def test_custom_indexes_serving(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    schema = "pk1 tinyint, pk2 tinyint, ck1 tinyint, ck2 tinyint, embedding vector<float, 3>, PRIMARY KEY ((pk1, pk2), ck1, ck2)"
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(
+            f"CREATE CUSTOM INDEX {index_name} ON {table}(embedding) "
+            "USING 'vector_index' WITH OPTIONS = {'similarity_function': 'cosine'}")
+        vector_store_mock.set_index_status(test_keyspace, index_name, "SERVING", 123, 100.0)
+
+        row = _wait_for_vector_store_index_row(
+            cql, test_keyspace, index_name,
+            lambda r: r.node_status == 'up' and r.index_state == 'SERVING')
+        assert row is not None
+        assert row.role == 'primary'
+        assert row.index_type == 'vector'
+        assert row.node_status == 'up'
+        assert row.index_state == 'SERVING'
+        assert row.build_progress == 100.0
+        assert row.size == 123
+        assert row.dimensions == 3
+        assert row.similarity_function == 'cosine'
+
+
 # Regression test: a map subscript restriction in a vector ANN query
 # (e.g. WHERE metadata_s['source'] = 'docs') was silently dropped by
 # binary_operator_to_prepared instead of raising an error, causing the
@@ -281,3 +329,76 @@ def test_vector_search_503_from_ann_when_vector_store_is_serving(cql, test_keysp
         with pytest.raises(InvalidRequest, match="503.*still being constructed"):
             cql.execute(
                 f"SELECT pk1, pk2, ck1, ck2 FROM {table} WHERE pk1 IN (5, 6) ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2")
+
+
+# While the index is still being built, the table reports the BOOTSTRAPPING
+# state together with the partial build progress reported by the vector store.
+def test_custom_indexes_building_stage(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    schema = "pk1 tinyint, pk2 tinyint, ck1 tinyint, ck2 tinyint, embedding vector<float, 3>, PRIMARY KEY ((pk1, pk2), ck1, ck2)"
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(
+            f"CREATE CUSTOM INDEX {index_name} ON {table}(embedding) USING 'vector_index'")
+        # Simulate a paused/in-progress backfill scan: the index is bootstrapping
+        # and only 42% of the initial table scan has completed.
+        vector_store_mock.set_index_status(test_keyspace, index_name, "BOOTSTRAPPING", 42, 42.0)
+
+        row = _wait_for_vector_store_index_row(
+            cql, test_keyspace, index_name,
+            lambda r: r.node_status == 'up' and r.index_state == 'BOOTSTRAPPING')
+        assert row is not None
+        assert row.index_state == 'BOOTSTRAPPING'
+        assert row.build_progress == 42.0
+        assert row.size == 42
+
+
+# Fulltext indexes are served by the same external search service and are
+# reported in system.custom_indexes alongside vector indexes, with the
+# vector-specific columns left unset.
+def test_custom_indexes_fulltext(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    schema = "pk text, content text, PRIMARY KEY (pk)"
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(
+            f"CREATE CUSTOM INDEX {index_name} ON {table}(content) USING 'fulltext_index'")
+        vector_store_mock.set_index_status(test_keyspace, index_name, "SERVING", 7, 100.0)
+
+        row = _wait_for_vector_store_index_row(
+            cql, test_keyspace, index_name,
+            lambda r: r.node_status == 'up' and r.index_state == 'SERVING')
+        assert row is not None
+        assert row.index_type == 'fulltext'
+        assert row.size == 7
+        # Vector-specific metadata is not reported for fulltext indexes.
+        assert row.dimensions is None
+        assert row.similarity_function is None
+
+
+# A configured vector store node that cannot be resolved/reached is still
+# reported, with an unknown/down connectivity and no index state.
+def test_custom_indexes_unreachable_node(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    schema = "pk1 tinyint, pk2 tinyint, ck1 tinyint, ck2 tinyint, embedding vector<float, 3>, PRIMARY KEY ((pk1, pk2), ck1, ck2)"
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(
+            f"CREATE CUSTOM INDEX {index_name} ON {table}(embedding) USING 'vector_index'")
+        vector_store_mock.set_index_status(test_keyspace, index_name, "SERVING", 1, 100.0)
+
+        # Point the secondary URI at a host that cannot be resolved.
+        with config_value_context(cql, "vector_store_secondary_uri", "http://nonexistent.invalid:6080"):
+            row = _wait_for_vector_store_index_row(
+                cql, test_keyspace, index_name,
+                lambda r: r.role == 'secondary')
+            assert row is not None
+            assert row.role == 'secondary'
+            assert row.host == 'nonexistent.invalid'
+            # The address of an unresolvable host falls back to the host name.
+            assert row.address == 'nonexistent.invalid'
+            assert row.node_status in ('unknown', 'down')
+            # No index information is available for an unreachable node.
+            assert row.index_state is None
+            assert row.build_progress is None
+            assert row.size is None
