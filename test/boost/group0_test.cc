@@ -105,7 +105,7 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
         co_await perform_schema_change();
         BOOST_REQUIRE_EQUAL(co_await get_history_size(), 1);
 
-        rclient.set_history_gc_duration(duration_cast<gc_clock::duration>(weeks{1}));
+        rclient.set_history_gc_duration(duration_cast<gc_clock::duration>(hours{1}));
         co_await perform_schema_change();
         BOOST_REQUIRE_EQUAL(co_await get_history_size(), 2);
 
