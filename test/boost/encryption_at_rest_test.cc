@@ -957,7 +957,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_kms_provider, local_aws_kms_wrapper, *check_run_t
                 master_key: {0}
                 aws_region: {1}
                 aws_profile: {2}
-                endpoint: {3}
+                endpoint: '{3}'
                 )foo"
         , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
     );
@@ -976,7 +976,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_master_key_in_cf, local_aws_kms
             kms_test:
                 aws_region: {1}
                 aws_profile: {2}
-                endpoint: {3}
+                endpoint: '{3}'
                 )foo"
         , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
     );
@@ -1015,7 +1015,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_broken_algo, local_aws_kms_wrap
                 master_key: {0}
                 aws_region: {1}
                 aws_profile: {2}
-                endpoint: {3}
+                endpoint: '{3}'
                 )foo"
         , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
     );
@@ -1040,7 +1040,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, l
                 master_key: {0}
                 aws_region: {1}
                 aws_profile: {2}
-                endpoint: {3}
+                endpoint: '{3}'
                 )foo"
         , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
     );
