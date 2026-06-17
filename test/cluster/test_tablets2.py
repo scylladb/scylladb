@@ -1281,7 +1281,7 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
         # tablet drives avg_tablet_size to 0, which would otherwise make the load balancer
         # revoke the already split-ready split instead of finalizing it. Suppress that
         # cancellation so the split finalizes.
-        await manager.api.enable_injection(servers[0].ip_addr, "skip_resize_cancellation", one_shot=False)
+        await manager.api.enable_injection(servers[0].ip_addr, "resize_cancellation", one_shot=False, parameters={"value": "skip"})
 
         await manager.api.stop_compaction(servers[0].ip_addr, "SPLIT")
         compaction_task = asyncio.create_task(manager.api.keyspace_compaction(servers[0].ip_addr, ks))
