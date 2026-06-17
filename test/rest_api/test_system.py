@@ -8,6 +8,7 @@ import requests
 def test_system_uptime_ms(rest_api):
     resp = rest_api.send('GET', "system/uptime_ms")
     resp.raise_for_status()
+    assert False, "DEBUG: intentional failure to test CI pipeline"
 
 
 def test_system_highest_sstable_format(rest_api):
