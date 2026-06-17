@@ -36,6 +36,7 @@ struct entry_descriptor {
     sstable_version_types version;
     sstable_format_types format;
     component_type component;
+    sstable_id sstable_identifier;
     std::optional<sstable_state> state;
 
     entry_descriptor(generation_type generation, optimized_optional<sstable_id> sid,

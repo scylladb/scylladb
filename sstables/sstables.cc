@@ -1801,6 +1801,14 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     }
 }
 
+sstable_id sstable::get_sstable_identifier() const {
+    if (_sstable_identifier) {
+        return *_sstable_identifier;
+    }
+    sstlog.warn("sstable {} has no identifier, deriving from generation", get_filename());
+    return sstable_id(_generation.as_uuid());
+}
+
 future<> sstable::create_data() noexcept {
     auto oflags = sstable_write_open_flags;
     file_open_options opt;
