@@ -1678,6 +1678,8 @@ struct database_config {
     seastar::scheduling_group commitlog_scheduling_group;
     seastar::scheduling_group schema_commitlog_scheduling_group;
     seastar::scheduling_group backup_scheduling_group;
+    // Shared by the Alternator export to S3 and import from S3 jobs.
+    seastar::scheduling_group export_import_scheduling_group;
     size_t available_memory;
 };
 
@@ -2012,6 +2014,7 @@ public:
     }
 
     seastar::scheduling_group get_gossip_scheduling_group() const { return _dbcfg.gossip_scheduling_group; }
+    seastar::scheduling_group get_export_import_scheduling_group() const { return _dbcfg.export_import_scheduling_group; }
 
     compaction::compaction_manager& get_compaction_manager() {
         return _compaction_manager;
