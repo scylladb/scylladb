@@ -317,21 +317,28 @@ class fake_proxy {
     bool _do_proxy = true;
     future<> _f;
 
-    future<> run(std::string dst_addr) {
-        uint16_t port = 443u;
-        auto i = dst_addr.find_last_of(':');
-        if (i != std::string::npos && i > 0 && dst_addr[i - 1] != ':') { // just check against ipv6...
-            port = std::stoul(dst_addr.substr(i + 1));
-            dst_addr = dst_addr.substr(0, i);
-        }
-
-        auto addr = co_await seastar::net::dns::resolve_name(dst_addr);
+    future<> run(std::string dst_endpoint) {
+        auto info = utils::http::parse_simple_url(dst_endpoint);
+        auto port = info.port;
+        auto dst_addr = info.host;
+        auto addr = co_await seastar::net::dns::resolve_name(dst_addr, seastar::net::inet_address::family::INET);
         std::vector<future<>> work;
+
+        testlog.debug("Proxy {} -> {} ({}:{}/{}:{})", _address, dst_endpoint, dst_addr, port, addr, port);
+
+        shared_ptr<seastar::tls::certificate_credentials> creds;
+        if (info.is_https()) {
+            creds = make_shared<seastar::tls::certificate_credentials>();
+            co_await creds->set_system_trust();
+        }
 
         while (_go_on) {
             try {
                 auto client = co_await _socket.accept();
-                auto dst = co_await seastar::connect(socket_address(addr, port));
+                auto dst = co_await (info.is_https()
+                    ? seastar::tls::connect(creds, socket_address(addr, port), seastar::tls::tls_options{ .server_name = info.host })
+                    : seastar::connect(socket_address(addr, port))
+                );
 
                 testlog.debug("Got proxy connection: {}->{}:{} ({})", client.remote_address, dst_addr, port, _do_proxy);
 
@@ -389,10 +396,10 @@ class fake_proxy {
         }
     }
 public:
-    fake_proxy(std::string dst)
+    fake_proxy(std::string endpoint)
         : _socket(seastar::listen(socket_address(0x7f000001, 0)))
         , _address(_socket.local_address())
-        , _f(run(std::move(dst)))
+        , _f(run(std::move(endpoint)))
     {}
 
     const socket_address& address() const {
@@ -415,8 +422,8 @@ public:
  * Tests that a network error in key resolution (in commitlog in this case) results in a non-fatal, non-isolating
  * exception, i.e. an eventual write error.
  */
-static future<> network_error_test_helper(const tmpdir& tmp, const std::string& host, std::function<std::tuple<scopts_map, std::string>(const fake_proxy&)> make_opts) {
-    fake_proxy proxy(host);
+static future<> network_error_test_helper(const tmpdir& tmp, const std::string& endpoint, std::function<std::tuple<scopts_map, std::string>(const fake_proxy&)> make_opts) {
+    fake_proxy proxy(endpoint);
     std::exception_ptr p;
     try {
         auto [scopts, yaml] = make_opts(proxy);
@@ -755,7 +762,7 @@ SEASTAR_TEST_CASE(test_kmip_provider_multiple_hosts, *check_run_test_decorator("
      * Pretend to have failover by using a local proxy.
     */
     co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        fake_proxy proxy(info.host);
+        fake_proxy proxy("kmip://" + info.host);
 
         auto host2 = boost::lexical_cast<std::string>(proxy.address());
 
@@ -806,7 +813,8 @@ SEASTAR_TEST_CASE(test_commitlog_kmip_encryption_with_slow_key_resolve, *check_r
 
 SEASTAR_TEST_CASE(test_kmip_network_error, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
     co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        co_await network_error_test_helper(tmp, info.host, [&](const auto& proxy) {
+        // fake an URI here. 
+        co_await network_error_test_helper(tmp, "kmip://" + info.host, [&](const auto& proxy) {
             auto yaml = fmt::format(R"foo(
                 kmip_hosts:
                     kmip_test:
@@ -1042,15 +1050,17 @@ SEASTAR_FIXTURE_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, l
 
 SEASTAR_FIXTURE_TEST_CASE(test_kms_network_error, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
     tmpdir tmp;
-    std::string host, scheme;
+    std::string host;
 
     if (endpoint.empty()) { 
-        host = make_aws_host(kms_aws_region, "kms");
-        scheme = "https://";
+        host = "https://" + make_aws_host(kms_aws_region, "kms");
+        // TODO: cannot run a proxy here, because REST calls to
+        // AWS are dependent on proper HTTP host headers (for virt host resolve)
+        // Need to build a real http proxy for this to work
+        BOOST_TEST_MESSAGE("Cannot run network proxy for actual AWS endpoint. Skipping test.");
+        co_return;
     } else {
-        auto info = utils::http::parse_simple_url(endpoint);
-        host = info.host + ":" + std::to_string(info.port);
-        scheme = info.scheme;
+        host = endpoint;
     }
 
     co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
@@ -1060,10 +1070,10 @@ SEASTAR_FIXTURE_TEST_CASE(test_kms_network_error, local_aws_kms_wrapper, *check_
                     master_key: {0}
                     aws_region: {1}
                     aws_profile: {2}
-                    endpoint: {3}://{4}
+                    endpoint: http://{3}
                     key_cache_expiry: 1ms
                     )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile, scheme, proxy.address()
+            , kms_key_alias, kms_aws_region, kms_aws_profile, proxy.address()
         );
         return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
     });
@@ -1600,10 +1610,8 @@ SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_both_secret_and_cert_real, re
 
 SEASTAR_FIXTURE_TEST_CASE(test_azure_network_error, fake_azure, *check_azure_mock_test_decorator()) {
     tmpdir tmp;
-    auto info = utils::http::parse_simple_url(imds_endpoint);
-    auto host_endpoint = fmt::format("{}:{}", info.host, info.port);
     auto key = key_name.substr(key_name.find_last_of('/') + 1);
-    co_await network_error_test_helper(tmp, host_endpoint, [&](const auto& proxy) {
+    co_await network_error_test_helper(tmp, imds_endpoint, [&](const auto& proxy) {
         auto yaml = fmt::format(R"foo(
             azure_hosts:
                 azure_test:
