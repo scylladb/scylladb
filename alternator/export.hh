@@ -8,13 +8,19 @@
 
 #pragma once
 
+#include "schema/schema_fwd.hh"
+#include <seastar/util/noncopyable_function.hh>
+#include <seastar/core/future.hh>
+#include "utils/rjson.hh"
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <span>
 #include <vector>
-#include <seastar/core/future.hh>
-#include "utils/rjson.hh"
+
+namespace service {
+class storage_proxy;
+}
 
 namespace alternator {
 
@@ -92,5 +98,24 @@ std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_mem
 // You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
 // you need to complete sink pipeline first, then create and run source pipeline.
 std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage &, std::function<seastar::future<>(rjson::value)> on_item);
+
+/// Perform a full table scan over an Alternator table, calling `cb` for
+/// every item found. The callback receives an `rjson::value` representing
+/// one DynamoDB-style item (JSON object with typed attribute values).
+///
+/// Guarantees:
+///  - Every item in the table is visited exactly once.
+///  - Calls to `cb` are sequential (never parallel).
+///  - Items may be visited in any order (not necessarily sort-key order).
+///
+/// This first version performs a simple global scan without multithreading,
+/// sharding awareness, or resilience to topology changes.
+///
+/// The scan uses LOCAL_QUORUM consistency and bypasses the cache to avoid
+/// polluting it.
+future<> scan_table(
+    service::storage_proxy& proxy,
+    schema_ptr schema,
+    noncopyable_function<future<>(rjson::value)> cb);
 
 } // namespace alternator

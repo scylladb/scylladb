@@ -7,8 +7,21 @@
  */
 
 #include "alternator/export.hh"
+#include "alternator/executor.hh"
+#include "alternator/executor_util.hh"
+#include "alternator/serialization.hh"
+#include "cql3/selection/selection.hh"
+#include "cql3/result_set.hh"
+#include "query/query-request.hh"
+#include "schema/schema.hh"
+#include "service/client_state.hh"
+#include "service/pager/query_pagers.hh"
+#include "service/storage_proxy.hh"
+#include "service_permit.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "utils/rjson.hh"
+#include <ranges>
 #include <algorithm>
 #include <string>
 #include <string_view>
@@ -206,6 +219,77 @@ std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_m
     auto parser = std::make_unique<json_parser>(std::move(on_item));
     auto decompressor = std::make_unique<noop_decompressor>(std::move(parser));
     return std::make_unique<in_memory_source>(storage, std::move(decompressor));
+}
+
+
+future<> scan_table(
+    service::storage_proxy& proxy,
+    schema_ptr schema,
+    noncopyable_function<future<>(rjson::value)> cb)
+{
+    // Build a wildcard selection (SELECT *) for all columns.
+    auto selection = cql3::selection::selection::wildcard(schema);
+
+    // Collect all regular column IDs to read.
+    auto regular_columns =
+        schema->regular_columns()
+        | std::views::transform(&column_definition::id)
+        | std::ranges::to<query::column_id_vector>();
+
+    // Set up query options: allow short reads and bypass cache.
+    query::partition_slice::option_set opts = selection->get_query_options();
+    opts.set<query::partition_slice::option::allow_short_read>();
+    opts.set<query::partition_slice::option::bypass_cache>();
+
+    // Scan all clustering ranges (no restriction).
+    std::vector<query::clustering_range> ck_bounds{
+        query::clustering_range::make_open_ended_both_sides()};
+
+    auto partition_slice = query::partition_slice(
+        std::move(ck_bounds), {}, std::move(regular_columns), opts);
+
+    auto command = ::make_lw_shared<query::read_command>(
+        schema->id(), schema->version(), partition_slice,
+        proxy.get_max_result_size(partition_slice),
+        query::tombstone_limit(proxy.get_tombstone_limit()));
+
+    // Use an internal client state - no authorization checks needed for
+    // this internal scan operation.
+    auto& client_state = service::client_state::for_internal_calls();
+    tracing::trace_state_ptr trace_state;
+    auto query_state_ptr = std::make_unique<service::query_state>(
+        client_state, trace_state, empty_service_permit());
+
+    db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
+    auto query_options = std::make_unique<cql3::query_options>(
+        cl, std::vector<cql3::raw_value>{});
+    lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
+    query_options = std::make_unique<cql3::query_options>(
+        std::move(query_options), std::move(paging_state));
+
+    // Scan the full token ring.
+    dht::partition_range_vector partition_ranges{
+        dht::partition_range::make_open_ended_both_sides()};
+
+    auto p = service::pager::query_pagers::pager(
+        proxy, schema, selection, *query_state_ptr, *query_options,
+        command, std::move(partition_ranges), nullptr);
+
+    while (!p->is_exhausted()) {
+        // Fetch one page at a time. The page size in bytes is bounded by
+        // the read command's max_result_size; we don't limit by row count.
+        uint32_t limit = std::numeric_limits<uint32_t>::max();
+        std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(
+            limit, gc_clock::now(), executor::default_timeout());
+
+        for (const auto& row : rs->rows()) {
+            rjson::value item = rjson::empty_object();
+            // Convert each row to a DynamoDB-style JSON item using the
+            // same logic as describe_single_item() from executor_util.
+            describe_single_item(*selection, row, std::nullopt, item);
+            co_await cb(std::move(item));
+        }
+    }
 }
 
 } // namespace alternator
