@@ -51,7 +51,7 @@ static std::vector<std::pair<int,float>> me_first(
 // Again, this is just a simulation - no actual request is sent here, these
 // requests are just counted.
 static void test_hit_rates(std::vector<float> hr, unsigned CL,
-                           bool want_extra = false, unsigned iterations = 100000) {
+                           bool want_extra = false, unsigned iterations = 500000) {
     const int RF = hr.size();
     BOOST_TEST_MESSAGE(fmt::format("RF={} nodes, given hit rates: {}",
         RF, fmt::join(hr, " ")));
@@ -208,9 +208,11 @@ static void test_hit_rates(std::vector<float> hr, unsigned CL,
     // such as test_clip(), very rarely (e.g., once in a million calls
     // to miss_equalizing_combination()) generate an invalid combination.
     // To work around this flakyness (and allow this test into the suite),
-    // we check here count_invalid <= 3. Later we should revert it to
-    // count_invalid == 0 and find the cause of the rare bug.
-    BOOST_CHECK(count_invalid <= 3);
+    // we allow up to RF*iterations/100000 invalid combinations (one per
+    // 100,000 calls), which scales with the total number of calls made.
+    // Later we should revert it to count_invalid == 0 and find the cause
+    // of the rare bug.
+    BOOST_CHECK(count_invalid <= (long long)RF * iterations / 100000);
     BOOST_TEST_MESSAGE("----------------------------------------------------------");
 }
 
@@ -350,7 +352,16 @@ BOOST_AUTO_TEST_CASE(extra) {
 // max_hit_rate variable, which clips hit rates - and what happens
 // when it is 0.999 (before issue #8815) or 0.95 (that issue's fix).
 BOOST_AUTO_TEST_CASE(test_a) {
-    test_hit_rates({0.999, 0.999, 0.999, 0.999, 0.999, 0.94}, 2);
+    // The cold node gets only ~1/301 of requests (miss rate 60x higher than
+    // warm nodes). With the old default of 100,000 iterations it got only
+    // ~3,988 requests (~3.6 sigma from failure, ~1 in 5,000 chance per run,
+    // causing actual CI failures). We use 5,000,000 iterations instead, giving
+    // ~199,000 requests (~25 sigma from failure).
+    test_hit_rates({0.999, 0.999, 0.999, 0.999, 0.999, 0.94}, 2, false, 5000000);
     test_hit_rates({0.95, 0.95, 0.95, 0.95, 0.95, 0.94}, 2);
-    test_hit_rates({0.999, 0.999, 0.999, 0.999, 0.999, 0.989}, 2);
+    // The cold node gets only ~1/56 of requests (miss rate 11x higher than
+    // warm nodes). With the old default of 100,000 iterations it got only
+    // ~21,000 requests (~8 sigma from failure). We use 1,000,000 iterations
+    // instead, giving ~214,000 requests (~26 sigma from failure).
+    test_hit_rates({0.999, 0.999, 0.999, 0.999, 0.999, 0.989}, 2, false, 1000000);
 }
