@@ -772,7 +772,7 @@ future<bool> object_storage_base::has_references(generation_type gen) const {
 }
 
 void object_storage_base::open(sstable& sst) {
-    entry_descriptor desc(sst._generation, sst._sstable_identifier, sst._version, sst._format, component_type::TOC);
+    entry_descriptor desc(sst._generation, sst.get_sstable_identifier(), sst._version, sst._format, component_type::TOC);
     auto host_id = sst.manager().get_local_host_id();
     sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
 
@@ -958,7 +958,7 @@ future<entry_descriptor> object_storage_base::clone(const sstable& sst, generati
     sstlog.trace("clone sst: {} generation={} leave_unsealed={}", sst.get_filename(), gen, leave_unsealed);
 
     // Register the cloned sstable as "creating" in the registry
-    entry_descriptor desc(gen, sst.sstable_identifier(), sst.get_version(), sst.get_format(), component_type::TOC);
+    entry_descriptor desc(gen, sst.get_sstable_identifier(), sst.get_version(), sst.get_format(), component_type::TOC);
     desc.state = sst.state();
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);

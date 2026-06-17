@@ -1397,6 +1397,7 @@ CREATE TABLE system.sstables (
     owner uuid,
     generation timeuuid,
     status text,
+    sstable_id uuid,
     state text,
     version text,
     format text,
@@ -1408,6 +1409,7 @@ CREATE TABLE system.sstables (
 - `owner`: UUID of the owning table
 - `generation`: SSTable generation identifier
 - `status`: Current status of the SSTable
+- `sstable_id`: Unique identifier of the SSTable, derived from its generation for new SSTables
 - `state`: State of the SSTable
 - `version`: SSTable format version
 - `format`: SSTable format

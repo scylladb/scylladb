@@ -1123,6 +1123,9 @@ public:
         return _sstable_identifier;
     }
 
+    // Returns the sstable identifier, falling back to deriving it from the generation.
+    sstable_id get_sstable_identifier() const;
+
     // Drops all evictable in-memory caches of on-disk content.
     future<> drop_caches();
 
