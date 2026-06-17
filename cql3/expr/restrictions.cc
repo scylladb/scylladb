@@ -214,17 +214,6 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     // Perform basic initial checks
     preliminary_binop_vaidation_checks(restriction);
 
-    // Scoring function: validate the first arg is a column on the unprepared expression.
-    // BM25 is pure, so prepare_binary_operator constant-folds BM25(literal, ...) by calling
-    // execute() before the post-prepare validation block is reached.
-    if (const auto* fc = as_if<function_call>(&restriction.lhs)) {
-        if (is_scoring_function_call(*fc)) {
-            if (fc->args.empty() || !as_if<unresolved_identifier>(&fc->args[0])) {
-                throw exceptions::invalid_request_exception("First argument to a scoring function must be a column");
-            }
-        }
-    }
-
     // Prepare the restriction
     binary_operator prepared_binop = prepare_binary_operator(restriction, db, *schema);
     expr::verify_no_aggregate_functions(prepared_binop, "WHERE clause");
@@ -271,6 +260,9 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
         // so the only function-call restrictions allowed here are scoring functions.
         if (!is_scoring_function_call(*function)) {
             throw exceptions::invalid_request_exception("Only the token function and scoring functions are supported in function-call restrictions");
+        }
+        if (function->args.empty() || !as_if<column_value>(&function->args[0])) {
+            throw exceptions::invalid_request_exception("First argument to a scoring function must be a column");
         }
         if (prepared_binop.op != oper_t::GT) {
             throw exceptions::invalid_request_exception(format("Unsupported \"{}\" relation for scoring function restriction, only \">\" is supported", prepared_binop.op));

@@ -406,6 +406,7 @@ def test_fulltext_index_if_not_exists_cross_column(cql, test_keyspace):
 def fulltext_table(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {table} (p int primary key, content text)")
+    cql.execute(f"INSERT INTO {table} (p, content) VALUES (1, 'hello world')")
     cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
     yield table
     cql.execute(f"DROP TABLE {table}")
@@ -537,9 +538,9 @@ def test_order_by_two_bm25_rejected(cql, fulltext_table):
 
 
 def test_bm25_in_select_clause_rejected(cql, fulltext_table):
-    """BM25() is not allowed in the SELECT clause."""
+    """BM25() is not allowed in the SELECT clause and must be rejected at prepare time."""
     with pytest.raises(InvalidRequest, match="not supported in the SELECT clause"):
-        cql.execute(f"SELECT BM25(content, 'hello') FROM {fulltext_table}")
+        cql.prepare(f"SELECT BM25(content, 'hello') FROM {fulltext_table}")
 
 
 def test_bm25_on_partition_key_rejected(cql, test_keyspace):
@@ -591,10 +592,10 @@ def test_bm25_different_columns_rejected(cql, test_keyspace):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'world') LIMIT 1")
 
 
-def test_bm25_literal_as_first_arg_rejected(cql, fulltext_table):
+def test_bm25_literal_as_column_reference_rejected(cql, fulltext_table):
     """BM25 with a string literal as the first argument must be rejected with a clear error."""
-    with pytest.raises(InvalidRequest, match="First argument to a scoring function must be a column"):
-        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25('x', 'term') > 0 ORDER BY BM25(content, 'term') LIMIT 1")
+    with pytest.raises(InvalidRequest, match="First argument to BM25 must be a column"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25('content', 'hello') > 0 ORDER BY BM25('content', 'hello') LIMIT 1")
 
 
 def test_bm25_extra_restriction_rejected(cql, test_keyspace):
