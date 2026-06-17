@@ -23,27 +23,73 @@ class atomic_cell_or_collection;
 
 namespace db {
 
+// Memtable-level guardrail cache keys.
+//
+// Each key has two flavours:
+//   *_key       — owns the data stored in the cache.
+//   *_key_view  — non-owning view used for allocation-free heterogeneous lookup.
+//
+// Hashing and equality are defined on the view types; owning keys expose view()
+// so the transparent functors (cache_key_hash / cache_key_eq) treat an owning
+// key and a matching view as equal.
+
+struct row_key_view {
+    bytes_view pk;
+    bytes_view ck;
+    bool operator==(const row_key_view&) const noexcept = default;
+    size_t hash() const noexcept {
+        return utils::hash_combine(
+            std::hash<bytes_view>{}(pk),
+            std::hash<bytes_view>{}(ck));
+    }
+};
+
+struct collection_key_view {
+    bytes_view pk;
+    bytes_view ck;
+    column_id col;
+    bool operator==(const collection_key_view&) const noexcept = default;
+    size_t hash() const noexcept {
+        return utils::hash_combine(
+            row_key_view{pk, ck}.hash(),
+            std::hash<column_id>{}(col));
+    }
+};
+
 struct row_key {
     bytes pk;
     bytes ck;
-    bool operator==(const row_key&) const = default;
-    struct hash {
-        size_t operator()(const row_key& k) const noexcept;
-    };
+    row_key_view view() const noexcept { return {bytes_view(pk), bytes_view(ck)}; }
 };
 
 struct collection_key {
     bytes pk;
     bytes ck;
     column_id col;
-    bool operator==(const collection_key&) const = default;
-    struct hash {
-        size_t operator()(const collection_key& k) const noexcept;
-    };
+    collection_key_view view() const noexcept { return {bytes_view(pk), bytes_view(ck), col}; }
 };
 
-using memtable_row_cache = std::unordered_map<row_key, uint64_t, row_key::hash>;
-using memtable_collection_cache = std::unordered_map<collection_key, uint64_t, collection_key::hash>;
+inline row_key_view as_key_view(const row_key& k) noexcept { return k.view(); }
+inline row_key_view as_key_view(const row_key_view& k) noexcept { return k; }
+inline collection_key_view as_key_view(const collection_key& k) noexcept { return k.view(); }
+inline collection_key_view as_key_view(const collection_key_view& k) noexcept { return k; }
+
+// Transparent hash/equality shared by both caches; heterogeneous lookups with
+// a *_key_view are allocation-free.
+struct cache_key_hash {
+    using is_transparent = void;
+    template <typename K>
+    size_t operator()(const K& k) const noexcept { return as_key_view(k).hash(); }
+};
+
+struct cache_key_eq {
+    using is_transparent = void;
+    template <typename A, typename B>
+    bool operator()(const A& a, const B& b) const noexcept { return as_key_view(a) == as_key_view(b); }
+};
+
+using memtable_row_cache = std::unordered_map<row_key, uint64_t, cache_key_hash, cache_key_eq>;
+using memtable_collection_cache = std::unordered_map<collection_key, uint64_t, cache_key_hash, cache_key_eq>;
 
 struct guardrail_config {
     // Partition thresholds (replica-side only — checked via SSTable metadata index)

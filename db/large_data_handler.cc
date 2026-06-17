@@ -28,20 +28,6 @@ static logging::logger large_data_logger("large_data");
 
 namespace db {
 
-size_t row_key::hash::operator()(const row_key& k) const noexcept {
-    return utils::hash_combine(
-        std::hash<bytes_view>{}(bytes_view(k.pk)),
-        std::hash<bytes_view>{}(bytes_view(k.ck)));
-}
-
-size_t collection_key::hash::operator()(const collection_key& k) const noexcept {
-    return utils::hash_combine(
-        utils::hash_combine(
-            std::hash<bytes_view>{}(bytes_view(k.pk)),
-            std::hash<bytes_view>{}(bytes_view(k.ck))),
-        std::hash<column_id>{}(k.col));
-}
-
 namespace {
 constexpr uint64_t MB = 1024 * 1024;
 
@@ -301,7 +287,7 @@ large_data_violation_type large_data_guardrail::check_row_size(const schema& s, 
     auto row_size_opt = _index.lookup_row(pk_bytes, ck_bytes);
     uint64_t row_size = row_size_opt.value_or(0);
     if (ck) {
-        auto it = _memtable_row_cache.find(row_key{bytes(pk_bytes), bytes(ck_bytes)});
+        auto it = _memtable_row_cache.find(row_key_view{pk_bytes, ck_bytes});
         if (it != _memtable_row_cache.end()) {
             row_size = std::max(row_size, it->second);
         }
@@ -327,7 +313,7 @@ large_data_violation_type large_data_guardrail::check_collection_element_count(c
     uint64_t count = count_opt.value_or(0);
     if (ck) {
         auto it = _memtable_collection_cache.find(
-            collection_key{bytes(pk_bytes), bytes(ck_bytes), cdef.id});
+            collection_key_view{pk_bytes, ck_bytes, cdef.id});
         if (it != _memtable_collection_cache.end()) {
             count = std::max(count, it->second);
         }
