@@ -475,7 +475,7 @@ def test_bm25_only_gt_allowed(cql, fulltext_table):
     """BM25 restrictions should reject all operators other than >."""
     for operator in ["=", "<", "<=", "!=", ">="]:
         with pytest.raises(InvalidRequest, match=fr'Unsupported "{operator}" relation'):
-            cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') {operator} 0 LIMIT 1")
+            cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') {operator} 0 ORDER BY BM25(content, 'hello') LIMIT 1")
 
 
 def test_bm25_like_operator_rejected(cql, fulltext_table):
@@ -506,6 +506,16 @@ def test_bm25_where_only_rejected(cql, fulltext_table):
     """WHERE BM25 without an ORDER BY BM25 clause must be rejected."""
     with pytest.raises(InvalidRequest, match="require an ORDER BY BM25"):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 1")
+
+
+def test_bm25_multiple_where_restrictions_rejected(cql, test_keyspace):
+    """More than one WHERE BM25() restriction must be rejected."""
+    schema = 'p int primary key, col1 text, col2 text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="only one WHERE BM25"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 AND BM25(col2, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 1")
 
 
 def test_bm25_order_by_only_rejected(cql, fulltext_table):
@@ -598,7 +608,7 @@ def test_bm25_different_columns_rejected(cql, test_keyspace):
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
         with pytest.raises(InvalidRequest, match="same column"):
-            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'world') LIMIT 1")
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'hello') LIMIT 1")
 
 
 def test_bm25_different_search_terms_rejected(cql, fulltext_table):
