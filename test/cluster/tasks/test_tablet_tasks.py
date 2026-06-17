@@ -592,8 +592,8 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
 
         async def revoke_resize(log, mark):
             await log.wait_for('tablet_virtual_task: wait until tablet operation is finished', from_mark=mark)
-            revoke_injection = "force_resize_cancellation"
-            await enable_injection(manager, servers, revoke_injection)
+            for server in servers:
+                await manager.api.enable_injection(server.ip_addr, "resize_cancellation", one_shot=False, parameters={"value": "force"})
 
         async def wait_for_task(task_id):
             status = await tm.wait_for_task(servers[0].ip_addr, task_id)
