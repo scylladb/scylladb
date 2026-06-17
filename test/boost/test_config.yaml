@@ -53,3 +53,7 @@ custom_args:
         - '-c2 -m2G --logger-log-level batchlog_manager=trace:debug_error_injection=trace:testlog=trace'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
+# Tests skipped in debug/sanitize modes because they use many iterations
+# for statistical accuracy and are prohibitively slow under those modes.
+skip_in_debug_modes:
+    - hwlb_test
