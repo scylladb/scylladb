@@ -184,8 +184,8 @@ async def test_lwt_during_migration(manager: ManagerClient):
                                     target_host_id, 0,
                                     target_host_id, 1, tablet.last_token))
 
-        logger.info(f"Wait for 'intranode_migration_streaming: waiting' injection on {target_server.ip_addr}")
-        await log.wait_for('intranode_migration_streaming: waiting')
+        logger.info(f"Wait for 'intranode_migration_streaming_wait' injection on {target_server.ip_addr}")
+        await manager.api.wait_for_injection_enter(target_server.ip_addr, "intranode_migration_streaming_wait")
 
         logger.info("Run another LWT while ingranode migration is in-progress")
         await cql.run_async(f"UPDATE {ks}.test SET c = 2 WHERE pk = 1 IF c = 1")
@@ -440,11 +440,8 @@ async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
         lwt_task = cql.run_async(
             f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
 
-        logger.info("Open log")
-        log = await manager.server_open_log(server.server_id)
-
         logger.info("Wait for load_paxos_state-enter injection")
-        await log.wait_for('load_paxos_state-enter: waiting for message')
+        await manager.api.wait_for_injection_enter(server.ip_addr, "load_paxos_state-enter")
 
         await recreate_table()
 
@@ -823,7 +820,7 @@ async def test_lwt_shutdown(manager: ManagerClient):
         logger.info("Open log")
         log = await manager.server_open_log(s0.server_id)
         logger.info("Wait for 'paxos_state_learn_after_mutate' injection")
-        await log.wait_for('paxos_state_learn_after_mutate: waiting for message')
+        await manager.api.wait_for_injection_enter(s0.ip_addr, "paxos_state_learn_after_mutate")
 
         logger.info("Start node shutdown")
         stop_task = asyncio.create_task(manager.server_stop_gracefully(s0.server_id))
@@ -920,7 +917,7 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout
         log0 = await manager.server_open_log(s0.server_id)
 
         logger.info("Wait for paxos_accept_proposal_wait")
-        await log0.wait_for("paxos_accept_proposal_wait: waiting for message")
+        await manager.api.wait_for_injection_enter(s0.ip_addr, "paxos_accept_proposal_wait")
 
         logger.info("Injecting tablet_force_tablet_count_decrease")
         await manager.api.enable_injection(s0.ip_addr, "tablet_force_tablet_count_decrease", one_shot=False)

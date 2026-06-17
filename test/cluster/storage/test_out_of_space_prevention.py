@@ -239,7 +239,7 @@ async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: 
                 await manager.api.enable_injection(servers[0].ip_addr, "split_sstable_rewrite", one_shot=False)
                 cql.execute_async(f"ALTER KEYSPACE {ks} WITH tablets = {{'initial': 32}}")
 
-                mark, _ = await log.wait_for("split_sstable_rewrite: waiting", from_mark=mark)
+                await manager.api.wait_for_injection_enter(servers[0].ip_addr, "split_sstable_rewrite")
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
@@ -522,7 +522,7 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
                 # Emit split decision during repair.
                 await run_split()
 
-                await log.wait_for("maybe_split_new_sstable_wait: waiting", from_mark=mark)
+                await manager.api.wait_for_injection_enter(servers[0].ip_addr, "maybe_split_new_sstable_wait")
                 await manager.api.disable_injection(coord_serv.ip_addr, "tablet_resize_finalization_postpone")
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
@@ -619,7 +619,7 @@ async def test_sstables_incrementally_released_during_streaming(manager: Manager
 
                 decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
                 await manager.enable_tablet_balancing()
-                mark, _ = await log.wait_for("tablet_stream_files_end_wait: waiting", from_mark=mark)
+                await manager.api.wait_for_injection_enter(servers[1].ip_addr, "tablet_stream_files_end_wait")
 
                 disk_info = psutil.disk_usage(workdir)
                 with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):

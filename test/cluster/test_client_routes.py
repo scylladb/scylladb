@@ -254,7 +254,7 @@ async def test_client_routes_snapshot_transfer(request, manager: ManagerClient, 
 
     await manager.server_start(server_to_restart.server_id)
     log = await manager.server_open_log(server_to_restart.server_id)
-    await log.wait_for("block_group0_transfer_snapshot: waiting for message")
+    await manager.api.wait_for_injection_enter(server_to_restart.ip_addr, "block_group0_transfer_snapshot")
     cql = await manager.get_cql_exclusive(server_to_restart)
     await wait_for_expected_client_routes_size(cql, 0)
 

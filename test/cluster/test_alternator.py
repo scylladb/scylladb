@@ -1327,7 +1327,7 @@ async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
     log = await manager.server_open_log(server.server_id)
 
     logger.info("Wait for intranode_migration_streaming_wait")
-    await log.wait_for("intranode_migration_streaming: waiting")
+    await manager.api.wait_for_injection_enter(server.ip_addr, "intranode_migration_streaming_wait")
 
     logger.info("Inject 'alternator_executor_batch_write_wait'")
     await manager.api.enable_injection(server.ip_addr,

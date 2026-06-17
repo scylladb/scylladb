@@ -111,7 +111,7 @@ async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
         logger.info("Start bootstrapping the third node")
         bootstrap_task = asyncio.create_task(manager.server_start(servers[2].server_id))
         logger.info("Waiting for topology_coordinator/write_both_read_new/after_barrier")
-        await log0.wait_for("topology_coordinator/write_both_read_new/after_barrier: waiting for message")
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "topology_coordinator/write_both_read_new/after_barrier")
 
         # Have a write request with write_both_read_new version stuck on both nodes:
         # - On the first node, this exercises the coordinator fencing code path.

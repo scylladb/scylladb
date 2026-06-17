@@ -1572,7 +1572,6 @@ public:
         }
 
         if (utils::get_local_injector().enter("determine_rf_change_actions_per_rack_throw")) {
-            lblogger.info("determine_rf_change_actions_per_rack_throw: entered");
             throw std::runtime_error("determine_rf_change_actions_per_rack_throw injection");
         }
 

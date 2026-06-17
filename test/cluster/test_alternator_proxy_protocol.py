@@ -334,20 +334,6 @@ async def test_alternator_proxy_protocol_address_in_system_clients(alternator_pr
     fake_src_port = 54321
     port = ALTERNATOR_HTTPS_PROXY_PORT if use_ssl else ALTERNATOR_PROXY_PORT
 
-    async def wait_for_injection_waiting(injection_name: str, timeout: float = 10.0):
-        """Poll until the injection has set 'waiting' parameter, indicating it's paused."""
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
-            injection_state = await manager.api.get_injection(server.ip_addr, injection_name)
-            # Each shard returns an object with 'enabled' and 'parameters' (array of {key, value})
-            for state in injection_state:
-                if state.get('enabled'):
-                    for param in state.get('parameters', []):
-                        if param.get('key') == 'waiting' and str(param.get('value')).lower() in ('true', '1'):
-                            return
-            await asyncio.sleep(0.01)
-        raise TimeoutError(f"Injection {injection_name} did not reach waiting state within {timeout}s")
-
     # Enable the error injection that pauses ListTables execution
     async with inject_error(manager.api, server.ip_addr, "alternator_list_tables"):
         # Start the request in the background - it will pause at the injection point
@@ -367,7 +353,7 @@ async def test_alternator_proxy_protocol_address_in_system_clients(alternator_pr
         request_task.add_done_callback(log_task_error)
 
         # Wait until the injection has paused the request
-        await wait_for_injection_waiting("alternator_list_tables")
+        await manager.api.wait_for_injection_enter(server.ip_addr, "alternator_list_tables")
 
         # Query system.clients while the request is paused
         cql = manager.get_cql()

@@ -63,11 +63,9 @@ async def test_major_compaction_consider_only_existing_data(manager: ManagerClie
         injection_handler = await inject_error_one_shot(manager.api, server.ip_addr, injection)
 
         logger.info("Start major compaction")
-        log = await manager.server_open_log(server.server_id)
-        mark = await log.mark()
         compaction_task = asyncio.create_task(manager.api.keyspace_compaction(server.ip_addr, ks, cf, consider_only_existing_data=consider_only_existing_data))
         # wait for the injection to pause the compaction
-        await log.wait_for("major_compaction_wait: waiting", from_mark=mark, timeout=30)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "major_compaction_wait")
 
         # insert new backdated rows with deleted keys and flush them
         # into a new sstable that will not be part of the major compaction
@@ -176,7 +174,7 @@ async def test_shutdown_drain_during_compaction(manager: ManagerClient):
         # start compaction and wait for it to pause at the injection point
         logger.info("Start compaction")
         compaction_task = asyncio.create_task(manager.api.keyspace_compaction(server.ip_addr, ks, cf))
-        await log.wait_for("update_history_wait: waiting", from_mark=mark, timeout=30)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "update_history_wait")
 
         mark = await log.mark()
         # Start server shutdown
@@ -219,7 +217,6 @@ async def test_alter_compaction_strategy_during_compaction(manager: ManagerClien
         logger.info("Inject error to pause compaction midway")
         injection_name="twcs_get_sstables_for_compaction"
         await manager.api.enable_injection(node_ip=node1.ip_addr, injection=injection_name, one_shot=False)
-        server_log = await manager.server_open_log(node1.server_id)
 
         logger.info("Populate table and start compaction")
         insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, ck, val) VALUES (?, ?, ?)")
@@ -229,7 +226,7 @@ async def test_alter_compaction_strategy_during_compaction(manager: ManagerClien
         compaction_task = asyncio.create_task(manager.api.keyspace_compaction(node_ip=node1.ip_addr, keyspace=ks, table=cf))
 
         logger.info("Waiting for compaction to be suspended")
-        await server_log.wait_for("twcs_get_sstables_for_compaction: waiting for message")
+        await manager.api.wait_for_injection_enter(node1.ip_addr, "twcs_get_sstables_for_compaction")
 
         logger.info("Alter compaction strategy")
         await cql.run_async(f"ALTER TABLE {ks}.{cf} WITH compaction = {{'class': 'LeveledCompactionStrategy'}};")
@@ -274,7 +271,7 @@ async def test_disable_autocompaction_during_major_compaction(manager: ManagerCl
         log = await manager.server_open_log(server.server_id)
         mark = await log.mark()
         compaction_task = asyncio.create_task(manager.api.keyspace_compaction(server.ip_addr, ks, cf))
-        await log.wait_for("major_compaction_wait: waiting", from_mark=mark, timeout=30)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "major_compaction_wait")
 
         # Now that major compaction is in progress, disable autocompaction on the table
         logger.info("Disabling autocompaction on the table")

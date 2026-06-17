@@ -163,14 +163,12 @@ async def test_keyspace_creation_during_node_join(manager: ManagerClient, inject
 
     # Start adding a new node in a new rack (this will pause due to injection)
     logger.info(f"Starting to add new node in rack r4 (will pause {injection})")
-    log = await manager.server_open_log(servers[0].server_id)
-    mark = await log.mark()
     add_node_task = asyncio.create_task(
         manager.server_add(config=cfg, cmdline=cmdline,
                            property_file={"dc": "dc1", "rack": "r4"},
                            expected_error=server_add_expected_error)
     )
-    await log.wait_for(f"{inj}: waiting for message", from_mark=mark, timeout=60)
+    await manager.api.wait_for_injection_enter(servers[0].ip_addr, inj)
 
     if injection == "before_bootstrap":
         # Node is accepted but bootstrap hasn't started yet
@@ -211,11 +209,10 @@ async def test_keyspace_creation_during_node_join(manager: ManagerClient, inject
         await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, inj, one_shot=True) for s in servers])
 
         # Start adding second node to rack r4
-        mark = await log.mark()
         add_node2_task = asyncio.create_task(
             manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r4"})
         )
-        await log.wait_for(f"{inj}: waiting for message", from_mark=mark, timeout=60)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, inj)
 
         # Creating keyspace should succeed now because rack count remains at 4
         logger.info("Creating keyspace with RF=4 while second node joins r4 (should succeed - rack count unchanged)")
@@ -261,8 +258,6 @@ async def test_keyspace_creation_during_node_remove(manager: ManagerClient, op: 
 
     # Start the node operation (this will pause due to injection)
     logger.info(f"Starting to {op} node from rack r3 (will pause during {op})")
-    log = await manager.server_open_log(servers[0].server_id)
-    mark = await log.mark()
 
     if op == "remove":
         await manager.server_stop_gracefully(servers[2].server_id)
@@ -274,7 +269,7 @@ async def test_keyspace_creation_during_node_remove(manager: ManagerClient, op: 
             manager.decommission_node(servers[2].server_id)
         )
 
-    await log.wait_for(f"{inj}: waiting for message", from_mark=mark, timeout=60)
+    await manager.api.wait_for_injection_enter(servers[0].ip_addr, inj)
 
     # While the node operation is paused, try to create keyspace with RF=3
     # Should fail because operation would leave only 2 racks, making RF=3 invalid

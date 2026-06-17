@@ -26,6 +26,7 @@
 #include "service/query_state.hh"
 #include "types/types.hh"
 #include "utils/error_injection.hh"
+#include "test/lib/error_injection.hh"
 
 // Regression test for use-after-free in table_helper::insert() when the
 // prepared_statements_cache entry is invalidated (e.g. DROP TABLE) while a
@@ -89,9 +90,7 @@ SEASTAR_TEST_CASE(test_concurrent_invalidation) {
         auto fiber_a = helper.insert(qp, mm, qs, make_opts);
 
         // Wait until fiber A is actually parked in wait_for_message.
-        while (utils::get_local_injector().waiters("table_helper_insert_before_execute") == 0) {
-            seastar::yield().get();
-        }
+        wait_for_injection_enter("table_helper_insert_before_execute").get();
 
         // Evict the prepared cache entry - drops its strong ref to the
         // modification_statement. helper._insert_stmt is the only ref left.

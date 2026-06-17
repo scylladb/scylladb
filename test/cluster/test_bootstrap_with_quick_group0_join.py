@@ -40,9 +40,7 @@ async def test_bootstrap_with_quick_group0_join(manager: ManagerClient):
     logger.info(f"Starting {s2}")
     start_task = asyncio.create_task(manager.server_start(s2.server_id))
 
-    s2_log = await manager.server_open_log(s2.server_id)
-
-    await s2_log.wait_for("join_group0_pause_before_config_check: waiting for message", timeout=60)
+    await manager.api.wait_for_injection_enter(s2.ip_addr, "join_group0_pause_before_config_check")
 
     s1_host_id = await manager.get_host_id(s1.server_id)
     s2_host_id = await manager.get_host_id(s2.server_id)

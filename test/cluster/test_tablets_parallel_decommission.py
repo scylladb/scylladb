@@ -59,7 +59,7 @@ async def test_tablets_are_drained_in_parallel(manager: ManagerClient):
         decomm_task1 = asyncio.create_task(manager.decommission_node(servers[2].server_id)) # rack1
         decomm_task2 = asyncio.create_task(manager.decommission_node(servers[3].server_id)) # rack2
 
-        mark, _ = await log.wait_for('topology_coordinator_pause_before_processing_backlog: waiting', from_mark=mark)
+        await manager.api.wait_for_injection_enter(coord_srv.ip_addr, "topology_coordinator_pause_before_processing_backlog")
 
         # Pause topology until all requests are queued to workaround for group0 concurrent modification
         # preventing second request from being queued due to fast migrations on behalf of the first requests.
@@ -138,7 +138,7 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack
         await manager.api.exclude_node(coord_srv.ip_addr, host_ids_to_remove)
         tasks = [asyncio.create_task(manager.remove_node(coord_srv.server_id, srv.server_id)) for srv in servers_to_remove]
 
-        mark, _ = await log.wait_for('topology_coordinator_pause_before_processing_backlog: waiting', from_mark=mark)
+        await manager.api.wait_for_injection_enter(coord_srv.ip_addr, "topology_coordinator_pause_before_processing_backlog")
 
         # Pause topology until all requests are queued to workaround for group0 concurrent modification
         # preventing second request from being queued due to fast migrations on behalf of the first requests.
@@ -191,7 +191,7 @@ async def test_decommission_can_be_canceled(manager: ManagerClient):
         task_id = task.task_id
         logger.info(f'decommission task: {task_id}')
 
-        await coord_log.wait_for('topology_coordinator_pause_before_processing_backlog: waiting', from_mark=mark)
+        await manager.api.wait_for_injection_enter(coord_serv.ip_addr, "topology_coordinator_pause_before_processing_backlog")
 
         # Aborting in a pending or paused state should be immediate even if migrations are ongoing.
         await manager.api.abort_task(servers[0].ip_addr, task_id)
@@ -337,7 +337,7 @@ async def test_decommission_start_time_is_stable(manager: ManagerClient):
         decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
         decomm_hostid = await manager.get_host_id(servers[1].server_id)
 
-        await coord_log.wait_for('topology_coordinator_pause_after_node_transition: waiting for message', from_mark=mark)
+        await manager.api.wait_for_injection_enter(coord_serv.ip_addr, "topology_coordinator_pause_after_node_transition")
 
         tasks = await manager.api.get_tasks(servers[0].ip_addr, 'node_ops')
         logger.info(f'tasks: {tasks}')
@@ -385,7 +385,7 @@ async def test_decommission_can_not_be_canceled_once_running(manager: ManagerCli
         decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
         decomm_hostid = await manager.get_host_id(servers[1].server_id)
 
-        await coord_log.wait_for('in_left_token_ring_transition: waiting', from_mark=mark)
+        await manager.api.wait_for_injection_enter(coord_serv.ip_addr, "in_left_token_ring_transition")
 
         tasks = await manager.api.get_tasks(servers[0].ip_addr, 'node_ops')
         logger.info(f'tasks: {tasks}')
@@ -496,7 +496,7 @@ async def test_node_lost_during_decommission_drain(manager: ManagerClient):
         decomm_task = task.task_id
         logger.info(f'decommission task: {decomm_task}')
 
-        await coord_log.wait_for('topology_coordinator_pause_before_processing_backlog: waiting', from_mark=mark)
+        await manager.api.wait_for_injection_enter(coord_serv.ip_addr, "topology_coordinator_pause_before_processing_backlog")
 
         await manager.server_stop(srv_to_remove.server_id, convict=True)
         await manager.server_not_sees_other_server(coord_serv.ip_addr, srv_to_remove.ip_addr)

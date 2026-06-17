@@ -128,9 +128,9 @@ async def test_zero_token_node_down_leaving(manager: ManagerClient):
                                               "scylla-nodetool=trace",
                                               "-h", servers[0].ip_addr]
 
-    logs = [await manager.server_open_log(srv.server_id) for srv in servers]
-
-    await wait_for_first_completed([log.wait_for("delay_node_removal: waiting for message") for log in logs])
+    await wait_for_first_completed([
+        manager.api.wait_for_injection_enter(srv.ip_addr, "delay_node_removal") for srv in servers
+    ])
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -207,9 +207,9 @@ async def test_regular_node_joining(manager: ManagerClient):
                                               "scylla-nodetool=trace",
                                               "-h", servers[0].ip_addr]
 
-    logs = [await manager.server_open_log(srv.server_id) for srv in servers]
-
-    await wait_for_first_completed([log.wait_for("delay_node_bootstrap: waiting for message") for log in logs])
+    await wait_for_first_completed([
+        manager.api.wait_for_injection_enter(srv.ip_addr, "delay_node_bootstrap") for srv in servers
+    ])
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)

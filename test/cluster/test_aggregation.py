@@ -49,10 +49,8 @@ async def test_cancel_mapreduce(manager: ManagerClient):
                 await cql.run_async(f"INSERT INTO {t} (pk, v) VALUES ({pk}, {v})")
 
             s1_log = await manager.server_open_log(s1.server_id)
-            s2_log = await manager.server_open_log(s2.server_id)
 
             s1_mark = await s1_log.mark()
-            s2_mark = await s2_log.mark()
 
             # Prevent finishing local mapreduce tasks on node 2.
             async with inject_error(manager.api, s2.ip_addr, "mapreduce_pause_dispatch_to_shards"):
@@ -70,7 +68,7 @@ async def test_cancel_mapreduce(manager: ManagerClient):
                     # Make sure node 1 is the supercoordinator and sends a mapreduce task to node 2.
                     await s1_log.wait_for(f"dispatching mapreduce_request=.* to address={host_id2}", from_mark=s1_mark, timeout=60)
                     # Make sure that node 2 is preventing its local mapreduce task from finishing.
-                    await s2_log.wait_for("mapreduce_pause_dispatch_to_shards: waiting for message", from_mark=s2_mark, timeout=60)
+                    await manager.api.wait_for_injection_enter(s2.ip_addr, "mapreduce_pause_dispatch_to_shards")
                     # Verify that the supercoordinator stops without an issue despite the ongoing mapreduce task.
                     await manager.server_stop_gracefully(s1.server_id, timeout=120)
 

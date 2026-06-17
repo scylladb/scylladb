@@ -373,7 +373,7 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
         # Once the writer reaches this place, it will wait for the message_injection() call below before proceeding.
         # The place we block the writer in should not hold to erm or topology_guard because that will block the migration
         # below and prevent test from proceeding.
-        await s1_log.wait_for('stream_mutation_fragments: waiting', from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[1].ip_addr, "stream_mutation_fragments")
         s1_mark = await s1_log.mark()
 
         # Should cause streaming to fail and be retried while leaving behind the replica-side writer.
@@ -451,7 +451,7 @@ async def test_table_dropped_during_streaming(manager: ManagerClient):
         # Once the writer reaches this place, it will wait for the message_injection() call below before proceeding.
         # We want to drop the table while streaming is deep in the process, where it will attempt to apply writes
         # to the dropped table.
-        await s1_log.wait_for('stream_mutation_fragments: waiting', from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[1].ip_addr, "stream_mutation_fragments")
 
         # Streaming blocks table drop, so we can't wait here.
         drop_task = cql.run_async(f"DROP TABLE {ks}.test")
@@ -674,7 +674,7 @@ async def test_tablet_split(manager: ManagerClient, injection_error: str):
 
         await manager.api.enable_injection(servers[0].ip_addr, injection_error, one_shot=True)
         compaction_task = asyncio.create_task(manager.api.keyspace_compaction(servers[0].ip_addr, ks))
-        await s1_log.wait_for(f"{injection_error}: waiting", from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, injection_error)
 
         # Now there's a split and migration need, so they'll potentially run concurrently.
         await manager.enable_tablet_balancing()
@@ -804,7 +804,7 @@ async def test_concurrent_tablet_migration_and_major(manager: ManagerClient, inj
         await manager.api.enable_injection(servers[0].ip_addr, injection_error, one_shot=True)
         logger.info("Started major compaction")
         compaction_task = asyncio.create_task(manager.api.keyspace_compaction(servers[0].ip_addr, ks))
-        await s1_log.wait_for(f"{injection_error}: waiting", from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, injection_error)
 
         tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
 
@@ -846,7 +846,7 @@ async def test_concurrent_table_drop_and_major(manager: ManagerClient):
         await manager.api.enable_injection(servers[0].ip_addr, injection_error, one_shot=True)
         logger.info("Started major compaction")
         compaction_task = asyncio.create_task(manager.api.keyspace_compaction(servers[0].ip_addr, ks))
-        await s1_log.wait_for(f"{injection_error}: waiting", from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, injection_error)
 
         logger.info("Dropping table")
         await cql.run_async(f"DROP TABLE {ks}.test")
@@ -1266,13 +1266,13 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
         await manager.enable_tablet_balancing()
 
         logger.info("Waits for split of sstable containing expired tombstones")
-        await s1_log.wait_for(f"split_sstable_rewrite: waiting", from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "split_sstable_rewrite")
         s1_mark = await s1_log.mark()
         await manager.api.message_injection(servers[0].ip_addr, "split_sstable_rewrite")
         await s1_log.wait_for(f"split_sstable_rewrite: released", from_mark=s1_mark)
 
         logger.info("Pause split of sstable containing deleted data")
-        await s1_log.wait_for(f"split_sstable_rewrite: waiting", from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "split_sstable_rewrite", threshold=2)
         s1_mark = await s1_log.mark()
 
         logger.info("Force compaction of split sstable containing expired tombstone")
@@ -1628,7 +1628,7 @@ async def test_drop_table_during_streaming(manager: ManagerClient, streaming_mod
             manager.api.move_tablet(servers[0].ip_addr, ks, "test", src_host_id, replica[1], dst_host_id, 0, tablet_token)
         )
 
-        await src_log.wait_for(f'{inj}: waiting for message', from_mark=src_mark)
+        await manager.api.wait_for_injection_enter(src_server.ip_addr, inj)
 
         logger.info("Dropping table while sender-side tablet stream is paused after snapshot")
         drop_task = cql.run_async(f"DROP TABLE {ks}.test")
@@ -1761,7 +1761,7 @@ async def test_split_correctness_on_tablet_count_change(manager: ManagerClient):
         await manager.enable_tablet_balancing()
 
         await log.wait_for('Emitting resize decision of type split', from_mark=log_mark)
-        await log.wait_for('splitting_mutation_writer_switch_wait: waiting', from_mark=log_mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "splitting_mutation_writer_switch_wait")
 
         # needs to skip update of repaired_at on merge, since it stops split task.
         await manager.api.enable_injection(server.ip_addr, "skip_update_repaired_at_for_merge", one_shot=False)
@@ -1859,7 +1859,7 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
 
         await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {initial_tablets * 2}}}")
 
-        await s1_log.wait_for(f"tablet_resize_finalization_post_barrier: waiting", from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "tablet_resize_finalization_post_barrier")
 
         await manager.api.enable_injection(servers[0].ip_addr, "stream_mutation_fragments", one_shot=True)
 
@@ -1869,7 +1869,7 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
         await manager.api.message_injection(server.ip_addr, "tablet_resize_finalization_post_barrier")
         await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
 
-        await s1_log.wait_for(f"stream_mutation_fragments: waiting", from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "stream_mutation_fragments")
         await manager.api.message_injection(server.ip_addr, "stream_mutation_fragments")
 
         await load_and_stream_task
@@ -2070,7 +2070,7 @@ async def test_tablets_barrier_waits_for_replica_erms(manager: ManagerClient):
         await manager.api.enable_injection(servers[0].ip_addr, "replica_query_wait", one_shot=False, parameters={"table": "test"})
 
         replica_query = cql.run_async(f"SELECT * from {ks}.test where pk={key} BYPASS CACHE", host=hosts[1])
-        await s0_log.wait_for('replica_query_wait: waiting', from_mark=s0_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "replica_query_wait")
 
         version_before_move = await get_topology_version(cql, hosts[0])
 
@@ -2166,8 +2166,8 @@ async def test_split_and_incremental_repair_synchronization(manager: ManagerClie
             for server in servers:
                 await manager.api.enable_injection(server.ip_addr, "incremental_repair_prepare_wait", one_shot=True)
             repair_task = asyncio.create_task(manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental'))
-            await s0_log.wait_for('incremental_repair_prepare_wait: waiting', from_mark=s0_mark)
-            await s1_log.wait_for('incremental_repair_prepare_wait: waiting', from_mark=s1_mark)
+            await manager.api.wait_for_injection_enter(servers[0].ip_addr, "incremental_repair_prepare_wait")
+            await manager.api.wait_for_injection_enter(servers[1].ip_addr, "incremental_repair_prepare_wait")
 
             await run_split_prepare()
 
@@ -2312,7 +2312,7 @@ async def test_split_stopped_on_shutdown(manager: ManagerClient):
         await manager.enable_tablet_balancing()
 
         await log.wait_for('Emitting resize decision of type split', from_mark=log_mark)
-        await log.wait_for('splitting_mutation_writer_switch_wait: waiting', from_mark=log_mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "splitting_mutation_writer_switch_wait")
 
         log_mark = await log.mark()
 
@@ -2321,7 +2321,7 @@ async def test_split_stopped_on_shutdown(manager: ManagerClient):
         await log.wait_for('Stopping.*ongoing compactions', from_mark=log_mark)
         await manager.api.message_injection(server.ip_addr, "splitting_mutation_writer_switch_wait")
 
-        await log.wait_for('storage_service_drain_wait: waiting', from_mark=log_mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "storage_service_drain_wait")
         await log.wait_for('Failed to complete splitting of table', from_mark=log_mark)
 
         await manager.api.message_injection(server.ip_addr, "storage_service_drain_wait")

@@ -94,12 +94,11 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query_typ
 
     logger.info("Confirm reads are waiting on the injected error")
     server_to_kill = None
-    async def wait_for_log_on_any_node(server):
-        server_log = await manager.server_open_log(server.server_id)
-        await server_log.wait_for("storage_proxy::handle_read injection hit")
+    async def wait_for_enter_on_node(server):
+        await manager.api.wait_for_injection_enter(server.ip_addr, "storage_proxy::handle_read")
         return server
     async with asyncio.TaskGroup() as tg:
-        log_watch_tasks = [tg.create_task(wait_for_log_on_any_node(server)) for server in servers if server != selected_server]
+        log_watch_tasks = [tg.create_task(wait_for_enter_on_node(server)) for server in servers if server != selected_server]
         done, pending = await asyncio.wait(log_watch_tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
             t.cancel()
@@ -170,11 +169,10 @@ async def test_long_query_timeout_without_failure_erm(request, manager: ManagerC
 
     logger.info("Confirm reads are waiting on the injected error")
 
-    async def wait_for_log_on_any_node(server):
-        server_log = await manager.server_open_log(server.server_id)
-        await server_log.wait_for("mapreduce_pause_parallel_dispatch: waiting for message")
-
-    await wait_for_first_completed([wait_for_log_on_any_node(server) for server in servers])
+    await wait_for_first_completed([
+        manager.api.wait_for_injection_enter(server.ip_addr, "mapreduce_pause_parallel_dispatch")
+        for server in servers
+    ])
 
     if enable_tablets:
         logger.info("Add new node - ERM should not be blocked")

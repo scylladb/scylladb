@@ -258,10 +258,6 @@ async def test_fence_lwt_during_bootstap(manager: ManagerClient):
                                              cmdline=cmdline,
                                              start=False)]
 
-        logger.info("Open s0 log")
-        s0_log = await manager.server_open_log(servers[0].server_id)
-        s0_mark = await s0_log.mark()
-
         logger.info("Enable topology_coordinator/write_both_read_old/before_version_increment injection on s0")
         await manager.api.enable_injection(servers[0].ip_addr,
                                            'topology_coordinator/write_both_read_old/before_version_increment', 
@@ -271,7 +267,7 @@ async def test_fence_lwt_during_bootstap(manager: ManagerClient):
         s3_start_task = asyncio.create_task(manager.server_start(servers[3].server_id))
 
         logger.info(f"Waiting for 'topology_coordinator/write_both_read_old/before_version_increment' injection on {servers[0]}")
-        await s0_log.wait_for('topology_coordinator/write_both_read_old/before_version_increment: waiting for message', from_mark=s0_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "topology_coordinator/write_both_read_old/before_version_increment")
 
         logger.info(f"Injecting 'topology_state_load_error' into {servers[1]}")
         await manager.api.enable_injection(servers[1].ip_addr, 'topology_state_load_error', one_shot=False)

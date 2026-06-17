@@ -37,8 +37,7 @@ async def test_auth_password_ensured(manager: ManagerClient) -> None:
     server = await manager.server_add(config=config, expected_server_up_state=ServerUpState.HOST_ID_QUERIED, connect_driver=False)
 
     logging.info("Waiting until PasswordAuthenticator pauses on the injected error")
-    server_log = await manager.server_open_log(server.server_id)
-    await server_log.wait_for("password_authenticator_start_pause: waiting for message")
+    await manager.api.wait_for_injection_enter(server.ip_addr, "password_authenticator_start_pause")
 
     with pytest.raises(NoHostAvailable, match="Unable to connect to any servers"):
         logging.info("Expecting driver connection failure, because password_authenticator_start_pause blocks serving CQL")

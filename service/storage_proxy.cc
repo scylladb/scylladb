@@ -884,9 +884,7 @@ private:
             if (s->cf_name() != cf_name) {
                 co_return;
             }
-            slogger.info("storage_proxy::handle_read injection hit");
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
-            slogger.info("storage_proxy::handle_read injection done");
         });
 
         // This erm ensures that tablet migrations wait for replica requests,

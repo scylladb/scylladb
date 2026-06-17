@@ -4434,10 +4434,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
 
     maybe_audit(audit_info, audit::statement_category::QUERY, "", "", "ListTables", request);
 
-    co_await utils::get_local_injector().inject("alternator_list_tables", [] (auto& handler) -> future<> {
-        handler.set("waiting", true);
-        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-    });
+    co_await utils::get_local_injector().inject("alternator_list_tables", utils::wait_for_message(5min));
 
     rjson::value* exclusive_start_json = rjson::find(request, "ExclusiveStartTableName");
     rjson::value* limit_json = rjson::find(request, "Limit");

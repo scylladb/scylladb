@@ -16,8 +16,6 @@ from test.pylib.rest_client import inject_error_one_shot
 async def test_prepare_fails_if_cached_statement_is_invalidated_mid_prepare(manager: ManagerClient):
     server = await manager.server_add()
     cql = manager.get_cql()
-    log = await manager.server_open_log(server.server_id)
-    
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY") as table:
             query = f"SELECT * FROM {table} WHERE pk = ?"
@@ -26,9 +24,8 @@ async def test_prepare_fails_if_cached_statement_is_invalidated_mid_prepare(mana
             await cql.run_async(f"INSERT INTO {table} (pk) VALUES (8)")
 
             handler = await inject_error_one_shot(manager.api, server.ip_addr, "query_processor_prepare_wait_after_cache_get")
-            mark = await log.mark()
             prepare_future = loop.run_in_executor(None, lambda: cql.prepare(query))
-            await log.wait_for("query_processor_prepare_wait_after_cache_get: waiting for message", from_mark=mark, timeout=60)
+            await manager.api.wait_for_injection_enter(server.ip_addr, "query_processor_prepare_wait_after_cache_get")
 
             # Trigger table schema update (metadata-only) to invalidate prepared statements while PREPARE is paused.
             await cql.run_async(f"ALTER TABLE {table} WITH comment = 'invalidate-prepared-race'")
@@ -50,9 +47,8 @@ async def test_prepare_fails_if_cached_statement_is_invalidated_mid_prepare(mana
             await cql.run_async(f"ALTER TABLE {table} WITH comment = 'invalidate-prepared-race-again'")
 
             reprepare_handler = await inject_error_one_shot(manager.api, server.ip_addr, "query_processor_prepare_wait_after_cache_get")
-            reprepare_mark = await log.mark()
             execute_future = loop.run_in_executor(None, lambda: cql.execute(result, [8]))
-            await log.wait_for("query_processor_prepare_wait_after_cache_get: waiting for message", from_mark=reprepare_mark, timeout=60)
+            await manager.api.wait_for_injection_enter(server.ip_addr, "query_processor_prepare_wait_after_cache_get")
 
             await reprepare_handler.message()
             execute_done, _ = await asyncio.wait({execute_future}, timeout=15)

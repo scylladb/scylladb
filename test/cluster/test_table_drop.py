@@ -95,7 +95,7 @@ async def test_drop_table_during_load_and_stream(manager: ManagerClient):
             manager.api.load_new_sstables(server.ip_addr, ks, cf, load_and_stream=True))
 
         # Wait until at least one shard hits the injection point
-        await server_log.wait_for("load_and_stream_before_streaming_batch: waiting for message", from_mark=log_mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "load_and_stream_before_streaming_batch")
         logger.info("load_and_stream paused at injection point")
 
         # Drop the table while streaming is paused.  With the stream_in_progress

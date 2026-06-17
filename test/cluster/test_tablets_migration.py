@@ -188,8 +188,6 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 logger.info(f"Will fail {self.stage}")
                 if self.stage == "streaming":
                     await manager.api.enable_injection(servers[3].ip_addr, "stream_mutation_fragments", one_shot=True)
-                    self.log = await manager.server_open_log(servers[3].server_id)
-                    self.mark = await self.log.mark()
                 elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "end_migration", "do_revert_migration" ]:
                     await manager.api.enable_injection(servers[self.fail_idx].ip_addr, "raft_topology_barrier_and_drain_fail", one_shot=False,
                             parameters={'keyspace': self.ks, 'table': 'test', 'last_token': last_token, 'stage': self.stage.removeprefix('do_')})
@@ -216,7 +214,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
             async def wait(self):
                 logger.info(f"Wait for {self.stage} to happen")
                 if self.stage == "streaming":
-                    await self.log.wait_for('stream_mutation_fragments: waiting', from_mark=self.mark)
+                    await manager.api.wait_for_injection_enter(servers[3].ip_addr, "stream_mutation_fragments")
                 elif self.stage in [ "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "end_migration", "do_revert_migration" ]:
                     await self.log.wait_for('raft_topology_cmd: barrier handler waits', from_mark=self.mark);
                 elif self.stage == "cleanup":

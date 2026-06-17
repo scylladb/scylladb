@@ -747,8 +747,6 @@ async def test_tablet_migration_with_compaction(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    s1_log = await manager.server_open_log(s1.server_id)
-
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
 
@@ -786,7 +784,6 @@ async def test_tablet_migration_with_compaction(manager: ManagerClient):
 
         # Enable the injection that pauses streaming after the snapshot is taken
         await manager.api.enable_injection(s1.ip_addr, inj, one_shot=True)
-        log_mark = await s1_log.mark()
 
         # Start migration in the background; it will pause at the injection point
         migration_task = asyncio.ensure_future(
@@ -794,7 +791,7 @@ async def test_tablet_migration_with_compaction(manager: ManagerClient):
         )
 
         # Wait until streaming has taken the snapshot and is paused at the injection
-        await s1_log.wait_for(f'{inj}: waiting for message', from_mark=log_mark)
+        await manager.api.wait_for_injection_enter(s1.ip_addr, inj)
 
         # Trigger compaction while streaming is paused; the snapshot holds segment refs so
         # compaction can compact and free dead segments without affecting the in-flight data

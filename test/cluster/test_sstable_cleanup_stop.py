@@ -42,13 +42,10 @@ async def test_cleanup_stop(manager: ManagerClient):
 
         await check(keys)
 
-        s0_log = await manager.server_open_log(servers[0].server_id)
-        s0_mark = await s0_log.mark()
-
         await inject_error_one_shot(manager.api, servers[0].ip_addr, "sstable_cleanup_wait")
         cleanup_task = asyncio.create_task(manager.api.cleanup_keyspace(servers[0].ip_addr, ks))
 
-        await s0_log.wait_for('sstable_cleanup_wait: waiting', from_mark=s0_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "sstable_cleanup_wait")
 
         stop_cleanup = asyncio.create_task(manager.api.stop_compaction(servers[0].ip_addr, "CLEANUP"))
         await asyncio.sleep(1)
