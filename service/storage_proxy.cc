@@ -6778,16 +6778,43 @@ storage_proxy::query_result(schema_ptr query_schema,
     storage_proxy::coordinator_query_options query_options,
     std::optional<cas_shard> shard)
 {
-    // First we check if the table_name from injected error matches, then we 'enter' it - the latter will consume `one-shot` injections,
-    // that's why we need to validate table_name first.
+    // First we read the injected parameters, then we 'enter' it - the latter will consume `one-shot`
+    // injections, which frees the parameters. Reading them before entering is also what lets us skip
+    // entering when table_name doesn't match. Hence `error` is copied out up front, and table_name is
+    // compared in the `&&` chain below, which short-circuits before enter() can invalidate it.
     const auto &injection_params = utils::get_local_injector().get_injection_parameters("alternator_query_result_timeout");
     if (!injection_params.empty()) {
         auto it = injection_params.find(sstring{ "table_name" });
+        // Which error the read fails with. The optional "error" parameter selects it; without
+        // it the read times out, which is the only thing this injection used to do.
+        auto error_it = injection_params.find(sstring{ "error" });
+        const sstring error = error_it != injection_params.end() ? error_it->second : sstring("read_timeout");
         if (it != injection_params.end() && it->second == query_schema->cf_name() && utils::get_local_injector().enter("alternator_query_result_timeout")) {
-            return make_ready_future<result<coordinator_query_result>>(
-                // Note: we don't care about the actual values of the exception fields, since this is just for testing Alternator's error handling.
-                exceptions::read_timeout_exception{ "Alternator's error injection: timeout", cl, 0, 1, false }
-            );
+            // Note: we don't care about the actual values of the exception fields, since this is just for testing Alternator's error handling.
+            if (error == "read_timeout") {
+                return make_ready_future<result<coordinator_query_result>>(
+                    exceptions::read_timeout_exception{ "Alternator's error injection: timeout", cl, 0, 1, false }
+                );
+            }
+            if (error == "read_failure") {
+                return make_ready_future<result<coordinator_query_result>>(
+                    exceptions::read_failure_exception{ "Alternator's error injection: read failure", cl, 0, 1, 1, false }
+                );
+            }
+            if (error == "overloaded") {
+                return make_ready_future<result<coordinator_query_result>>(
+                    exceptions::overloaded_exception{ "Alternator's error injection: overloaded" }
+                );
+            }
+            if (error == "unavailable") {
+                // `unavailable_exception` is not one of the exceptions a `coordinator_result` can
+                // carry, so it is thrown rather than returned as a value - which is also how the
+                // read path itself reports it.
+                return make_exception_future<result<coordinator_query_result>>(
+                    exceptions::unavailable_exception{ "Alternator's error injection: unavailable", cl, 1, 0 }
+                );
+            }
+            on_internal_error(slogger, format("alternator_query_result_timeout: unknown error \"{}\"", error));
         }
 
     }
