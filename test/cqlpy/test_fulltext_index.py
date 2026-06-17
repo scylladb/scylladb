@@ -12,13 +12,15 @@
 
 import pytest
 import re
+from test.pylib.skip_types import skip_env
 from .util import new_test_table, new_test_keyspace, new_function, unique_name
 from cassandra.protocol import InvalidRequest, SyntaxException
 
 # Fulltext search is not allowed in tables using vnodes, so all tests in this file need tablets
-@pytest.fixture(scope="function", autouse=True)
-def all_tests_are_tablets_and_scylla_only(skip_without_tablets, scylla_only):
-    pass
+@pytest.fixture(scope="module", autouse=True)
+def all_tests_are_tablets_and_scylla_only(scylla_only, has_tablets):
+    if not has_tablets:
+        skip_env("Full-Text Search needs tablets enabled")
 
 
 @pytest.mark.parametrize("column_type", ["text", "varchar", "ascii"])
