@@ -22,6 +22,7 @@
 #include <charconv>
 #include <exception>
 #include <fmt/ranges.h>
+#include <ranges>
 #include <regex>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/metrics.hh>
@@ -134,11 +135,20 @@ auto ck_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& s
     return clustering_key_prefix::from_exploded(raw_ck);
 }
 
-auto write_ann_json(vs_vector vs_vector, limit limit, const rjson::value& filter) -> json_content {
-    if (filter.ObjectEmpty()) {
-        return seastar::format(R"({{"vector":[{}],"limit":{}}})", fmt::join(vs_vector, ","), limit);
+auto write_ann_json(vs_vector vs_vector, limit limit, const rjson::value& filter, const std::vector<std::string>& return_columns) -> json_content {
+    sstring cols_part;
+    if (!return_columns.empty()) {
+        // JSON-encode each column name as a quoted string, then join into an array.
+        // rjson::from_string handles any characters requiring JSON escaping.
+        auto quoted = return_columns | std::views::transform([](const std::string& s) {
+            return rjson::print(rjson::from_string(s));
+        });
+        cols_part = seastar::format(",\"return_columns\":[{}]", fmt::join(quoted, ","));
     }
-    return seastar::format(R"({{"vector":[{}],"limit":{},"filter":{}}})", fmt::join(vs_vector, ","), limit, rjson::print(filter));
+    if (filter.ObjectEmpty()) {
+        return seastar::format(R"({{"vector":[{}],"limit":{}{}}})", fmt::join(vs_vector, ","), limit, cols_part);
+    }
+    return seastar::format(R"({{"vector":[{}],"limit":{},"filter":{}{}}})", fmt::join(vs_vector, ","), limit, rjson::print(filter), cols_part);
 }
 
 auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
@@ -196,6 +206,25 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
             return std::unexpected{service_reply_format_error{}};
         }
     }
+
+    // Parse optional column_values: { column_name: [value_or_null, ...] }
+    if (json.HasMember("column_values") && json["column_values"].IsObject()) {
+        auto const& col_vals_json = json["column_values"];
+        for (auto it = col_vals_json.MemberBegin(); it != col_vals_json.MemberEnd(); ++it) {
+            auto const col_name = rjson::to_string_view(it->name);
+            if (!it->value.IsArray()) {
+                continue;
+            }
+            auto const& arr = it->value.GetArray();
+            for (auto idx = 0U; idx < size && idx < arr.Size(); ++idx) {
+                if (arr[idx].IsNull()) {
+                    continue; // attribute not present for this row
+                }
+                keys[idx].column_values.emplace(col_name, rjson::copy(arr[idx]));
+            }
+        }
+    }
+
     return std::move(keys);
 }
 
@@ -347,7 +376,8 @@ struct vector_store_client::impl {
         }
     }
 
-    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as,
+            const std::vector<std::string>& return_columns)
             -> future<std::expected<primary_keys, ann_error>> {
         if (is_disabled()) {
             vslogger.error("Disabled Vector Store while calling ann");
@@ -355,7 +385,7 @@ struct vector_store_client::impl {
         }
 
         auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-        auto content = write_ann_json(std::move(vs_vector), limit, filter);
+        auto content = write_ann_json(std::move(vs_vector), limit, filter, return_columns);
 
         auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
         if (!resp) {
@@ -431,8 +461,8 @@ auto vector_store_client::get_index_status(keyspace_name keyspace, index_name na
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
-        abort_source& as) -> future<std::expected<primary_keys, ann_error>> {
-    return _impl->ann(keyspace, name, schema, vs_vector, limit, filter, as);
+        abort_source& as, const std::vector<std::string>& return_columns) -> future<std::expected<primary_keys, ann_error>> {
+    return _impl->ann(keyspace, name, schema, vs_vector, limit, filter, as, return_columns);
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {

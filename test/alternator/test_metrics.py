@@ -469,7 +469,7 @@ def test_query_vector_item_metrics(vs, metrics, needs_vector_store):
         assert after[base_metric] - before[base_metric] == 0
 
         # A SELECT=ALL_PROJECTED_ATTRIBUTES query increments items_from_vs
-        # and returned_items, but not items_from_base_table.
+        # and returned_items, but not items_from_base_table (KEYS_ONLY index).
         the_metrics = get_metrics(metrics)
         before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
         result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='ALL_PROJECTED_ATTRIBUTES')
@@ -479,6 +479,98 @@ def test_query_vector_item_metrics(vs, metrics, needs_vector_store):
         assert after[vs_metric] - before[vs_metric] == 2
         assert after[returned_metric] - before[returned_metric] == 2
         assert after[base_metric] - before[base_metric] == 0
+
+# Test that SELECT=ALL_PROJECTED_ATTRIBUTES on an INCLUDE-projected vector
+# index does not read the base table (items_from_base_table stays 0), i.e.,
+# the projected non-key attributes are returned directly from the vector store
+# without a round-trip to Scylla's base table.
+#
+# The correctness of SELECT=ALL_PROJECTED_ATTRIBUTES (and other Select types)
+# for INCLUDE projection is already verified by test_vector_projection_include
+# in test_vector.py. This test is specifically about the *efficiency*: once
+# the optimization is implemented, returning projected attrs should not require
+# reading the base table at all.
+def test_vector_projection_include_no_base_table_read(vs, metrics, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        for i in range(3):
+            table.put_item(Item={'p': random_string(), 'v': [i, 0, 0], 'x': str(i), 'y': 'extra'})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']}}}])
+        wait_for_vector_index_active(table, 'vind')
+
+        vs_metric = 'scylla_alternator_vector_search_query_items_from_vs'
+        returned_metric = 'scylla_alternator_vector_search_query_returned_items'
+        base_metric = 'scylla_alternator_vector_search_query_items_from_base_table'
+        the_metrics = get_metrics(metrics)
+        before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2,
+                             Select='ALL_PROJECTED_ATTRIBUTES')
+        assert result['Count'] == 2
+        # Projected non-key attr 'x' must be present; non-projected 'y' must not.
+        for item in result['Items']:
+            assert 'x' in item, f"projected attr 'x' missing from item {item}"
+            assert 'y' not in item, f"non-projected attr 'y' unexpectedly present in item {item}"
+        the_metrics = get_metrics(metrics)
+        after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        assert after[vs_metric] - before[vs_metric] == 2
+        assert after[returned_metric] - before[returned_metric] == 2
+        # The key assertion: projected attrs should come from the vector store,
+        # not from a base-table read.
+        assert after[base_metric] - before[base_metric] == 0
+
+# Companion to test_vector_projection_include_no_base_table_read above, for
+# SELECT=SPECIFIC_ATTRIBUTES.  When requesting only a projected attribute ('x'),
+# the vector store already has the value and the base table should not be read.
+# When requesting a non-projected attribute ('y'), the vector store does not
+# have it, so a base-table read is required.
+#
+# The correctness of SPECIFIC_ATTRIBUTES for INCLUDE projection is already
+# verified by test_vector_projection_include in test_vector.py.  This test
+# is specifically about the *efficiency* of the projected-attr case.
+def test_vector_projection_include_specific_attributes_no_base_table_read(vs, metrics, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        for i in range(3):
+            table.put_item(Item={'p': random_string(), 'v': [i, 0, 0], 'x': str(i), 'y': 'extra'})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']}}}])
+        wait_for_vector_index_active(table, 'vind')
+
+        vs_metric = 'scylla_alternator_vector_search_query_items_from_vs'
+        returned_metric = 'scylla_alternator_vector_search_query_returned_items'
+        base_metric = 'scylla_alternator_vector_search_query_items_from_base_table'
+
+        # Requesting only 'x' (projected): vector store has the value, no base-table read.
+        the_metrics = get_metrics(metrics)
+        before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2,
+                             Select='SPECIFIC_ATTRIBUTES', ProjectionExpression='x')
+        assert result['Count'] == 2
+        the_metrics = get_metrics(metrics)
+        after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        assert after[vs_metric] - before[vs_metric] == 2
+        assert after[returned_metric] - before[returned_metric] == 2
+        assert after[base_metric] - before[base_metric] == 0
+
+        # Requesting only 'y' (not projected into the index): vector store does
+        # not have it, so the base table must be read.
+        the_metrics = get_metrics(metrics)
+        before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2,
+                             Select='SPECIFIC_ATTRIBUTES', ProjectionExpression='y')
+        assert result['Count'] == 2
+        the_metrics = get_metrics(metrics)
+        after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        assert after[vs_metric] - before[vs_metric] == 2
+        assert after[returned_metric] - before[returned_metric] == 2
+        assert after[base_metric] - before[base_metric] == 2
 
 # Test counters for DescribeEndpoints:
 def test_describe_endpoints_operations(dynamodb, metrics):
