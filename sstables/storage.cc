@@ -89,7 +89,7 @@ public:
 
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring name) const override;
-    virtual future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
+    virtual future<entry_descriptor> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -449,9 +449,13 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring name) const {
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
     co_await create_links_common(sst, snapshot_dir.native(), sst._generation, link_mode::default_mode);
 }
-future<> filesystem_storage::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
+future<entry_descriptor> filesystem_storage::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
     sstlog.debug("Cloning {} dir={} generation={} leave_unsealed={}", sst.get_filename(), _dir.path().native(), gen, leave_unsealed);
-    co_await create_links_common(sst, _dir.path().native(), std::move(gen), leave_unsealed ? link_mode::leave_unsealed : link_mode::default_mode);
+    co_await create_links_common(sst, _dir.path().native(), gen, leave_unsealed ? link_mode::leave_unsealed : link_mode::default_mode);
+    auto desc = sst.get_descriptor(component_type::TOC);
+    desc.generation = gen;
+    desc.state = sst.state();
+    co_return desc;
 }
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
@@ -665,7 +669,7 @@ public:
 
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring name) const override;
-    future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
+    future<entry_descriptor> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
@@ -747,7 +751,7 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
 }
 
 void object_storage_base::open(sstable& sst) {
-    entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
+    entry_descriptor desc(sst._generation, sst._sstable_identifier, sst._version, sst._format, component_type::TOC);
     sst.manager().sstables_registry().create_entry(owner(), sst.manager().get_local_host_id(), status_creating, sst._state, std::move(desc)).get();
 
     memory_data_sink_buffers bufs;
@@ -976,11 +980,12 @@ future<> object_storage_base::snapshot(const sstable& sst, sstring name) const {
     co_return;
 }
 
-future<> object_storage_base::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
+future<entry_descriptor> object_storage_base::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
     sstlog.trace("clone sst: {} generation={} leave_unsealed={}", sst.get_filename(), gen, leave_unsealed);
 
     // Register the cloned sstable as "creating" in the registry
-    entry_descriptor desc(gen, sst.get_version(), sst.get_format(), component_type::TOC);
+    entry_descriptor desc(gen, sst.sstable_identifier(), sst.get_version(), sst.get_format(), component_type::TOC);
+    desc.state = sst.state();
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
@@ -995,6 +1000,7 @@ future<> object_storage_base::clone(const sstable& sst, generation_type gen, boo
     }
 
     sstlog.debug("clone sst: {} generation={}: done", sst.get_filename(), gen);
+    co_return desc;
 }
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state) {

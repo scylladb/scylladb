@@ -3542,9 +3542,10 @@ future<> system_keyspace::sstables_registry_list(table_id tid, locator::host_id 
         auto status = row.get_as<sstring>("status");
         auto state = sstables::state_from_dir(row.get_as<sstring>("state"));
         auto gen = sstables::generation_type(row.get_as<utils::UUID>("generation"));
+        optimized_optional<sstables::sstable_id> sid = std::nullopt;  // FIXME: for now
         auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
         auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
-        sstables::entry_descriptor desc(gen, ver, fmt, sstables::component_type::TOC);
+        sstables::entry_descriptor desc(gen, sid, ver, fmt, sstables::component_type::TOC);
         co_await consumer(std::move(status), std::move(state), std::move(desc));
         co_return stop_iteration::no;
     });
