@@ -4428,7 +4428,7 @@ generation_type::from_string(const std::string& s) {
 }
 
 sstring component_name::format() const {
-    return sst._storage->prefix() + "/" + sst.component_basename(component);
+    return fmt::format("{}/{}", sst._storage->prefix(), sst.component_basename(component));
 }
 
 future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_type c, data_sink sink) {

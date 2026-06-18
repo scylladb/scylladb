@@ -108,7 +108,7 @@ public:
     }
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept override;
 
-    virtual sstring prefix() const override { return _dir.native(); }
+    virtual std::string_view prefix() const override { return _dir.native(); }
     future<bool> exists(const sstable& sst, component_type type) const override {
         return file_exists(sst.get_filename(type).format());
     }
@@ -584,7 +584,7 @@ future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const st
 
     for (const auto& sst : ssts) {
         auto prefix = sst->_storage->prefix();
-        res.prefixes.insert(prefix);
+        res.prefixes.emplace(prefix);
     }
 
     res.pending_delete_log = co_await sstable_directory::create_pending_deletion_log(_base_dir, ssts);
@@ -634,6 +634,8 @@ protected:
     shared_ptr<sstables::object_storage_client> _client;
     sstring _bucket;
     std::optional<sstring> _location;
+    sstring _sstables_prefix;
+    std::string_view _prefix;
     seastar::abort_source* _as;
 
     static constexpr auto status_creating = "creating";
@@ -659,6 +661,8 @@ public:
         , _client(std::move(client))
         , _bucket(std::move(bucket))
         , _location(std::move(loc))
+        , _sstables_prefix(_location ? "" : fmt::to_string(_schema->id()))
+        , _prefix(_location ? *_location : _sstables_prefix)
         , _as(as)
     {
         sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} loc={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _location ? *_location : "<none>");
@@ -692,11 +696,8 @@ public:
     }
     future<> unlink_component(const sstable& sst, component_type) noexcept override;
 
-    sstring prefix() const override { 
-        if (_location) {
-            return *_location;
-        }
-        return fmt::to_string(_schema->id());
+    std::string_view prefix() const override {
+        return _prefix;
     }
 
     future<bool> exists(const sstable& sst, component_type type) const override {
