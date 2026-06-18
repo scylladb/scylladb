@@ -24,6 +24,7 @@ from test.pylib.suite.python import PythonTest, add_host_option, add_cql_connect
 from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
 from .nodetool import scylla_log
 from ..conftest import dynamic_scope
+from .vector_store_mock import VectorStoreMock
 
 print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 
@@ -283,3 +284,29 @@ def compact_storage(cql):
 def skip_s3_tests(request):
     if request.config.getoption("--no-minio", default=None):
         skip_env("Skipping S3 related tests being run from test/cqlpy/run")
+
+
+@pytest.fixture(scope=dynamic_scope())
+def _vector_store_mock_session(cql):
+    mock = VectorStoreMock()
+    if not is_scylla(cql):
+        # Yield a mock without starting the HTTP server so tests can run
+        # on Cassandra (where the vector store service is not needed).
+        yield mock
+        return
+
+    if not local_process_id(cql):
+        skip_env("Vector store mock requires a local Scylla process")
+    host = cql.hosts[0].endpoint.address
+    mock.start(host)
+    try:
+        with config_value_context(cql, "vector_store_primary_uri", f"http://{host}:{mock.port}"):
+            yield mock
+    finally:
+        mock.stop()
+
+
+@pytest.fixture(scope="function")
+def vector_store_mock(_vector_store_mock_session):
+    _vector_store_mock_session.reset()
+    yield _vector_store_mock_session

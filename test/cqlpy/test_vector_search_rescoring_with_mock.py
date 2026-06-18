@@ -5,10 +5,10 @@
 ###############################################################################
 # Tests for vector search rescoring and oversampling behavior.
 #
-# These tests use the vector store mock infrastructure from
-# test_vector_search_with_vector_store_mock.py to verify that Scylla correctly
-# applies oversampling when querying the vector store and rescores results
-# returned by the vector store before returning them to the client.
+# These tests use the vector store mock infrastructure from vector_store_mock.py
+# to verify that Scylla correctly applies oversampling when querying the vector
+# store and rescores results returned by the vector store before returning them
+# to the client.
 ###############################################################################
 
 import json
@@ -17,7 +17,6 @@ from dataclasses import dataclass
 
 import pytest
 
-from .test_vector_search_with_vector_store_mock import vector_store_mock, _vector_store_mock_session
 from .util import new_test_table
 
 
