@@ -645,6 +645,13 @@ protected:
     object_name make_object_name(const sstable& sst, component_type type) const;
     object_name make_object_name(const sstable& sst, sstring comp, generation_type gen) const;
 
+    // Construct the object name for a reference: {prefix}/{gen}/refs/node-{host_id}/{gen}
+    object_name make_ref_object_name(const sstable& sst, generation_type gen, locator::host_id host_id) const {
+        return make_object_name(sst, fmt::format("refs/node-{}/{}", host_id, gen), gen);
+    }
+    // Check if any reference objects exist for the given generation
+    future<bool> has_references(generation_type gen) const;
+
     table_id owner() const {
         if (_location) {
             on_internal_error(sstlog, format("Storage holds '{}' prefix, but registry owner is expected", *_location));
@@ -751,9 +758,21 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
     return ret;
 }
 
+future<bool> object_storage_base::has_references(generation_type gen) const {
+    auto refs_prefix = fmt::format("{}/{}/refs/", _prefix, gen);
+    auto lister = _client->make_object_lister(_bucket, refs_prefix, [] (const std::filesystem::path&, const directory_entry&) { return true; });
+    co_return co_await with_closeable(std::move(lister), [] (abstract_lister& lister) -> future<bool> {
+        auto entry = co_await lister.get();
+        co_return entry.has_value();
+    });
+}
+
 void object_storage_base::open(sstable& sst) {
     entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
-    sst.manager().sstables_registry().create_entry(owner(), sst.manager().get_local_host_id(), status_creating, sst._state, std::move(desc)).get();
+    auto host_id = sst.manager().get_local_host_id();
+    sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
+
+    put_object(make_ref_object_name(sst, sst._generation, host_id), memory_data_sink_buffers()).get();
 
     memory_data_sink_buffers bufs;
     auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
@@ -868,9 +887,15 @@ future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_conte
         co_await sstables_registry.update_entry_status(owner(), node_owner, sst.generation(), status_removing);
     }
 
-    co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
-        co_await delete_object(make_object_name(sst, type));
-    });
+    // Remove this node's reference to the sstable
+    co_await delete_object(make_ref_object_name(sst, sst.generation(), node_owner));
+
+    // Only delete components if no references remain
+    if (!co_await has_references(sst.generation())) {
+        co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
+            co_await delete_object(make_object_name(sst, type));
+        });
+    }
 
     co_await sstables_registry.delete_entry(owner(), node_owner, sst.generation());
 }
@@ -932,6 +957,8 @@ future<> object_storage_base::clone(const sstable& sst, generation_type gen, boo
     entry_descriptor desc(gen, sst.get_version(), sst.get_format(), component_type::TOC);
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
+
+    co_await _client->put_object(make_ref_object_name(sst, gen, node_owner), memory_data_sink_buffers(), abort_source());
 
     // Copy all component objects from the source to the destination generation.
     co_await coroutine::parallel_for_each(sst.all_components(), [this, &sst, &gen] (const std::pair<component_type, sstring>& p) -> future<> {
