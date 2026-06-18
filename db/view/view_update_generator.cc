@@ -237,33 +237,36 @@ std::pair<stop_iteration, uint64_t> view_update_generator::generate_updates_from
 }
 
 future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::table> table, std::vector<sstables::shared_sstable> sstables) {
-    return seastar::async([this, table = std::move(table), &sstables] {
-        for(auto& sst: sstables) {
-            _progress_tracker->on_sstable_registration(sst);
-        }
+    auto holder = _gate.hold();
 
-        utils::get_local_injector().inject("view_update_generator_pause_before_processing",
-                utils::wait_for_message(std::chrono::minutes(5))).get();
-
-        // Generate view updates from staging sstables
-        auto start_time = db_clock::now();
-        auto [result, input_size] = generate_updates_from_staging_sstables(table, sstables);
-        if (result == stop_iteration::yes) {
-            throw abort_requested_exception{};
-        }
-
+    for (auto& sst : sstables) {
+        _progress_tracker->on_sstable_registration(sst);
+    }
+    auto deregister_sstables = defer([this, &sstables] {
         _progress_tracker->on_sstables_deregistration(sstables);
-
-        auto end_time = db_clock::now();
-        auto duration = std::chrono::duration<float>(end_time - start_time);
-        schema_ptr s = table->schema();
-        vug_logger.info("Processed {}.{}: {} sstables in {}ms = {}", s->ks_name(), s->cf_name(), sstables.size(),
-                        std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(),
-                        utils::pretty_printed_throughput(input_size, duration));
-        
-        // Move staging sstables to table's base directory
-        table->move_sstables_from_staging(sstables).get();
     });
+
+    co_await utils::get_local_injector().inject("view_update_generator_pause_before_processing",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
+    // Generate view updates from staging sstables
+    auto start_time = db_clock::now();
+    auto [result, input_size] = co_await seastar::async([this, table, &sstables] {
+        return generate_updates_from_staging_sstables(table, sstables);
+    });
+    if (result == stop_iteration::yes) {
+        throw abort_requested_exception{};
+    }
+
+    auto end_time = db_clock::now();
+    auto duration = std::chrono::duration<float>(end_time - start_time);
+    schema_ptr s = table->schema();
+    vug_logger.info("Processed {}.{}: {} sstables in {}ms = {}", s->ks_name(), s->cf_name(), sstables.size(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(),
+                    utils::pretty_printed_throughput(input_size, duration));
+
+    // Move staging sstables to table's base directory
+    co_await table->move_sstables_from_staging(sstables);
 }
 
 // The .do_abort() just kicks the v.u.g. background fiber to wrap up and it
@@ -291,15 +294,16 @@ void view_update_generator::do_abort() noexcept {
 
 future<> view_update_generator::drain() {
     co_await _proxy.local().abort_view_writes();
-    co_await _gate.close();
+    if (!_gate.is_closed()) {
+        co_await _gate.close();
+    }
 }
 
 future<> view_update_generator::stop() {
     _db.unplug_view_update_generator();
     do_abort();
-    return std::move(_started).then([this] {
-        _registration_sem.broken();
-    });
+    co_await std::exchange(_started, make_ready_future<>());
+    _registration_sem.broken();
 }
 
 bool view_update_generator::should_throttle() const {
