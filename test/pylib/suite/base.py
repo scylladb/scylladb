@@ -6,16 +6,12 @@
 
 from __future__ import annotations
 
-import re
 import logging
 import os
 import pathlib
 import shutil
-import sys
 import time
-from typing import TYPE_CHECKING
 
-import colorama
 import universalasync
 
 from test import TEST_RUNNER
@@ -27,43 +23,9 @@ from test.pylib.resource_gather import setup_cgroup
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.util import LogPrefixAdapter
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from typing import Any
 
 
 PYTEST_TESTS_LOGS_FOLDER = "pytest_tests_logs"
-
-output_is_a_tty = sys.stdout.isatty()
-
-
-def create_formatter(*decorators) -> Callable[[Any], str]:
-    """Return a function which decorates its argument with the given
-    color/style if stdout is a tty, and leaves intact otherwise."""
-    def color(arg: Any) -> str:
-        return "".join(decorators) + str(arg) + colorama.Style.RESET_ALL
-
-    def nocolor(arg: Any) -> str:
-        return str(arg)
-    return color if output_is_a_tty else nocolor
-
-
-class palette:
-    """Color palette for formatting terminal output"""
-    ok = create_formatter(colorama.Fore.GREEN, colorama.Style.BRIGHT)
-    fail = create_formatter(colorama.Fore.RED, colorama.Style.BRIGHT)
-    new = create_formatter(colorama.Fore.BLUE)
-    skip = create_formatter(colorama.Style.DIM)
-    path = create_formatter(colorama.Style.BRIGHT)
-    diff_in = create_formatter(colorama.Fore.GREEN)
-    diff_out = create_formatter(colorama.Fore.RED)
-    diff_mark = create_formatter(colorama.Fore.MAGENTA)
-    warn = create_formatter(colorama.Fore.YELLOW)
-    crit = create_formatter(colorama.Fore.RED, colorama.Style.BRIGHT)
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    @staticmethod
-    def nocolor(text: str) -> str:
-        return palette.ansi_escape.sub('', text)
 
 
 def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) -> None:
