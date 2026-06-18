@@ -478,6 +478,12 @@ def test_bm25_only_gt_allowed(cql, fulltext_table):
             cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') {operator} 0 ORDER BY BM25(content, 'hello') LIMIT 1")
 
 
+def test_bm25_only_zero_threshold_allowed(cql, fulltext_table):
+    """BM25 restrictions should reject any threshold value other than 0."""
+    with pytest.raises(InvalidRequest, match="Scoring function comparison value must be the literal 0"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 67 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
 def test_bm25_like_operator_rejected(cql, fulltext_table):
     """LIKE operator is rejected by type resolution (BM25 returns float, not string)."""
     with pytest.raises(InvalidRequest, match="LIKE is allowed only on string types"):
