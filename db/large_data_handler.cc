@@ -48,7 +48,7 @@ constexpr uint64_t MB = 1024 * 1024;
 enum class guardrail_source { replica, coordinator };
 
 template <guardrail_source Source, typename ContextFn>
-void enforce_threshold(const schema& s, uint64_t value,
+bool enforce_threshold(const schema& s, uint64_t value,
         uint64_t fail_threshold, uint64_t warn_threshold,
         std::string_view metric, ContextFn&& make_context) {
     if (fail_threshold > 0 && value > fail_threshold) [[unlikely]] {
@@ -66,9 +66,30 @@ void enforce_threshold(const schema& s, uint64_t value,
         large_data_logger.warn("Large data guardrail: {} {} exceeds soft limit {} "
             "(keyspace={}, table={}, {})",
             metric, value, warn_threshold, s.ks_name(), s.cf_name(), make_context());
+        return true;
     }
+    return false;
 }
 } // anonymous namespace
+
+sstring large_data_soft_violation_warning(large_data_violation_type violations) {
+    if (violations == large_data_violation_type::none) {
+        return {};
+    }
+    // List categories in a stable row, cell, collection order.
+    static constexpr std::pair<large_data_violation_type, std::string_view> categories[] = {
+        {large_data_violation_type::row, "row"},
+        {large_data_violation_type::cell, "cell"},
+        {large_data_violation_type::collection, "collection"},
+    };
+    std::vector<std::string_view> listed;
+    for (const auto& [category, name] : categories) {
+        if ((violations & category) != large_data_violation_type::none) {
+            listed.push_back(name);
+        }
+    }
+    return seastar::format("Large data guardrail: Soft limit violation for {}", fmt::join(listed, ", "));
+}
 
 nop_large_data_handler::nop_large_data_handler()
     : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(),
@@ -309,7 +330,7 @@ void large_data_guardrail::check_collection_element_count(const schema& s, bytes
             ck ? seastar::format("{}", ck->with_schema(s)) : sstring()); });
 }
 
-void large_data_guardrail::check_coordinator(const schema& s, const mutation_partition& mp,
+large_data_violation_type large_data_guardrail::check_coordinator(const schema& s, const mutation_partition& mp,
         partition_key_view pk) const {
     const uint64_t cell_fail = uint64_t(_cfg.cell_size_fail_threshold_mb()) * MB;
     const uint64_t cell_warn = uint64_t(_cfg.cell_size_warn_threshold_mb()) * MB;
@@ -317,6 +338,17 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
     const uint64_t row_warn = uint64_t(_cfg.row_size_warn_threshold_mb()) * MB;
     const uint64_t coll_fail = uint64_t(_cfg.collection_elements_fail_threshold());
     const uint64_t coll_warn = uint64_t(_cfg.collection_elements_warn_threshold());
+
+    // Only accumulate soft violations when CQL warnings are enabled by
+    // configuration.  Hard limit enforcement and server-side soft limit logging
+    // are unaffected.
+    const bool track = _cfg.cql_warnings_enabled();
+    large_data_violation_type violations = large_data_violation_type::none;
+    auto note = [&] (large_data_violation_type category, bool warned) {
+        if (track && warned) {
+            violations |= category;
+        }
+    };
 
     auto check_cell = [&](const column_definition& cdef, const atomic_cell_or_collection& cell) {
         if (!cdef.is_atomic()) {
@@ -326,25 +358,25 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
         if (!acv.is_live()) {
             return;
         }
-        enforce_threshold<guardrail_source::coordinator>(s, acv.value_size(),
+        note(large_data_violation_type::cell, enforce_threshold<guardrail_source::coordinator>(s, acv.value_size(),
             cell_fail, cell_warn, "cell value size",
-            [&] { return seastar::format("column={}", cdef.name_as_text()); });
+            [&] { return seastar::format("column={}", cdef.name_as_text()); }));
     };
 
     auto check_collection = [&](const column_definition& cdef, const atomic_cell_or_collection& cell) {
         if (cdef.is_atomic()) {
             return;
         }
-        enforce_threshold<guardrail_source::coordinator>(s, cell.as_collection_mutation().size(),
+        note(large_data_violation_type::collection, enforce_threshold<guardrail_source::coordinator>(s, cell.as_collection_mutation().size(),
             coll_fail, coll_warn, "collection element count",
-            [&] { return seastar::format("column={}", cdef.name_as_text()); });
+            [&] { return seastar::format("column={}", cdef.name_as_text()); }));
     };
 
     if (!mp.static_row().empty()) {
         auto static_size = mp.static_row().external_memory_usage(s, column_kind::static_column);
-        enforce_threshold<guardrail_source::coordinator>(s, static_size,
+        note(large_data_violation_type::row, enforce_threshold<guardrail_source::coordinator>(s, static_size,
             row_fail, row_warn, "static row size",
-            [&] { return seastar::format("partition_key={}", pk); });
+            [&] { return seastar::format("partition_key={}", pk); }));
         mp.static_row().for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
             const column_definition& cdef = s.static_column_at(id);
             check_cell(cdef, cell);
@@ -356,15 +388,16 @@ void large_data_guardrail::check_coordinator(const schema& s, const mutation_par
         if (e.dummy()) {
             continue;
         }
-        enforce_threshold<guardrail_source::coordinator>(s, e.memory_usage(s),
+        note(large_data_violation_type::row, enforce_threshold<guardrail_source::coordinator>(s, e.memory_usage(s),
             row_fail, row_warn, "row size",
-            [&] { return seastar::format("clustering_key={}", e.key().with_schema(s)); });
+            [&] { return seastar::format("clustering_key={}", e.key().with_schema(s)); }));
         e.row().cells().for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
             const column_definition& cdef = s.regular_column_at(id);
             check_cell(cdef, cell);
             check_collection(cdef, cell);
         });
     }
+    return violations;
 }
 
 void large_data_cache_tracker::on_row_merged(const schema& s, const rows_entry& row) noexcept {

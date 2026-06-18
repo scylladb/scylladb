@@ -28,6 +28,7 @@
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
+#include "db/large_data_handler.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "cql3/statements/strong_consistency/modification_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
@@ -310,6 +311,11 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
         result->add_warning(format("Using write consistency level {} listed on the "
                                    "write_consistency_levels_warned is not recommended.", cl));
     }
+    // Surface any coordinator-side large data guardrail soft limit violations
+    // detected during the write to the client as a CQL warning.
+    if (auto warning = db::large_data_soft_violation_warning(res.value()); !warning.empty()) {
+        result->add_warning(std::move(warning));
+    }
     if (keys_size_one) {
         auto&& table = s->table();
         if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
@@ -324,13 +330,13 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     co_return std::move(result);
 }
 
-future<coordinator_result<>>
+future<coordinator_result<db::large_data_violation_type>>
 modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
     return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, json_cache, std::move(keys)).then([this, cl, timeout, &qp, &qs, &options] (auto mutations) {
         if (mutations.empty()) {
-            return make_ready_future<coordinator_result<>>(bo::success());
+            return make_ready_future<coordinator_result<db::large_data_violation_type>>(db::large_data_violation_type::none);
         }
 
         return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write(), {
@@ -453,10 +459,15 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     return qp.proxy().cas(s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout, true, {},
-            attrs->is_bypass_large_data_guardrails()).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (bool is_applied) mutable {
-        auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
+            attrs->is_bypass_large_data_guardrails()).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (service::storage_proxy::cas_result cas_result) mutable {
+        auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, cas_result.is_applied);
         if (tablet_info) {
             result->add_tablet_info(std::move(*tablet_info));
+        }
+        // Surface any coordinator-side large data guardrail soft limit violations
+        // detected during the LWT to the client as a CQL warning.
+        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) {
+            result->add_warning(std::move(warning));
         }
         return result;
     });

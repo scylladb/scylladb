@@ -844,6 +844,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Log a warning when writing cells larger than this value.")
     , large_cell_fail_threshold_mb(this, "large_cell_fail_threshold_mb", liveness::LiveUpdate, value_status::Used, 0,
         "Reject writes with cell value size exceeding this threshold in MB. Set to 0 to disable.")
+    , large_data_cql_warnings(this, "large_data_cql_warnings", liveness::LiveUpdate, value_status::Used, false,
+        "When true, soft limit violations detected by the coordinator-side large data guardrail check are reported to the "
+        "client as CQL warnings in the response frame. When false, this behavior is suppressed (only server-side logging is "
+        "performed).")
     , large_partition_fail_threshold_mb(this, "large_partition_fail_threshold_mb", liveness::LiveUpdate, value_status::Used, 0,
         "Reject writes targeting a partition whose on-disk size already exceeds this threshold in MB, as recorded in any SSTable's large data records. "
         "Set to 0 to disable.")

@@ -75,6 +75,7 @@ class feature_service;
 namespace db {
 class system_keyspace;
 struct snapshot_options;
+enum class large_data_violation_type : uint8_t;
 
 namespace view {
 struct view_building_state_machine;
@@ -174,6 +175,15 @@ struct storage_proxy_coordinator_mutate_options {
     bool bypass_large_data_guardrails = false;
 };
 
+// Result of a CAS (LWT) operation: whether the conditional update was applied,
+// plus any coordinator-side large data guardrail soft limit violations detected
+// while proposing the client-requested mutation, so the CQL layer can surface
+// them to the client as a response warning.
+struct storage_proxy_cas_result {
+    bool is_applied = false;
+    db::large_data_violation_type large_data_violations = {};
+};
+
 class cas_request;
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
@@ -231,6 +241,7 @@ public:
     using coordinator_query_options = storage_proxy_coordinator_query_options;
     using coordinator_query_result = storage_proxy_coordinator_query_result;
     using coordinator_mutate_options = storage_proxy_coordinator_mutate_options;
+    using cas_result = storage_proxy_cas_result;
 
     // Holds  a list of endpoints participating in CAS request, for a given
     // consistency level, token, and state of joining/leaving nodes.
@@ -746,7 +757,7 @@ public:
     future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                            clock_type::time_point timeout, service_permit permit);
 
-    future<result<>> mutate_with_triggers(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
+    future<result<db::large_data_violation_type>> mutate_with_triggers(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                           bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit,
                                           db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false,
                                           coordinator_mutate_options options = {});
@@ -842,7 +853,7 @@ public:
         clock_type::time_point timeout,
         tracing::trace_state_ptr trace_state = nullptr);
 
-    future<bool> cas(schema_ptr schema, cas_shard cas_shard, cas_request& request, lw_shared_ptr<query::read_command> cmd,
+    future<cas_result> cas(schema_ptr schema, cas_shard cas_shard, cas_request& request, lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true, cdc::per_request_options cdc_opts = {},

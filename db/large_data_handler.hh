@@ -11,6 +11,7 @@
 #include <concepts>
 #include <cstdint>
 #include <optional>
+#include <type_traits>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/future.hh>
 #include <boost/intrusive/set.hpp>
@@ -115,6 +116,34 @@ private:
     record_set<record_type::collection> _collections;
 };
 
+// Coordinator-side soft limit violation categories.  Used as a set of bit
+// flags so a single write can accumulate violations across all of its rows,
+// cells, and collections (see the operators below).
+enum class large_data_violation_type : uint8_t {
+    none       = 0,
+    row        = 1 << 0,
+    cell       = 1 << 1,
+    collection = 1 << 2,
+};
+
+inline constexpr large_data_violation_type operator|(large_data_violation_type a, large_data_violation_type b) {
+    return large_data_violation_type(std::underlying_type_t<large_data_violation_type>(a) | std::underlying_type_t<large_data_violation_type>(b));
+}
+
+inline constexpr void operator|=(large_data_violation_type& a, large_data_violation_type b) {
+    a = a | b;
+}
+
+inline constexpr large_data_violation_type operator&(large_data_violation_type a, large_data_violation_type b) {
+    return large_data_violation_type(std::underlying_type_t<large_data_violation_type>(a) & std::underlying_type_t<large_data_violation_type>(b));
+}
+
+// Translate a set of soft-limit violation categories into the client-facing CQL
+// warning string, or an empty string when no categories are set.  The message
+// lists the violated categories in row, cell, collection order, e.g.
+//   "Large data guardrail: Soft limit violation for cell, collection"
+sstring large_data_soft_violation_warning(large_data_violation_type violations);
+
 // Each replica::table holds a shared_ptr to either a real guardrail or a
 // noop.  The guardrail owns the per-table large_data_record_index, so
 // noop tables pay no index-maintenance cost.
@@ -131,7 +160,10 @@ public:
             partition_key_view pk) const = 0;
     // Coordinator-side check: inspects the mutation content directly
     // (cell value sizes, row memory usage, collection element counts).
-    virtual void check_coordinator(const schema& s, const mutation_partition& mp,
+    // Hard limit violations throw; soft limit violations are logged and, when
+    // CQL warnings are enabled, returned as the set of violated categories so
+    // the CQL layer can surface them to the client as a response warning.
+    virtual large_data_violation_type check_coordinator(const schema& s, const mutation_partition& mp,
             partition_key_view pk) const = 0;
     // Returns a tracker to pass to partition_entry::apply(), or nullptr
     // when no memtable-level tracking is needed.  The returned pointer
@@ -155,8 +187,8 @@ public:
     }
     void check(const schema&, const mutation_partition&,
             partition_key_view) const override {}
-    void check_coordinator(const schema&, const mutation_partition&,
-            partition_key_view) const override {}
+    large_data_violation_type check_coordinator(const schema&, const mutation_partition&,
+            partition_key_view) const override { return large_data_violation_type::none; }
     large_data_cache_tracker* get_memtable_cache_tracker(const schema&,
             partition_key_view) override { return nullptr; }
     void on_flush() override {}
@@ -172,7 +204,7 @@ public:
 
     void check(const schema& s, const mutation_partition& mp,
             partition_key_view pk) const override;
-    void check_coordinator(const schema& s, const mutation_partition& mp,
+    large_data_violation_type check_coordinator(const schema& s, const mutation_partition& mp,
             partition_key_view pk) const override;
     large_data_cache_tracker* get_memtable_cache_tracker(const schema& s,
             partition_key_view pk) override;
