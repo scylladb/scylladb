@@ -457,13 +457,19 @@ async def test_driver_service_level_not_used_for_user_queries(manager: ManagerCl
     [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
-    func = lambda: cql.execute(f"SELECT * from system.peers")
+    await cql.run_async("CREATE KEYSPACE demo WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}", host=h)
+    await cql.run_async("CREATE TABLE demo.events (id int PRIMARY KEY)", host=h)
+
+    # A connection starts in sl:driver and is reclassified to the user's service
+    # level the moment it runs user load, so querying a user table moves it out of
+    # sl:driver into sl:default.
+    func = lambda: cql.execute("SELECT * from demo.events")
     await _verify_requests_count_metrics(manager, server, 'sl:default', 'sl:driver', func)
 
     await cql.run_async(f"CREATE SERVICE LEVEL test", host=h)
     await cql.run_async(f"ATTACH SERVICE LEVEL test TO cassandra", host=h)
 
-    func = lambda: cql.execute(f"SELECT * from system.peers")
+    func = lambda: cql.execute("SELECT * from demo.events")
     await _verify_requests_count_metrics(manager, server, 'sl:test', 'sl:driver', func)
 
 async def test_driver_service_level_used_for_driver_queries(manager: ManagerClient) -> None:
@@ -501,23 +507,33 @@ async def test_anonymous_user(manager: ManagerClient) -> None:
     cql = manager.get_cql()
     [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
 
-    async def connections_ready():
+    # Every connection starts in sl:driver and only moves to its user scheduling
+    # group once it runs user (non-system) load. Run a query on a user table so
+    # the anonymous user's connection is reclassified to sl:default - without it
+    # the connection would stay in sl:driver and never expose the #26040 bug,
+    # where sl:default was previously confused with the main scheduling group.
+    await cql.run_async("CREATE KEYSPACE demo WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE demo.events (id int PRIMARY KEY)")
+    for _ in range(10):
+        await cql.run_async("SELECT * FROM demo.events")
+
+    async def anonymous_connection_uses_sl_default():
         rows = list(cql.execute("SELECT connection_stage, username, scheduling_group FROM system.clients"))
         if len(rows) == 0:
             return None
+        if any(row.connection_stage != "READY" for row in rows):
+            return None
         for row in rows:
-            if row.connection_stage != "READY":
-                return None
-        return rows
+            assert row.username == 'anonymous'
+            assert row.scheduling_group in ['sl:default', 'sl:driver']
+        if any(row.scheduling_group == 'sl:default' for row in rows):
+            return rows
+        return None
 
-    rows = await wait_for(connections_ready, time.time() + 60)
-    for r in rows:
-        assert r.username == 'anonymous'
-        assert r.scheduling_group in ['sl:default', 'sl:driver']
-        if r.scheduling_group == 'sl:default':
-            return
-
-    assert False, f"None of clients use sl:default, rows={rows}"
+    # Retry: the user-table load above reclassifies a connection to sl:default,
+    # but the switch takes effect only after the triggering query finishes, so
+    # system.clients may briefly still report the old group.
+    await wait_for(anonymous_connection_uses_sl_default, time.time() + 60)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_per_service_level_cql_requests_serving(manager: ManagerClient) -> None:
@@ -540,6 +556,21 @@ async def test_per_service_level_cql_requests_serving(manager: ManagerClient) ->
     await cql.run_async(f"CREATE ROLE user_a WITH PASSWORD = 'pass_a' AND LOGIN = true")
     await cql.run_async(f"ATTACH SERVICE LEVEL {sl_a} TO user_a")
 
+    # Drop sl:driver to make all connections start directly in their user
+    # service level (sl:sl_a or sl:default), avoiding the connection-pool
+    # warm-up race where some pooled connections remain in sl:driver.
+    await cql.run_async("DROP SERVICE LEVEL driver")
+
+    # Wait for the drop to propagate: poll until a probe connection no longer
+    # reports any user as being in sl:driver.
+    async def driver_sl_dropped():
+        clients = await cql.run_async("SELECT scheduling_group FROM system.clients")
+        for row in clients:
+            if 'sl:driver' in row.scheduling_group:
+                return None  # Still have sl:driver connections, retry
+        return True  # All connections are out of sl:driver
+    await wait_for(driver_sl_dropped, deadline=time.time() + 10, period=0.5)
+
     # Open dedicated driver sessions for user_a and the cassandra superuser.
     # Disable schema and token metadata refresh on both to prevent background
     # driver queries from interfering with the error injection and metrics.
@@ -556,12 +587,6 @@ async def test_per_service_level_cql_requests_serving(manager: ManagerClient) ->
     session_default = cluster_default.connect()
 
     try:
-        # Warm up both sessions to ensure the driver has established connections
-        # before enabling injection. Without this, execute() may fail with
-        # NoHostAvailable and the query never reaches the server.
-        session_a.execute("SELECT key FROM system.local")
-        session_default.execute("SELECT key FROM system.local")
-
         # Enable error injection to pause CQL requests.
         await manager.api.enable_injection(server.ip_addr, "transport_cql_request_pause", False)
 
@@ -645,6 +670,20 @@ async def test_per_service_level_cql_request_latency_histogram(manager: ManagerC
     await cql.run_async(f"CREATE ROLE user_a WITH PASSWORD = 'pass_a' AND LOGIN = true")
     await cql.run_async(f"ATTACH SERVICE LEVEL {sl_a} TO user_a")
 
+    # Drop sl:driver to make all connections start directly in their user
+    # service level (sl:sl_a), avoiding the connection-pool warm-up race
+    # where some pooled connections remain in sl:driver.
+    await cql.run_async("DROP SERVICE LEVEL driver")
+
+    # Wait for the drop to propagate.
+    async def driver_sl_dropped():
+        clients = await cql.run_async("SELECT scheduling_group FROM system.clients")
+        for row in clients:
+            if 'sl:driver' in row.scheduling_group:
+                return None
+        return True
+    await wait_for(driver_sl_dropped, deadline=time.time() + 10, period=0.5)
+
     cluster_a = manager.con_gen([server.ip_addr],
         manager.port, manager.use_ssl, PlainTextAuthProvider(username='user_a', password='pass_a'))
     cluster_a.schema_metadata_enabled = False
@@ -658,10 +697,6 @@ async def test_per_service_level_cql_request_latency_histogram(manager: ManagerC
         return 0 if value is None else value
 
     try:
-        # Warm up the session before enabling the injection, so the paused query
-        # is not mixed with connection initialization.
-        session_a.execute("SELECT key FROM system.local")
-
         metrics = await manager.metrics.query(server.ip_addr)
         baseline_count = metric_value(metrics, "count")
         baseline_sum = metric_value(metrics, "sum")
@@ -669,7 +704,7 @@ async def test_per_service_level_cql_request_latency_histogram(manager: ManagerC
         await manager.api.enable_injection(server.ip_addr, "transport_cql_request_pause", False)
         log = await manager.server_open_log(server.server_id)
         mark = await log.mark()
-        query_task = asyncio.ensure_future(asyncio.to_thread(session_a.execute, "SELECT key FROM system.local"))
+        query_task = asyncio.ensure_future(asyncio.to_thread(session_a.execute, "SELECT * FROM system.local"))
         await log.wait_for("transport_cql_request_pause: waiting for message", from_mark=mark)
 
         metrics = await manager.metrics.query(server.ip_addr)

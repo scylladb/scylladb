@@ -630,6 +630,11 @@ query_processor::execute_direct_without_checking_exception_message(utils::chunke
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state(), d);
+    return execute_direct_statement_without_checking_exception_message(std::move(p), query_state, options);
+}
+
+future<::shared_ptr<result_message>>
+query_processor::execute_direct_statement_without_checking_exception_message(std::unique_ptr<statements::prepared_statement> p, service::query_state& query_state, query_options& options) {
     auto statement = p->statement;
     if (statement->get_bound_terms() != options.get_values_count()) {
         const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",

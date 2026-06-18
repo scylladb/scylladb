@@ -88,6 +88,7 @@ private:
             : _keyspace(cs->_keyspace)
             , _user(cs->_user)
             , _auth_state(cs->_auth_state)
+            , _user_connection(cs->_user_connection)
             , _is_internal(cs->_is_internal)
             , _bypass_auth_checks(cs->_bypass_auth_checks)
             , _remote_address(cs->_remote_address)
@@ -129,7 +130,18 @@ private:
 	std::list<client_option_key_value_cached_entry> _client_options;
 
     auth_state _auth_state = auth_state::UNINITIALIZED;
-    bool _control_connection = false;
+    // A connection is treated as a driver control connection by default: it is
+    // meant to issue only the system queries a driver needs to manage itself.
+    // Once it is observed running user (non-system) load it is multiplexed with
+    // user load by the driver and is reclassified as a regular user connection.
+    // The reclassification is sticky so the connection is never turned back into
+    // a control connection. Whether a non-reclassified connection actually runs
+    // in the driver scheduling group additionally depends on sl:driver existing.
+    bool _user_connection = false;
+    // Set together with _user_connection and cleared once the CQL server has
+    // switched the connection to the user scheduling group, so the switch happens
+    // exactly once.
+    bool _reclassification_pending = false;
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
@@ -177,12 +189,21 @@ public:
         _auth_state = new_state;
     }
 
-    bool is_control_connection() const noexcept {
-        return _control_connection;
+    bool is_user_connection() const noexcept {
+        return _user_connection;
     }
 
-    bool set_control_connection() noexcept {
-        return _control_connection = true;
+    void reclassify_as_user_connection() noexcept {
+        _user_connection = true;
+        _reclassification_pending = true;
+    }
+
+    bool needs_scheduling_group_reclassification() const noexcept {
+        return _reclassification_pending;
+    }
+
+    void mark_reclassification_applied() noexcept {
+        _reclassification_pending = false;
     }
 
     std::optional<client_options_cache_entry_type> get_driver_name() const {
