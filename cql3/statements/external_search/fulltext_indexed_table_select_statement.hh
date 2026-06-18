@@ -31,6 +31,7 @@ class fulltext_indexed_table_select_statement : public external_index_select_sta
     expr::expression _search_term;
 
 public:
+    static constexpr size_t max_fts_query_limit = 1000;
     static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db,
             schema_ptr schema,
             uint32_t bound_terms,

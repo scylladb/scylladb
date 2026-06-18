@@ -8,12 +8,20 @@
 
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
 #include "cql3/statements/raw/select_statement.hh"
+#include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/query_processor.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "index/secondary_index_manager.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "db/consistency_level_validations.hh"
 #include "exceptions/exceptions.hh"
+#include "types/types.hh"
+#include "utils/assert.hh"
+
+#include <seastar/core/future.hh>
+#include <seastar/coroutine/exception.hh>
 
 namespace cql3::statements {
 
@@ -177,7 +185,32 @@ fulltext_indexed_table_select_statement::fulltext_indexed_table_select_statement
 
 future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_table_select_statement::execute_search(
         query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const {
-    throw exceptions::invalid_request_exception("Full-text search not implemented");
+
+    if (limit > max_fts_query_limit) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                fmt::format("Full-text search queries require a LIMIT that is not greater than {}. LIMIT was {}", max_fts_query_limit, limit)));
+    }
+
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    auto aoe = abort_on_expiry(timeout);
+
+    auto search_term_val = expr::evaluate(_search_term, options);
+    if (search_term_val.is_null()) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception("Full-text search query term must not be null"));
+    }
+
+    auto search_term_bytes = std::move(search_term_val).to_bytes();
+    sstring search_term_text = value_cast<sstring>(utf8_type->deserialize(search_term_bytes));
+
+    auto pkeys = co_await qp.vector_store_client().bm25(_schema->ks_name(), _index.metadata().name(), _schema, search_term_text, limit, aoe.abort_source());
+    if (!pkeys.has_value()) {
+        co_await coroutine::return_exception(
+                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::fts_error_visitor{}, pkeys.error())));
+    }
+
+    throwing_assert(pkeys->size() <= limit);
+
+    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
 }
 
 } // namespace cql3::statements
