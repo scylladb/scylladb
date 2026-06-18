@@ -621,7 +621,7 @@ sstable_directory::retrieve_shared_sstables() {
     return std::exchange(_shared_sstable_info, {});
 }
 
-bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, const sstring& prefix_b) noexcept {
+bool sstable_directory::compare_sstable_storage_prefix(std::string_view prefix_a, std::string_view prefix_b) noexcept {
     size_t size_a = prefix_a.size();
     if (prefix_a.back() == '/') {
         size_a--;

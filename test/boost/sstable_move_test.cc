@@ -67,7 +67,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_idempotent) {
     auto stop_env = defer([&env] { env.stop().get(); });
 
     auto [ sst, cur_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), sstables::generation_type(1));
-    sstring old_path = sst->get_storage().prefix();
+    auto old_path = sstring(sst->get_storage().prefix());
     touch_directory(format("{}/{}", old_path, sstables::staging_dir)).get();
     sst->change_state(sstables::sstable_state::staging).get();
     sst->change_state(sstables::sstable_state::normal).get();
@@ -171,7 +171,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_clone_preserves_staging_state) {
     // Load the cloned sstable from the staging directory.  We use the storage
     // prefix of the source (which is the staging sub-directory) so that the
     // loader can find the files, mirroring what distributed_loader does.
-    auto staging_dir = sst->get_storage().prefix();
+    auto staging_dir = sstring(sst->get_storage().prefix());
     auto cloned_sst = env.reusable_sst(schema, staging_dir, clone_gen).get();
 
     // Assert that the cloned sstable preserves the staging state.

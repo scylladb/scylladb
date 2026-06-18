@@ -127,7 +127,7 @@ public:
     virtual future<uint64_t> free_space() const = 0;
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
 
-    virtual sstring prefix() const  = 0;
+    virtual std::string_view prefix() const  = 0;
     virtual future<bool> exists(const sstable& sst, component_type type) const = 0;
 };
 
