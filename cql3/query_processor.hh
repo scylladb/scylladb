@@ -327,6 +327,15 @@ public:
             dialect d,
             query_options& options);
 
+    // Like execute_direct_without_checking_exception_message, but takes an already
+    // prepared statement. The CQL server prepares the statement before calling this
+    // so it can inspect it (e.g. to reclassify a control connection running user load).
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_direct_statement_without_checking_exception_message(
+            std::unique_ptr<statements::prepared_statement> statement,
+            service::query_state& query_state,
+            query_options& options);
+
     future<::shared_ptr<cql_transport::messages::result_message>>
     do_execute_direct(
             service::query_state& query_state,
