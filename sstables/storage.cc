@@ -1006,15 +1006,11 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schem
             return std::make_unique<sstables::filesystem_storage>(loc.dir.native(), state);
         },
         [&] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstables::storage> {
-            auto loc = std::visit(overloaded_functor {
-                        [] (const sstring& prefix) { return std::optional<sstring>(prefix); },
-                        [] (const table_id&) { return std::optional<sstring>(); }
-                    }, os.location);
             if (s_opts.is_s3_type()) {
-                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, std::move(loc), os.abort_source);
+                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
             }
             if (s_opts.is_gs_type()) {
-                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, std::move(loc), os.abort_source);
+                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
             }
             throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }
@@ -1057,7 +1053,6 @@ static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_
     nopts.value = data_dictionary::storage_options::object_storage {
         .bucket = so.bucket,
         .endpoint = so.endpoint,
-        .location = s.id(),
         .type = so.type
     };
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
