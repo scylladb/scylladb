@@ -5038,7 +5038,15 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         tasks::task_info global_tablet_repair_task_info;
         std::optional<locator::tablet_replica_set> replicas = std::nullopt;
         if (trinfo->stage == locator::tablet_transition_stage::repair) {
-            global_tablet_repair_task_info = {tasks::task_id{tmap.get_tablet_info(tablet.tablet).repair_task_info->tablet_task_id.uuid()}, 0};
+            auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+            // The repair request may have been deleted concurrently (e.g. via the
+            // del_repair_tablet_request API), which clears repair_task_info while
+            // leaving the transition stage at repair. Treat it like a canceled
+            // request instead of dereferencing a null repair_task_info.
+            if (!tinfo.repair_task_info) {
+                throw std::runtime_error(fmt::format("Repair request for tablet {} was deleted", tablet));
+            }
+            global_tablet_repair_task_info = {tasks::task_id{tinfo.repair_task_info->tablet_task_id.uuid()}, 0};
         } else {
             auto migration_streaming_info = get_migration_streaming_info(get_token_metadata_ptr()->get_topology(), tmap.get_tablet_info(tablet.tablet), *trinfo);
             replicas = locator::tablet_replica_set{migration_streaming_info.read_from.begin(), migration_streaming_info.read_from.end()};
