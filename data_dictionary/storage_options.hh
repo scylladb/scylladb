@@ -32,7 +32,7 @@ struct storage_options {
     struct object_storage {
         std::string bucket;
         std::string endpoint;
-        std::variant<sstring, table_id> location;
+        std::optional<sstring> location;
         seastar::abort_source* abort_source = nullptr;
 
         std::string type;
