@@ -18,13 +18,12 @@
 #include <seastar/core/reactor.hh>
 
 #include "data_dictionary/storage_options.hh"
+#include "schema/schema_fwd.hh"
 #include "seastarx.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
 #include "utils/disk-error-handler.hh"
-
-class schema;
 
 namespace data_dictionary {
 class storage_options;
@@ -129,7 +128,7 @@ public:
     virtual future<bool> exists(const sstable& sst, component_type type) const = 0;
 };
 
-std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstable_state state);
+std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
