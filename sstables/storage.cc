@@ -662,6 +662,9 @@ public:
         , _as(as)
     {}
 
+    virtual bool is_object_storage() const noexcept override {
+        return true;
+    }
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring name) const override;
     future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
