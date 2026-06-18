@@ -486,7 +486,6 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
 
     co_await with_gate(_gate, [this, &all_replayed, batch = std::move(batch)] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches");
-        co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
 
         auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
 
@@ -527,7 +526,6 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
 
     co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch), now, &replay_stats_per_shard] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches with cleanup: {}", cleanup);
-        co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
 
         auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
 
