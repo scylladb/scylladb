@@ -396,6 +396,9 @@ def test_fulltext_index_if_not_exists_cross_column(cql, test_keyspace):
 # function used with fulltext indexes. They cover parsing, validation of
 # column types, restriction requirements (LIMIT, fulltext_index), and error
 # handling.
+#
+# Execution tests that require a running Vector Store are in
+# test_fulltext_search_with_mock.py.
 ###############################################################################
 
 
@@ -412,12 +415,8 @@ def fulltext_table(cql, test_keyspace):
     cql.execute(f"DROP TABLE {table}")
 
 
-def test_bm25_basic_parsing(cql, fulltext_table):
-    """BM25 should be accepted when WHERE and ORDER BY are both present with a fulltext_index, a text column, and a LIMIT.
-
-    Full-text search execution is not implemented yet, so we use prepare() instead of execute().
-    Preparation runs the full parsing and validation path, which is what this test cares about, without attempting execution.
-    """
+def test_bm25_basic_parsing_and_validation(cql, fulltext_table):
+    """BM25 should be accepted when WHERE and ORDER BY are both present with a fulltext_index, a text column, and a LIMIT."""
     cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
 
 
@@ -461,9 +460,7 @@ def test_bm25_on_supported_text_types(cql, test_keyspace):
 
 def test_bm25_with_bind_markers(cql, fulltext_table):
     """BM25 should accept a bind marker (?) as the query string argument."""
-    stmt = cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT 1")
-    with pytest.raises(InvalidRequest, match="not implemented"):
-        cql.execute(stmt, ['hello', 'hello'])
+    cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT 1")
 
 
 def test_bm25_column_name_parses_as_identifier(cql, test_keyspace):
