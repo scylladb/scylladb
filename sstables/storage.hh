@@ -107,7 +107,7 @@ public:
     }
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring name) const = 0;
-    virtual future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const = 0;
+    virtual future<entry_descriptor> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const = 0;
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;

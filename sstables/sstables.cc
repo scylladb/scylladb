@@ -989,8 +989,7 @@ future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_
 }
 
 future<entry_descriptor> sstable::clone(generation_type new_generation, bool leave_unsealed) const {
-    co_await _storage->clone(*this, new_generation, leave_unsealed);
-    co_return entry_descriptor(new_generation, _version, _format, component_type::TOC, _state);
+    co_return co_await _storage->clone(*this, new_generation, leave_unsealed);
 }
 
 file_writer::~file_writer() {
@@ -2134,7 +2133,7 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
 }
 
 entry_descriptor sstable::get_descriptor(component_type c) const {
-    return entry_descriptor(_generation, _version, _format, c);
+    return entry_descriptor(_generation, _sstable_identifier, _version, _format, c);
 }
 
 future<>
@@ -3020,7 +3019,7 @@ static std::expected<std::tuple<entry_descriptor, sstring, sstring>, sstring> ma
         return std::unexpected{seastar::format("invalid version for file {}. Name doesn't match any known version.", fname)};
     }
     try {
-        return std::make_tuple(entry_descriptor(generation_type::from_string(generation), version, format_from_string(format), sstable::component_from_sstring(version, component)), ks, cf);
+        return std::make_tuple(entry_descriptor(generation_type::from_string(generation), std::nullopt, version, format_from_string(format), sstable::component_from_sstring(version, component)), ks, cf);
     } catch (const std::exception& e) {
         return std::unexpected{seastar::format("failed to parse sstable filename {}: {}", fname, e.what())};
     }
