@@ -45,6 +45,9 @@ constexpr size_t file_stream_write_behind = 10;
 constexpr size_t file_stream_read_ahead = 4;
 
 static sstables::sstable_state sstable_state(const streaming::stream_blob_meta& meta) {
+    if (meta.sstable_meta) {
+        return meta.sstable_meta->state;
+    }
     return meta.sstable_state.value_or(sstables::sstable_state::normal);
 }
 
@@ -566,6 +569,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             meta.fops = info.fops;
             meta.filename = info.filename;
             meta.sstable_state = info.sstable_state;
+            meta.sstable_meta = info.sstable_meta;
             fstream = co_await info.source(stream_options);
         } catch (...) {
             blogger.warn("fstream[{}] Master failed sources={} targets={} error={}",
@@ -794,6 +798,10 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
             auto& sst = sst_snapshot.sst;
             // stable state (across files) is a must for load to work on destination
             auto sst_state = sst->state();
+            auto sst_id = sst->sstable_identifier();
+            if (!sst_id) {
+                on_internal_error(blogger, format("sstable {} has no identifier", sst->get_filename()));
+            }
 
             if (sst->get_storage().is_object_storage()) {
                 // Clone path for object-storage SSTables: send CLONE_SSTABLE RPC
@@ -810,10 +818,11 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                     streaming::clone_sstable_request clone_req;
                     clone_req.ops_id = req.ops_id;
                     clone_req.table = req.table;
-                    clone_req.generation = sst->generation().as_uuid();
-                    clone_req.version = static_cast<int32_t>(sst->get_version());
-                    clone_req.format = static_cast<int32_t>(sst->get_format());
-                    clone_req.sstable_state = static_cast<int32_t>(sst_state);
+                    clone_req.sstable_meta.id = *sst->sstable_identifier();
+                    clone_req.sstable_meta.generation = sst->generation().as_uuid();
+                    clone_req.sstable_meta.version = static_cast<int32_t>(sst->get_version());
+                    clone_req.sstable_meta.format = static_cast<int32_t>(sst->get_format());
+                    clone_req.sstable_meta.state = sst_state;
                     clone_req.dst_shard_id = target.shard;
                     clone_req.topo_guard = req.topo_guard;
 
@@ -832,7 +841,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
 
                     auto& info = files.emplace_back();
                     info.fops = file_ops::stream_sstables;
-                    info.sstable_state = sst_state;
+                    info.sstable_meta = stream_sstable_meta{*sst_id, sst->generation().as_uuid(), static_cast<int32_t>(sst->get_version()), static_cast<int32_t>(sst->get_format()), sst_state};
                     info.filename = std::move(newname);
                     info.source = [s = std::move(s)](const file_input_stream_options& options) {
                         return s->input(options);
@@ -900,13 +909,11 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
         blogger.info("stream_mutation_fragments: released (clone)");
     });
 
-    if (req.sstable_state < 0 || req.sstable_state > static_cast<int32_t>(sstables::sstable_state::upload)) {
-        throw std::runtime_error(fmt::format("clone_sstable_handler: invalid sstable_state {}", req.sstable_state));
-    }
-    auto state = static_cast<sstables::sstable_state>(req.sstable_state);
-    auto generation = sstables::generation_type(req.generation);
-    auto version = static_cast<sstables::sstable_version_types>(req.version);
-    auto format = static_cast<sstables::sstable_format_types>(req.format);
+    auto& meta = req.sstable_meta;
+    auto state = meta.state;
+    auto generation = sstables::generation_type(meta.generation);
+    auto version = static_cast<sstables::sstable_version_types>(meta.version);
+    auto format = static_cast<sstables::sstable_format_types>(meta.format);
     // The descriptor carries the ORIGINAL generation from the source node.
     // Server-side copy the S3/GCS objects to a fresh generation owned
     // by this (destination) node.  The source holds shared_sstable
@@ -919,7 +926,7 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
     // throw away immediately after cloning.
     replica::table& t = db.find_column_family(req.table);
     auto& sstm = t.get_sstables_manager();
-    auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, state, version, format);
+    auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, meta.id, state, version, format);
     co_await orig_sst->load_metadata();
     auto new_gen = t.get_sstable_generation_generator()();
     // clone() server-side copies the S3/GCS objects to a fresh generation and
