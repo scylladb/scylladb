@@ -2707,7 +2707,6 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                     } else {
                         if (now < last_replay) {
                             flush_time = now;
-                            utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "skip_flush_use_now", fmt::to_string(flush_time));
                         } else if (now - last_replay < cache_time) {
                             // Skip the replay request since last_replay is already
                             // updated since last _flush_hints_batchlog_time
@@ -2715,7 +2714,6 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                             // flush time because last_replay (batchlog replay
                             // time) is smaller than now (hint flush time).
                             flush_time = last_replay;
-                            utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "skip_flush_use_last_replay", fmt::to_string(flush_time));
                         } else {
                             // Issue the replay so the last_replay will be updated
                             // to bigger than now after the call.
