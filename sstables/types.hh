@@ -736,7 +736,7 @@ struct scylla_metadata {
         auto* sid = data.get<scylla_metadata_type::SSTableIdentifier, scylla_metadata::sstable_identifier>();
         return sid ? sid->value : sstable_id::create_null_id();
     }
-    void set_sstable_identifier(sstable_id sid = sstable_id{utils::UUID_gen::get_time_UUID()}) {
+    void set_sstable_identifier(sstable_id sid) {
         data.set<scylla_metadata_type::SSTableIdentifier>(scylla_metadata::sstable_identifier{sid});
     }
     components_digests& get_or_create_components_digests() {
