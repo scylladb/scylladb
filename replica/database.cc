@@ -1850,7 +1850,7 @@ static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
 
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr query_schema, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
-                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info, abort_source* as) {
     column_family& cf = find_column_family(cmd.cf_id);
 
     if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
@@ -1884,11 +1884,11 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
         future<> f = make_ready_future<>();
         if (querier_opt) {
             querier_opt->permit().set_trace_state(trace_state);
-            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
+            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), as, read_func));
         } else {
             reader_permit_opt permit_holder;
             f = co_await coroutine::as_future(semaphore.with_permit(query_schema, "data-query", cf.estimate_read_memory_cost(), timeout,
-                        trace_state, permit_holder, read_func));
+                        trace_state, as, permit_holder, read_func));
         }
 
         if (!f.failed()) {
@@ -1918,7 +1918,7 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
 
 future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr query_schema, const query::read_command& cmd, const dht::partition_range& range,
-                          tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, bool tombstone_gc_enabled) {
+                          tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, bool tombstone_gc_enabled, abort_source* as) {
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size();
@@ -1949,11 +1949,11 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
         future<> f = make_ready_future<>();
         if (querier_opt) {
             querier_opt->permit().set_trace_state(trace_state);
-            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
+            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), as, read_func));
         } else {
             reader_permit_opt permit_holder;
             f = co_await coroutine::as_future(semaphore.with_permit(query_schema, "mutation-query", cf.estimate_read_memory_cost(), timeout,
-                        trace_state, permit_holder, read_func));
+                        trace_state, as, permit_holder, read_func));
         }
 
         if (!f.failed()) {
@@ -2018,7 +2018,7 @@ db::timeout_semaphore& database::get_view_update_concurrency_sem() {
 }
 
 future<reader_permit> database::obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
-    return get_reader_concurrency_semaphore().obtain_permit(tbl.schema(), op_name, tbl.estimate_read_memory_cost(), timeout, std::move(trace_ptr));
+    return get_reader_concurrency_semaphore().obtain_permit(tbl.schema(), op_name, tbl.estimate_read_memory_cost(), timeout, std::move(trace_ptr), {});
 }
 
 future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
@@ -4081,7 +4081,7 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
                 coroutine::lambda([&] (int) -> future<>
             {
                 auto permit = co_await local_db._system_read_concurrency_sem.obtain_permit(
-                    local_state.schema, "sample_data_files", chunk_size, no_timeout, nullptr);
+                    local_state.schema, "sample_data_files", chunk_size, no_timeout, nullptr, {});
                 auto [sst, offset] = get_next_chunk();
                 auto sample = co_await sst->data_read(offset, chunk_size, permit);
                 auto& out_buf = *out_it++;

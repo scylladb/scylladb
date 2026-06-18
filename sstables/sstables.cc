@@ -1484,7 +1484,7 @@ future<> sstable::load_first_and_last_position_in_partition() {
     }
 
     auto& sem = _manager.sstable_metadata_concurrency_sem();
-    reader_permit permit = co_await sem.obtain_permit(_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout, {});
+    reader_permit permit = co_await sem.obtain_permit(_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout, {}, {});
     auto first_pos_opt = co_await find_first_position_in_partition(permit, get_first_decorated_key(), false);
     auto last_pos_opt = co_await find_first_position_in_partition(permit, get_last_decorated_key(), true);
 
@@ -3687,7 +3687,7 @@ future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range
 
     auto& sem = _manager.sstable_metadata_concurrency_sem();
     uint64_t estimated_memory = 16 * 1024; // Value pulled from thin air
-    reader_permit permit = co_await sem.obtain_permit(_schema, "sstable::estimated_keys_for_range", estimated_memory, db::no_timeout, {});
+    reader_permit permit = co_await sem.obtain_permit(_schema, "sstable::estimated_keys_for_range", estimated_memory, db::no_timeout, {}, {});
     auto ir = make_index_reader(std::move(permit));
 
     std::exception_ptr ex;

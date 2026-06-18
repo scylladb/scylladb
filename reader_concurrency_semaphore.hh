@@ -17,6 +17,10 @@
 #include "utils/updateable_value.hh"
 #include "dht/i_partitioner_fwd.hh"
 
+namespace seastar {
+class abort_source;
+}
+
 namespace bi = boost::intrusive;
 
 using namespace seastar;
@@ -423,8 +427,15 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    future<reader_permit> obtain_permit(schema_ptr schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
-    future<reader_permit> obtain_permit(schema_ptr schema, sstring&& op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
+    ///
+    /// If \c as is provided, the admission wait can be cancelled early by
+    /// calling \c as->request_abort(), which causes the returned future to
+    /// resolve with \c abort_requested_exception.  After admission the
+    /// subscription remains active: callers may check
+    /// \c reader_permit::get_abort_exception() at yield points to propagate
+    /// the abort through their read logic.
+    future<reader_permit> obtain_permit(schema_ptr schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, abort_source* as);
+    future<reader_permit> obtain_permit(schema_ptr schema, sstring&& op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, abort_source* as);
 
     /// Make a tracking only permit
     ///
@@ -461,8 +472,13 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
+    ///
+    /// If \c as is provided, the read can be cancelled early by calling
+    /// \c as->request_abort(). Reads waiting in the admission queue are
+    /// removed immediately; active reads see the abort exception at the next
+    /// permit check-point inside the reader.
     future<> with_permit(schema_ptr schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout,
-            tracing::trace_state_ptr trace_ptr, reader_permit_opt& permit_holder, read_func func);
+            tracing::trace_state_ptr trace_ptr, abort_source* as, reader_permit_opt& permit_holder, read_func func);
 
     /// Run the function through the semaphore's execution stage with a pre-admitted permit
     ///
@@ -471,7 +487,7 @@ public:
     /// available, e.g. when resuming a saved read. Using
     /// \ref obtain_permit(), then \ref with_ready_permit() is less
     /// optimal then just using \ref with_permit().
-    future<> with_ready_permit(reader_permit permit, read_func func);
+    future<> with_ready_permit(reader_permit permit, abort_source* as, read_func func);
 
     /// Set the total resources of the semaphore to \p r.
     ///
