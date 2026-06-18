@@ -1518,17 +1518,16 @@ async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
         await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
 
         logger.info("Create view")
-        # Pause view building
-        await manager.api.enable_injection(servers[0].ip_addr, "view_building_worker_pause_before_consume", one_shot=True)
+        # Pause view building worker at the range processing point
+        pause_build_injection = "view_building_worker_pause_build_range_task"
+        await manager.api.enable_injection(servers[0].ip_addr, pause_build_injection, one_shot=True)
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv1 AS \
                 SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL \
                 PRIMARY KEY (c, pk);")
         
-        # Check if view building was started
-        async def check_mv_status():
-            mv_status = await cql.run_async(f"SELECT status FROM system.view_build_status_v2 WHERE keyspace_name='{ks}' AND view_name='mv'")
-            return len(mv_status) == 1 and mv_status[0].status == "STARTED"
-        await wait_for(check_mv_status, time.time() + 30)
+        # Wait for view building worker to reach the injection point (deterministic synchronization)
+        logger.info("Waiting for view building worker to reach injection point")
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, pause_build_injection)
 
         logger.info("Generate an sstable and move it to upload directory of test table")
         # create an sstable using a dummy table
