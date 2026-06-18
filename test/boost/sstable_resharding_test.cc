@@ -106,8 +106,9 @@ void run_sstable_resharding_test(sstables::test_env& env) {
         auto gen = smp::submit_to(shard, [&cf] () {
             return column_family_test::calculate_generation_for_new_table(*cf);
         }).get();
+        auto sid = sstables::sstable_id(gen.as_uuid());
 
-        return env.make_sstable(cf->schema(), gen, version);
+        return env.make_sstable(cf->schema(), gen, sid, version);
     };
     auto cdata = compaction::compaction_manager::create_compaction_data();
     compaction::compaction_progress_monitor progress_monitor;

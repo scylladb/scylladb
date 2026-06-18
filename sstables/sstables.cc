@@ -1805,7 +1805,6 @@ sstable_id sstable::get_sstable_identifier() const {
     if (_sstable_identifier) {
         return *_sstable_identifier;
     }
-    sstlog.warn("sstable {} has no identifier, deriving from generation", get_filename());
     return sstable_id(_generation.as_uuid());
 }
 
@@ -2425,7 +2424,9 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
 
     sstable_id sid;
-    if (generation().is_uuid_based()) {
+    if (_sstable_identifier) {
+        sid = *_sstable_identifier;
+    } else if (generation().is_uuid_based()) {
         sid = sstable_id(generation().as_uuid());
     } else {
         sid = sstable_id(utils::UUID_gen::get_time_UUID());
@@ -3972,6 +3973,7 @@ mutation_source sstable::as_mutation_source() {
 sstable::sstable(schema_ptr schema,
         const data_dictionary::storage_options& storage,
         generation_type generation,
+        optimized_optional<sstable_id> sstable_identifier,
         sstable_state state,
         version_types v,
         format_types f,
@@ -3996,6 +3998,7 @@ sstable::sstable(schema_ptr schema,
     , _large_data_handler(large_data_handler)
     , _corrupt_data_handler(corrupt_data_handler)
     , _manager(manager)
+    , _sstable_identifier(std::move(sstable_identifier))
     , _ignore_component_digest_mismatch(_manager.get_config().ignore_component_digest_mismatch)
 {
     manager.add(this);
@@ -4387,13 +4390,13 @@ public:
     }
 };
 
-std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, std::string_view component_filename, sstable_stream_sink_cfg cfg) {
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, std::string_view component_filename, optimized_optional<sstable_id> sid, sstable_stream_sink_cfg cfg) {
     auto desc_result = parse_path(component_filename, schema->ks_name(), schema->cf_name());
     if (!desc_result) {
         throw_malformed_sstable_exception(desc_result.error());
     }
     auto desc = std::move(*desc_result);
-    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, state, desc.version, desc.format);
+    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, sid, state, desc.version, desc.format);
 
     auto type = desc.component;
     // Don't write actual TOC. Write temp, if successful, storage::seal will rename this to actual

@@ -7359,7 +7359,7 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
     bool leave_unsealed = true;
     auto d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst2 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst2 = env.make_sstable(s, d.generation, d.sid, d.version, d.format);
     sst2->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::TOC).get());
     BOOST_REQUIRE(sst2->get_storage().exists(*sst2, sstables::component_type::TemporaryTOC).get());
@@ -7367,7 +7367,7 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
     leave_unsealed = false;
     d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst3 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst3 = env.make_sstable(s, d.generation, d.sid, d.version, d.format);
     sst3->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(sst3->get_storage().exists(*sst3, sstables::component_type::TOC).get());
     BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::TemporaryTOC).get());
@@ -7394,7 +7394,7 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
     bool leave_unsealed = true;
     auto d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst2 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst2 = env.make_sstable(s, d.generation, d.sid, d.version, d.format);
     {
         bool checked = false;
         env.manager()
@@ -7416,7 +7416,7 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
     leave_unsealed = false;
     d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst3 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst3 = env.make_sstable(s, d.generation, d.sid, d.version, d.format);
     {
         bool checked = false;
         env.manager()

@@ -210,6 +210,7 @@ public:
     sstable(schema_ptr schema,
             const data_dictionary::storage_options& storage,
             generation_type generation,
+            optimized_optional<sstable_id> sstable_identifier,
             sstable_state state,
             version_types v,
             format_types f,
@@ -1330,7 +1331,7 @@ struct sstable_stream_sink_cfg {
 
 // Creates a sink object which can receive a component file sourced from above source object data.
 
-std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr, sstables_manager&, const data_dictionary::storage_options&, sstable_state, std::string_view component_filename, sstable_stream_sink_cfg cfg);
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr, sstables_manager&, const data_dictionary::storage_options&, sstable_state, std::string_view component_filename, optimized_optional<sstable_id> sid, sstable_stream_sink_cfg cfg);
 
 } // namespace sstables
 

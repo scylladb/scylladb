@@ -94,17 +94,17 @@ future<sstables::shared_sstable> make_sstable_containing(std::function<sstables:
 }
 
 shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writer_config cfg,
-        sstables::generation_type gen, const sstables::sstable::version_types version, int expected_partition, db_clock::time_point query_time) {
+        sstables::generation_type gen, optimized_optional<sstables::sstable_id> sid, const sstables::sstable::version_types version, int expected_partition, db_clock::time_point query_time) {
     auto s = rd.schema();
-    auto sst = env.make_sstable(s, gen, version, sstable_format_types::big, default_sstable_buffer_size, query_time);
+    auto sst = env.make_sstable(s, gen, sid, version, sstable_format_types::big, default_sstable_buffer_size, query_time);
     sst->write_components(std::move(rd), expected_partition, s, cfg, encoding_stats{}).get();
     sst->load(s->get_sharder()).get();
     return sst;
 }
 
 shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
-        sstables::generation_type gen, const sstable::version_types v, int estimated_partitions, db_clock::time_point query_time) {
-    return make_sstable_easy(env, mt->make_mutation_reader(mt->schema(), env.make_reader_permit()), std::move(cfg), gen, v, estimated_partitions, query_time);
+        sstables::generation_type gen, optimized_optional<sstables::sstable_id> sid, const sstable::version_types v, int estimated_partitions, db_clock::time_point query_time) {
+    return make_sstable_easy(env, mt->make_mutation_reader(mt->schema(), env.make_reader_permit()), std::move(cfg), gen, sid, v, estimated_partitions, query_time);
 }
 
 future<compaction::compaction_result> compact_sstables(test_env& env, compaction::compaction_descriptor descriptor, table_for_tests t,

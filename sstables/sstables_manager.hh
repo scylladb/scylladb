@@ -197,6 +197,7 @@ public:
     shared_sstable make_sstable(schema_ptr schema,
             const data_dictionary::storage_options& storage,
             generation_type generation,
+            optimized_optional<sstable_id> sstable_identifier,
             sstable_state state = sstable_state::normal,
             sstable_version_types v = get_highest_sstable_version(),
             sstable_format_types f = sstable_format_types::big,

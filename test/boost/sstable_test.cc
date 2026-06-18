@@ -963,7 +963,7 @@ static future<> test_component_digest_persistence(component_type component, ssta
 
         sst_original = nullptr;
 
-        auto sst_reopened = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        auto sst_reopened = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.sid, entry_desc.version, entry_desc.format);
         sst_reopened->load(schema->get_sharder()).get();
 
         auto loaded_digest = sst_reopened->get_component_digest(component);
@@ -1074,7 +1074,7 @@ static future<> test_component_digest_validation(component_type component, sstab
         corrupt_sstable(sst, component);
 
         // Loading the sstable should detect the digest mismatch
-        auto sst_corrupted = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        auto sst_corrupted = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.sid, entry_desc.version, entry_desc.format);
         BOOST_REQUIRE_EXCEPTION(sst_corrupted->load(schema->get_sharder()).get(), malformed_sstable_exception,
             exception_predicate::message_contains(expected_message));
     });

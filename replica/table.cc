@@ -498,7 +498,9 @@ sstables::shared_sstable table::make_sstable(sstables::sstable_state state) {
 
 sstables::shared_sstable table::make_sstable(sstables::sstable_state state, sstables::sstable_version_types version) {
     auto& sstm = get_sstables_manager();
-    return sstm.make_sstable(_schema, *_storage_opts, calculate_generation_for_new_table(), state, version, sstables::sstable::format_types::big);
+    auto gen = calculate_generation_for_new_table();
+    auto sid = sstables::sstable_id(gen.as_uuid());
+    return sstm.make_sstable(_schema, *_storage_opts, gen, sid, state, version, sstables::sstable::format_types::big);
 }
 
 sstables::shared_sstable table::make_sstable() {

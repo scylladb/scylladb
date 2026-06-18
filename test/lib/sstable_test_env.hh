@@ -117,14 +117,15 @@ public:
     future<> stop();
 
     sstables::generation_type new_generation() noexcept;
+    std::pair<sstables::generation_type, sstables::sstable_id> new_generation_and_sid() noexcept;
 
-    shared_sstable make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
+    shared_sstable make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation, optimized_optional<sstables::sstable_id> sid = {},
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, db_clock::time_point now = db_clock::now());
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstable::version_types v = sstables::get_highest_sstable_version());
 
-    shared_sstable make_sstable(schema_ptr schema, sstables::generation_type generation,
+    shared_sstable make_sstable(schema_ptr schema, sstables::generation_type generation, optimized_optional<sstables::sstable_id> sid = {},
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, db_clock::time_point now = db_clock::now());
 

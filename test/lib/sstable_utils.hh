@@ -259,18 +259,22 @@ future<compaction::compaction_result> compact_sstables(test_env& env, compaction
                  can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
 shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writer_config cfg,
-        sstables::generation_type gen, const sstable::version_types version = sstables::get_highest_sstable_version(), int expected_partition = 1, db_clock::time_point = db_clock::now());
+        sstables::generation_type gen, optimized_optional<sstables::sstable_id> sid,
+        const sstable::version_types version = sstables::get_highest_sstable_version(), int expected_partition = 1, db_clock::time_point = db_clock::now());
 shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
-        sstables::generation_type gen, const sstable::version_types v = sstables::get_highest_sstable_version(), int estimated_partitions = 1, db_clock::time_point = db_clock::now());
+        sstables::generation_type gen, optimized_optional<sstables::sstable_id> sid,
+        const sstable::version_types v = sstables::get_highest_sstable_version(), int estimated_partitions = 1, db_clock::time_point = db_clock::now());
 
 
 inline shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writer_config cfg,
         const sstable::version_types version = sstables::get_highest_sstable_version(), int expected_partition = 1) {
-    return make_sstable_easy(env, std::move(rd), std::move(cfg), env.new_generation(), version, expected_partition);
+    auto [gen, sid] = env.new_generation_and_sid();
+    return make_sstable_easy(env, std::move(rd), std::move(cfg), gen, sid, version, expected_partition);
 }
 inline shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
         const sstable::version_types version = sstables::get_highest_sstable_version(), int estimated_partitions = 1, db_clock::time_point query_time = db_clock::now()) {
-    return make_sstable_easy(env, std::move(mt), std::move(cfg), env.new_generation(), version, estimated_partitions, query_time);
+    auto [gen, sid] = env.new_generation_and_sid();
+    return make_sstable_easy(env, std::move(mt), std::move(cfg), gen, sid, version, estimated_partitions, query_time);
 }
 
 future<lw_shared_ptr<replica::memtable>> make_memtable(schema_ptr s, const utils::chunked_vector<mutation>& muts);

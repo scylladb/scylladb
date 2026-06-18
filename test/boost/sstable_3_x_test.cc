@@ -55,6 +55,7 @@ class sstable_assertions final : public sstables::test {
         : test(env.make_sstable(std::move(schema),
                             path,
                             generation,
+                            std::nullopt,
                             version,
                             sstable_format_types::big,
                             1))

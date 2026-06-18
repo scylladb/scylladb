@@ -229,7 +229,7 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc,
         const data_dictionary::storage_options& storage_opts, sstables::sstable_open_config cfg) const {
-    shared_sstable sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+    shared_sstable sst = _manager.make_sstable(_schema, storage_opts, desc.generation, desc.sid, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
     co_await sst->load(_sharder, cfg);
     co_return sst;
 }
@@ -263,7 +263,9 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
             new_sst.mutate_sstable_level(0);
         };
         auto sst_creator = [&](shared_sstable) {
-            return _manager.make_sstable(_schema, storage_opts, sstables::sstable_generation_generator{}(), _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+            auto gen = sstable_generation_generator{}();
+            auto sid = storage_opts.is_object_storage_type() ? sstable_id(gen.as_uuid()) : sst->get_sstable_identifier();
+            return _manager.make_sstable(_schema, storage_opts, gen, sid, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
         };
         auto new_sst = co_await sst->link_with_rewritten_component(std::move(sst_creator), component_type::Statistics, std::move(modifier), false);
         co_await sst->unlink();
@@ -510,7 +512,8 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 }
 
 future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_open_info& info) {
-    auto sst = _manager.make_sstable(_schema, *_storage_opts, info.generation, _state, info.version, info.format, db_clock::now(), _error_handler_gen);
+    auto sid = sstable_id{utils::UUID_gen::get_time_UUID()};
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, info.generation, sid, _state, info.version, info.format, db_clock::now(), _error_handler_gen);
     co_await sst->load(std::move(info));
     co_return sst;
 }
@@ -527,7 +530,7 @@ sstable_directory::load_foreign_sstables(sstable_entry_descriptor_vector info_ve
 
 future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(
         const sstables::entry_descriptor& desc, const data_dictionary::storage_options& storage_opts, process_flags flags) const {
-    auto sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, storage_opts, desc.generation, std::nullopt, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
     co_await sst->load_owner_shards(_sharder);
     validate(sst, flags);
     co_return sst->get_shards_for_this_sstable();

@@ -52,7 +52,7 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         replica::table& t = db.find_column_family(id);
         auto erm = t.get_effective_replication_map();
         auto& sstm = t.get_sstables_manager();
-        auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, state, desc.version, desc.format);
+        auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, desc.sid, state, desc.version, desc.format);
         sstables::sstable_open_config cfg { .unsealed_sstable = true };
         co_await sst->load(erm->get_sharder(*t.schema()), cfg);
         auto on_add = [sst, &sstm] (sstables::shared_sstable loading_sst) -> future<> {
@@ -438,7 +438,8 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
             // left sealed on the table directory.
             sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables,
                                                     .leave_unsealed = true };
-            auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, cfg);
+            auto sid = optimized_optional<sstables::sstable_id>{};  // FIXME: pass sstable_id in stream_blob_meta
+            auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, sid, cfg);
             auto out = co_await sstable_sink->output(foptions, stream_options);
             co_return output_result{
                 [sstable_sink = std::move(sstable_sink), &meta, &db, &vbw](store_result res) -> future<> {
