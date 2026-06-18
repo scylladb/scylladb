@@ -17,6 +17,28 @@
 
 namespace cql3::statements {
 
+namespace {
+
+const column_definition* extract_column_from_first_argument(const expr::function_call& fc) {
+    const auto* col_val = expr::as_if<expr::column_value>(&fc.args[0]);
+    if (!col_val) {
+        throw exceptions::invalid_request_exception("First argument to BM25 must be a column reference");
+    }
+    return col_val->col;
+}
+
+expr::expression extract_search_term_from_second_argument(const expr::function_call& fc) {
+    expr::expression search_term = fc.args[1];
+    if (expr::find_in_expression<expr::column_value>(search_term, [](const expr::column_value&) {
+            return true;
+        })) {
+        throw exceptions::invalid_request_exception("Second argument to BM25() must not be a column reference");
+    }
+    return search_term;
+}
+
+} // anonymous namespace
+
 std::optional<bm25_ordering_info> get_bm25_ordering_info(
         data_dictionary::database db,
         schema_ptr schema,
@@ -43,22 +65,19 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         throw exceptions::invalid_request_exception("Only BM25 scoring function is supported in ORDER BY");
     }
 
-    // Extract the column from the first argument
-    if (fc->args.empty()) {
-        throw exceptions::invalid_request_exception("BM25 requires at least a column argument");
+    if (fc->args.size() != 2) {
+        throw exceptions::invalid_request_exception("BM25 requires both a column and a query term argument");
     }
-    const auto* col_val = expr::as_if<expr::column_value>(&fc->args[0]);
-    if (!col_val) {
-        throw exceptions::invalid_request_exception("First argument to BM25 must be a column");
-    }
-    const column_definition* def = col_val->col;
+
+    const auto* column = extract_column_from_first_argument(*fc);
+    auto search_term = extract_search_term_from_second_argument(*fc);
 
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
 
     for (const auto& idx : sim.list_indexes()) {
-        if (idx.supports_bm25_expression(*def)) {
-            return bm25_ordering_info{idx};
+        if (idx.supports_bm25_expression(*column)) {
+            return bm25_ordering_info{idx, std::move(search_term)};
         }
     }
 
@@ -101,12 +120,28 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         const auto* col_val = expr::as_if<expr::column_value>(&fc->args[0]);
         return col_val && ordering_info->index.supports_bm25_expression(*col_val->col);
     };
-    const bool has_bm25_restriction =
-            expr::find_binop(restrictions->get_nonprimary_key_restrictions(), bm25_where_pred) ||
-            expr::find_binop(restrictions->get_clustering_columns_restrictions(), bm25_where_pred);
-    if (!has_bm25_restriction) {
+    const auto* where_bm25_binop = expr::find_binop(restrictions->get_nonprimary_key_restrictions(), bm25_where_pred)
+                                           ?: expr::find_binop(restrictions->get_clustering_columns_restrictions(), bm25_where_pred);
+    if (!where_bm25_binop) {
+        throw exceptions::invalid_request_exception("Full-text search queries require a WHERE BM25() clause on the same column used in ORDER BY BM25()");
+    }
+
+    // Validate that the WHERE BM25 second argument is not a column reference.
+    const auto& where_fc = expr::as<expr::function_call>(where_bm25_binop->lhs);
+    if (where_fc.args.size() != 2) {
+        throw exceptions::invalid_request_exception("BM25() requires both a column and a query term argument");
+    }
+    extract_search_term_from_second_argument(where_fc);
+
+    // Reject any WHERE restrictions beyond the BM25 clause itself.
+    const auto is_non_bm25_binop = [](const expr::binary_operator& o) {
+        return !expr::is_bm25_function_call(o.lhs);
+    };
+    if (!restrictions->partition_key_restrictions_is_empty()
+            || expr::find_binop(restrictions->get_clustering_columns_restrictions(), is_non_bm25_binop)
+            || expr::find_binop(restrictions->get_nonprimary_key_restrictions(), is_non_bm25_binop)) {
         throw exceptions::invalid_request_exception(
-                "Full-text search queries require a WHERE BM25() clause on the same column used in ORDER BY BM25()");
+                "Full-text search queries do not support additional WHERE restrictions");
     }
 
     return ::make_shared<cql3::statements::fulltext_indexed_table_select_statement>(
@@ -122,6 +157,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
             std::move(per_partition_limit),
             stats,
             ordering_info->index,
+            std::move(ordering_info->search_term),
             std::move(attrs));
 }
 
@@ -132,9 +168,11 @@ fulltext_indexed_table_select_statement::fulltext_indexed_table_select_statement
         ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats,
         const secondary_index::index& index,
+        expr::expression search_term,
         std::unique_ptr<attributes> attrs)
     : external_index_select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices,
-              is_reversed, ordering_comparator, limit, per_partition_limit, stats, index, std::move(attrs)} {
+              is_reversed, ordering_comparator, limit, per_partition_limit, stats, index, std::move(attrs)}
+    , _search_term{std::move(search_term)} {
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_table_select_statement::execute_search(

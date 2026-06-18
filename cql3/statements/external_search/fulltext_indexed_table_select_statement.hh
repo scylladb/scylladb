@@ -16,6 +16,7 @@ namespace cql3::statements {
 
 struct bm25_ordering_info {
     secondary_index::index index;
+    expr::expression search_term;
 };
 
 /// Resolves BM25 ordering metadata from the query's ORDER BY clause.
@@ -27,6 +28,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         prepare_context& ctx);
 
 class fulltext_indexed_table_select_statement : public external_index_select_statement {
+    expr::expression _search_term;
 
 public:
     static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db,
@@ -56,6 +58,7 @@ public:
             std::optional<expr::expression> per_partition_limit,
             cql_stats& stats,
             const secondary_index::index& index,
+            expr::expression search_term,
             std::unique_ptr<cql3::attributes> attrs);
 
 private:

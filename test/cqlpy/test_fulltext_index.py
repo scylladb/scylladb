@@ -486,11 +486,6 @@ def test_bm25_like_operator_rejected(cql, fulltext_table):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') LIKE 'x' LIMIT 1")
 
 
-def test_bm25_with_and_restriction(cql, fulltext_table):
-    """BM25 can be combined with other restrictions as conjunctions."""
-    cql.prepare(f"SELECT * FROM {fulltext_table} WHERE p = 1 AND BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
-
-
 def test_bm25_on_nonexistent_column_fails(cql, fulltext_table):
     """BM25 on a column that doesn't exist should be rejected."""
     with pytest.raises(InvalidRequest, match="Unrecognized name nonexistent"):
@@ -602,14 +597,44 @@ def test_bm25_literal_as_first_arg_rejected(cql, fulltext_table):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25('x', 'term') > 0 ORDER BY BM25(content, 'term') LIMIT 1")
 
 
-def test_bm25_where_with_extra_regular_index_uses_correct_fulltext_index(cql, test_keyspace):
-    """When WHERE has both a BM25 restriction and a regular indexed predicate, the BM25 fulltext index must be selected."""
+def test_bm25_extra_restriction_rejected(cql, test_keyspace):
+    """Any additional WHERE restriction alongside BM25 must be rejected (not yet supported)."""
     schema = 'p int primary key, content text, tag text'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
         cql.execute(f"CREATE INDEX ON {table}(tag)")
-        # The presence of a regular secondary index on 'tag' must not displace the fulltext index.
-        cql.prepare(f"SELECT * FROM {table} WHERE tag = 'x' AND BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+        # Partition-key restriction.
+        with pytest.raises(InvalidRequest, match="do not support additional WHERE restrictions"):
+            cql.execute(f"SELECT * FROM {table} WHERE p = 1 AND BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+        # Regular secondary-indexed restriction.
+        with pytest.raises(InvalidRequest, match="do not support additional WHERE restrictions"):
+            cql.execute(f"SELECT * FROM {table} WHERE tag = 'x' AND BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_column_reference_as_search_term_rejected(cql, fulltext_table):
+    """BM25 with a column reference as the search term (second argument) must be rejected at prepare time."""
+    with pytest.raises(InvalidRequest, match="must not be a column reference"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, content) > 0 ORDER BY BM25(content, content) LIMIT 1")
+
+
+def test_bm25_wrong_argument_count_rejected(cql, fulltext_table):
+    """BM25 with the wrong number of arguments must be rejected."""
+    # Too few arguments
+    with pytest.raises(InvalidRequest, match="Invalid number of arguments"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content) > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+    with pytest.raises(InvalidRequest, match="Invalid number of arguments"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content) LIMIT 1")
+    # Too many arguments
+    with pytest.raises(InvalidRequest, match="Invalid number of arguments"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello', 'extra') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+    with pytest.raises(InvalidRequest, match="Invalid number of arguments"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello', 'extra') LIMIT 1")
+
+
+def test_bm25_column_reference_in_where_with_valid_order_by_term_rejected(cql, fulltext_table):
+    """WHERE BM25 with a column reference as search term and a valid ORDER BY term must be rejected."""
+    with pytest.raises(InvalidRequest, match="must not be a column reference"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, content) > 0 ORDER BY BM25(content, 'world') LIMIT 1")
 
 
 # Test that a UDF named "bm25" (same name as the system BM25 scoring operator)
