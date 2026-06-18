@@ -714,7 +714,6 @@ future<> view_building_worker::do_build_range(table_id base_id, std::vector<tabl
                     co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5), &as);
                 }
             }).get();
-            utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, as).get();
 
             vbw_logger.info("Starting range {} building for base table: {}.{}", range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
             auto end_token = reader.consume_in_thread(std::move(consumer));
