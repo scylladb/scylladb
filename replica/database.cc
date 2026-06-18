@@ -1883,8 +1883,7 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
 
         future<> f = make_ready_future<>();
         if (querier_opt) {
-            querier_opt->permit().set_trace_state(trace_state);
-            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), as, read_func));
+            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), trace_state, as, read_func));
         } else {
             reader_permit_opt permit_holder;
             f = co_await coroutine::as_future(semaphore.with_permit(query_schema, "data-query", cf.estimate_read_memory_cost(), timeout,
@@ -1948,8 +1947,7 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
 
         future<> f = make_ready_future<>();
         if (querier_opt) {
-            querier_opt->permit().set_trace_state(trace_state);
-            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), as, read_func));
+            f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), trace_state, as, read_func));
         } else {
             reader_permit_opt permit_holder;
             f = co_await coroutine::as_future(semaphore.with_permit(query_schema, "mutation-query", cf.estimate_read_memory_cost(), timeout,

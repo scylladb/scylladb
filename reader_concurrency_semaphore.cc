@@ -1814,7 +1814,8 @@ future<> reader_concurrency_semaphore::with_ready_permit(reader_permit::impl& pe
     return fut;
 }
 
-future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit, abort_source* as, read_func func) {
+future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit, tracing::trace_state_ptr trace_ptr, abort_source* as, read_func func) {
+    permit->set_trace_state(std::move(trace_ptr));
     if (as) {
         permit->set_abort_source(*as);
     }

@@ -1181,7 +1181,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
 
     auto p2 = semaphore.obtain_permit(s, get_name(), 1024, db::no_timeout, {}, {}).get();
     read rd2(p2);
-    auto fut2 = semaphore.with_ready_permit(p2, {}, rd2.get_read_func());
+    auto fut2 = semaphore.with_ready_permit(p2, {}, {}, rd2.get_read_func());
 
     // At this point we expect to have:
     // * 1 inactive read (not evicted)
@@ -2192,7 +2192,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_execution_stage_wakeu
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted_immediately, 1);
 
     bool func_called = false;
-    auto func_fut = semaphore.with_ready_permit(permit1, {}, [&] (reader_permit permit) {
+    auto func_fut = semaphore.with_ready_permit(permit1, {}, {}, [&] (reader_permit permit) {
         func_called = true;
         return sleep(std::chrono::milliseconds(1));
     });
@@ -2769,7 +2769,7 @@ SEASTAR_THREAD_TEST_CASE(test_with_ready_permit_pre_aborted) {
     as.request_abort(); // fire before with_read_permit is even called
 
     bool lambda_called = false;
-    auto fut = semaphore.with_ready_permit(permit, &as,
+    auto fut = semaphore.with_ready_permit(permit, {}, &as,
             [&] (reader_permit) {
                 lambda_called = true;
                 return make_ready_future<>();
@@ -2803,7 +2803,7 @@ SEASTAR_THREAD_TEST_CASE(test_with_ready_permit_abort) {
     abort_source as;
     bool lambda_called = false;
 
-    auto permit_fut = semaphore.with_ready_permit(permit, &as,
+    auto permit_fut = semaphore.with_ready_permit(permit, {}, &as,
             [&lambda_called] (reader_permit p) -> future<> {
                 lambda_called = true;
                 // Infinite loop on purpose, testing that abort works.

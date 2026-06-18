@@ -489,7 +489,7 @@ public:
     /// available, e.g. when resuming a saved read. Using
     /// \ref obtain_permit(), then \ref with_ready_permit() is less
     /// optimal then just using \ref with_permit().
-    future<> with_ready_permit(reader_permit permit, abort_source* as, read_func func);
+    future<> with_ready_permit(reader_permit permit, tracing::trace_state_ptr trace_ptr, abort_source* as, read_func func);
 
     /// Set the total resources of the semaphore to \p r.
     ///
