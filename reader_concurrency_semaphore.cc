@@ -170,6 +170,9 @@ private:
     // Lazily allocated: only needed for memory-wait or inactive-read paths.
     std::unique_ptr<auxiliary_data> _aux_data;
 
+    // Subscription to an external abort_source, set via set_abort_source().
+    optimized_optional<abort_source::subscription> _abort_sub;
+
     uint64_t _need_cpu_branches = 0;
     uint64_t _awaits_branches = 0;
     uint64_t _sstables_read = 0;
@@ -411,6 +414,51 @@ public:
         _state = reader_permit::state::preemptive_aborted;
         _pr.set_exception(ex);
         _semaphore.on_permit_preemptive_aborted();
+    }
+
+    // Called (synchronously, inline) when the associated abort_source fires.
+    // Must be noexcept because it runs from abort_source::request_abort().
+    void on_abort() noexcept {
+        if (_ex) {
+            return; // already failed (e.g. timed out), nothing to do
+        }
+        _ex = std::make_exception_ptr(abort_requested_exception{});
+        _ttl_timer.cancel();
+        ++_semaphore._stats.reads_aborted;
+
+        switch (_state) {
+            case state::waiting_for_admission:
+            case state::waiting_for_memory:
+            case state::waiting_for_execution:
+                // Dequeue the permit and unblock the waiting coroutine.
+                _pr.set_exception(_ex);
+                _semaphore.dequeue_permit(*this);
+                on_permit_inactive(reader_permit::state::preemptive_aborted);
+                break;
+            case state::inactive:
+                // Evict the inactive reader so the permit can be destroyed.
+                // After evict() returns *this may already be destroyed via the
+                // notify_handler / close path, so we must not access any member.
+                _semaphore.evict(*this, reader_concurrency_semaphore::evict_reason::permit);
+                return;
+            case state::active:
+            case state::active_need_cpu:
+            case state::active_await:
+                // _ex is set; the reader will propagate it at the next
+                // permit check-point (cache_mutation_reader, partition_snapshot_reader, etc.)
+                break;
+            case state::evicted:
+            case state::preemptive_aborted:
+                break;
+        }
+    }
+
+    void set_abort_source(abort_source& as) {
+        if (as.abort_requested()) {
+            on_abort();
+        } else {
+            _abort_sub = as.subscribe([this] () noexcept { on_abort(); });
+        }
     }
 
     void on_register_as_inactive() {
@@ -1497,6 +1545,12 @@ bool reader_concurrency_semaphore::should_evict_inactive_read() const noexcept {
 }
 
 future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& permit) {
+    // Abort_source may have already fired (or the source was already aborted
+    // when set_abort_source() was called) — fail fast without touching queues.
+    if (permit.aborted()) [[unlikely]] {
+        return make_exception_future<>(permit.get_abort_exception());
+    }
+
     if (!_execution_loop_future) {
         _execution_loop_future.emplace(execution_loop());
     }
@@ -1706,6 +1760,9 @@ void reader_concurrency_semaphore::on_permit_not_awaits() noexcept {
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(schema_ptr schema, const char* const op_name, size_t memory,
         db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, abort_source* as) {
     auto permit = reader_permit(*this, std::move(schema), std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
+    if (as) {
+        permit->set_abort_source(*as);
+    }
     return do_wait_admission(*permit).then([permit] () mutable {
         return std::move(permit);
     });
@@ -1714,6 +1771,9 @@ future<reader_permit> reader_concurrency_semaphore::obtain_permit(schema_ptr sch
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(schema_ptr schema, sstring&& op_name, size_t memory,
         db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, abort_source* as) {
     auto permit = reader_permit(*this, std::move(schema), std::move(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
+    if (as) {
+        permit->set_abort_source(*as);
+    }
     return do_wait_admission(*permit).then([permit] () mutable {
         return std::move(permit);
     });
@@ -1734,6 +1794,9 @@ future<> reader_concurrency_semaphore::with_permit(schema_ptr schema, const char
     permit_holder = reader_permit(*this, std::move(schema), std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
     auto permit = *permit_holder;
     permit->func() = std::move(func);
+    if (as) {
+        permit->set_abort_source(*as);
+    }
     return do_wait_admission(*permit);
 }
 
@@ -1752,6 +1815,12 @@ future<> reader_concurrency_semaphore::with_ready_permit(reader_permit::impl& pe
 }
 
 future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit, abort_source* as, read_func func) {
+    if (as) {
+        permit->set_abort_source(*as);
+    }
+    if (permit->aborted()) [[unlikely]] {
+        return make_exception_future<>(permit->get_abort_exception());
+    }
     permit->func() = std::move(func);
     return with_ready_permit(*permit);
 }

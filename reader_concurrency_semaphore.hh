@@ -100,6 +100,8 @@ public:
         uint64_t total_reads_killed_due_to_kill_limit = 0;
         // Total number of reads admitted, via all admission paths.
         uint64_t reads_admitted = 0;
+        // Total number of reads aborted by the user (via the abort_source param)
+        uint64_t reads_aborted = 0;
         // Total number of reads enqueued to wait for admission.
         uint64_t reads_enqueued_for_admission = 0;
         // Total number of reads enqueued to wait for memory.

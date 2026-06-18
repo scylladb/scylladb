@@ -2635,4 +2635,283 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_signal_detects_negati
     BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources{});
 }
 
+// Verify that with_permit() returns abort_requested_exception immediately
+// (without queuing and without calling the read function) when the
+// abort_source has already been fired before with_permit() is called.
+SEASTAR_THREAD_TEST_CASE(test_with_permit_pre_aborted) {
+    simple_schema s;
+    const auto schema = s.schema();
+    const std::string test_name = get_name();
+
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, test_name);
+    auto stop_sem = deferred_stop(semaphore);
+
+    abort_source as;
+    as.request_abort(); // fire before with_permit is even called
+
+    reader_permit_opt permit_holder;
+    bool lambda_called = false;
+    auto fut = semaphore.with_permit(schema, test_name.c_str(), 1024, db::no_timeout, {}, &as, permit_holder,
+            [&] (reader_permit) {
+                lambda_called = true;
+                return make_ready_future<>();
+            });
+
+    fut.wait();
+
+    BOOST_REQUIRE(fut.failed());
+    BOOST_CHECK_THROW(fut.get(), abort_requested_exception);
+    BOOST_REQUIRE(!lambda_called);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 0);
+}
+
+// Verify that with_permit() returns abort_requested_exception when the
+// abort_source fires while the permit is waiting in the admission queue.
+SEASTAR_THREAD_TEST_CASE(test_with_permit_abort_in_queue) {
+    simple_schema s;
+    const auto schema = s.schema();
+    const std::string test_name = get_name();
+
+    // count=1 so the second permit must queue
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, test_name, 1);
+    auto stop_sem = deferred_stop(semaphore);
+
+    // Occupy the single admission slot
+    reader_permit_opt permit1 = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}, {}).get();
+
+    // with_permit will queue because count=1 is exhausted
+    abort_source as;
+    reader_permit_opt permit2_holder;
+    bool lambda_called = false;
+    auto permit2_fut = semaphore.with_permit(schema, test_name.c_str(), 1024, db::no_timeout, {}, &as, permit2_holder,
+            [&] (reader_permit) {
+                lambda_called = true;
+                return make_ready_future<>();
+            });
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_count_resources, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 0);
+    BOOST_REQUIRE(!permit2_fut.available());
+
+    as.request_abort();
+
+    permit2_fut.wait();
+
+    BOOST_REQUIRE(!lambda_called);
+    BOOST_REQUIRE(permit2_fut.failed());
+    BOOST_CHECK_THROW(permit2_fut.get(), abort_requested_exception);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 1);
+}
+
+// Verify that aborting a permit while the read function is executing sets the
+// abort exception on the permit.
+SEASTAR_THREAD_TEST_CASE(test_with_permit_abort_after_admission) {
+    simple_schema s;
+    const auto schema = s.schema();
+    const std::string test_name = get_name();
+
+    // Semaphore with unlimited resources so the permit is admitted immediately
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, test_name);
+    auto stop_sem = deferred_stop(semaphore);
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 0);
+
+    abort_source as;
+    reader_permit_opt permit_holder;
+    bool lambda_called = false;
+
+    auto permit_fut = semaphore.with_permit(schema, test_name.c_str(), 1024, db::no_timeout, {}, &as, permit_holder,
+            [&lambda_called] (reader_permit p) -> future<> {
+                lambda_called = true;
+                // Infinite loop on purpose, testing that abort works.
+                while (true) {
+                    if (auto ex = p.get_abort_exception(); ex) {
+                        std::rethrow_exception(ex);
+                    }
+                    co_await yield();
+                }
+            });
+
+    BOOST_REQUIRE(eventually_true([&] { return lambda_called; }));
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 0);
+
+    as.request_abort();
+
+    permit_fut.wait();
+
+    BOOST_REQUIRE(permit_fut.failed());
+    BOOST_CHECK_THROW(permit_fut.get(), abort_requested_exception);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 1);
+}
+
+// Verify that with_ready_permit() returns abort_requested_exception
+// immediately (without calling the read function) when the
+// abort_source has already been fired before with_permit() is called.
+SEASTAR_THREAD_TEST_CASE(test_with_ready_permit_pre_aborted) {
+    simple_schema s;
+    const auto schema = s.schema();
+    const std::string test_name = get_name();
+
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, test_name);
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}, {}).get();
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 0);
+
+    abort_source as;
+    as.request_abort(); // fire before with_read_permit is even called
+
+    bool lambda_called = false;
+    auto fut = semaphore.with_ready_permit(permit, &as,
+            [&] (reader_permit) {
+                lambda_called = true;
+                return make_ready_future<>();
+            });
+
+    fut.wait();
+
+    BOOST_REQUIRE(fut.failed());
+    BOOST_CHECK_THROW(fut.get(), abort_requested_exception);
+    BOOST_REQUIRE(!lambda_called);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 0);
+}
+
+// Verify that aborting a permit while the read function is executing sets the
+// abort exception on the permit.
+SEASTAR_THREAD_TEST_CASE(test_with_ready_permit_abort) {
+    simple_schema s;
+    const auto schema = s.schema();
+    const std::string test_name = get_name();
+
+    // Semaphore with unlimited resources so the permit is admitted immediately
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, test_name);
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}, {}).get();
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 0);
+
+    abort_source as;
+    bool lambda_called = false;
+
+    auto permit_fut = semaphore.with_ready_permit(permit, &as,
+            [&lambda_called] (reader_permit p) -> future<> {
+                lambda_called = true;
+                // Infinite loop on purpose, testing that abort works.
+                while (true) {
+                    if (auto ex = p.get_abort_exception(); ex) {
+                        std::rethrow_exception(ex);
+                    }
+                    co_await yield();
+                }
+            });
+
+    BOOST_REQUIRE(eventually_true([&] { return lambda_called; }));
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 0);
+
+    as.request_abort();
+
+    permit_fut.wait();
+
+    BOOST_REQUIRE(permit_fut.failed());
+    BOOST_CHECK_THROW(permit_fut.get(), abort_requested_exception);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 1);
+}
+
+// Verify that obtain_permit() returns abort_requested_exception immediately
+// (without queuing) when the abort_source has already been fired before
+// obtain_permit() is called.
+SEASTAR_THREAD_TEST_CASE(test_obtain_permit_pre_aborted) {
+    simple_schema s;
+    const auto schema = s.schema();
+    const std::string test_name = get_name();
+
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, test_name);
+    auto stop_sem = deferred_stop(semaphore);
+
+    abort_source as;
+    as.request_abort();
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 0);
+
+    auto permit_fut = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}, &as);
+
+    permit_fut.wait();
+
+    BOOST_REQUIRE(permit_fut.failed());
+    BOOST_CHECK_THROW(permit_fut.get(), abort_requested_exception);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 1);
+}
+
+// Verify that obtain_permit() returns abort_requested_exception when the
+// abort_source fires while the permit is waiting in the admission queue.
+SEASTAR_THREAD_TEST_CASE(test_obtain_permit_abort_in_queue) {
+    simple_schema s;
+    const auto schema = s.schema();
+    const std::string test_name = get_name();
+
+    // count=1 so the second permit must queue
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, test_name, 1);
+    auto stop_sem = deferred_stop(semaphore);
+
+    // Occupy the single admission slot
+    reader_permit_opt permit1 = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}, {}).get();
+
+    // obtain_permit will queue because count=1 is exhausted
+    abort_source as;
+    auto permit2_fut = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}, &as);
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_count_resources, 1);
+    BOOST_REQUIRE(!permit2_fut.available());
+
+    as.request_abort();
+
+    permit2_fut.wait();
+
+    BOOST_REQUIRE(permit2_fut.failed());
+    BOOST_CHECK_THROW(permit2_fut.get(), abort_requested_exception);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 1);
+}
+
+// Verify that aborting a permit after admission sets the
+// abort exception on the permit.
+SEASTAR_THREAD_TEST_CASE(test_obtain_permit_aborted_after_admission) {
+    simple_schema s;
+    const auto schema = s.schema();
+    const std::string test_name = get_name();
+
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, test_name);
+    auto stop_sem = deferred_stop(semaphore);
+
+    abort_source as;
+
+    auto permit = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}, &as).get();
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE(!permit.get_abort_exception());
+
+    as.request_abort();
+
+    BOOST_REQUIRE(permit.get_abort_exception());
+    BOOST_CHECK_THROW(std::rethrow_exception(permit.get_abort_exception()), abort_requested_exception);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_aborted, 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
