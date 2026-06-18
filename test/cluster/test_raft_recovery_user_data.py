@@ -23,6 +23,7 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
         reconnect_driver, start_writes, wait_for_cdc_generations_publishing
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
 async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes_with: str):
     """
@@ -44,25 +45,14 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     previous state. For replace, add a single node (a sanity check verifying that the cluster is functioning properly).
     7. Stop sending writes.
     """
-    # Currently, the constraints imposed by `rf_rack_valid_keyspaces` are quite strict
-    # and adjusting this test to working with it may require significant changes in the test.
-    # Let's disable the option explicitly until we do that.
-    rf_rack_cfg = {'rf_rack_valid_keyspaces': False}
     # Workaround for flakiness from https://github.com/scylladb/scylladb/issues/23565.
-    hints_cfg = {'hinted_handoff_enabled': False}
-    cfg = {
-        'endpoint_snitch': 'GossipingPropertyFileSnitch',
-        'tablets_mode_for_new_keyspaces': 'enabled',
-    } | rf_rack_cfg | hints_cfg
-
-    property_file_dc1 = {'dc': 'dc1', 'rack': 'rack1'}
-    property_file_dc2 = {'dc': 'dc2', 'rack': 'rack2'}
+    cfg = {'hinted_handoff_enabled': False}
 
     # Add servers to dc2 first, so 3 out of 5 voters will be there.
     logging.info('Adding servers that will be killed to dc2')
-    dead_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc2)
+    dead_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc2')
     logging.info('Adding servers that will survive majority loss to dc1')
-    live_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc1)
+    live_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc1')
     logging.info(f'Servers to survive majority loss: {live_servers}, servers to be killed: {dead_servers}')
 
     cql, _ = await manager.get_ready_cql(live_servers + dead_servers)
@@ -112,8 +102,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     cql, _ = await manager.get_ready_cql(live_servers)
 
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
-    for h in hosts:
-        await delete_discovery_state_and_group0_id(cql, h)
+    await gather_safely(*(delete_discovery_state_and_group0_id(cql, h) for h in hosts))
 
     # FIXME: use the API to find the recovery leader here when it is implemented. A background operation like a tablet
     # migration could change the group 0 state just before losing the majority. Then, node 0 could be an incorrect
@@ -151,10 +140,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         await manager.api.exclude_node(live_servers[0].ip_addr, dead_host_ids)
 
         logging.info(f'Decreasing RF of {ks_name} to 0 in dc2')
-        for i in range(1, rf + 1):
-            # ALTER KEYSPACE with tablets can decrease RF only by one.
-            await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
-                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf - i}}}""")
+        await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
+                            {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': 0}}""")
 
         logging.info(f'Removing {dead_servers}')
         for i, being_removed in enumerate(dead_servers):
@@ -162,19 +149,42 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
             initiator = live_servers[i]
             await manager.remove_node(initiator.server_id, being_removed.server_id, ignored)
     else:
-        logging.info(f'Replacing {dead_servers}')
-        for i, being_replaced in enumerate(dead_servers):
+        # Replace dead nodes concurrently. Not recommended for users, but it should work, and it significantly speeds up
+        # the test in debug mode.
+        # Enable topology_coordinator_pause_before_processing_backlog and wait for all join requests to be placed before
+        # unblocking the topology coordinator to prevent the request rejection due to a non-ignored node being down.
+        # Ignoring all dead nodes in all replace requests would also result in rejection due to ignoring a left node.
+        recovery_leader = live_servers[0]
+        inj = 'topology_coordinator_pause_before_processing_backlog'
+        await manager.api.enable_injection(recovery_leader.ip_addr, inj, one_shot=True)
+        log = await manager.server_open_log(recovery_leader.server_id)
+        mark = await log.mark()
+
+        logging.info(f'Starting replacement of {dead_servers}')
+        async def replace_server(i, being_replaced):
             replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True,
                                         ignore_dead_nodes=[dead_srv.ip_addr for dead_srv in dead_servers[i + 1:]])
-            new_servers.append(await manager.server_add(replace_cfg=replace_cfg, config=cfg, property_file=property_file_dc2))
+            # Specify the leader as the only seed to make sure it receives all join requests (for simplicity).
+            return await manager.server_add(replace_cfg=replace_cfg, config=cfg,
+                                            property_file={'dc': 'dc2', 'rack': f'rack{i + 1}'},
+                                            seeds=[recovery_leader.ip_addr])
+        replace_tasks = [asyncio.create_task(replace_server(i, srv)) for i, srv in enumerate(dead_servers)]
+
+        logging.info(f'Waiting for join requests to be placed')
+        for _ in dead_servers:
+            mark, _ = await log.wait_for("placed join request for", from_mark=mark)
+
+        await manager.api.message_injection(recovery_leader.ip_addr, inj)
+
+        logging.info('Waiting for replace operations to complete')
+        replace_results = await gather_safely(*replace_tasks)
+        new_servers.extend(replace_results)
 
     logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
-    for srv in live_servers:
-        await manager.server_remove_config_option(srv.server_id, 'recovery_leader')
+    await gather_safely(*(manager.server_remove_config_option(srv.server_id, 'recovery_leader') for srv in live_servers))
 
     logging.info(f'Deleting persistent data of group 0 {first_group0_id} on {live_servers}')
-    for h in hosts:
-        await delete_raft_group_data(first_group0_id, cql, h)
+    await gather_safely(*(delete_raft_group_data(first_group0_id, cql, h) for h in hosts))
 
     # Disable load balancer on the topology coordinator node so that an ongoing tablet migration doesn't fail one of the
     # check_system_topology_and_cdc_generations_v3_consistency calls below. A tablet migration can suddenly make
@@ -190,7 +200,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     new_servers_num = 3 if remove_dead_nodes_with == "remove" else 1
     logging.info(f'Adding {new_servers_num} new servers to dc2')
-    new_servers += await manager.servers_add(new_servers_num, config=cfg, property_file=property_file_dc2)
+    new_servers += await manager.servers_add(new_servers_num, config=cfg, auto_rack_dc='dc2')
 
     # Reconnect the driver as a workaround for https://github.com/scylladb/scylladb/issues/27862.
     await reconnect_driver(manager)
@@ -198,9 +208,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     if remove_dead_nodes_with == "remove":
         logging.info(f'Increasing RF of {ks_name} back to {rf} in dc2')
-        for i in range(1, rf + 1):
-            await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
-                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {i}}}""")
+        await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
+                            {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf}}}""")
 
     # After increasing RF back to 3 in dc2 (if remove_dead_nodes_with == "remove"), we can start sending writes to dc2.
     ccluster_dc2 = cluster_con(
