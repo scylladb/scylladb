@@ -95,6 +95,12 @@ class stream_blob_cmd_data {
     std::optional<streaming::stream_blob_data> data;
 };
 
+class stream_sstable_meta {
+    sstables::sstable_id id;
+    sstables::sstable_version_types version;
+    sstables::sstable_format_types format;
+};
+
 class stream_blob_meta {
     streaming::file_stream_id ops_id;
     table_id table;
@@ -103,6 +109,7 @@ class stream_blob_meta {
     streaming::file_ops fops;
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<streaming::stream_sstable_meta> sstable_meta;
 };
 
 class node_and_shard {

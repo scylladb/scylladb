@@ -90,6 +90,12 @@ public:
 
 };
 
+struct stream_sstable_meta {
+    sstables::sstable_id id;
+    sstables::sstable_version_types version;
+    sstables::sstable_format_types format;
+};
+
 class stream_blob_meta {
 public:
     file_stream_id ops_id;
@@ -99,6 +105,7 @@ public:
     streaming::file_ops fops;
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<stream_sstable_meta> sstable_meta;
     // We can extend this verb to send arbitrary blob of data
 };
 
@@ -115,6 +122,7 @@ struct stream_blob_info {
     sstring filename;
     streaming::file_ops fops;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<stream_sstable_meta> sstable_meta;
     stream_blob_source_fn source;
 
     friend inline std::ostream& operator<<(std::ostream& os, const stream_blob_info& x) {
