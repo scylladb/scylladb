@@ -102,6 +102,9 @@ public:
 
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
 
+    virtual bool is_object_storage() const noexcept {
+        return false;
+    }
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring name) const = 0;
     virtual future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const = 0;

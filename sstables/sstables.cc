@@ -1607,6 +1607,11 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
     }
 
+    if (_storage->is_object_storage()) {
+        // Always update the sstable_id for object storage, since sstables may be shared globally
+        update_sstable_id = true;
+    }
+
     return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_sstable_id] {
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
