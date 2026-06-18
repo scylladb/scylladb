@@ -99,6 +99,7 @@ public:
     streaming::file_ops fops;
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<sstables::sstable_id> sstable_id;
     // We can extend this verb to send arbitrary blob of data
 };
 
@@ -115,6 +116,7 @@ struct stream_blob_info {
     sstring filename;
     streaming::file_ops fops;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<sstables::sstable_id> sstable_id;
     stream_blob_source_fn source;
 
     friend inline std::ostream& operator<<(std::ostream& os, const stream_blob_info& x) {

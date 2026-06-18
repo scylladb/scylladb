@@ -7,6 +7,8 @@
  */
 
 
+#include "sstables/types.hh"
+
 namespace sstables {
 
 enum class sstable_state : uint8_t {
@@ -14,6 +16,10 @@ enum class sstable_state : uint8_t {
     staging,
     quarantine,
     upload,
+};
+
+class sstable_id final {
+    utils::UUID uuid();
 };
 
 }

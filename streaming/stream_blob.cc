@@ -553,6 +553,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             meta.fops = info.fops;
             meta.filename = info.filename;
             meta.sstable_state = info.sstable_state;
+            meta.sstable_id = info.sstable_id;
             fstream = co_await info.source(stream_options);
         } catch (...) {
             blogger.warn("fstream[{}] Master failed sources={} targets={} error={}",
@@ -779,6 +780,10 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
             auto& sst = sst_snapshot.sst;
             // stable state (across files) is a must for load to work on destination
             auto sst_state = sst->state();
+            auto sst_id = sst->sstable_identifier();
+            if (!sst_id) {
+                on_internal_error(blogger, format("sstable {} has no identifier", sst->get_filename()));
+            }
 
             auto sources = co_await create_stream_sources(sst_snapshot, reader);
             auto newgen = fmt::to_string(sst_gen());
@@ -792,6 +797,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                 auto& info = files.emplace_back();
                 info.fops = file_ops::stream_sstables;
                 info.sstable_state = sst_state;
+                info.sstable_id = *sst_id;
                 info.filename = std::move(newname);
                 info.source = [s = std::move(s)](const file_input_stream_options& options) {
                     return s->input(options);
