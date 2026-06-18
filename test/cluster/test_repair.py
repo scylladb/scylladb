@@ -181,7 +181,6 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
 
     for node in (node1, node2):
         await manager.api.enable_injection(node.ip_addr, "repair_flush_hints_batchlog_handler", one_shot=False)
-        await manager.api.enable_injection(node.ip_addr, "add_delay_to_batch_replay", one_shot=False)
 
     async def do_repair(node):
         await manager.api.repair(node.ip_addr, "ks", "tbl")
