@@ -1626,7 +1626,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         scylla_metadata metadata;
         read_simple<component_type::Scylla>(metadata).get();
         if (update_sstable_id) {
-            metadata.set_sstable_identifier();
+            metadata.set_sstable_identifier(sstable_id(generation.as_uuid()));
         }
 
         new_sst->write_component_with_metadata(component, std::move(metadata));
