@@ -1459,13 +1459,16 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
         s1_host_id = await manager.get_host_id(servers[1].server_id)
 
         logger.info("Inject error to make view building worker pause before processing the sstable")
-        injection_name = "view_building_worker_pause_before_consume"
+        injection_name = "view_building_worker_pause_build_range_task"
         await manager.api.enable_injection(servers[0].ip_addr, injection_name, one_shot=True)
 
         logger.info("Create view")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv1 AS \
                 SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL \
                 PRIMARY KEY (c, pk);")
+
+        logger.info("Wait for view building worker to reach the injection point")
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, injection_name)
 
         logger.info("Migrate the tablet to node 2")
         tablet_token = 0 # Doesn't matter since there is one tablet
