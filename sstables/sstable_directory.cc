@@ -79,20 +79,10 @@ sstable_directory::make_components_lister() {
             return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(loc.dir.native(), _state));
         },
         [this] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            return std::visit(overloaded_functor {
-                [this, &os] (const sstring& prefix) -> std::unique_ptr<sstable_directory::components_lister> {
-                    if (prefix.empty()) {
-                        on_internal_error(sstlog, fmt::format("{} storage options is missing 'prefix'", os.type));
-                    }
-                    return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(prefix), _manager, os);
-                },
-                [this, &os] (const table_id& owner) -> std::unique_ptr<sstable_directory::components_lister> {
-                    if (owner.id.is_null()) {
-                        on_internal_error(sstlog, fmt::format("{} storage options is missing 'owner'", os.type));
-                    }
-                    return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), owner, _manager.get_local_host_id());
-                }
-            }, os.location);
+            if (os.location) {
+                return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(*os.location), _manager, os);
+            }
+            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _schema->id(), _manager.get_local_host_id());
         }
     }, _storage_opts->value);
 }

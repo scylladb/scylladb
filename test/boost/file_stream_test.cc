@@ -564,7 +564,7 @@ static future<> test_stream_sink_write(sstables::test_env_config cfg) {
 
         std::visit(overloaded_functor {
             [&env] (data_dictionary::storage_options::local& o) { o.dir = env.tempdir().path().native(); },
-            [&s] (data_dictionary::storage_options::object_storage& o) { o.location = s->id(); },
+            [] (data_dictionary::storage_options::object_storage& o) { o.location = std::nullopt; },
         }, s_opts.value);
 
         auto toc_basename = sstable::component_basename(
