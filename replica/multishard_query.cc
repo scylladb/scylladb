@@ -857,8 +857,9 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     auto& stats = local_db.get_stats();
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
 
-    const auto& keyspace = local_db.find_keyspace(s->ks_name());
-    auto query_method = keyspace.get_replication_strategy().uses_tablets() ? do_query_tablets<ResultBuilder> : do_query_vnodes<ResultBuilder>;
+    const auto& table = local_db.find_column_family(s);
+    const auto& erm = table.get_effective_replication_map();
+    auto query_method = erm->get_replication_strategy().uses_tablets() ? do_query_tablets<ResultBuilder> : do_query_vnodes<ResultBuilder>;
 
     auto account_failed_read = defer([&stats] {
         ++stats.total_reads_failed;
