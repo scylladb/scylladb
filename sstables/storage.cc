@@ -648,12 +648,12 @@ protected:
     object_name make_object_name(const sstable& sst, component_type type) const;
     object_name make_object_name(const sstable& sst, sstring comp, generation_type gen) const;
 
-    // Construct the object name for a reference: {prefix}/{gen}/refs/node-{host_id}/{gen}
+    // Construct the object name for a reference: {prefix}/{sstable_id}/refs/node-{host_id}/{gen}
     object_name make_ref_object_name(const sstable& sst, generation_type gen, locator::host_id host_id) const {
         return make_object_name(sst, fmt::format("refs/node-{}/{}", host_id, gen), gen);
     }
-    // Check if any reference objects exist for the given generation
-    future<bool> has_references(generation_type gen) const;
+    // Check if any reference objects exist for the given sstable_id
+    future<bool> has_references(sstable_id sid) const;
 
     table_id owner() const {
         if (_location) {
@@ -756,13 +756,13 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
 
     auto ret = _location
             ? object_name(_bucket, *_location, sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp))
-            : object_name(_bucket, _prefix, gen, comp);
+            : object_name(_bucket, _prefix, sst.get_sstable_identifier(), comp);
     sstlog.debug("make_object_name: sstable_id={} generation={} comp={}: {}", sst.sstable_identifier(), gen, comp, ret.str());
     return ret;
 }
 
-future<bool> object_storage_base::has_references(generation_type gen) const {
-    auto refs_prefix = fmt::format("{}/{}/refs/", _prefix, gen);
+future<bool> object_storage_base::has_references(sstable_id sid) const {
+    auto refs_prefix = fmt::format("{}/{}/refs/", _prefix, sid);
     auto lister = _client->make_object_lister(_bucket, refs_prefix, nullptr);
     co_return co_await with_closeable(std::move(lister), [] (abstract_lister& lister) -> future<bool> {
         auto entry = co_await lister.get();
@@ -894,7 +894,7 @@ future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_conte
     co_await delete_object(make_ref_object_name(sst, sst.generation(), node_owner));
 
     // Only delete components if no references remain
-    if (!co_await has_references(sst.generation())) {
+    if (!co_await has_references(sst.get_sstable_identifier())) {
         co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
             co_await delete_object(make_object_name(sst, type));
         });
@@ -921,7 +921,7 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
     std::vector<sstring> components;
 
     try {
-        auto f = make_readable_file(object_name(_bucket, _prefix, desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
+        auto f = make_readable_file(object_name(_bucket, _prefix, desc.sstable_identifier, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
         auto [components, digest] = co_await with_closeable(std::move(f), [] (file& f) {
             return sstable::read_and_parse_toc(f);
         });
@@ -933,10 +933,10 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
 
     co_await coroutine::parallel_for_each(components, [this, &desc] (sstring comp) -> future<> {
         if (comp != sstable_version_constants::TOC_SUFFIX) {
-            co_await delete_object(object_name(_bucket, _prefix, desc.generation, comp));
+            co_await delete_object(object_name(_bucket, _prefix, desc.sstable_identifier, comp));
         }
     });
-    co_await delete_object(object_name(_bucket, _prefix, desc.generation, sstable_version_constants::TOC_SUFFIX));
+    co_await delete_object(object_name(_bucket, _prefix, desc.sstable_identifier, sstable_version_constants::TOC_SUFFIX));
 }
 
 future<> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {
@@ -956,20 +956,15 @@ future<> object_storage_base::snapshot(const sstable& sst, sstring name) const {
 future<entry_descriptor> object_storage_base::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
     sstlog.trace("clone sst: {} generation={} leave_unsealed={}", sst.get_filename(), gen, leave_unsealed);
 
-    // Register the cloned sstable as "creating" in the registry
+    // The clone shares the same sstable_id as the source, so the objects are
+    // already at the right path. Just register a new entry and add a reference.
     entry_descriptor desc(gen, sst.get_sstable_identifier(), sst.get_version(), sst.get_format(), component_type::TOC);
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
     co_await _client->put_object(make_ref_object_name(sst, gen, node_owner), memory_data_sink_buffers(), abort_source());
 
-    // Copy all component objects from the source to the destination generation.
-    co_await coroutine::parallel_for_each(sst.all_components(), [this, &sst, &gen] (const std::pair<component_type, sstring>& p) -> future<> {
-        co_await copy_object(make_object_name(sst, p.second, sst.generation()), make_object_name(sst, p.second, gen));
-    });
-
     if (!leave_unsealed) {
-        // Mark the cloned sstable as sealed in the registry
         co_await sst.manager().sstables_registry().update_entry_status(owner(), node_owner, gen, status_sealed);
     }
 

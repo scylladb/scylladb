@@ -438,7 +438,7 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
             // left sealed on the table directory.
             sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables,
                                                     .leave_unsealed = true };
-            auto sid = optimized_optional<sstables::sstable_id>{};  // FIXME: pass sstable_id in stream_blob_meta
+            auto sid = meta.sstable_id ? optimized_optional<sstables::sstable_id>(*meta.sstable_id) : optimized_optional<sstables::sstable_id>{};
             auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, sid, cfg);
             auto out = co_await sstable_sink->output(foptions, stream_options);
             co_return output_result{
