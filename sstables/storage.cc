@@ -634,7 +634,7 @@ protected:
     schema_ptr _schema;
     shared_ptr<sstables::object_storage_client> _client;
     sstring _bucket;
-    std::variant<sstring, table_id> _location;
+    std::optional<sstring> _location;
     seastar::abort_source* _as;
 
     static constexpr auto status_creating = "creating";
@@ -645,16 +645,16 @@ protected:
     object_name make_object_name(const sstable& sst, sstring comp, generation_type gen) const;
 
     table_id owner() const {
-        if (std::holds_alternative<sstring>(_location)) {
-            on_internal_error(sstlog, format("Storage holds {} prefix, but registry owner is expected", std::get<sstring>(_location)));
+        if (_location) {
+            on_internal_error(sstlog, format("Storage holds '{}' prefix, but registry owner is expected", *_location));
         }
-        return std::get<table_id>(_location);
+        return _schema->id();
     }
     seastar::abort_source* abort_source() const {
         return _as;
     }
 public:
-    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
+    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, seastar::abort_source* as)
         : _type(type) 
         , _schema(std::move(schema))
         , _client(std::move(client))
@@ -687,7 +687,10 @@ public:
     future<> unlink_component(const sstable& sst, component_type) noexcept override;
 
     sstring prefix() const override { 
-        return std::visit([] (const auto& v) { return fmt::to_string(v); }, _location); 
+        if (_location) {
+            return *_location;
+        }
+        return fmt::to_string(_schema->id());
     }
 
     future<bool> exists(const sstable& sst, component_type type) const override {
@@ -718,7 +721,7 @@ public:
 
 class s3_storage : public object_storage_base {
 public:
-    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
+    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, seastar::abort_source* as)
         : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), as)
     {}
 
@@ -736,15 +739,11 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
         throw std::runtime_error(fmt::format("'{}' STORAGE only works with uuid_sstable_identifier enabled", _type));
     }
 
-    return std::visit(overloaded_functor {
-        [&] (const sstring& prefix) {
-            return object_name(_bucket, prefix,
-                sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp));
-        },
-        [&] (const table_id&) {
-            return object_name(_bucket, gen, comp);
-        }
-    }, _location);
+    if (!_location) {
+        return object_name(_bucket, gen, comp);
+    }
+    return object_name(_bucket, *_location,
+        sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp));
 }
 
 void object_storage_base::open(sstable& sst) {
@@ -1007,17 +1006,15 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schem
             return std::make_unique<sstables::filesystem_storage>(loc.dir.native(), state);
         },
         [&] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstables::storage> {
-            if (std::visit(overloaded_functor {
-                        [] (const sstring& prefix) { return prefix.empty(); },
-                        [] (const table_id& owner) { return owner.id.is_null(); }
-                    }, os.location)) {
-                on_internal_error(sstlog, fmt::format("{} storage options is missing 'location'", os.name()));
-            }
+            auto loc = std::visit(overloaded_functor {
+                        [] (const sstring& prefix) { return std::optional<sstring>(prefix); },
+                        [] (const table_id&) { return std::optional<sstring>(); }
+                    }, os.location);
             if (s_opts.is_s3_type()) {
-                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, std::move(loc), os.abort_source);
             }
             if (s_opts.is_gs_type()) {
-                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, std::move(loc), os.abort_source);
             }
             throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }
