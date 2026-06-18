@@ -97,6 +97,18 @@ public:
             // (see `schema_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
             // In this case, we should just ignore mutations without throwing an error.
             logger.log(log_level::warn, rate_limit, "apply(): table {} was already dropped, ignoring mutations", _tablet.table);
+        } catch (replica::no_such_keyspace&) {
+            // Thrown when DROP KEYSPACE races with the raft applier fiber.
+            // The path: resolve_and_upgrade_mutations() calls
+            // local_schema_registry().get_or_null(schema_version), which may
+            // trigger lazy unfreezing of a cached frozen_schema. Unfreezing
+            // re-parses column types via cql_type_parser::parse(), which
+            // consults db_user_types_storage::get(ks_name), which calls
+            // database::find_keyspace() — and that throws no_such_keyspace
+            // if the keyspace was concurrently dropped.
+            // Safe to ignore: the table's raft group is about to be destroyed
+            // by schedule_raft_group_deletion() anyway.
+            logger.log(log_level::warn, rate_limit, "apply(): keyspace for table {} was already dropped, ignoring mutations", _tablet.table);
         } catch (const abort_requested_exception& ex) {
             // The exception can be thrown by get_schema_and_upgrade_mutations.
             // It means that the Raft group is being removed.
@@ -230,7 +242,8 @@ future<std::vector<schema_ptr>> resolve_and_upgrade_mutations(utils::chunked_vec
             // Old schema are TTLed after 10 days (see comment in `schema_applier::finalize_tables_and_views()`),
             // so this error theoretically may be triggered if a node is stuck longer than this.
             // But in practice we should do a snapshot much earlier, that's why `on_internal_error()` here.
-            // And if the table was already dropped, `no_such_column_family` will be thrown earlier.
+            // And if the table or keyspace was already dropped, `no_such_column_family`
+            // or `no_such_keyspace` will be thrown earlier.
             on_internal_error(logger, fmt::format("couldn't find schema for table {} and mutation schema version {}", table, m.schema_version()));
         }
         if (entry->second) {
