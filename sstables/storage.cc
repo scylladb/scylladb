@@ -661,7 +661,7 @@ public:
         , _client(std::move(client))
         , _bucket(std::move(bucket))
         , _location(std::move(loc))
-        , _sstables_prefix(_location ? "" : fmt::to_string(_schema->id()))
+        , _sstables_prefix(_location ? "" : format("sstables/{}/{}-{}", _schema->ks_name(), _schema->cf_name(), _schema->id()))
         , _prefix(_location ? *_location : _sstables_prefix)
         , _as(as)
     {
@@ -746,7 +746,7 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
 
     auto ret = _location
             ? object_name(_bucket, *_location, sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp))
-            : object_name(_bucket, gen, comp);
+            : object_name(_bucket, _prefix, gen, comp);
     sstlog.debug("make_object_name: sstable_id={} generation={} comp={}: {}", sst.sstable_identifier(), gen, comp, ret.str());
     return ret;
 }
@@ -893,7 +893,7 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
     std::vector<sstring> components;
 
     try {
-        auto f = make_readable_file(object_name(_bucket, desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
+        auto f = make_readable_file(object_name(_bucket, _prefix, desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
         auto [components, digest] = co_await with_closeable(std::move(f), [] (file& f) {
             return sstable::read_and_parse_toc(f);
         });
@@ -905,10 +905,10 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
 
     co_await coroutine::parallel_for_each(components, [this, &desc] (sstring comp) -> future<> {
         if (comp != sstable_version_constants::TOC_SUFFIX) {
-            co_await delete_object(object_name(_bucket, desc.generation, comp));
+            co_await delete_object(object_name(_bucket, _prefix, desc.generation, comp));
         }
     });
-    co_await delete_object(object_name(_bucket, desc.generation, sstable_version_constants::TOC_SUFFIX));
+    co_await delete_object(object_name(_bucket, _prefix, desc.generation, sstable_version_constants::TOC_SUFFIX));
 }
 
 future<> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {
