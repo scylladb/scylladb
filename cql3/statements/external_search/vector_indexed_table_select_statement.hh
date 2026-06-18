@@ -8,9 +8,8 @@
 
 #pragma once
 
-#include "cql3/statements/select_statement.hh"
+#include "cql3/statements/external_search/external_index_select_statement.hh"
 #include "cql3/statements/external_search/filter.hh"
-#include "vector_search/vector_store_client.hh"
 
 #include <optional>
 
@@ -44,11 +43,9 @@ select_statement::ordering_comparator_type get_similarity_ordering_comparator(
         std::vector<selection::prepared_selector>& prepared_selectors,
         uint32_t similarity_column_index);
 
-class vector_indexed_table_select_statement : public select_statement {
-    secondary_index::index _index;
+class vector_indexed_table_select_statement : public external_index_select_statement {
     prepared_ann_ordering_type _prepared_ann_ordering;
     external_search::prepared_filter _prepared_filter;
-    mutable gc_clock::time_point _query_start_time_point;
 
 public:
     static constexpr size_t max_ann_query_limit = 1000;
@@ -68,25 +65,6 @@ public:
 private:
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
             query_processor& qp, service::query_state& state, const query_options& options) const override;
-
-    void update_stats() const;
-
-    lw_shared_ptr<query::read_command> prepare_command_for_base_query(query_processor& qp, service::query_state& state, const query_options& options, uint64_t fetch_limit) const;
-
-    future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(query_processor& qp, service::query_state& state,
-            const query_options& options, const std::vector<vector_search::primary_key>& pkeys, lowres_clock::time_point timeout) const;
-
-    future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> query_base_table(query_processor& qp, service::query_state& state,
-            const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-            const std::vector<vector_search::primary_key>& pkeys) const;
-
-    future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> query_base_table(query_processor& qp, service::query_state& state,
-            const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-            std::vector<dht::partition_range> partition_ranges) const;
-
-    bool needs_post_filtering() const override {
-        return false; // All filtering is done by the index query, so no post-filtering is allowed.
-    }
 };
 
 } // namespace cql3::statements

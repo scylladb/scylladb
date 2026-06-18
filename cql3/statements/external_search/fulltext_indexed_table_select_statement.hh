@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "cql3/statements/select_statement.hh"
+#include "external_index_select_statement.hh"
 
 #include <optional>
 
@@ -26,8 +26,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         lw_shared_ptr<const raw::select_statement::parameters> parameters,
         prepare_context& ctx);
 
-class fulltext_indexed_table_select_statement : public select_statement {
-    secondary_index::index _index;
+class fulltext_indexed_table_select_statement : public external_index_select_statement {
 
 public:
     static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db,
@@ -62,11 +61,6 @@ public:
 private:
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
             query_processor& qp, service::query_state& state, const query_options& options) const override;
-
-    void update_stats_rows_read(int64_t rows_read) const override {
-        _stats.rows_read += rows_read;
-        _stats.secondary_index_rows_read += rows_read;
-    }
 };
 
 } // namespace cql3::statements

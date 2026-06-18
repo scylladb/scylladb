@@ -13,6 +13,7 @@
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "index/secondary_index_manager.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql3::statements {
 
@@ -132,9 +133,8 @@ fulltext_indexed_table_select_statement::fulltext_indexed_table_select_statement
         std::optional<expr::expression> per_partition_limit, cql_stats& stats,
         const secondary_index::index& index,
         std::unique_ptr<attributes> attrs)
-    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices,
-              is_reversed, ordering_comparator, limit, per_partition_limit, stats, std::move(attrs)}
-    , _index{index} {
+    : external_index_select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices,
+              is_reversed, ordering_comparator, limit, per_partition_limit, stats, index, std::move(attrs)} {
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_table_select_statement::do_execute(
