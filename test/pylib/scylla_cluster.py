@@ -359,6 +359,10 @@ class ScyllaServer:
         self.vardir = pathlib.Path(vardir)
         self.logger = logger
         self.log_file = None
+        self.stdout_task: asyncio.Task[None] | None = None
+        # Cleared to pause the stdout relay (for slow-consumer tests); set = running.
+        self.stdout_relay_gate: asyncio.Event = asyncio.Event()
+        self.stdout_relay_gate.set()
         self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
         self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
         self.cluster_name = cluster_name
@@ -385,6 +389,7 @@ class ScyllaServer:
 
         self.workdir = workdir
         self.log_filename = self.workdir.with_suffix(".log")
+        self.stdout_log_filename = self.workdir.with_suffix(".stdout.log")
         self.config_filename = self.workdir / "conf/scylla.yaml"
         self.property_filename = self.workdir / "conf/cassandra-rackdc.properties"
         self.certificate_filename = self.workdir / "conf/scylla.crt"
@@ -548,6 +553,7 @@ class ScyllaServer:
             self.config_filename.parent.mkdir(parents=True, exist_ok=True)
             self._write_config_file()
 
+            self.stdout_log_filename.unlink(missing_ok=True)
             self.log_file = self.log_filename.open("wb")
         except:
             try:
@@ -870,14 +876,20 @@ class ScyllaServer:
         if self.log_file is None or self.log_file.closed:
             self.log_file = self.log_filename.open("ab")  # append mode to preserve previous logs
 
+        split_stdout = env.get("SCYLLA_TEST_SPLIT_STDOUT") == "1"
+        if split_stdout and (not hasattr(self, "stdout_log_file") or self.stdout_log_file is None or self.stdout_log_file.closed):
+            self.stdout_log_file = self.stdout_log_filename.open("ab")
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
             *(self.cmdline_options if cmdline_options_override is None else cmdline_options_override),
             cwd=self.workdir,
             stderr=self.log_file,
-            stdout=self.log_file,
+            stdout=asyncio.subprocess.PIPE if split_stdout else self.log_file,
             env=env,
         )
+        if split_stdout:
+            assert self.cmd.stdout is not None
+            self.stdout_task = asyncio.create_task(self._copy_stdout_to_log())
 
         if expected_server_up_state == ServerUpState.PROCESS_STARTED:
             return
@@ -976,6 +988,42 @@ class ScyllaServer:
             self.control_cluster = None
         self._cleanup_notify_socket()
 
+    async def _copy_stdout_to_log(self) -> None:
+        assert self.cmd is not None and self.cmd.stdout is not None
+        while True:
+            # Wait here while paused; the kernel pipe buffer backs up to the
+            # scylla process, exercising the stdout audit writer's
+            # backpressure path (slow-consumer scenario).
+            await self.stdout_relay_gate.wait()
+            chunk = await self.cmd.stdout.read(65536)
+            if not chunk:
+                break
+            assert self.log_file is not None
+            assert self.stdout_log_file is not None
+            self.log_file.write(chunk)
+            self.log_file.flush()
+            self.stdout_log_file.write(chunk)
+            self.stdout_log_file.flush()
+
+    def pause_stdout_relay(self) -> None:
+        """Stop draining the stdout pipe, letting the kernel buffer fill."""
+        self.stdout_relay_gate.clear()
+
+    def unpause_stdout_relay(self) -> None:
+        """Resume draining the stdout pipe."""
+        self.stdout_relay_gate.set()
+
+    async def _finish_stdout_task(self) -> None:
+        if self.stdout_task is None:
+            return
+        # Ensure we are not paused; otherwise the relay would wait forever
+        # on the gate and never observe the pipe EOF.
+        self.stdout_relay_gate.set()
+        await self.stdout_task
+        self.stdout_task = None
+        if hasattr(self, "stdout_log_file") and self.stdout_log_file is not None and not self.stdout_log_file.closed:
+            self.stdout_log_file.close()
+
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
         stop, so is not graceful. Waits for the process to exit before return.
@@ -1004,6 +1052,7 @@ class ScyllaServer:
 
         if cmd.returncode is not None:
             # process has already exited
+            await self._finish_stdout_task()
             if cmd.returncode != 0:
                 self.logger.error("%s exited with non-zero status code: %d", self, cmd.returncode)
             self.logger.info("stopped %s in %s", self, self.workdir.name)
@@ -1020,6 +1069,7 @@ class ScyllaServer:
         else:
             await cmd.wait()
         finally:
+            await self._finish_stdout_task()
             self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
 
@@ -1042,11 +1092,13 @@ class ScyllaServer:
             wait_task = self.cmd.wait()
             try:
                 await asyncio.wait_for(wait_task, timeout=STOP_TIMEOUT_SECONDS)
+                await self._finish_stdout_task()
                 if self.cmd.returncode != 0:
                     raise RuntimeError(f"Server {self} exited with non-zero exit code: {self.cmd.returncode}")
             except asyncio.TimeoutError:
                 self.cmd.kill()
                 await self.cmd.wait()
+                await self._finish_stdout_task()
                 raise RuntimeError(
                     f"Stopping server {self} gracefully took longer than {STOP_TIMEOUT_SECONDS}s")
         finally:
@@ -1227,7 +1279,8 @@ class ScyllaCluster:
                          seeds: Optional[List[IPAddress]] = None,
                          server_encryption: str = "none",
                          expected_error: Optional[str] = None,
-                         expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> ServerInfo:
+                         expected_server_up_state: ServerUpState = ServerUpState.SERVING,
+                         append_env: Optional[dict[str, str]] = None) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
@@ -1292,6 +1345,12 @@ class ScyllaCluster:
 
         try:
             server = self.create_server(params)
+            if append_env:
+                # create_server() hands every server the suite's shared base_env
+                # dict; merge into a fresh per-server copy instead of mutating it
+                # in place, otherwise this server's extra env (e.g.
+                # SCYLLA_TEST_SPLIT_STDOUT) would leak into every other server.
+                server.append_env = {**server.append_env, **append_env}
             self.starting[server.server_id] = server
             self.logger.info("Cluster %s adding server...", self)
             if start:
@@ -1328,7 +1387,8 @@ class ScyllaCluster:
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
                           server_encryption: str = "none",
-                          expected_error: Optional[str] = None) -> List[ServerInfo]:
+                          expected_error: Optional[str] = None,
+                          append_env: Optional[dict[str, str]] = None) -> List[ServerInfo]:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
 
@@ -1341,8 +1401,8 @@ class ScyllaCluster:
                 assert type(property_file) is list and len(property_file) == servers_num
                 return property_file[i]
 
-        return await gather_safely(*(self.add_server(None, cmdline, config, version, get_property_file(i), start, seeds, server_encryption, expected_error)
-                                      for i in range(servers_num)))
+        return await gather_safely(*(self.add_server(None, cmdline, config, version, get_property_file(i), start, seeds, server_encryption, expected_error, append_env=append_env)
+                                       for i in range(servers_num)))
 
     def endpoint(self) -> str:
         """Get a server id (IP) from running servers"""
@@ -1531,6 +1591,19 @@ class ScyllaCluster:
         assert server_id in self.running
         server = self.running[server_id]
         server.unpause()
+
+    def server_pause_stdout_relay(self, server_id: ServerNum) -> None:
+        """Pause the stdout pipe relay (fills kernel pipe buffer, exercises backpressure)."""
+        self.logger.info("Cluster %s pausing stdout relay for server %s", self.name, server_id)
+        assert server_id in self.running
+        self.is_dirty = True
+        self.running[server_id].pause_stdout_relay()
+
+    def server_unpause_stdout_relay(self, server_id: ServerNum) -> None:
+        """Resume the stdout pipe relay."""
+        self.logger.info("Cluster %s resuming stdout relay for server %s", self.name, server_id)
+        assert server_id in self.running
+        self.running[server_id].unpause_stdout_relay()
 
     def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
         """Switch the executable path of a stopped server"""
@@ -1809,6 +1882,8 @@ class ScyllaClusterManager:
         add_put('/cluster/server/{server_id}/start', self._cluster_server_start)
         add_put('/cluster/server/{server_id}/pause', self._cluster_server_pause)
         add_put('/cluster/server/{server_id}/unpause', self._cluster_server_unpause)
+        add_put('/cluster/server/{server_id}/pause_stdout_relay', self._cluster_server_pause_stdout_relay)
+        add_put('/cluster/server/{server_id}/unpause_stdout_relay', self._cluster_server_unpause_stdout_relay)
         add_put('/cluster/addserver', self._cluster_server_add)
         add_put('/cluster/addservers', self._cluster_servers_add)
         add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
@@ -1972,6 +2047,18 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         self.cluster.server_unpause(server_id)
 
+    async def _cluster_server_pause_stdout_relay(self, request) -> None:
+        """Pause the stdout pipe relay for the specified server."""
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        self.cluster.server_pause_stdout_relay(server_id)
+
+    async def _cluster_server_unpause_stdout_relay(self, request) -> None:
+        """Resume the stdout pipe relay for the specified server."""
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        self.cluster.server_unpause_stdout_relay(server_id)
+
     async def _cluster_server_add(self, request) -> dict[str, object]:
         """Add a new server."""
         assert self.cluster
@@ -1990,6 +2077,7 @@ class ScyllaClusterManager:
             server_encryption=data.get("server_encryption", "none"),
             expected_error=data.get("expected_error"),
             expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "SERVING")),
+            append_env=data.get("append_env"),
         )
         return s_info.as_dict()
 
@@ -2000,7 +2088,7 @@ class ScyllaClusterManager:
         version = ScyllaVersionDescription(**data["version"]) if "version" in data else None
         s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'), version,
                                                  data.get('property_file'), data.get('start', True),
-                                                 data.get('seeds', None), data.get('server_encryption'), data.get('expected_error', None))
+                                                 data.get('seeds', None), data.get('server_encryption'), data.get('expected_error', None), data.get('append_env'))
         return [s_info.as_dict() for s_info in s_infos]
 
     async def _cluster_remove_node(self, request: aiohttp.web.Request) -> None:

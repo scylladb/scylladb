@@ -20,7 +20,7 @@ audit_composite_storage_helper::audit_composite_storage_helper(std::vector<std::
 {}
 
 future<> audit_composite_storage_helper::start(const db::config& cfg) {
-    auto res = seastar::parallel_for_each(
+    auto res = seastar::do_for_each(
         _storage_helpers,
         [&cfg] (std::unique_ptr<storage_helper>& h) {
             return h->start(cfg);
@@ -30,7 +30,7 @@ future<> audit_composite_storage_helper::start(const db::config& cfg) {
 }
 
 future<> audit_composite_storage_helper::stop() {
-    auto res = seastar::parallel_for_each(
+    auto res = seastar::do_for_each(
         _storage_helpers,
         [] (std::unique_ptr<storage_helper>& h) {
             return h->stop();
@@ -46,9 +46,9 @@ future<> audit_composite_storage_helper::write(audit_sink_set sinks,
                                                std::optional<db::consistency_level> cl,
                                                const sstring& username,
                                                bool error) {
-    return seastar::parallel_for_each(
+    return seastar::do_for_each(
         _storage_helpers,
-        [sinks, audit_info, node_ip, client_ip, cl, &username, error](std::unique_ptr<storage_helper>& h) {
+        [sinks, audit_info, node_ip, client_ip, cl, username, error](std::unique_ptr<storage_helper>& h) {
             return h->write(sinks, audit_info, node_ip, client_ip, cl, username, error);
         }
     );
@@ -59,9 +59,9 @@ future<> audit_composite_storage_helper::write_login(audit_sink_set sinks,
                                                      socket_address node_ip,
                                                      socket_address client_ip,
                                                      bool error) {
-    return seastar::parallel_for_each(
+    return seastar::do_for_each(
         _storage_helpers,
-        [sinks, &username, node_ip, client_ip, error](std::unique_ptr<storage_helper>& h) {
+        [sinks, username, node_ip, client_ip, error](std::unique_ptr<storage_helper>& h) {
             return h->write_login(sinks, username, node_ip, client_ip, error);
         }
     );

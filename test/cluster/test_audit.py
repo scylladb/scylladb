@@ -71,6 +71,14 @@ class AuditTester:
         self.manager = manager
         self._prev_config_keys: set[str] = set()
 
+    def _server_append_env(self, helper: 'AuditBackend') -> dict[str, str] | None:
+        # Set SCYLLA_TEST_SPLIT_STDOUT whenever stdout participates in the
+        # audit configuration (directly or as a composite component). The
+        # stdout helper uses pipe_data_sink which requires stdout to be a
+        # pipe, not a regular file.
+        modes = helper.audit_mode().split(",")
+        return {"SCYLLA_TEST_SPLIT_STDOUT": "1"} if "stdout" in modes else None
+
     def _build_server_config(self, target_config: dict[str, str],
                              enable_compact_storage: bool,
                              user: str | None) -> dict[str, Any]:
@@ -161,6 +169,7 @@ class AuditTester:
                                    enable_compact_storage: bool,
                                    rf: int,
                                    user: str | None,
+                                   helper: 'AuditBackend',
                                    auth_provider,
                                    property_file: list[dict[str, str]] | None = None,
                                    cmdline: list[str] | None = None) -> list[str]:
@@ -187,15 +196,17 @@ class AuditTester:
             # Add the first server without starting to learn its IP.
             first = await self.manager.server_add(
                 config=cfg, property_file=property_file[0],
-                cmdline=cmdline, start=False, connect_driver=False)
+                cmdline=cmdline, start=False, connect_driver=False,
+                append_env=self._server_append_env(helper))
             # Start it with an explicit self-seed so it doesn't try the dead IP.
-            await self.manager.server_start(first.server_id, seeds=[first.ip_addr])
+            await self.manager.server_start(first.server_id, seeds=[first.ip_addr], append_env_override=self._server_append_env(helper))
             server_infos = [first]
             if len(property_file) > 1:
                 rest = await self.manager.servers_add(
                     servers_num=len(property_file) - 1, config=cfg,
                     property_file=property_file[1:],
                     cmdline=cmdline,
+                    append_env=self._server_append_env(helper),
                     driver_connect_opts=connect_opts)
                 server_infos.extend(rest)
         else:
@@ -203,6 +214,7 @@ class AuditTester:
                 servers_num=len(property_file), config=cfg,
                 property_file=property_file,
                 cmdline=cmdline,
+                append_env=self._server_append_env(helper),
                 driver_connect_opts=connect_opts,
             )
         return [s.ip_addr for s in server_infos]
@@ -241,7 +253,7 @@ class AuditTester:
                 servers, target_config, absent_keys, enable_compact_storage, user, auth_provider)
         else:
             server_ips = await self._start_fresh_servers(
-                target_config, enable_compact_storage, rf, user, auth_provider,
+                target_config, enable_compact_storage, rf, user, helper, auth_provider,
                 property_file=property_file, cmdline=cmdline)
 
         self._prev_config_keys = set(target_config.keys())
@@ -275,10 +287,24 @@ class AuditTester:
             user=user, password=password,
             property_file=property_file,
             cmdline=cmdline)
+        servers = await self.manager.running_servers()
+        node_logs = []
+        for srv in servers:
+            log_file = await self.manager.server_open_log(srv.server_id)
+            node_logs.append(AuditLogNode(srv.ip_addr, log_file.file))
+        self.helper.set_nodes(node_logs)
         session = self.manager.get_cql()
         session.execute("DROP KEYSPACE IF EXISTS ks")
         if create_keyspace:
             create_ks(session, "ks", rf)
+        # For stdout backend: the audit lines from the CQL statements above
+        # are written to the Scylla process's stdout pipe and relayed to
+        # .stdout.log by an asyncio task (_copy_stdout_to_log) on the
+        # manager thread.  We must wait for that relay to flush before
+        # clear_audit_logs() snapshots the file position, otherwise stale
+        # audit rows from the statements above leak into the next test's
+        # assertion window.
+        self.helper.drain_stdout()
         self.helper.clear_audit_logs(session)
         return session
 
@@ -293,6 +319,9 @@ class AuditEntry:
     table: str
     user: str
     source: str = "127.0.0.1"
+
+
+AuditLogNode = namedtuple("AuditLogNode", ["address", "log_path"])
 
 
 class AuditBackend:
@@ -311,11 +340,22 @@ class AuditBackend:
     def clear_audit_logs(self, session: Session | None = None) -> None:
         pass
 
+    def set_nodes(self, nodes):
+        pass
+
     def update_audit_settings(self, audit_settings, modifiers=None):
         raise NotImplementedError
 
     def get_audit_log_dict(self, session, consistency_level):
         raise NotImplementedError
+
+    def drain_stdout(self) -> None:
+        """Wait for any pending stdout data to be flushed to disk.
+
+        No-op for backends that don't use stdout.  Overridden by
+        AuditBackendStdout.
+        """
+        pass
 
 
 class AuditBackendTable(AuditBackend):
@@ -520,6 +560,15 @@ class AuditBackendComposite(AuditBackend):
         for backend in self.backends:
             backend.clear_audit_logs(session)
 
+    @override
+    def drain_stdout(self) -> None:
+        for backend in self.backends:
+            backend.drain_stdout()
+
+    def set_nodes(self, nodes):
+        for backend in self.backends:
+            backend.set_nodes(nodes)
+
     def update_audit_settings(self, audit_settings, modifiers=None):
         if modifiers is None:
             modifiers = {}
@@ -551,6 +600,130 @@ class AuditBackendComposite(AuditBackend):
         return rows_dict
 
 
+class AuditBackendStdout(AuditBackend):
+    audit_default_settings = {"audit": "stdout", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+
+    def __init__(self, socket_path: str | None = None):
+        super().__init__(socket_path=socket_path)
+        self.nodes = []
+        self.node_start_marks = {}
+        self._node_lines = {}
+        self._accumulated_lines = []
+        self.named_tuple_factory = namedtuple("Row", ["date", "node", "event_time", "category", "consistency", "error", "keyspace_name", "operation", "source", "table_name", "username"])
+
+    @override
+    def audit_mode(self) -> str:
+        return "stdout"
+
+    def update_audit_settings(self, audit_settings, modifiers=None):
+        if modifiers is None:
+            modifiers = {}
+        new_audit_settings = copy.deepcopy(audit_settings or self.audit_default_settings)
+        # This is a hack. The test framework uses "table" as "not none".
+        # Appropriate audit mode should be passed from the test itself, and not set here.
+        # This converts "table" to its own audit mode, or keeps "none" as is.
+        if "audit" in new_audit_settings and new_audit_settings["audit"] == "table":
+            new_audit_settings["audit"] = self.audit_mode()
+        for key in modifiers:
+            new_audit_settings[key] = modifiers[key]
+        return new_audit_settings
+
+    @override
+    def clear_audit_logs(self, session: Session | None = None) -> None:
+        self.node_start_marks = {}
+        self._node_lines = {}
+        self._accumulated_lines = []
+        for node in self.nodes:
+            node_address = node.address
+            self.node_start_marks[node_address] = node.log_path.stat().st_size
+            self._node_lines[node_address] = []
+
+    @override
+    def drain_stdout(self) -> None:
+        """Wait for the stdout relay to flush all pending data to .stdout.log.
+
+        The Scylla process writes audit lines to its stdout pipe.  An
+        asyncio task (_copy_stdout_to_log in scylla_cluster.py) on the
+        *manager* thread reads from the pipe and writes to .stdout.log.
+        Since the relay runs on a separate thread, we can simply poll
+        the file size until it stabilizes.
+        """
+        if not self.nodes:
+            return
+        stable_rounds = 0
+        prev_sizes = {node.address: node.log_path.stat().st_size for node in self.nodes}
+        while stable_rounds < 3:
+            time.sleep(0.05)
+            cur_sizes = {node.address: node.log_path.stat().st_size for node in self.nodes}
+            if cur_sizes == prev_sizes:
+                stable_rounds += 1
+            else:
+                stable_rounds = 0
+                prev_sizes = cur_sizes
+
+    def set_nodes(self, nodes):
+        stdout_nodes = []
+        for node in nodes:
+            stdout_log = node.log_path.with_suffix(".stdout.log")
+            stdout_nodes.append(AuditLogNode(node.address, stdout_log if stdout_log.exists() else node.log_path))
+        self.nodes = stdout_nodes
+
+    def _fetch_new_lines(self):
+        for node in self.nodes:
+            node_address = node.address
+            to_mark = node.log_path.stat().st_size
+            matched = []
+            with node.log_path.open(encoding="utf-8") as log_file:
+                log_file.seek(self.node_start_marks[node_address])
+                while True:
+                    pos = log_file.tell()
+                    if pos >= to_mark:
+                        break
+                    line = log_file.readline()
+                    if not line:
+                        break
+                    if pos + len(line) > to_mark:
+                        line = line[: to_mark - pos]
+                    if not line.endswith("\n"):
+                        break
+                    if "scylla-audit:" in line:
+                        matched.append(line.rstrip())
+            previous_lines = self._node_lines[node_address]
+            assert matched[: len(previous_lines)] == previous_lines, (
+                f"stdout audit log for {node_address} changed unexpectedly"
+            )
+            new_lines = matched[len(previous_lines) :]
+            self._node_lines[node_address] = matched
+            self._accumulated_lines.extend(new_lines)
+
+    def line_to_row(self, line, idx):
+        metadata, data = line.split(": ", 1)
+        data = "".join(data.splitlines()) # Remove newlines
+        fields = ["node", "category", "cl", "error", "keyspace", "query", "client_ip", "table", "username"]
+        regexp = ", ".join(f'{field}="(?P<{field}>.*)"' for field in fields)
+        match = re.match(regexp, data)
+
+        # Arbitrary date because we don't really check the field. We just need to fill it with something
+        # and make sure it doesn't change during the test (e.g. when the test is running at 23:59:59)
+        date = datetime.datetime(2000, 1, 1, 0, 0)
+
+        node = match.group("node").split(":")[0]
+        statement = match.group("query")
+        source = match.group("client_ip").split(":")[0]
+        event_time = uuid.UUID(int=idx)
+        t = self.named_tuple_factory(date, node, event_time, match.group("category"), match.group("cl"), match.group("error") == "true", match.group("keyspace"), statement, source, match.group("table"), match.group("username"))
+        return t
+
+    @override
+    def get_audit_log_dict(self, session, consistency_level):
+        self._fetch_new_lines()
+        entries = []
+        for idx, line in enumerate(self._accumulated_lines):
+            entries.append(self.line_to_row(line, idx))
+        return { self.audit_mode(): entries }
+
+
+@pytest.mark.single_node
 class CQLAuditTester(AuditTester):
     """
     Make sure CQL statements are audited
@@ -1056,6 +1229,60 @@ class CQLAuditTester(AuditTester):
 
         session.execute("DROP KEYSPACE ks")
         assert_invalid(session, "use audit;", expected=InvalidRequest)
+
+    async def _test_audit_type_stdout(self):
+        """
+        'audit': stdout
+         check node started, ks audit not created
+        """
+        with AuditBackendStdout() as helper:
+            audit_settings = {"audit": "stdout", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+            session = await self.prepare(audit_settings=audit_settings, helper=helper)
+            assert_invalid(session, "use audit;", expected=InvalidRequest)
+            self.execute_and_validate_new_audit_entry(session, "CREATE TABLE test_stdout (k int PRIMARY KEY, v int)", category="DDL", table="test_stdout")
+
+    async def _test_audit_type_table_stdout(self):
+        class AuditBackendTableStdoutComposite(AuditBackendComposite):
+            audit_default_settings = {"audit": "table,stdout", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+
+            def __init__(self):
+                AuditBackend.__init__(self)
+                self.backends = [AuditBackendTable(), AuditBackendStdout()]
+
+        with AuditBackendTableStdoutComposite() as helper:
+            audit_settings = helper.audit_default_settings
+            session = await self.prepare(audit_settings=audit_settings, helper=helper)
+            assert rows_to_list(session.execute("SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")) == [["audit"]]
+            self.execute_and_validate_new_audit_entry(session, "CREATE TABLE test_table_stdout (k int PRIMARY KEY, v int)", category="DDL", table="test_table_stdout")
+
+    async def _test_audit_type_stdout_regular_file_rejected(self):
+        """
+        'audit': stdout, but the process stdout is a regular file (the default
+        in the test harness when SCYLLA_TEST_SPLIT_STDOUT is not set).
+
+        The stdout audit backend only supports pipe/character-device stdout (as
+        provided by a container runtime); a regular file would be overwritten
+        from offset zero, so the node must refuse to start with an explanatory
+        error instead. This guards the regular-file branch of
+        make_stdout_output_stream(), which the other stdout tests never exercise
+        because they force the pipe path via SCYLLA_TEST_SPLIT_STDOUT.
+        """
+        audit_settings = {"audit": "stdout", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+        expected_error = r"stdout audit backend: unsupported stdout type"
+
+        servers = await self.manager.running_servers()
+        # The server's stdout must stay a regular log file to hit the rejection
+        # path, so we must NOT pass SCYLLA_TEST_SPLIT_STDOUT. When reusing an
+        # existing server (which a previous stdout test may have started with
+        # split-stdout), pass append_env_override={} to clear that env on
+        # restart; otherwise stdout would be a pipe and the node would start.
+        if not servers:
+            await self.manager.server_add(config=audit_settings, expected_error=expected_error)
+        else:
+            srv = servers[0]
+            await self.manager.server_stop_gracefully(srv.server_id)
+            await self.manager.server_update_config(srv.server_id, config_options=audit_settings)
+            await self.manager.server_start(srv.server_id, expected_error=expected_error, append_env_override={})
 
     async def _test_audit_type_invalid(self):
         """
@@ -2508,6 +2735,21 @@ async def test_audit_type_invalid_standalone(manager: ManagerClient):
     await CQLAuditTester(manager)._test_audit_type_invalid()
 
 
+async def test_audit_type_stdout_standalone(manager: ManagerClient):
+    """audit=stdout — verify audit entries are written without creating the audit keyspace."""
+    await CQLAuditTester(manager)._test_audit_type_stdout()
+
+
+async def test_audit_type_stdout_regular_file_rejected_standalone(manager: ManagerClient):
+    """audit=stdout with a regular-file stdout — server should fail to start."""
+    await CQLAuditTester(manager)._test_audit_type_stdout_regular_file_rejected()
+
+
+async def test_audit_type_table_stdout_standalone(manager: ManagerClient):
+    """audit=table,stdout — verify both sinks work together."""
+    await CQLAuditTester(manager)._test_audit_type_table_stdout()
+
+
 async def test_composite_audit_type_invalid_standalone(manager: ManagerClient):
     """audit=table,syslog,invalid — server should fail to start."""
     await CQLAuditTester(manager)._test_composite_audit_type_invalid()
@@ -2606,8 +2848,36 @@ async def test_audit_composite_auth(manager: ManagerClient):
     await t._test_permissions(Composite)
 
 
+# AuditBackendStdout, no auth, rf=1
+
+async def test_audit_stdout_noauth(manager: ManagerClient):
+    """Stdout backend, no auth, single node."""
+    t = CQLAuditTester(manager)
+    await t._test_using_non_existent_keyspace(AuditBackendStdout)
+    await t._test_audit_keyspace(AuditBackendStdout)
+    await t._test_audit_keyspace_extra_parameter(AuditBackendStdout)
+    await t._test_audit_keyspace_many_ks(AuditBackendStdout)
+    await t._test_audit_keyspace_table_not_exists(AuditBackendStdout)
+    await t._test_audit_categories_part2(AuditBackendStdout)
+    await t._test_audit_categories_part3(AuditBackendStdout)
+    await t._test_prepare(AuditBackendStdout)
+    await t._test_batch(AuditBackendStdout)
+    await t._test_batch_native_protocol(AuditBackendStdout)
+
+
+# AuditBackendStdout, auth, rf=1
+
+async def test_audit_stdout_auth(manager: ManagerClient):
+    """Stdout backend, auth enabled, single node."""
+    t = CQLAuditTester(manager)
+    await t._test_user_password_masking(AuditBackendStdout)
+    await t._test_role_password_masking(AuditBackendStdout)
+    await t._test_permissions(AuditBackendStdout)
+
+
 _syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
 _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_path)
+_stdout = AuditBackendStdout
 
 
 @pytest.mark.parametrize("helper_class,config_changer", [
@@ -2617,6 +2887,8 @@ _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_
     pytest.param(_syslog, CQLAuditTester.AuditCqlConfigChanger, id="syslog-cql"),
     pytest.param(_composite, CQLAuditTester.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
+    pytest.param(_stdout, CQLAuditTester.AuditSighupConfigChanger, id="stdout-sighup"),
+    pytest.param(_stdout, CQLAuditTester.AuditCqlConfigChanger, id="stdout-cql"),
 ])
 async def test_config_no_liveupdate(manager: ManagerClient, helper_class, config_changer):
     """Non-live audit config params (audit, audit_unix_socket_path, audit_syslog_write_buffer_size) must be unmodifiable."""
@@ -2630,6 +2902,8 @@ async def test_config_no_liveupdate(manager: ManagerClient, helper_class, config
     pytest.param(_syslog, CQLAuditTester.AuditCqlConfigChanger, id="syslog-cql"),
     pytest.param(_composite, CQLAuditTester.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
+    pytest.param(_stdout, CQLAuditTester.AuditSighupConfigChanger, id="stdout-sighup"),
+    pytest.param(_stdout, CQLAuditTester.AuditCqlConfigChanger, id="stdout-cql"),
 ])
 async def test_config_liveupdate(manager: ManagerClient, helper_class, config_changer):
     """Live-updatable audit config params (categories, keyspaces, tables) must be modifiable at runtime."""
@@ -2640,6 +2914,7 @@ async def test_config_liveupdate(manager: ManagerClient, helper_class, config_ch
     pytest.param(AuditBackendTable, id="table"),
     pytest.param(_syslog, id="syslog"),
     pytest.param(_composite, id="composite"),
+    pytest.param(_stdout, id="stdout"),
 ])
 async def test_parallel_syslog_audit(manager: ManagerClient, helper_class):
     """Cluster must not fail when multiple queries are audited in parallel."""
