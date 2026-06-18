@@ -183,9 +183,6 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
         await manager.api.enable_injection(node.ip_addr, "repair_flush_hints_batchlog_handler", one_shot=False)
         await manager.api.enable_injection(node.ip_addr, "add_delay_to_batch_replay", one_shot=False)
 
-    for node in (node1, node2):
-        assert (await get_injection_params(manager, node.ip_addr, "repair_flush_hints_batchlog_handler")) == {}
-
     async def do_repair(node):
         await manager.api.repair(node.ip_addr, "ks", "tbl")
 
@@ -193,23 +190,23 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
         start = time.time()
         await asyncio.gather(*(do_repair(node) for x in range(nr_repairs_per_node) for node in [node1, node2]))
         duration = time.time() - start
-        params = await get_injection_params(manager, node1.ip_addr, "repair_flush_hints_batchlog_handler")
-        logger.debug(f"After {label} repair cache_time_in_ms={cache_time_in_ms} injection_params={params} repair_duration={duration}")
-        return (params, duration)
+        logger.debug(f"After {label} repair cache_time_in_ms={cache_time_in_ms} repair_duration={duration}")
+        return duration
 
-    params, duration = await repair("First")
+    duration = await repair("First")
     total_repair_duration += duration
 
     await asyncio.sleep(1 + (cache_time_in_ms / 1000))
 
-    params, duration = await repair("Second")
+    count_before = await manager.api.get_injection_enter_count(node1.ip_addr, "repair_flush_hints_batchlog_handler")
+    duration = await repair("Second")
     total_repair_duration += duration
+    count_after = await manager.api.get_injection_enter_count(node1.ip_addr, "repair_flush_hints_batchlog_handler")
 
-    assert (int(params['issue_flush']) > 0)
-    if cache_time_in_ms > 0:
-        assert (int(params['skip_flush']) > 0)
-    else:
-        assert (not 'skip_flush' in params)
+    # Each repair sends flush requests to all nodes, so node1 receives nr_repairs
+    # requests per round. With cache, only the first triggers an actual replay.
+    replays_per_round = 1 if cache_time_in_ms > 0 else nr_repairs
+    assert count_after - count_before == replays_per_round
 
     logger.debug(f"Repair nr_repairs={nr_repairs} cache_time_in_ms={cache_time_in_ms} total_repair_duration={total_repair_duration}")
 
