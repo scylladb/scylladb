@@ -665,7 +665,9 @@ public:
         , _bucket(std::move(bucket))
         , _location(std::move(loc))
         , _as(as)
-    {}
+    {
+        sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} loc={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _location ? *_location : "<none>");
+    }
 
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring name) const override;
@@ -752,11 +754,11 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
         throw std::runtime_error(fmt::format("'{}' STORAGE only works with uuid_sstable_identifier enabled", _type));
     }
 
-    if (!_location) {
-        return object_name(_bucket, gen, comp);
-    }
-    return object_name(_bucket, *_location,
-        sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp));
+    auto ret = _location
+            ? object_name(_bucket, *_location, sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp))
+            : object_name(_bucket, gen, comp);
+    sstlog.trace("make_object_name: sstable_id={} generation={} comp={}: {}", sst.sstable_identifier(), gen, comp, ret.str());
+    return ret;
 }
 
 void object_storage_base::open(sstable& sst) {
