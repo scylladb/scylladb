@@ -148,13 +148,9 @@ class PythonTest(Test):
     def __init__(self, test_no: int, shortname: str, casename: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
         self.casename = casename
-        self.server_address: str | None = None
-        self.server_log_filename: Optional[pathlib.Path] = None
-        self.is_before_test_ok = False
-        self.is_after_test_ok = False
 
     @asynccontextmanager
-    async def run_ctx(self) -> AsyncGenerator[None]:
+    async def run_ctx(self) -> AsyncGenerator[ScyllaCluster]:
         """A test's setup/teardown context manager.
 
         Important part of this code is getting a ScyllaDB node from the pool and providing an address to the host
@@ -163,14 +159,16 @@ class PythonTest(Test):
         """
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
-        cluster = None
+        cluster: ScyllaCluster | None = None
+        server_log_filename: pathlib.Path | None = None
+        is_before_test_ok = False
+        is_after_test_ok = False
         try:
-            cluster = await self.suite.clusters.get(logger)
+            cluster: ScyllaCluster = await self.suite.clusters.get(logger)
             cluster.before_test(self.uname)
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.server_address = cluster.endpoint()
-            self.server_log_filename = cluster.server_log_filename()
-            self.is_before_test_ok = True
+            server_log_filename = cluster.server_log_filename()
+            is_before_test_ok = True
             cluster.take_log_savepoint()
 
             yield cluster
@@ -178,13 +176,13 @@ class PythonTest(Test):
             if self.shortname in self.suite.dirties_cluster:
                 cluster.is_dirty = True
             cluster.after_test(self.uname, self.success)
-            self.is_after_test_ok = True
+            is_after_test_ok = True
         except Exception as e:
-            if not self.is_before_test_ok:
-                print(f"Test {self.name} pre-check failed: {str(e)}\ncheck server logs: {self.server_log_filename}")
+            if not is_before_test_ok:
+                print(f"Test {self.name} pre-check failed: {str(e)}\ncheck server logs: {server_log_filename}")
                 logger.info(f"Discarding cluster after failed start for test %s...", self.name)
-            elif not self.is_after_test_ok:
-                print(f"Test {self.name} post-check failed: {str(e)}\ncheck server logs: {self.server_log_filename}")
+            elif not is_after_test_ok:
+                print(f"Test {self.name} post-check failed: {str(e)}\ncheck server logs: {server_log_filename}")
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
             self.success = False
             if cluster is not None:

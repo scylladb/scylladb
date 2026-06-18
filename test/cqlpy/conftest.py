@@ -43,8 +43,8 @@ async def host(request, testpy_test: PythonTest | None):
     if testpy_test is None:
         yield request.config.getoption("--host")
     else:
-        async with testpy_test.run_ctx():
-            yield testpy_test.server_address
+        async with testpy_test.run_ctx() as cluster:
+            yield cluster.endpoint()
 
 
 # "cql" fixture: set up client object for communicating with the CQL API.
