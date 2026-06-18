@@ -53,7 +53,10 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
         swap(*scylla_it, *std::next(components.begin()));
     }
 
+    // For now, use new gen/sid for the downloaded SSTable.
+    // In the future, consider using the same gen/sid as the source SSTable.
     auto gen = table.get_sstable_generation_generator()();
+    auto sid = sstables::sstable_id(gen.as_uuid());
     auto files = co_await sstable->readable_file_for_all_components();
     for (auto it = components.cbegin(); it != components.cend(); ++it) {
         try {
@@ -65,6 +68,7 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
                                              sstables::sstable_state::normal,
                                              sstables::sstable::component_basename(
                                                  table.schema()->ks_name(), table.schema()->cf_name(), descriptor.version, gen, descriptor.format, it->first),
+                                             sid,
                                              sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend(), .leave_unsealed = true});
             auto out = co_await sstable_sink->output(foptions, stream_options);
 
@@ -101,7 +105,7 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
                     on_internal_error(logger, "Fully-contained sstable must belong to one shard only");
                 }
                 logger.debug("SSTable shards {}", fmt::join(shards, ", "));
-                co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format};
+                co_return minimal_sst_info{shards.front(), gen, sid, descriptor.version, descriptor.format};
             }
         } catch (...) {
             logger.info("Error downloading SSTable component {}. Reason: {}", it->first, std::current_exception());

@@ -2228,7 +2228,7 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
                 .with_column("v", int32_type)
                 .build(schema_builder::compact_storage::yes);
 
-        auto sst = env.make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), sstables::generation_type(1), version);
+        auto sst = env.make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), sstables::generation_type(1), std::nullopt, version);
         try {
             sst->load(sst->get_schema()->get_sharder()).get();
         } catch (...) {

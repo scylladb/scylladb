@@ -623,7 +623,7 @@ static future<> test_stream_sink_write(sstables::test_env_config cfg) {
 
         auto version = get_highest_sstable_version();
         auto format = sstable::format_types::big;
-        auto generation = env.new_generation();
+        auto [generation, sid] = env.new_generation_and_sid();
         auto& mgr = env.manager();
         auto s_opts = env.get_storage_options();
 
@@ -635,7 +635,7 @@ static future<> test_stream_sink_write(sstables::test_env_config cfg) {
         auto toc_basename = sstable::component_basename(
                 s->ks_name(), s->cf_name(), version, generation, format, component_type::TOC);
 
-        auto sink = create_stream_sink(s, mgr, s_opts, sstable_state::normal, toc_basename, {});
+        auto sink = create_stream_sink(s, mgr, s_opts, sstable_state::normal, toc_basename, sid, {});
 
         // output() would succeed before the fix (wrapping the read-only file into a stream),
         // but the write below would throw std::logic_error("unsupported operation on s3 readable file").

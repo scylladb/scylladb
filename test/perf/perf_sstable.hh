@@ -229,7 +229,7 @@ public:
             std::filesystem::path sst_path = sst_dir_path / de.name.begin();
             auto entry = parse_path(sst_path, s->ks_name(), s->cf_name()).value();
             if (entry.component == component_type::TOC) {
-                auto sst = _env.make_sstable(s, this->dir(), entry.generation, entry.version);
+                auto sst = _env.make_sstable(s, this->dir(), entry.generation, entry.sid, entry.version);
                 co_await sst->load(s->get_sharder());
                 _sst.push_back(sst);
             }
@@ -243,7 +243,7 @@ public:
             size_t partitions = _mt->partition_count();
 
             test_setup::create_empty_test_dir(dir()).get();
-            auto sst = _env.make_sstable(s, dir(), sstables::generation_type(idx), sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
+            auto sst = _env.make_sstable(s, dir(), sstables::generation_type(idx), std::nullopt, sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
 
             auto start = perf_sstable_test_env::now();
             write_memtable_to_sstable(*_mt, sst).get();
@@ -260,7 +260,9 @@ public:
         return test_setup::create_empty_test_dir(dir()).then([this] {
             return sstables::test_env::do_with_async_returning<double>([this] (sstables::test_env& env) {
                 auto sst_gen = [this] () mutable {
-                    return _env.make_sstable(s, dir(), _env.new_generation(), sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
+                    auto gen = _env.new_generation();
+                    auto sid = sstables::sstable_id(gen.as_uuid());
+                    return _env.make_sstable(s, dir(), gen, sid, sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
                 };
 
                 std::vector<shared_sstable> ssts;
