@@ -2064,7 +2064,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     for (auto& ps : prepared_selectors) {
-        if (expr::is_bm25_function_call(ps.expr)) {
+        if (expr::is_native_function_call(ps.expr, "bm25")) {
             throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause");
         }
         expr::fill_prepare_context(ps.expr, ctx);
@@ -2116,7 +2116,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
 
     bool has_bm25_restriction = std::ranges::any_of(scoring_restrictions, [](const expr::binary_operator& binop) {
-        return expr::is_bm25_function_call(binop.lhs);
+        return expr::is_native_function_call(binop.lhs, "bm25");
     });
     bool is_fts_query = has_bm25_restriction || has_bm25_ordering;
 

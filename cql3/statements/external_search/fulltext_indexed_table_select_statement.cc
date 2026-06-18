@@ -90,7 +90,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
 
     // Verify this is a BM25 function call
     auto* fc = expr::as_if<expr::function_call>(&prepared_expr);
-    if (!fc || !expr::is_bm25_function_call(*fc)) {
+    if (!fc || !expr::is_native_function_call(*fc, "bm25")) {
         throw exceptions::invalid_request_exception("Only BM25 scoring function is supported in ORDER BY");
     }
 

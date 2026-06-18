@@ -837,7 +837,7 @@ statement_restrictions::statement_restrictions(private_tag,
             // BM25 restrictions are purely declarative.
             // They signal full-text search intent but do not filter rows or select an index.
             // Intercept them so they never enter the generic restriction/index/filtering machinery.
-            if (expr::is_bm25_function_call(*fc)) {
+            if (expr::is_native_function_call(*fc, "bm25")) {
                 _scoring_function_restrictions.push_back(std::move(prepared_restriction));
                 continue;
             }
