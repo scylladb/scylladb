@@ -5142,6 +5142,7 @@ table::query(schema_ptr query_schema,
         if (table_name && *table_name == _schema->cf_name()) {
             tlogger.info("replica_query_wait: waiting");
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5));
+            tlogger.info("replica_query_wait: done");
         }
     });
 

@@ -2432,4 +2432,202 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
     }, cfg);
 }
 
+// Test that reads can be aborted via the abort_source* parameter, in all phases of the read.
+SEASTAR_TEST_CASE(replica_read_abort) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    cql_test_config cfg;
+    cfg.db_config->reader_concurrency_semaphore_preemptive_abort_factor.set(0.0);
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const sstring ks_name = get_name();
+        const sstring tbl_name = "tbl";
+
+        e.execute_cql(format("CREATE KEYSPACE {} WITH"
+                    " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND"
+                    " tablets = {{'enabled': 'true'}}", ks_name)).get();
+
+        e.execute_cql(format("CREATE TABLE {}.{} (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}", ks_name, tbl_name)).get();
+
+        auto& db = e.local_db();
+        auto& tbl = db.find_column_family(ks_name, tbl_name);
+        auto schema = tbl.schema();
+
+        auto& semaphore = db.get_reader_concurrency_semaphore();
+        const auto& semaphore_stats = semaphore.get_stats();
+
+        const auto& querier_cache_stats = db.get_querier_cache_stats();
+
+        auto& error_injection = utils::get_local_injector();
+        const auto error_injection_name = "replica_query_wait";
+
+        const auto dk = tests::generate_partition_key(tbl);
+
+        // Insert data
+        {
+            auto insert_id = e.prepare(format("INSERT INTO {}.{} (pk, ck, v) VALUES (?, ?, 0)", ks_name, tbl_name)).get();
+            const auto cql3_pk = cql3::raw_value::make_value(dk.key().explode().front());
+            for (int32_t ck = 0; ck < 30; ++ck) {
+                e.execute_prepared(insert_id, {cql3_pk, cql3::raw_value::make_value(serialized(ck))}).get();
+            }
+            replica::database::flush_table_on_all_shards(e.db(), ks_name, tbl_name).get();
+        }
+
+        auto execute_read = [&] (abort_source& as, std::optional<query_id> query_uuid = {}) -> future<query_id> {
+            auto first_page_slice = schema->full_slice();
+            first_page_slice.options.set<query::partition_slice::option::allow_short_read>();
+
+            auto ck = clustering_key::from_single_value(*schema, serialized(10));
+            auto second_page_slice = partition_slice_builder(*schema)
+                .set_specific_ranges(query::specific_ranges(dk.key(), {query::clustering_range::make_starting_with(query::clustering_range::bound(ck, false))}))
+                .build();
+
+            auto max_size = std::numeric_limits<uint64_t>::max();
+
+            auto cmd = query::read_command(
+                    schema->id(),
+                    schema->version(),
+                    query_uuid ? second_page_slice : first_page_slice,
+                    query::max_result_size(max_size, max_size, 10),
+                    query::tombstone_limit::max,
+                    query::row_limit::max,
+                    query::partition_limit::max,
+                    gc_clock::now(),
+                    {},
+                    query_uuid ? *query_uuid : query_id::create_random_id(),
+                    query_uuid ? query::is_first_page::no : query::is_first_page::yes);
+
+            dht::partition_range_vector ranges;
+            ranges.push_back(dht::partition_range::make_singular(dk));
+
+            const auto inserts_before = querier_cache_stats.inserts;
+
+            try {
+                co_await db.query(schema, cmd, query::result_options::only_result(), ranges, {}, db::no_timeout, std::monostate{}, &as);
+
+                BOOST_REQUIRE_EQUAL(querier_cache_stats.inserts, inserts_before + 1);
+                BOOST_REQUIRE_EQUAL(querier_cache_stats.population, 1);
+            } catch (abort_requested_exception) {
+                BOOST_REQUIRE_EQUAL(querier_cache_stats.inserts, inserts_before);
+                BOOST_REQUIRE_EQUAL(querier_cache_stats.population, 0);
+                throw;
+            } catch (...) {
+                BOOST_FAIL(format("Unexpected exception from db.query(): {}", std::current_exception()));
+            }
+
+            co_return cmd.query_uuid;
+        };
+
+        testlog.info("abort read before started");
+        {
+            abort_source as;
+            as.request_abort();
+
+            BOOST_REQUIRE_THROW(execute_read(as).get(), abort_requested_exception);
+        }
+
+        testlog.info("abort read while in queue");
+        {
+            auto permit = semaphore.make_tracking_only_permit(schema, "soak", db::no_timeout, {});
+            auto resources = permit.consume_resources(semaphore.available_resources());
+
+            abort_source as;
+
+            BOOST_REQUIRE_EQUAL(semaphore_stats.waiters, 0);
+
+            auto fut = execute_read(as);
+
+            BOOST_REQUIRE(eventually_true([&] { return semaphore_stats.waiters > 0; }));
+
+            as.request_abort();
+
+            BOOST_REQUIRE_THROW(fut.get(), abort_requested_exception);
+        }
+
+        testlog.info("abort read after admission");
+        {
+            error_injection.enable(error_injection_name, false, {{"table", tbl_name}});
+
+            abort_source as;
+
+            const auto reads_admitted_before = semaphore_stats.reads_admitted;
+
+            auto fut = execute_read(as);
+
+            BOOST_REQUIRE(eventually_true([&] { return semaphore_stats.reads_admitted > reads_admitted_before; }));
+            BOOST_REQUIRE(eventually_true([&] { return error_injection.waiters(error_injection_name) > 0; }));
+
+            as.request_abort();
+
+            error_injection.receive_message(error_injection_name);
+            error_injection.disable(error_injection_name);
+
+            BOOST_REQUIRE_THROW(fut.get(), abort_requested_exception);
+        }
+
+        testlog.info("abort read on second page before start");
+        {
+            abort_source as_firs_page;
+            const auto query_uuid = execute_read(as_firs_page).get();
+
+            abort_source as_second_page;
+            as_second_page.request_abort();
+
+            const auto misses_before = querier_cache_stats.misses;
+
+            BOOST_REQUIRE_THROW(execute_read(as_second_page, query_uuid).get(), abort_requested_exception);
+            BOOST_REQUIRE_EQUAL(querier_cache_stats.misses, misses_before);
+        }
+
+        testlog.info("abort read on second page while queued");
+        {
+            abort_source as_firs_page;
+            const auto query_uuid = execute_read(as_firs_page).get();
+
+            BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+            auto permit = semaphore.make_tracking_only_permit(schema, "soak", db::no_timeout, {});
+            auto resources = permit.consume_resources(semaphore.available_resources());
+
+            abort_source as_second_page;
+
+            const auto misses_before = querier_cache_stats.misses;
+
+            auto fut = execute_read(as_second_page, query_uuid);
+
+            BOOST_REQUIRE(eventually_true([&] { return semaphore_stats.waiters > 0; }));
+
+            as_second_page.request_abort();
+
+            BOOST_REQUIRE_THROW(fut.get(), abort_requested_exception);
+            BOOST_REQUIRE_EQUAL(querier_cache_stats.misses, misses_before + 1);
+        }
+
+        testlog.info("abort read on second page after admission");
+        {
+            abort_source as_firs_page;
+            const auto query_uuid = execute_read(as_firs_page).get();
+
+            error_injection.enable(error_injection_name, false, {{"table", tbl_name}});
+
+            abort_source as_second_page;
+
+            const auto reads_admitted_before = semaphore_stats.reads_admitted;
+
+            auto fut = execute_read(as_second_page, query_uuid);
+
+            BOOST_REQUIRE(eventually_true([&] { return semaphore_stats.reads_admitted > reads_admitted_before; }));
+            BOOST_REQUIRE(eventually_true([&] { return error_injection.waiters(error_injection_name) > 0; }));
+
+            as_second_page.request_abort();
+
+            error_injection.receive_message(error_injection_name);
+            error_injection.disable(error_injection_name);
+
+            BOOST_REQUIRE_THROW(fut.get(), abort_requested_exception);
+        }
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
