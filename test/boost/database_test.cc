@@ -2453,6 +2453,7 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
                     "dummy",
                     1,
                     db::no_timeout,
+                    {},
                     {}));
             }).get();
 
