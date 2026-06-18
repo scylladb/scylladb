@@ -37,10 +37,7 @@ import treelib
 from scripts import coverage
 from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to
 from test.pylib import coverage_utils
-from test.pylib.suite.base import (
-    TestSuite,
-    palette,
-)
+from test.pylib.suite.base import palette
 from test.pylib.util import LogPrefixAdapter, get_configured_modes
 
 launch_time = time.monotonic()

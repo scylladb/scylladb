@@ -39,18 +39,17 @@ from test.pylib.scylla_cluster import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.suite.base import (
     PYTEST_TESTS_LOGS_FOLDER,
-    get_testpy_test,
     prepare_environment,
 )
-from test.pylib.util import get_modes_to_run, scale_timeout_by_mode
+from test.pylib.suite.python import PythonTest, PythonTestSuite
+from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id
+from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     import _pytest.nodes
     import _pytest.scope
-
-    from test.pylib.suite.base import Test
 
 
 TEST_CONFIG_FILENAME = "test_config.yaml"
@@ -69,6 +68,9 @@ logger = logging.getLogger(__name__)
 _pytest_config: pytest.Config | None = None
 
 _system_resource_monitor: SystemResourceMonitor | None = None
+
+_suites: dict[str, PythonTestSuite] = {}
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
@@ -243,15 +245,30 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
 
 
 @pytest.fixture(scope="module")
-async def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> Test | None:
+def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> PythonTest:
     """Create an instance of Test class for the current test.py test."""
 
-    if request.scope == "module":
-        return await get_testpy_test(path=request.path, options=request.config.option, mode=build_mode)
-    return None
+    params_stash = get_params_stash(node=request.node)
+    suite_config = params_stash[TEST_SUITE]
+    suite_key = os.path.join(suite_config.path, build_mode)
+    suite = _suites.get(suite_key)
+    if not suite:
+        _suites[suite_key] = suite = PythonTestSuite(
+            path=suite_config.path,
+            cfg=suite_config.cfg,
+            options=request.config.option,
+            mode=build_mode,
+        )
+    run_id = params_stash[RUN_ID]
+    shortname = str(request.path.relative_to(suite.suite_path).with_suffix(""))
+    uname = f"{suite_config.name}.{shortname.replace("/", "_")}.{run_id}"
+    if worker_id := get_xdist_worker_id():
+        uname = f"{worker_id}.{uname}"
+    return PythonTest(test_no=run_id, uname=uname, shortname=shortname, suite=suite)
+
 
 @pytest.fixture(scope="function")
-def scylla_binary(testpy_test) -> Path:
+def scylla_binary(testpy_test: PythonTest) -> Path:
     return testpy_test.suite.scylla_exe
 
 
@@ -419,13 +436,15 @@ def pytest_configure(config: pytest.Config) -> None:
     root_logger.addHandler(file_handler)
     root_logger.setLevel(log_file_level)
 
-    if config.getoption("--exe-url") and config.getoption("--exe-path"):
-        raise RuntimeError("Can't use --exe-url and exe-path simultaneously.")
+    if exe_url := config.getoption("--exe-url"):
+        if config.getoption("--exe-path"):
+            raise RuntimeError("Can't use --exe-url and exe-path simultaneously.")
+        config.option.exe_path = fetch_and_install_scylla_version(url=exe_url)
 
-    if  config.getoption("--exe-path") or config.getoption("--exe-url"):
-            if config.getoption("--mode"):
-                raise RuntimeError("Can't use --mode with --exe-path or --exe-url.")
-            config.option.modes = ["custom_exe"]
+    if config.getoption("--exe-path"):
+        if config.getoption("--mode"):
+            raise RuntimeError("Can't use --mode with --exe-path or --exe-url.")
+        config.option.modes = ["custom_exe"]
 
     os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)
@@ -512,7 +531,7 @@ def pytest_runtest_makereport(item, call):
 class TestSuiteConfig:
     def __init__(self, config_file: pathlib.Path):
         self.path = config_file.parent
-        self.cfg = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        self.cfg = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
 
     @cached_property
     def name(self) -> str:
@@ -558,7 +577,7 @@ class TestSuiteConfig:
 
 TEST_SUITE = pytest.StashKey[TestSuiteConfig | None]()
 
-_STASH_KEYS_TO_COPY = BUILD_MODE, TEST_SUITE
+_STASH_KEYS_TO_COPY = BUILD_MODE, TEST_SUITE, RUN_ID
 
 
 def get_params_stash(node: _pytest.nodes.Node) -> pytest.Stash | None:
@@ -571,9 +590,10 @@ def get_params_stash(node: _pytest.nodes.Node) -> pytest.Stash | None:
 def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], count]) -> None:
     params_stash = get_params_stash(node=item)
 
+    if RUN_ID not in params_stash:
+        params_stash[RUN_ID] = next(run_ids[(params_stash[BUILD_MODE], item.parent._nodeid)])
     for key in _STASH_KEYS_TO_COPY:
         item.stash[key] = params_stash[key]
-    item.stash[RUN_ID] = next(run_ids[(item.stash[BUILD_MODE], item._nodeid)])
 
     suffix = f".{item.stash[BUILD_MODE]}.{item.stash[RUN_ID]}"
 

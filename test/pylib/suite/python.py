@@ -17,23 +17,35 @@ from test import path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.pool import Pool
 from test.pylib.scylla_cluster import ScyllaCluster, ScyllaServer, merge_cmdline_options, get_current_version_description
-from test.pylib.suite.base import Test, TestSuite
 from test.pylib.util import LogPrefixAdapter
 
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable, Awaitable, AsyncGenerator
-    from typing import Optional, Union
 
     from pytest import Parser
 
 
-class PythonTestSuite(TestSuite):
-    """A collection of Python pytests against a single Scylla instance"""
+class PythonTestSuite:
+    def __init__(self, path: pathlib.Path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
+        self.suite_path = path
+        self.log_dir = pathlib.Path(options.tmpdir) / mode
+        self.name = str(self.suite_path.name)
+        self.cfg = cfg
+        self.options = options
+        self.mode = mode
+        self.suite_key = os.path.join(path, mode)
+        # environment variables that should be the base of all processes running in this suit
+        self.base_env = {}
+        if self.need_coverage():
+            # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
+            # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
+            # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
+            # thousands of tests it can easily reach 10 of GBs)
+            # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
+            self.base_env["LLVM_PROFILE_FILE"] = str(self.log_dir / "coverage" / self.name / "%m.profraw")
 
-    def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
-        super().__init__(path, cfg, options, mode)
-        self.scylla_exe = path_to(self.mode, "scylla")
+        self.scylla_exe = options.exe_path or path_to(self.mode, "scylla")
 
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
         cluster_size = cluster_cfg["initial_size"]
@@ -65,6 +77,10 @@ class PythonTestSuite(TestSuite):
             await cluster.release_ips()
 
         self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
+
+    def need_coverage(self):
+        return self.options.coverage and (self.mode in self.options.coverage_modes) and bool(
+            self.cfg.get("coverage", True))
 
     def get_cluster_factory(self, cluster_size: int, options: argparse.Namespace) -> Callable[..., Awaitable]:
         def create_server(create_cfg: ScyllaCluster.CreateServerParams):
@@ -102,7 +118,7 @@ class PythonTestSuite(TestSuite):
 
             return server
 
-        async def create_cluster(logger: Union[logging.Logger, logging.LoggerAdapter]) -> ScyllaCluster:
+        async def create_cluster(logger: logging.Logger | logging.LoggerAdapter) -> ScyllaCluster:
             cluster = ScyllaCluster(logger, cluster_size, create_server)
 
             async def stop() -> None:
@@ -138,16 +154,23 @@ class PythonTestSuite(TestSuite):
         return create_cluster
 
 
-    async def add_test(self, shortname, casename) -> None:
-        test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, casename, self)
-        self.tests.append(test)
-
-class PythonTest(Test):
+class PythonTest:
     """Run a pytest collection of cases against a standalone Scylla"""
 
-    def __init__(self, test_no: int, shortname: str, casename: str, suite) -> None:
-        super().__init__(test_no, shortname, suite)
-        self.casename = casename
+    def __init__(self, test_no: int, uname: str, shortname: str, suite: PythonTestSuite) -> None:
+        self.id = test_no
+        # Name with test suite name
+        self.name = os.path.join(suite.name, shortname.split('.')[0])
+        # Name within the suite
+        self.shortname = shortname
+        self.mode = suite.mode
+        self.suite = suite
+        # Unique file name, which is also readable by human, as filename prefix
+        self.uname = uname
+        self.log_filename = self.suite.log_dir / f"{self.uname}.log"
+        self.success = False
+        self.time_start: float = 0
+        self.time_end: float = 0
 
     @asynccontextmanager
     async def run_ctx(self) -> AsyncGenerator[ScyllaCluster]:

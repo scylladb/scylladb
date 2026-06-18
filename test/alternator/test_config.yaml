@@ -1,4 +1,3 @@
-type: Python
 extra_scylla_cmdline_options:
   - '--logger-log-level=alternator-auth=trace'
   - '--logger-log-level=alternator-conditions=trace'

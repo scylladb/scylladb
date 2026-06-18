@@ -13,7 +13,6 @@ import pytest
 
 from test.cqlpy.conftest import host, cql, this_dc  # add required fixtures
 from test.pylib.cql_repl import CQL_TEST_SUFFIX, CqlFile
-from test.pylib.suite.base import get_testpy_test
 from test.pylib.suite.python import add_host_option, add_cql_connection_options
 
 if TYPE_CHECKING:
@@ -22,6 +21,8 @@ if TYPE_CHECKING:
 
     from _pytest.nodes import Collector
     from cassandra.cluster import Session
+
+    from test.pylib.suite.python import PythonTest
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -74,8 +75,7 @@ def keyspace(cql: Session, this_dc: str) -> Generator[str]:
 
 
 @pytest.fixture(scope="module", autouse=True)
-async def output_path(request: pytest.FixtureRequest, build_mode: str) -> Path:
+async def output_path(testpy_test: PythonTest) -> Path:
     """A file to collect real output of test's CQL queries to compare with .result file."""
 
-    testpy_test = await get_testpy_test(path=request.path, options=request.config.option, mode=build_mode)
     return testpy_test.suite.log_dir / f"{testpy_test.uname}.reject"

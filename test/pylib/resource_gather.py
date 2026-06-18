@@ -40,7 +40,7 @@ from test.pylib.db.writer import (
 if TYPE_CHECKING:
     from typing import IO, TextIO
 
-    from test.pylib.suite.base import Test as TestPyTest
+    from test.pylib.suite.python import PythonTest as TestPyTest
 
 logger = logging.getLogger(__name__)
 
