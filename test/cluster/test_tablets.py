@@ -15,7 +15,7 @@ from test.pylib.repair import create_table_insert_data_for_repair
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.pylib.util import unique_name, wait_for, wait_for_first_completed
+from test.pylib.util import unique_name, wait_for, wait_for_first_completed, gather_safely
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
     get_topology_coordinator, parse_replication_options, get_replication, get_replica_count
 from contextlib import nullcontext as does_not_raise
@@ -1824,20 +1824,19 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient,
         await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in keys])
 
         nodes_to_replace = servers['dc1'][0:2]
-        replaced_host_id = await manager.get_host_id(nodes_to_replace[1].server_id)
+        host_ids_to_replace = await gather_safely(*(manager.get_host_id(node.server_id) for node in nodes_to_replace))
 
         # Stop both token owners in dc1 to leave no token owners in the datacenter
         for node in nodes_to_replace:
             await manager.server_stop_gracefully(node.server_id)
 
-        logger.info(f"Replacing {nodes_to_replace[0]} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[0].server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True,
-                                    ignore_dead_nodes=[replaced_host_id])
-        await manager.server_add(replace_cfg=replace_cfg, property_file=nodes_to_replace[0].property_file())
+        async def replace_node(node):
+            replace_cfg = ReplaceConfig(replaced_id=node.server_id, reuse_ip_addr=False, use_host_id=True, wait_dead=True,
+                                        ignore_dead_nodes=host_ids_to_replace)
+            await manager.server_add(replace_cfg=replace_cfg, property_file=node.property_file())
 
-        logger.info(f"Replacing {nodes_to_replace[1]} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[1].server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True)
-        await manager.server_add(replace_cfg=replace_cfg, property_file=nodes_to_replace[1].property_file())
+        logger.info(f"Replacing {nodes_to_replace}")
+        await gather_safely(*(replace_node(node) for node in nodes_to_replace))
 
         logger.info("Verifying data")
         for node in servers['dc2']:
