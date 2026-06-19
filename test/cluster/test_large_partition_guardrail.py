@@ -10,9 +10,12 @@ import time
 import asyncio
 
 from cassandra import WriteFailure
+from cassandra.cluster import ConsistencyLevel
 from cassandra.protocol import ConfigurationException
+from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
+from test.pylib.util import wait_for_cql_and_get_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -100,3 +103,77 @@ async def test_large_data_guardrails_rolling_upgrade(manager: ManagerClient):
     insert = cql.prepare("INSERT INTO ks_upgrade_test.tbl1 (pk, ck, v) VALUES (?, ?, ?)")
     with pytest.raises(WriteFailure, match=REJECT_MSG_RE):
         await cql.run_async(insert, [1, 99, b"\x00"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_read_repair_skips_large_data_guardrails(manager: ManagerClient):
+    """Read repair must bypass large-data guardrails.
+
+    The data already exists on at least one replica; rejecting the
+    read-repair write would leave replicas permanently inconsistent,
+    which is worse than having an oversized partition.
+
+    Scenario:
+    1. Build a partition that exceeds the fail threshold on both replicas.
+    2. Verify that a normal write to that partition is rejected.
+    3. Use error injection to make one node miss an additional write,
+       creating a digest mismatch.
+    4. Read at CL=ALL — triggers read repair.  The repair write must
+       succeed even though the partition already exceeds the guardrail.
+    """
+    cfg = {
+        "compaction_large_partition_warning_threshold_mb": 1,
+        "large_partition_fail_threshold_mb": 1,
+    }
+    cmdline = ["--hinted-handoff-enabled", "0"]
+
+    nodes = await manager.servers_add(2, cmdline=cmdline, config=cfg, auto_rack_dc="dc1")
+    node1, node2 = nodes
+
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 60)
+
+    ks = "ks_rr_guardrail"
+    await cql.run_async(
+        f"CREATE KEYSPACE {ks} WITH REPLICATION = "
+        f"{{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}}"
+    )
+    await cql.run_async(
+        f"CREATE TABLE {ks}.tbl (pk int, ck int, v blob, PRIMARY KEY (pk, ck)) "
+        f"WITH large_data_guardrails_enabled = true"
+    )
+
+    # Build an oversized partition (> 1 MB) on both replicas.
+    await _make_oversized_partition(cql, f"{ks}.tbl", pk=0, num_rows=2, value_size_bytes=600 * 1024)
+
+    # Before flushing (guardrails not yet active), create divergence:
+    # prevent node1 from receiving one extra write.
+    await manager.api.enable_injection(
+        node1.ip_addr, "database_apply", one_shot=False,
+        parameters={"ks_name": ks, "cf_name": "tbl", "what": "throw"})
+
+    insert_one = cql.prepare(f"INSERT INTO {ks}.tbl (pk, ck, v) VALUES (?, ?, ?)")
+    insert_one.consistency_level = ConsistencyLevel.ONE
+    await cql.run_async(insert_one, [0, 100, b"\x01"])
+
+    await manager.api.disable_injection(node1.ip_addr, "database_apply")
+
+    # Now flush both nodes — this makes the guardrail aware of the
+    # oversized partition and activates rejection on subsequent writes.
+    for node in nodes:
+        await manager.api.keyspace_flush(node.ip_addr, ks, "tbl")
+
+    # Verify that normal writes to this partition are now rejected.
+    insert = cql.prepare(f"INSERT INTO {ks}.tbl (pk, ck, v) VALUES (?, ?, ?)")
+    with pytest.raises(WriteFailure, match=REJECT_MSG_RE):
+        await cql.run_async(insert, [0, 99, b"\x00"])
+
+    # CL=ALL read triggers a digest mismatch and read repair.
+    # The read-repair write to node1 must succeed despite the partition
+    # exceeding the guardrail — otherwise this would raise WriteFailure.
+    rows = cql.execute(SimpleStatement(
+        f"SELECT ck FROM {ks}.tbl WHERE pk = 0",
+        consistency_level=ConsistencyLevel.ALL))
+    cks = {row.ck for row in rows}
+    assert 100 in cks, "Read-repair row (ck=100) missing from CL=ALL result"
