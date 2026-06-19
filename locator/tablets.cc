@@ -1011,6 +1011,32 @@ tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const 
     return tablet_repair_incremental_mode_from_name.at(name);
 }
 
+// The names are persisted in system tables so should not be changed.
+static const std::unordered_map<locator::tablet_layout, sstring> tablet_layout_to_name = {
+    {locator::tablet_layout::pow_of_2, "powof2"},
+    {locator::tablet_layout::arbitrary, "arbitrary"},
+};
+
+static const std::unordered_map<sstring, tablet_layout> tablet_layout_from_name = std::invoke([] {
+    std::unordered_map<sstring, tablet_layout> result;
+    for (auto&& [v, s] : tablet_layout_to_name) {
+        result.emplace(s, v);
+    }
+    return result;
+});
+
+sstring tablet_layout_to_string(tablet_layout layout) {
+    auto i = tablet_layout_to_name.find(layout);
+    if (i == tablet_layout_to_name.end()) {
+        on_internal_error(tablet_logger, format("Invalid tablet layout: {}", static_cast<int>(layout)));
+    }
+    return i->second;
+}
+
+tablet_layout tablet_layout_from_string(const sstring& name) {
+    return tablet_layout_from_name.at(name);
+}
+
 size_t tablet_id_map::external_memory_usage() const {
     return _buckets.external_memory_usage() +_last_tokens.external_memory_usage();
 }
@@ -2023,6 +2049,11 @@ auto fmt::formatter<locator::tablet_task_type>::format(const locator::tablet_tas
 auto fmt::formatter<locator::tablet_repair_incremental_mode>::format(const locator::tablet_repair_incremental_mode& mode, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "{}", locator::tablet_repair_incremental_mode_to_string(mode));
+}
+
+auto fmt::formatter<locator::tablet_layout>::format(const locator::tablet_layout& layout, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", locator::tablet_layout_to_string(layout));
 }
 
 auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, fmt::format_context& ctx) const

@@ -2317,12 +2317,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             db::snapshot_ctl::config snap_cfg = {
                 .backup_sched_group = dbcfg.backup_scheduling_group,
             };
-            snapshot_ctl.start(std::ref(db), std::ref(proxy), std::ref(task_manager), std::ref(sstm), snap_cfg).get();
-            db.local().plug_snapshot_ctl(snapshot_ctl.local());
-            auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl, &db] {
-                db.local().unplug_snapshot_ctl();
+            snapshot_ctl.start(std::ref(db), std::ref(proxy), std::ref(qp), std::ref(messaging), std::ref(task_manager), std::ref(sstm), snap_cfg).get();
+            auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
                 snapshot_ctl.stop().get();
             });
+            db.local().plug_snapshot_ctl(snapshot_ctl.local());
+
             auto backup_throughput_update = io_throughput_updater("backup", dbcfg.backup_scheduling_group, cfg->backup_io_throughput_mb_per_sec);
 
             api::set_server_snapshot(ctx, snapshot_ctl).get();

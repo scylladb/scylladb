@@ -58,6 +58,7 @@ struct sstable_snapshot_metadata {
     uint64_t index_size;
     int64_t first_token;
     int64_t last_token;
+    int64_t repaired_at;
     std::optional<size_t> tablet_id;
 };
 

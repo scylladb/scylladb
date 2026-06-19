@@ -5,6 +5,7 @@
 #
 
 import pytest
+import json
 
 from test.nodetool.rest_api_mock import expected_request
 
@@ -102,6 +103,89 @@ end: {end_time}
         else:
             expected_returncode = 1
             expected_output = f"""{task_state}: {task_error}
+start: {start_time}
+end: {end_time}
+"""
+        assert res.returncode == expected_returncode
+        assert res.stdout == expected_output
+
+
+@pytest.mark.parametrize("nowait,task_state,task_error,move_files", [(False, "failed", "error", False),
+                                                          (False, "done", "", True),
+                                                          (True, "", "", True)])
+def test_cluster_backup(nodetool, scylla_only, nowait, task_state, task_error, move_files):
+    endpoint = "s3.us-east-2.amazonaws.com"
+    bucket = "bucket-foo"
+    prefix = "foo/bar/baz"
+    keyspace = "ks"
+    table = "cf"
+    snapshot = "ss"
+    datacenter = "dc"
+    params = {"keyspace": keyspace,
+              "table": table,
+              "tag": snapshot,
+              "move_files": "true" if move_files else "false"}
+    body = [{ "datacenter": datacenter, 
+              "endpoint": endpoint,
+              "bucket": bucket,
+              "prefix": prefix } ]
+    task_id = "2c4a3e5f"
+    start_time = "2024-08-08T14:29:25Z"
+    end_time = "2024-08-08T14:30:42Z"
+    task_status = {
+        "id": task_id,
+        "type": "backup",
+        "kind": "datacenter",
+        "scope": "datacenter",
+        "state": task_state,
+        "is_abortable": False,
+        "start_time": start_time,
+        "end_time": end_time,
+        "error": task_error,
+        "sequence_number": 0,
+        "shard": 0,
+        "progress_total": 1.0,
+        "progress_completed": 1.0,
+        "children_ids": []
+    }
+    expected_requests = [
+        expected_request(
+            "POST",
+            "/storage_service/tablets/backup",
+            params,
+            response=task_id,
+            body=body #json.dumps(body)
+            )
+    ]
+    args = ["cluster", "backup",
+            "--keyspace", keyspace,
+            "--table", table,
+            "--snapshot", snapshot,
+            "--locations", f"{datacenter},{endpoint},{bucket},{prefix}"]
+    if move_files:
+        args.append("--move-files")
+    if nowait:
+        args.append("--nowait")
+        res = nodetool(*args, expected_requests=expected_requests)
+        assert task_id in res.stdout
+    else:
+        # wait for the completion of backup task
+        expected_requests.append(
+            expected_request(
+                "GET",
+                f"/task_manager/wait_task/{task_id}",
+                response=task_status))
+        res = nodetool(*args, expected_requests=expected_requests, check_return_code=False)
+        if task_state == "done":
+            expected_returncode = 0
+            expected_state = ""
+        else:
+            expected_returncode = 1
+            expected_state = f": {task_error}"
+
+        expected_output = f"""Requested cluster backup(s) for [{keyspace}] with snapshot name [{snapshot}] and options {{move_files={'true' if move_files else 'false'}}}, locations={json.dumps(body)}
+Snapshot directory: {snapshot}
+{task_state}{expected_state}
 start: {start_time}
 end: {end_time}
 """

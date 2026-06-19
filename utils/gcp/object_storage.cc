@@ -126,7 +126,7 @@ public:
     }
 
     size_t buffer_size() const noexcept override {
-        return default_gcp_storage_chunk_size;
+        return 128 * 1024;
     }
 
     future<> acquire_session();

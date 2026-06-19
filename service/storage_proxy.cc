@@ -41,6 +41,7 @@
 #include "db/batchlog_manager.hh"
 #include "db/hints/manager.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/intrusive/list.hpp>
 #include <boost/outcome/result.hpp>
@@ -997,8 +998,14 @@ private:
             .created_at = ts,
             .expires_at = expiry
         };
+        auto local = _sp.get_token_metadata_ptr()->get_topology().get_location();
+        auto me = _sp.get_token_metadata_ptr()->get_topology().my_host_id();
         co_await coroutine::parallel_for_each(ids, [&] (const table_id& id) -> future<> {
-            co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts);
+            co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts, [&](const db::snapshot_entries& e) -> future<> {
+                auto s = _sp._db.local().find_schema(id);
+                db::snapshot_table_helper sth(_sp.system_keyspace().query_processor());
+                co_await sth.insert_snapshot_entries(tag, s->ks_name(), s->cf_name(), local.dc, local.rack, me, e);
+            });
         });
     }
 

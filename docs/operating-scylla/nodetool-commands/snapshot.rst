@@ -14,7 +14,7 @@ SYNOPSIS
               nodetool [(-h <host> | --host <host>)] [(-p <port> | --port <port>)]
                    [(-pp | --print-port)] [(-pw <password> | --password <password>)]
                    [(-pwf <passwordFilePath> | --password-file <passwordFilePath>)]
-                   [(-u <username> | --username <username>)] snapshot
+                   [(-u <username> | --username <username>)] [cluster] snapshot
                    [(-cf <table> | --column-family <table> | --table <table>)]
                    [(-kc <kclist> | --kc.list <kclist>)]
                    [(-sf | --skip-flush)] [(-t <tag> | --tag <tag>)] [--ttl <ttl>] [--] [<keyspaces...>]
@@ -47,6 +47,9 @@ Parameter                                                             Descriptio
 ``--`` This option can be used to separate command-line options from the list of argument, (useful when arguments might be mistaken for command-line options.
 
 ``[<keyspaces...>]`` List of keyspaces. By default, all keyspaces.
+
+The 'cluster snapshot' version of this command will issue the snapshot on all nodes in the cluster, where as 
+the non-cluster version only operates on the destination node. 
 
 Examples
 ........
