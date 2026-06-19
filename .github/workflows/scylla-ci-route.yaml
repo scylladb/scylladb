@@ -32,8 +32,8 @@ jobs:
           fi
 
           # Use the GitHub API to compare trees
-          BEFORE_TREE=$(gh api "repos/$PR_REPO/git/commits/$BEFORE" --jq '.tree.sha' --retry 3 2>/dev/null || true)
-          AFTER_TREE=$(gh api "repos/$PR_REPO/git/commits/$AFTER" --jq '.tree.sha' --retry 3 2>/dev/null || true)
+          BEFORE_TREE=$(gh api "repos/$PR_REPO/git/commits/$BEFORE" --jq '.tree.sha' 2>/dev/null || true)
+          AFTER_TREE=$(gh api "repos/$PR_REPO/git/commits/$AFTER" --jq '.tree.sha' 2>/dev/null || true)
 
           if [ -n "$BEFORE_TREE" ] && [ -n "$AFTER_TREE" ] && [ "$BEFORE_TREE" = "$AFTER_TREE" ]; then
             echo "No code changes detected (commit message edit only), skipping CI"
@@ -59,7 +59,7 @@ jobs:
           # Fetch all pages of PR files
           PAGE=1
           while true; do
-            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename' --retry 3)
+            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
             if [ -z "$FILES" ]; then
               break
             fi
@@ -117,7 +117,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching PR #$PR_NUMBER details..."
-          PR_JSON=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER" --retry 3)
+          PR_JSON=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER")
 
           MERGEABLE_STATE=$(echo "$PR_JSON" | jq -r '.mergeable_state')
           LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
@@ -197,7 +197,7 @@ jobs:
           ALL_FILES=""
           PAGE=1
           while true; do
-            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename' --retry 3)
+            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
             if [ -z "$FILES" ]; then
               break
             fi
@@ -295,12 +295,12 @@ jobs:
           TRUSTED=false
 
           # Check if user is a ScyllaDB org member
-          HTTP_CODE=$(gh api "orgs/scylladb/members/$PR_USER" --silent --retry 3 2>/dev/null && echo "204" || echo "other")
+          HTTP_CODE=$(gh api "orgs/scylladb/members/$PR_USER" --silent 2>/dev/null && echo "204" || echo "other")
           if [ "$HTTP_CODE" = "204" ]; then
             TRUSTED=true
           else
             # Check if user is in the external-contributors team
-            TEAM_STATE=$(gh api "orgs/scylladb/teams/external-contributors/memberships/$PR_USER" --jq '.state' --retry 3 2>/dev/null || echo "none")
+            TEAM_STATE=$(gh api "orgs/scylladb/teams/external-contributors/memberships/$PR_USER" --jq '.state' 2>/dev/null || echo "none")
             if [ "$TEAM_STATE" = "active" ]; then
               TRUSTED=true
             fi
@@ -309,7 +309,7 @@ jobs:
           if [ "$TRUSTED" = "false" ]; then
             echo "::warning::PR submitted by external contributor ($PR_USER), CI will not trigger automatically"
             TARGET_FOLDER="${{ steps.target-folder.outputs.folder }}"
-            gh api "repos/$PR_REPO/issues/$PR_NUMBER/comments" --retry 3 \
+            gh api "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
               -f body="@scylladb/scylla-maint please review and trigger CI for this pull request
           **CI Build:** https://jenkins.scylladb.com/job/${TARGET_FOLDER}/job/scylla-ci/parambuild/?PR_NUMBER=${PR_NUMBER}"
           fi
@@ -395,7 +395,7 @@ jobs:
           fi
 
           # Set pending commit status
-          gh api "repos/$PR_REPO/statuses/$PR_SHA" --retry 3 \
+          gh api "repos/$PR_REPO/statuses/$PR_SHA" \
             -f state="pending" \
             -f context="Checkout" \
             -f description="Waiting for CI to start" \
