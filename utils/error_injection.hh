@@ -395,7 +395,7 @@ public:
 
     // \brief Returns the sum of enter_count across all shards.
     static future<size_t> enter_count_on_all(const std::string_view& injection_name) {
-        auto counts = std::vector<size_t>(smp::count, 0);
+        auto counts = std::vector<size_t>(this_smp_shard_count(), 0);
         co_await smp::invoke_on_all([&counts, name = sstring(injection_name)] {
             counts[this_shard_id()] = _local.enter_count(name);
         });
