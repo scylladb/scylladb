@@ -626,10 +626,10 @@ query_processor::execute_maybe_with_guard(service::query_state& query_state, ::s
 }
 
 future<::shared_ptr<result_message>>
-query_processor::execute_direct_without_checking_exception_message(utils::chunked_string_view query_string, service::query_state& query_state, dialect d, query_options& options) {
+query_processor::execute_direct_without_checking_exception_message(utils::chunked_string query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
-    return get_statement(query_string, query_state.get_client_state(), d).then(
+    return get_statement(std::move(query_string), query_state.get_client_state(), d).then(
             [this, &query_state, &options] (std::unique_ptr<statements::prepared_statement> p) {
         auto statement = p->statement;
         if (statement->get_bound_terms() != options.get_values_count()) {
@@ -742,7 +742,7 @@ query_processor::prepare(utils::chunked_string query_string, const service::clie
     try {
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
         auto prep_entry = co_await _prepared_cache.get_pinned(key, [this, &query_string, &client_state, d] {
-                return get_statement(query_string, client_state, d).then(
+                return get_statement(utils::chunked_string(query_string), client_state, d).then(
                         [] (std::unique_ptr<statements::prepared_statement> prepared) {
                     prepared->calculate_metadata_id();
                     auto bound_terms = prepared->statement->get_bound_terms();
@@ -787,7 +787,7 @@ prepared_cache_key_type query_processor::compute_id(
 }
 
 future<std::unique_ptr<prepared_statement>>
-query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d) {
+query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d) {
     // Measure the synchronous parsing/setup cost. prepare() may yield
     // for batch statements, so it reports its own prepare allocation cost
     // separately (sampled without spanning a yield) instead of letting us
@@ -804,12 +804,10 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
 
     auto parse_cost = seastar::memory::stats().total_bytes_allocated() - bytes_before;
 
-    utils::chunked_string owned_query(query);
-
     auto [p, prepare_cost] = co_await statement->prepare(_db, _cql_stats, _cql_config);
     _parsing_cost_tracker.add_sample(parse_cost + prepare_cost);
 
-    p->statement->raw_cql_statement = std::move(owned_query);
+    p->statement->raw_cql_statement = std::move(query);
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {
         audit_info->set_query_string(p->statement->raw_cql_statement.linearize());

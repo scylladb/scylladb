@@ -1608,7 +1608,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
 
-    return qp.local().execute_direct_without_checking_exception_message(query.assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+    return qp.local().execute_direct_without_checking_exception_message(std::move(query).assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->as_bounce()) {
             return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
@@ -1779,16 +1779,11 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             if (!query) {
                 co_await coroutine::return_exception_ptr(std::move(query).assume_error());
             }
-            // query owns its storage and is a local that lives across the
-            // co_await below, so we can hand get_statement() a view into it
-            // (get_statement() makes its own copy before it suspends) and still
-            // use it for tracing afterwards.
-            const utils::chunked_string& query_text = query.assume_value();
-            stmt_ptr = co_await qp.local().get_statement(query_text, client_state, dialect);
-            ps = stmt_ptr->checked_weak_from_this();
             if (init_trace && trace_state) {
-                tracing::add_query(trace_state, query_text);
+                tracing::add_query(trace_state, query.assume_value());
             }
+            stmt_ptr = co_await qp.local().get_statement(std::move(query).assume_value(), client_state, dialect);
+            ps = stmt_ptr->checked_weak_from_this();
             break;
         }
         case 1: {

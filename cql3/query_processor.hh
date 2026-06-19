@@ -309,12 +309,12 @@ public:
     inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_direct(
-            utils::chunked_string_view query_string,
+            utils::chunked_string query_string,
             service::query_state& query_state,
             dialect d,
             query_options& options) {
         return execute_direct_without_checking_exception_message(
-                query_string,
+                std::move(query_string),
                 query_state,
                 d,
                 options)
@@ -325,7 +325,7 @@ public:
     // The result_message::exception must be explicitly handled.
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_direct_without_checking_exception_message(
-            utils::chunked_string_view query_string,
+            utils::chunked_string query_string,
             service::query_state& query_state,
             dialect d,
             query_options& options);
@@ -514,7 +514,7 @@ public:
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
     future<std::unique_ptr<statements::prepared_statement>> get_statement(
-            utils::chunked_string_view query,
+            utils::chunked_string query,
             const service::client_state& client_state,
             dialect d);
 

@@ -311,7 +311,7 @@ public:
 
     virtual future<utils::chunked_vector<mutation>> get_modification_mutations(const sstring& text) override {
         auto qs = make_query_state();
-        auto cql_stmt = (co_await local_qp().get_statement(text, qs->get_client_state(), test_dialect()))->statement;
+        auto cql_stmt = (co_await local_qp().get_statement(utils::chunked_string(text), qs->get_client_state(), test_dialect()))->statement;
         auto modif_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(std::move(cql_stmt));
         if (!modif_stmt) {
             throw std::runtime_error(format("get_stmt_mutations: not a modification statement: {}", text));
@@ -1291,7 +1291,7 @@ public:
 
         std::vector<batch_statement::single_statement> modifications;
         for (const auto& query : queries) {
-            auto stmt = co_await local_qp().get_statement(query, _core_local.local().client_state, test_dialect());
+            auto stmt = co_await local_qp().get_statement(utils::chunked_string(query), _core_local.local().client_state, test_dialect());
             auto mod = dynamic_cast<modification_statement*>(stmt->statement.get());
             if (!mod) {
                 throw exceptions::invalid_request_exception(
