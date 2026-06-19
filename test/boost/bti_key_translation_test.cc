@@ -28,25 +28,60 @@ static std::vector<std::byte> linearize(comparable_bytes_iterator auto&& it) {
 
 // Generate an ordered list of various ring position views,
 // which together should cover all kinds of various pairwise comparisons.
-static std::generator<dht::ring_position_view> generate_rpvs(const schema& string_pair_pk_schema) {
+//
+// The expected ordering depends on `sst_ver`:
+// `mt` sorts partition keys within the same token by a bytewise comparison of their "legacy encoding",
+// `ms` sorts them by a typed column-by-column comparison.
+static std::generator<dht::ring_position_view> generate_rpvs(
+        const schema& string_pair_pk_schema,
+        sstables::sstable_version_types sst_ver) {
     constexpr auto alphabet = std::string_view("\x00\xff", 2);
     constexpr auto max_len = 2;
     auto all_strings = tests::generate_all_strings(alphabet, max_len);
-    co_yield dht::ring_position_view::min();
-    for (const auto& token : {dht::token::first(), dht::token::last()}) {
-        using token_bound = dht::ring_position_view::token_bound;
-        co_yield dht::ring_position_view(token, token_bound::start);
-        for (const auto& pk1 : all_strings)
+
+    std::vector<partition_key> pks;
+    for (const auto& pk1 : all_strings) {
         for (const auto& pk2 : all_strings) {
             std::vector<data_value> components;
             components.emplace_back(pk1);
             components.emplace_back(pk2);
-            auto pk = partition_key::from_deeply_exploded(string_pair_pk_schema, components);
+            pks.push_back(partition_key::from_deeply_exploded(string_pair_pk_schema, components));
+        }
+    }
+
+    std::vector<dht::token> tokens{
+        dht::token::first(),
+        dht::token::last()
+    };
+
+    std::vector<dht::ring_position_view> rpvs;
+    for (const auto& token : tokens) {
+        for (const auto& pk : pks) {
             for (int weight = -1; weight <= 1; ++weight) {
-                co_yield dht::ring_position_view(token, &pk, weight);
+                rpvs.push_back(dht::ring_position_view(token, &pk, weight));
             }
         }
-        co_yield dht::ring_position_view(token, token_bound::end);
+    }
+    if (sst_ver == sstables::sstable_version_types::ms) {
+        // ms encodes the partition key component-wise, so for two same-token
+        // rpvs the expected order is given by partition_key::tri_compare
+        // (NOT the ring comparator, which compares pks by their legacy form).
+        partition_key::tri_compare pk_cmp(string_pair_pk_schema);
+        std::ranges::sort(rpvs, [&pk_cmp] (const dht::ring_position_view& a, const dht::ring_position_view& b) {
+            if (auto cmp = a.token() <=> b.token(); cmp != 0) {
+                return cmp < 0;
+            }
+            if (auto cmp = pk_cmp(*a.key(), *b.key()); cmp != 0) {
+                return cmp < 0;
+            }
+            return a.weight() < b.weight();
+        });
+    } else {
+        std::ranges::sort(rpvs, dht::ring_position_less_comparator(string_pair_pk_schema));
+    }
+
+    for (const auto& rpv : rpvs) {
+        co_yield rpv;
     }
 }
 
@@ -58,22 +93,25 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_ord
         .with_column("pk2", utf8_type, column_kind::partition_key)
         .build();
     using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
-    std::unique_ptr<encoding> prev;
-    for (const auto& rpv : generate_rpvs(*s)) {
-        if (!prev) {
-            prev = std::make_unique<encoding>(*s, rpv);
-        } else {
-            auto curr = std::make_unique<encoding>(*s, rpv);
-            auto prev_bytes = linearize(prev->begin());
-            auto curr_bytes = linearize(curr->begin());
-            testlog.debug("prev_bytes={}, curr_bytes={}", fmt_hex(prev_bytes), fmt_hex(curr_bytes));
-            SCYLLA_ASSERT(prev_bytes < curr_bytes);
-            std::swap(prev, curr);
+    for (auto sst_ver : {sstables::sstable_version_types::ms, sstables::sstable_version_types::mt}) {
+        testlog.info("checking sstable_version={}", sst_ver);
+        std::unique_ptr<encoding> prev;
+        for (const auto& rpv : generate_rpvs(*s, sst_ver)) {
+            if (!prev) {
+                prev = std::make_unique<encoding>(sst_ver, *s, rpv);
+            } else {
+                auto curr = std::make_unique<encoding>(sst_ver, *s, rpv);
+                auto prev_bytes = linearize(prev->begin());
+                auto curr_bytes = linearize(curr->begin());
+                testlog.debug("prev_bytes={}, curr_bytes={}", fmt_hex(prev_bytes), fmt_hex(curr_bytes));
+                SCYLLA_ASSERT(prev_bytes < curr_bytes);
+                std::swap(prev, curr);
+            }
         }
+        auto prev_bytes = linearize(prev->begin());
+        SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view(dht::maximum_token(), nullptr, -1)).begin()));
+        SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view::max()).begin()));
     }
-    auto prev_bytes = linearize(prev->begin());
-    SCYLLA_ASSERT(prev_bytes <= linearize(encoding(*s, dht::ring_position_view(dht::maximum_token(), nullptr, -1)).begin()));
-    SCYLLA_ASSERT(prev_bytes <= linearize(encoding(*s, dht::ring_position_view::max()).begin()));
 }
 
 // Tests lazy_comparable_bytes_from_ring_position::trim().
@@ -99,39 +137,279 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_trim) {
         partition_key::from_deeply_exploded(*s, components);
     });
     using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
-    const auto dk = dht::decorated_key(dht::token::from_int64(42), std::move(pk));
-    const auto encoded = linearize(encoding(*s, dk).begin());
+    for (auto sst_ver : {sstables::sstable_version_types::ms, sstables::sstable_version_types::mt}) {
+        testlog.info("checking sstable_version={}", sst_ver);
+        const auto dk = dht::decorated_key(dht::token::from_int64(42), pk);
+        const auto encoded = linearize(encoding(sst_ver, *s, dk).begin());
 
-    constexpr auto modification_byte = std::byte('z');
-    for (size_t view_position = 0; view_position <= encoded.size(); ++view_position)
-    for (size_t trim_position = 0; trim_position <= view_position; ++trim_position)
-    for (size_t modification_position = 0; modification_position <= trim_position; ++modification_position) {
-        auto enc = encoding(*s, std::move(dk));
-        {
-            size_t n_seen = 0;
-            auto it = enc.begin();
-            while (it != std::default_sentinel) {
-                auto fragment_start = n_seen;
-                n_seen += (*it).size_bytes();
-                if (fragment_start <= modification_position && modification_position < n_seen) {
-                    (*it)[modification_position - fragment_start] = modification_byte;
+        constexpr auto modification_byte = std::byte('z');
+        for (size_t view_position = 0; view_position <= encoded.size(); ++view_position)
+        for (size_t trim_position = 0; trim_position <= view_position; ++trim_position)
+        for (size_t modification_position = 0; modification_position <= trim_position; ++modification_position) {
+            auto enc = encoding(sst_ver, *s, dk);
+            {
+                size_t n_seen = 0;
+                auto it = enc.begin();
+                while (it != std::default_sentinel) {
+                    auto fragment_start = n_seen;
+                    n_seen += (*it).size_bytes();
+                    if (fragment_start <= modification_position && modification_position < n_seen) {
+                        (*it)[modification_position - fragment_start] = modification_byte;
+                    }
+                    if (view_position <= n_seen) {
+                        break;
+                    }
+                    ++it;
                 }
-                if (view_position <= n_seen) {
-                    break;
-                }
-                ++it;
+                enc.trim(trim_position);
             }
-            enc.trim(trim_position);
+            auto expected_encoded = encoded;
+            if (modification_position < trim_position) {
+                expected_encoded[modification_position] = modification_byte;
+            }
+            expected_encoded.resize(trim_position);
+            auto new_encoded = linearize(enc.begin());
+            testlog.debug("view_position={}, trim_position={}, modification_position={}", view_position, trim_position, modification_position);
+            testlog.debug("new_encoded={}, expected_encoded={}", fmt_hex(new_encoded), fmt_hex(expected_encoded));
+            SCYLLA_ASSERT(new_encoded == expected_encoded);
         }
-        auto expected_encoded = encoded;
-        if (modification_position < trim_position) {
-            expected_encoded[modification_position] = modification_byte;
+    }
+}
+
+// Compatibility test for partition key encoding.
+//
+// The encoding has to stay stable across Scylla versions,
+// so it's good to have a test with fixed inputs and outputs.
+BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_fixed_cases_mt) {
+    struct fixed_case {
+        // Name of the test case, for logging.
+        const char* name;
+        // Columns of the partition key.
+        std::vector<data_type> col_types;
+        std::vector<bytes> col_values;
+        int64_t token;
+        // Hex strings representing the encodings of various
+        // ring positions around the token and key.
+        const char* at_key;
+        const char* before_token;
+        const char* after_token;
+        const char* before_key;
+        const char* after_key;
+    };
+
+    std::vector<fixed_case> cases = {
+        {
+            "bigint",
+            {long_type},
+            {from_hex("0123456789abcdef")},
+            0x6f24ac460b9c0027,
+            "40ef24ac460b9c0027400123456789abcdef0038",
+            "40ef24ac460b9c002720",
+            "40ef24ac460b9c002760",
+            "40ef24ac460b9c0027400123456789abcdef0020",
+            "40ef24ac460b9c0027400123456789abcdef0060",
+        },
+        {
+            "int",
+            {int32_type},
+            {from_hex("01020304")},
+            0x0a0090a9da040fe3,
+            "408a0090a9da040fe340010203040038",
+            "408a0090a9da040fe320",
+            "408a0090a9da040fe360",
+            "408a0090a9da040fe340010203040020",
+            "408a0090a9da040fe340010203040060",
+        },
+        {
+            "blob_all_nuls",
+            {bytes_type},
+            {from_hex("00000000")},
+            0xcfa0f7ddd84c76bc,
+            "404fa0f7ddd84c76bc4000fefefefe38",
+            "404fa0f7ddd84c76bc20",
+            "404fa0f7ddd84c76bc60",
+            "404fa0f7ddd84c76bc4000fefefefe20",
+            "404fa0f7ddd84c76bc4000fefefefe60",
+        },
+        {
+            "blob_no_nuls",
+            {bytes_type},
+            {from_hex("0102030405")},
+            0xfe94a31bab98860e,
+            "407e94a31bab98860e4001020304050038",
+            "407e94a31bab98860e20",
+            "407e94a31bab98860e60",
+            "407e94a31bab98860e4001020304050020",
+            "407e94a31bab98860e4001020304050060",
+        },
+        {
+            "bigint_blob_pair",
+            {long_type, bytes_type},
+            {from_hex("0123456789abcdef"), from_hex("0100020003")},
+            0x79086c2c2e019e3e,
+            "40f9086c2c2e019e3e4000ff080123456789abcdef00feff050100ff0200ff0300fe38",
+            "40f9086c2c2e019e3e20",
+            "40f9086c2c2e019e3e60",
+            "40f9086c2c2e019e3e4000ff080123456789abcdef00feff050100ff0200ff0300fe20",
+            "40f9086c2c2e019e3e4000ff080123456789abcdef00feff050100ff0200ff0300fe60",
+        },
+    };
+
+    using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
+    auto sst_ver = sstables::sstable_version_types::mt;
+
+    for (const auto& tc : cases) {
+        auto sb = schema_builder("ks", "t");
+        for (size_t i = 0; i < tc.col_types.size(); ++i) {
+            sb.with_column(to_bytes(fmt::format("pk{}", i)), tc.col_types[i], column_kind::partition_key);
         }
-        expected_encoded.resize(trim_position);
-        auto new_encoded = linearize(enc.begin());
-        testlog.debug("view_position={}, trim_position={}, modification_position={}", view_position, trim_position, modification_position);
-        testlog.debug("new_encoded={}, expected_encoded={}", fmt_hex(new_encoded), fmt_hex(expected_encoded));
-        SCYLLA_ASSERT(new_encoded == expected_encoded);
+        auto s = sb.build();
+
+        auto pk = partition_key::from_exploded(*s, tc.col_values);
+        auto tok = dht::token::from_int64(tc.token);
+
+        struct subcase {
+            const char* kind;
+            const partition_key* pk_ptr;
+            int8_t weight;
+            const char* expected;
+        };
+        std::array<subcase, 5> subs = {{
+            {"at_key",       &pk,     0, tc.at_key},
+            {"before_token", nullptr, -1, tc.before_token},
+            {"after_token",  nullptr, +1, tc.after_token},
+            {"before_key",   &pk,    -1, tc.before_key},
+            {"after_key",    &pk,    +1, tc.after_key},
+        }};
+        for (const auto& sub : subs) {
+            auto rpv = dht::ring_position_view(tok, sub.pk_ptr, sub.weight);
+            encoding enc(sst_ver, *s, rpv);
+            auto got_hex = fmt::format("{}", fmt_hex(linearize(enc.begin())));
+            BOOST_REQUIRE_MESSAGE(got_hex == sub.expected,
+                fmt::format("case '{}' position_kind={}: expected={} got={}",
+                    tc.name, sub.kind, sub.expected, got_hex));
+        }
+    }
+}
+
+// Compatibility test for partition key encoding, ms format.
+//
+// Same shape as test_lazy_comparable_bytes_from_ring_position_fixed_cases,
+// but uses sstable_version_types::ms.
+// In ms the partition key is encoded component-wise via comparable_bytes_from_compound
+// (each column prefixed with separator 0x40 and encoded via to_comparable_bytes for the column's type),
+// instead of the "legacy form" used by mt.
+//
+// Note: the encoding used by ms was a mistake, because the index ordering implied by it
+// is not compatible with the ordering of Data files.
+// However, since `ms` files might exist out there, and for a given file index readers
+// must use the same encoding as index writers, we need to support this encoding
+// and keep it stable.
+BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_fixed_cases_ms) {
+    struct fixed_case {
+        const char* name;
+        std::vector<data_type> col_types;
+        std::vector<bytes> col_values;
+        int64_t token;
+        const char* at_key;
+        const char* before_token;
+        const char* after_token;
+        const char* before_key;
+        const char* after_key;
+    };
+
+    std::vector<fixed_case> cases = {
+        {
+            "bigint",
+            {long_type},
+            {from_hex("0123456789abcdef")},
+            0x6f24ac460b9c0027,
+            "40ef24ac460b9c002740ff8123456789abcdef38",
+            "40ef24ac460b9c002720",
+            "40ef24ac460b9c002760",
+            "40ef24ac460b9c002740ff8123456789abcdef20",
+            "40ef24ac460b9c002740ff8123456789abcdef60",
+        },
+        {
+            "int",
+            {int32_type},
+            {from_hex("01020304")},
+            0x0a0090a9da040fe3,
+            "408a0090a9da040fe3408102030438",
+            "408a0090a9da040fe320",
+            "408a0090a9da040fe360",
+            "408a0090a9da040fe3408102030420",
+            "408a0090a9da040fe3408102030460",
+        },
+        {
+            "blob_all_nuls",
+            {bytes_type},
+            {from_hex("00000000")},
+            0xcfa0f7ddd84c76bc,
+            "404fa0f7ddd84c76bc4000fefefefe38",
+            "404fa0f7ddd84c76bc20",
+            "404fa0f7ddd84c76bc60",
+            "404fa0f7ddd84c76bc4000fefefefe20",
+            "404fa0f7ddd84c76bc4000fefefefe60",
+        },
+        {
+            "blob_no_nuls",
+            {bytes_type},
+            {from_hex("0102030405")},
+            0xfe94a31bab98860e,
+            "407e94a31bab98860e4001020304050038",
+            "407e94a31bab98860e20",
+            "407e94a31bab98860e60",
+            "407e94a31bab98860e4001020304050020",
+            "407e94a31bab98860e4001020304050060",
+        },
+        {
+            "bigint_blob_pair",
+            {long_type, bytes_type},
+            {from_hex("0123456789abcdef"), from_hex("0100020003")},
+            0x79086c2c2e019e3e,
+            "40f9086c2c2e019e3e40ff8123456789abcdef400100ff0200ff030038",
+            "40f9086c2c2e019e3e20",
+            "40f9086c2c2e019e3e60",
+            "40f9086c2c2e019e3e40ff8123456789abcdef400100ff0200ff030020",
+            "40f9086c2c2e019e3e40ff8123456789abcdef400100ff0200ff030060",
+        },
+    };
+
+    using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
+    auto sst_ver = sstables::sstable_version_types::ms;
+
+    for (const auto& tc : cases) {
+        auto sb = schema_builder("ks", "t");
+        for (size_t i = 0; i < tc.col_types.size(); ++i) {
+            sb.with_column(to_bytes(fmt::format("pk{}", i)), tc.col_types[i], column_kind::partition_key);
+        }
+        auto s = sb.build();
+
+        auto pk = partition_key::from_exploded(*s, tc.col_values);
+        auto tok = dht::token::from_int64(tc.token);
+
+        struct subcase {
+            const char* kind;
+            const partition_key* pk_ptr;
+            int8_t weight;
+            const char* expected;
+        };
+        std::array<subcase, 5> subs = {{
+            {"at_key",       &pk,     0, tc.at_key},
+            {"before_token", nullptr, -1, tc.before_token},
+            {"after_token",  nullptr, +1, tc.after_token},
+            {"before_key",   &pk,    -1, tc.before_key},
+            {"after_key",    &pk,    +1, tc.after_key},
+        }};
+        for (const auto& sub : subs) {
+            auto rpv = dht::ring_position_view(tok, sub.pk_ptr, sub.weight);
+            encoding enc(sst_ver, *s, rpv);
+            auto got_hex = fmt::format("{}", fmt_hex(linearize(enc.begin())));
+            BOOST_REQUIRE_MESSAGE(got_hex == sub.expected,
+                fmt::format("case '{}' position_kind={}: expected={} got={}",
+                    tc.name, sub.kind, sub.expected, got_hex));
+        }
     }
 }
 

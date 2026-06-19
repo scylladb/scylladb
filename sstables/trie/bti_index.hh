@@ -73,7 +73,7 @@ public:
     // but it mustn't be extended after `finish()`,
     // because `finish()` writes a footer which is used by the reader
     // to find the root of the trie.
-    explicit bti_partition_index_writer(sstables::file_writer&);
+    explicit bti_partition_index_writer(sstable_version_types, sstables::file_writer&);
     bti_partition_index_writer(bti_partition_index_writer&&) noexcept;
     bti_partition_index_writer& operator=(bti_partition_index_writer&&) noexcept;
     ~bti_partition_index_writer() noexcept;
@@ -83,7 +83,7 @@ public:
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
     // If add() was never called, returns -1.
     // The writer mustn't be used again after this.
-    std::optional<bti_partitions_db_footer> finish(sstable_version_types ver, const sstables::key& first_key, const sstables::key& last_key) &&;
+    std::optional<bti_partitions_db_footer> finish(const sstables::key& first_key, const sstables::key& last_key) &&;
 };
 
 future<bti_partitions_db_footer> read_bti_partitions_db_footer(const schema& s, sstable_version_types v, const seastar::file& f, uint64_t file_size);
@@ -147,6 +147,7 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     seastar::shared_ptr<cached_file> rows_db,
     uint64_t partitions_db_root_pos,
     uint64_t total_data_db_file_size,
+    sstable_version_types,
     schema_ptr,
     reader_permit,
     tracing::trace_state_ptr);

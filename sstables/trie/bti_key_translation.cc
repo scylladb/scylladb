@@ -11,7 +11,7 @@
 
 namespace sstables::trie {
 
-lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(const schema& s, dht::ring_position_view rpv)
+lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(sstable_version_types sst_ver, const schema& s, dht::ring_position_view rpv)
     : _s(s)
     // Note about `dht::maximum_token()`: this isn't a real token.
     // It's just a fake element greater than any real token.
@@ -27,6 +27,7 @@ lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_positi
     , _pk(rpv.key()
         ? decltype(_pk)(*rpv.key())
         : decltype(_pk)(comparable_bytes(managed_bytes{bytes::value_type(bound_weight_to_terminator(_weight))})))
+    , _format_version(sst_ver)
 {
     if (std::holds_alternative<comparable_bytes>(_pk)) {
         // If we initialized `_pk` to a `comparable_bytes`, we must initialize `_size` accordingly.
@@ -38,10 +39,11 @@ lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_positi
     init_first_fragment(rpv.token().is_maximum() ? dht::token::last() : rpv.token());
 }
 
-lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(const schema& s, dht::decorated_key dk)
+lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(sstable_version_types sst_ver, const schema& s, dht::decorated_key dk)
     : _s(s)
     , _weight(bound_weight::equal)
     , _pk(std::move(dk._key))
+    , _format_version(sst_ver)
 {
     init_first_fragment(dk._token);
 }

@@ -222,6 +222,7 @@ struct partitions_metadata {
 // are consistent with the fragments they were (supposed to be) built on.
 void test_index_files(
     sstables::test_env& env,
+    sstable_version_types bti_ver,
     schema_ptr s,
     std::span<const position_and_fragment> fragments,
     const partitions_metadata& pm,
@@ -246,7 +247,7 @@ void test_index_files(
     auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
 
     // Read the Partitions.db footer, check the metadata contained there.
-    auto footer = sstables::trie::read_bti_partitions_db_footer(*s, sstable::version_types::me, partitions_db_cached->get_file(), partitions_db_size).get();
+    auto footer = sstables::trie::read_bti_partitions_db_footer(*s, bti_ver, partitions_db_cached->get_file(), partitions_db_size).get();
     SCYLLA_ASSERT(footer.partition_count == pm.partition_count);
     SCYLLA_ASSERT(sstables::key_view(footer.first_key) == sstables::key::from_partition_key(*s, pm.first_key.key()));
     SCYLLA_ASSERT(sstables::key_view(footer.last_key) == sstables::key::from_partition_key(*s, pm.last_key.key()));
@@ -257,6 +258,7 @@ void test_index_files(
         rows_db_cached,
         footer.trie_root_position,
         data_db_size,
+        bti_ver,
         s,
         env.make_reader_permit(),
         trace_state
@@ -421,14 +423,16 @@ void do_test(const test_config& cfg) {
         // of the test logic.
         // (There's no easy way to learn the Data.db positions from *reading* sstables,
         // only from writing them. And adding one would be troublesome.)
+        auto data_file_version = sstables::sstable_version_types::me;
+        auto bti_version = sstables::sstable_version_types::mt;
         auto sst = cfg.phase == "prepare"
             ? env.make_sstable(
                 adjusted_schema,
                 cfg.scylla_directory.value(),
-                sstables::sstable_version_types::me)
+                data_file_version)
             : env.make_sstable(
                 adjusted_schema,
-                sstables::sstable_version_types::me);
+                data_file_version);
         auto mr = make_reader_from_mutations();
         auto close_mr = deferred_close(mr);
         auto wr = sst->get_writer(*schema, mutations.size(), env.manager().configure_writer(), enc_stats);
@@ -499,7 +503,7 @@ void do_test(const test_config& cfg) {
             auto close_rows_db = defer([&] () { rows_db_writer.close(); });
 
             // Construct BTI index writers on top of the `file_writer`s.
-            auto bti_partition_index_writer = sstables::trie::bti_partition_index_writer(partitions_db_writer);
+            auto bti_partition_index_writer = sstables::trie::bti_partition_index_writer(bti_version, partitions_db_writer);
             auto bti_row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
 
             struct current_partition_data {
@@ -562,7 +566,7 @@ void do_test(const test_config& cfg) {
                     auto pk = sstables::key::from_partition_key(*adjusted_schema, current_partition->dk.key());
                     auto hash = utils::make_hashed_key(bytes_view(pk));
                     auto payload = bti_row_index_writer.finish(
-                        sst->get_version(),
+                        bti_version,
                         *adjusted_schema,
                         current_partition->data_file_offset,
                         frag.offset,
@@ -574,7 +578,6 @@ void do_test(const test_config& cfg) {
                 }
             }
             std::move(bti_partition_index_writer).finish(
-                sst->get_version(),
                 sstables::key::from_partition_key(*adjusted_schema, mutations.front().key()),
                 sstables::key::from_partition_key(*adjusted_schema, mutations.back().key())
             );
@@ -623,6 +626,7 @@ void do_test(const test_config& cfg) {
             auto expected_scylla_index_granularity = std::nullopt;
             test_index_files(
                 env,
+                bti_version,
                 adjusted_schema,
                 fragments,
                 partition_meta,
@@ -636,6 +640,7 @@ void do_test(const test_config& cfg) {
             const uint64_t expected_cassandra_index_granularity = 4096;
             test_index_files(
                 env,
+                bti_version,
                 adjusted_schema,
                 fragments,
                 partition_meta,
