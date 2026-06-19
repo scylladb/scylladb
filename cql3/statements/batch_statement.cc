@@ -452,8 +452,13 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
     std::vector<cql3::statements::batch_statement::single_statement> statements;
     statements.reserve(_parsed_statements.size());
 
-    auto bytes_before = seastar::memory::stats().total_bytes_allocated();
+    // Each prepared sub-statement owns its schema through modification_statement::s.
+    // A schema change while we yield can invalidate caches, but it cannot make an
+    // already prepared sub-statement refer to freed schema state; cache invalidation
+    // after this returns is handled by the prepared-cache caller.
+    uint64_t prepare_bytes = 0;
     for (auto&& parsed : _parsed_statements) {
+        auto bytes_before = seastar::memory::stats().total_bytes_allocated();
         auto statement = parsed->make_prepared_modification_statement(db, meta, stats);
         if (!first_ks) {
             first_ks = statement->keyspace();
@@ -466,8 +471,11 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         if (audit_info) {
             audit_info->set_query_string(parsed->get_raw_cql());
         }
+        prepare_bytes += seastar::memory::stats().total_bytes_allocated() - bytes_before;
+        co_await coroutine::maybe_yield();
     }
 
+    auto bytes_before = seastar::memory::stats().total_bytes_allocated();
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
     prep_attrs->fill_prepare_context(meta);
 
@@ -480,7 +488,7 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
     auto p = std::make_unique<prepared_statement>(audit_info(), make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
                                                   meta.get_variable_specifications(),
                                                   std::move(partition_key_bind_indices));
-    uint64_t prepare_bytes = seastar::memory::stats().total_bytes_allocated() - bytes_before;
+    prepare_bytes += seastar::memory::stats().total_bytes_allocated() - bytes_before;
 
     co_return std::pair(std::move(p), prepare_bytes);
 }
