@@ -7,8 +7,8 @@ import errno
 import fcntl
 import os
 import random
-import threading
 from pathlib import Path
+
 from test.pylib.pool import Pool
 from typing import NewType, Optional
 
@@ -51,12 +51,13 @@ class HostRegistry:
         # stops Scyllas.
         #
         # To create a subnet let's randomly generate a number and put
-        # a file with this name into /tmp. If the file doesn't exist,
-        # the subnet is free. If it already exists and is locked,
-        # there is another process running with this subnet and we
-        # should try again with another subnet. If the file isn't
+        # a file with this name into a well-known directory. If the file
+        # doesn't exist, the subnet is free. If it already exists and is
+        # locked, there is another process running with this subnet and
+        # we should try again with another subnet. If the file isn't
         # locked, it remains from some previous invocation and can be
         # locked and reused.
+
         worker_id = os.getenv('PYTEST_XDIST_WORKER', 'gw0')
         second_octet = int(worker_id[2:]) + 1
         # HostRegistry is a singleton, so there should be no possibility to mess and overlap in IP for one use
@@ -64,20 +65,19 @@ class HostRegistry:
         # so this simple retry should help to eliminate the overlap and just find another random IP
         max_attempts = 20
         for attempt in range(max_attempts):
-            with threading.Lock():
-                # Avoid 127.0.*.* since CCM (a different test framework)
-                # assumes it will be available for it to run Scylla
-                # instances. 127.255.255.255 is also illegal.
-                self.subnet = "127.{}.{}".format(second_octet, random.randrange(0, 255))
-                self.lock_filename: Optional[Path] = Path(os.getenv('TMPDIR', '/tmp')) / ('scylla-' + self.subnet)
-                self.lock_file = self.lock_filename.open('w')
-                try:
-                    fcntl.lockf(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError as e:
-                    self.lock_file.close()
-                    if e.errno not in (errno.EACCES, errno.EAGAIN):
-                        raise
+            # Avoid 127.0.*.* since CCM (a different test framework)
+            # assumes it will be available for it to run Scylla
+            # instances. 127.255.255.255 is also illegal.
+            self.subnet = f"127.{second_octet}.{random.randrange(0, 255)}"
+            self.lock_filename: Optional[Path] = Path('/tmp') / f"scylla-{self.subnet}"
+            self.lock_file = self.lock_filename.open('w')
+            try:
+                fcntl.lockf(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as e:
+                self.lock_file.close()
+                if e.errno not in (errno.EACCES, errno.EAGAIN):
+                    raise
         else:
             raise RuntimeError(
                 f"Failed to acquire a subnet lock after {max_attempts} attempts"
