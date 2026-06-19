@@ -170,7 +170,8 @@ or
 # System tables
 There are a few system tables that object storage related code needs to touch in order to operate.
 * [system_distributed.snapshot_sstables](docs/dev/snapshot_sstables.md) - Used during restore by worker nodes to get the list of SSTables that need to be downloaded from object storage and restored locally.
-* [system.sstables](docs/dev/system_keyspace.md#systemsstables) - Used to keep track of SSTables on object storage when a keyspace is created with object storage storage_options.
+* [system_distributed.snapshot_cql_tables](docs/dev/snapshot_cql_tables.md) - Used during restore to get the CQL schema of tables that need to be restored.
+* [system.sstables](docs/dev/system_keyspace.md#systemsstables) - Used to keep track of SSTables on object storage when a keyspace is created with S3 storage_options.
 
 # Manipulating S3 data
 

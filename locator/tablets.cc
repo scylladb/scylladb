@@ -1278,14 +1278,12 @@ tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map
 {
     // Filter all tablets and save only those that have a replica on the specified host.
     for (auto tid = std::optional(tablets.first_tablet()); tid; tid = tablets.next_tablet(*tid)) {
-        const auto& tablet_info = tablets.get_tablet_info(*tid);
-
-        auto replica_it = std::ranges::find_if(tablet_info.replicas, [&] (auto&& r) { return r.host == host; });
-        if (replica_it == tablet_info.replicas.end()) {
+        auto shard = get_shard_for_reads(tablets, *tid, host);
+        if (!shard) {
             continue;
         }
 
-        _tablet_ranges.emplace_back(range_split_result{replica_it->shard, dht::to_partition_range(tablets.get_token_range(*tid))});
+        _tablet_ranges.emplace_back(range_split_result{*shard, dht::to_partition_range(tablets.get_token_range(*tid))});
     }
     _tablet_ranges_it = _tablet_ranges.begin();
 }

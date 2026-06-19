@@ -31,6 +31,7 @@ struct restore_result {
 
 namespace sstables { class storage_manager; }
 
+namespace cql3 { class query_processor; }
 namespace netw { class messaging_service; }
 namespace db {
 class system_distributed_keyspace;
@@ -93,6 +94,7 @@ private:
     shared_ptr<task_manager_module> _task_manager_module;
     sstables::storage_manager& _storage_manager;
     db::system_distributed_keyspace& _sys_dist_ks;
+    cql3::query_processor& _qp;
     seastar::scheduling_group _sched_group;
 
     // Note that this is obviously only valid for the current shard. Users of
@@ -121,6 +123,7 @@ public:
             tasks::task_manager& tm,
             sstables::storage_manager& sstm,
             db::system_distributed_keyspace& sys_dist_ks,
+            cql3::query_processor& qp,
             seastar::scheduling_group sg);
 
     future<> stop();
@@ -152,6 +155,10 @@ public:
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
 
     future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, utils::chunked_vector<sstring> manifests);
+
+    replica::database& local_db() {
+        return _db.local();
+    }
 
     class download_task_impl;
     class tablet_restore_task_impl;

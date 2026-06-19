@@ -1077,6 +1077,14 @@ public:
     void set_train_dict_callback(decltype(_train_dict));
     seastar::future<> notify_client_routes_change(const client_routes_service::client_route_keys& client_route_keys);
 
+    // Alters the given table's min/max tablet count hints. Only the engaged
+    // hints are applied; if both are disengaged the call is a no-op. When
+    // wait_balancer is set, waits for the load balancer to reach the requested
+    // tablet count (which requires both hints to be engaged and equal).
+    future<> alter_table_with_tablet_hints(schema_ptr schema,
+                                           std::optional<size_t> min_tablet_count,
+                                           std::optional<size_t> max_tablet_count,
+                                           bool wait_balancer = true);
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;
