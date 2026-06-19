@@ -893,6 +893,15 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     }
 }
 
+void fsm::maybe_resend_vote_request(server_id to) {
+    if (auto& state = candidate_state(); !state.votes.has_responded(to)) {
+        logger.trace("{} [term: {}] re-sending vote request to {} after receiving a ping_leader request",
+                _tag, _current_term, to);
+        send_to(to, vote_request{_current_term, _log.last_idx(), _log.last_term(),
+                state.is_prevote, false});
+    }
+}
+
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
     logger.trace("replicate_to[{}->{}]: called next={} match={}",

@@ -172,6 +172,10 @@ public:
         }
         return true;
     }
+    // Check if a voter has responded (voted or rejected) in this election.
+    bool has_responded(server_id id) const {
+        return _responded.contains(id);
+    }
     vote_result tally_votes() const {
         auto quorum = _suffrage.size() / 2 + 1;
         if (_granted >= quorum) {
@@ -200,6 +204,10 @@ public:
 
     void register_vote(server_id from, bool granted);
     vote_result tally_votes() const;
+    // Check if a voter has responded in the current election round.
+    bool has_responded(server_id id) const {
+        return _current.has_responded(id);
+    }
 
     friend fmt::formatter<votes>;
 };

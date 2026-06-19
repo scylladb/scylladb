@@ -2511,3 +2511,92 @@ BOOST_AUTO_TEST_CASE(test_no_start_as_candidate_with_nonempty_log) {
 
     BOOST_CHECK(A.is_follower());
 }
+// Test that when a candidate's initial vote request is lost (peer not
+// available initially), it resends the vote request when the peer pings us
+// with a stale-term message.
+BOOST_AUTO_TEST_CASE(test_start_as_candidate_resend_on_peer_ping) {
+    server_id A_id = id(), B_id = id();
+    BOOST_CHECK(A_id < B_id);
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .enable_fast_bootstrap = true};
+    fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+
+    BOOST_CHECK(A.is_candidate());
+    BOOST_CHECK_EQUAL(A.get_current_term(), term_t{1});
+
+    // Consume the initial vote request (simulating it being lost)
+    auto output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+
+    // Simulate the peer starting later and pinging us with a stale-term
+    // append_reply (this is what ping_leader() sends at term 0)
+    A.step(B_id, raft::append_reply{term_t{0}, index_t{0},
+            raft::append_reply::rejected{index_t{0}, index_t{0}}});
+
+    // The candidate should resend its vote request to B
+    output = A.get_output();
+    BOOST_CHECK_GE(output.messages.size(), 1);
+    bool found_vote_request = false;
+    for (auto& [to, msg] : output.messages) {
+        if (auto* vr = std::get_if<raft::vote_request>(&msg)) {
+            BOOST_CHECK_EQUAL(to, B_id);
+            BOOST_CHECK(!vr->is_prevote);
+            BOOST_CHECK_EQUAL(vr->current_term, term_t{1});
+            found_vote_request = true;
+        }
+    }
+    BOOST_CHECK(found_vote_request);
+
+    // Now B grants the vote — A should become leader
+    A.step(B_id, raft::vote_reply{term_t{1}, true});
+    BOOST_CHECK(A.is_leader());
+}
+
+// Test that a candidate does NOT resend its vote request to a peer that has
+// already responded (voted) in the current term, even if that peer sends a
+// stale-term message.
+BOOST_AUTO_TEST_CASE(test_no_resend_to_responded_peer) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    auto A = create_follower(A_id, log);
+    BOOST_CHECK(A.is_follower());
+
+    // Become a candidate via the normal election timeout.
+    election_timeout(A);
+    BOOST_CHECK(A.is_candidate());
+    auto output = A.get_output();
+    BOOST_CHECK(output.term_and_vote);
+    auto term = output.term_and_vote->first;
+
+    // B responds to our vote request (rejects it). A stays a candidate since
+    // there is no granting quorum (self-vote + rejection), but B has now
+    // responded for this term.
+    A.step(B_id, raft::vote_reply{term, false});
+    BOOST_CHECK(A.is_candidate());
+    (void)A.get_output();
+
+    // B (having responded) sends a stale-term ping — no resend to B.
+    A.step(B_id, raft::append_reply{term_t{0}, index_t{0},
+            raft::append_reply::rejected{index_t{0}, index_t{0}}});
+    output = A.get_output();
+    for (auto& [to, msg] : output.messages) {
+        BOOST_CHECK(to != B_id || !std::holds_alternative<raft::vote_request>(msg));
+    }
+
+    // C (which hasn't responded) sends a stale-term ping — we resend to C.
+    A.step(C_id, raft::append_reply{term_t{0}, index_t{0},
+            raft::append_reply::rejected{index_t{0}, index_t{0}}});
+    output = A.get_output();
+    bool resent_to_c = false;
+    for (auto& [to, msg] : output.messages) {
+        if (to == C_id && std::holds_alternative<raft::vote_request>(msg)) {
+            resent_to_c = true;
+        }
+    }
+    BOOST_CHECK(resent_to_c);
+}

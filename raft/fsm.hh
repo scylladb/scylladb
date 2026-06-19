@@ -290,6 +290,7 @@ private:
 
     void request_vote(server_id from, vote_request&& vote_request);
     void request_vote_reply(server_id from, vote_reply&& vote_reply);
+    void maybe_resend_vote_request(server_id to);
 
     void install_snapshot_reply(server_id from, snapshot_reply&& reply);
 
@@ -538,6 +539,8 @@ void fsm::step(server_id from, const candidate& c, Message&& msg) {
     } else if constexpr (std::is_same_v<Message, install_snapshot>) {
         send_to(from, snapshot_reply{.current_term = _current_term,
                      .success = false });
+    } else if constexpr (std::is_same_v<Message, append_reply>) {
+        maybe_resend_vote_request(from);
     }
 }
 
@@ -627,6 +630,19 @@ void fsm::step(server_id from, Message&& msg) {
         } else if constexpr (std::is_same_v<Message, vote_request>) {
             if (msg.is_prevote) {
                 send_to(from, vote_reply{_current_term, false, true});
+            }
+        } else if constexpr (std::is_same_v<Message, append_reply>) {
+            // A peer that is looking for a leader pings us with a stale-term
+            // append_reply (see ping_leader()/send_ping_messages()). If we are a
+            // candidate and that peer hasn't responded to our vote request yet,
+            // re-send it: the peer is clearly alive now and our original request
+            // may have been lost (e.g. the peer's raft server wasn't ready when we
+            // first became a candidate). We skip peers that already responded for
+            // this term -- re-sending to them would be pointless (a vote is final
+            // for a term), though it would be harmless since the receiver is
+            // idempotent.
+            if (is_candidate()) {
+                maybe_resend_vote_request(from);
             }
         } else {
             // Ignore other cases
