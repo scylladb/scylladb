@@ -2038,7 +2038,7 @@ group_by_references_clustering_keys(const selection::selection& sel, const std::
     });
 }
 
-std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg, bool for_view) {
+std::unique_ptr<prepared_statement> select_statement::prepare_for_view(data_dictionary::database db, cql_stats& stats, const cql_config& cfg, bool for_view) {
     schema_ptr underlying_schema = validation::validate_column_family(db, keyspace(), column_family());
     schema_ptr schema = _parameters->is_mutation_fragments() ? mutation_fragments_select_statement::generate_output_schema(underlying_schema) : underlying_schema;
     prepare_context& ctx = get_prepare_context();

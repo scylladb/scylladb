@@ -31,7 +31,7 @@ public:
     drop_role_statement(const cql3::role_name& name, bool if_exists) : _role(name.to_string()), _if_exists(if_exists) {
     }
 
-    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
     virtual void validate(query_processor&, const service::client_state&) const override;
 

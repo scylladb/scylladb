@@ -19,7 +19,7 @@ namespace cql3 {
 
 namespace statements {
 
-std::unique_ptr<prepared_statement> drop_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+std::unique_ptr<prepared_statement> drop_aggregate_statement::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     return std::make_unique<prepared_statement>(audit_info(), make_shared<drop_aggregate_statement>(*this));
 }
 

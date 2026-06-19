@@ -39,11 +39,6 @@ raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::
     // max_mutation_size = 1/2 of commitlog segment size, thus _max_mutation_size is set 1/3 of commitlog segment size to leave space for metadata.
     , _max_mutation_size(_qp.db().get_config().schema_commitlog_segment_size_in_mb() * 1024 * 1024 / 3)
 {
-    static const auto store_cql = format("INSERT INTO system.{} (group_id, term, \"index\", data) VALUES (?, ?, ?, ?)",
-        db::system_keyspace::RAFT);
-    auto prepared_stmt_ptr = _qp.prepare_internal(store_cql);
-    shared_ptr<cql3::cql_statement> cql_stmt = prepared_stmt_ptr->statement;
-    _store_entry_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
 }
 
 future<> raft_sys_table_storage::store_term_and_vote(raft::term_t term, raft::server_id vote) {
@@ -187,6 +182,14 @@ future<> raft_sys_table_storage::store_snapshot_descriptor(const raft::snapshot_
 }
 
 future<size_t> raft_sys_table_storage::do_store_log_entries_one_batch(const std::vector<raft::log_entry_ptr>& entries, size_t start_idx) {
+    if (!_store_entry_stmt) {
+        static const auto store_cql = format("INSERT INTO system.{} (group_id, term, \"index\", data) VALUES (?, ?, ?, ?)",
+            db::system_keyspace::RAFT);
+        auto prepared_stmt_ptr = co_await _qp.prepare_internal(store_cql);
+        shared_ptr<cql3::cql_statement> cql_stmt = prepared_stmt_ptr->statement;
+        _store_entry_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
+    }
+
     std::vector<cql3::statements::batch_statement::single_statement> batch_stmts;
     // statement values that can be allocated at once (one contiguous allocation)
     std::vector<std::vector<cql3::raw_value>> stmt_values;

@@ -27,7 +27,7 @@ bool detach_service_level_statement::needs_guard(query_processor& qp, service::q
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-cql3::statements::detach_service_level_statement::prepare(
+cql3::statements::detach_service_level_statement::make_prepared_statement(
         data_dictionary::database db, cql_stats &stats, const cql_config& cfg) {
     return std::make_unique<prepared_statement>(audit_info(), ::make_shared<detach_service_level_statement>(*this));
 }

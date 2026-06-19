@@ -19,7 +19,7 @@ class list_effective_service_level_statement final : public service_level_statem
 public:
     list_effective_service_level_statement(sstring role_name);
 
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    virtual std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
     virtual seastar::shared_ptr<const metadata> get_result_metadata() const override;
 

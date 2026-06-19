@@ -54,7 +54,7 @@ create_function_statement::audit_info() const {
     return audit::audit::create_audit_info(category(), sstring(), sstring());
 }
 
-std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+std::unique_ptr<prepared_statement> create_function_statement::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     return std::make_unique<prepared_statement>(audit_info(), make_shared<create_function_statement>(*this));
 }
 

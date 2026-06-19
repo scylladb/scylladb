@@ -46,7 +46,10 @@ public:
         }
     }
 
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    // Yields between preparation of the contained sub-statements to avoid
+    // reactor stalls on large batches (#24578).
+    virtual future<std::pair<std::unique_ptr<prepared_statement>, uint64_t>> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+
 protected:
     virtual audit::statement_category category() const override;
     virtual audit::audit_info_ptr audit_info() const override {

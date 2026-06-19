@@ -37,7 +37,7 @@ public:
                 , _if_not_exists(if_not_exists) {
     }
 
-    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
     virtual future<> check_access(query_processor& qp, const service::client_state&) const override;
 

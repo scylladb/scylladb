@@ -32,7 +32,7 @@ private:
 public:
     list_permissions_statement(auth::permission_set, std::optional<auth::resource>, std::optional<sstring>, bool);
 
-    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
     virtual seastar::shared_ptr<const metadata> get_result_metadata() const override;
 

@@ -1753,7 +1753,7 @@ validate_and_prepare_query(std::string_view query, std::string_view table_name, 
     cql3::cql_stats cql_stats;
 
     try {
-        auto prepared_statement = raw_statement->prepare(db, cql_stats, cql3::default_cql_config);
+        auto [prepared_statement, _] = raw_statement->prepare(db, cql_stats, cql3::default_cql_config).get();
         return std::move(prepared_statement->statement);
     } catch (...) {
         throw std::invalid_argument(seastar::format("failed to prepare query: {}", std::current_exception()));

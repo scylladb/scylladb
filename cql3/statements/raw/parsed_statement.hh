@@ -43,9 +43,16 @@ public:
 
     void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names);
 
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) = 0;
+    // Returns {prepared statement, gross bytes allocated by the synchronous
+    // prepare work}. The allocation cost is measured without spanning any
+    // yield, so callers can account for the preparation cost.
+    virtual future<std::pair<std::unique_ptr<prepared_statement>, uint64_t>> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg);
 
 protected:
+    // Synchronous implementation point for non-batch statements. External
+    // callers use prepare(); batch_statement overrides prepare() directly.
+    virtual std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg);
+
     virtual audit::statement_category category() const = 0;
     virtual audit::audit_info_ptr audit_info() const = 0;
 };

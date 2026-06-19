@@ -81,7 +81,7 @@ public:
     explicit describe_statement(describe_config config);
     void with_internals_details(bool with_hashed_passwords);
 
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    virtual std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
     static std::unique_ptr<describe_statement> cluster();
     static std::unique_ptr<describe_statement> schema(bool full);

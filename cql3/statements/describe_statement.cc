@@ -881,7 +881,7 @@ describe_statement::audit_info() const {
     return audit::audit::create_audit_info(category(), "system", "");
 }
 
-std::unique_ptr<prepared_statement> describe_statement::prepare(data_dictionary::database db, cql_stats &stats, const cql_config& cfg) {
+std::unique_ptr<prepared_statement> describe_statement::make_prepared_statement(data_dictionary::database db, cql_stats &stats, const cql_config& cfg) {
     bool internals = bool(_with_internals);
     auto desc_stmt = std::visit(overloaded_functor{
         [] (const describe_cluster&) -> ::shared_ptr<statements::describe_statement> {

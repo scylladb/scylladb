@@ -32,6 +32,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/try_future.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/metrics.hh>
@@ -1744,11 +1745,11 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp) {
     const utils::result_with_exception_ptr<int8_t> type = in.read_byte();
     if (!type) {
-        return make_exception_future<cql_server::process_fn_return_type>(std::move(type).assume_error());
+        co_await coroutine::return_exception_ptr(std::move(type).assume_error());
     }
     const utils::result_with_exception_ptr<uint16_t> n = in.read_short();
     if (!n) {
-        return make_exception_future<cql_server::process_fn_return_type>(std::move(n).assume_error());
+        co_await coroutine::return_exception_ptr(std::move(n).assume_error());
     }
 
     std::vector<cql3::statements::batch_statement::single_statement> modifications;
@@ -1765,7 +1766,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     for ([[gnu::unused]] auto i : std::views::iota(0u, n.assume_value())) {
         const utils::result_with_exception_ptr<int8_t> kind = in.read_byte();
         if (!kind) {
-            return make_exception_future<cql_server::process_fn_return_type>(std::move(kind).assume_error());
+            co_await coroutine::return_exception_ptr(std::move(kind).assume_error());
         }
 
         std::unique_ptr<cql3::statements::prepared_statement> stmt_ptr;
@@ -1776,19 +1777,24 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         case 0: {
             utils::result_with_exception_ptr<utils::chunked_string> query = in.read_long_chunked_string();
             if (!query) {
-                return make_exception_future<cql_server::process_fn_return_type>(std::move(query).assume_error());
+                co_await coroutine::return_exception_ptr(std::move(query).assume_error());
             }
-            stmt_ptr = qp.local().get_statement(query.assume_value(), client_state, dialect);
+            // query owns its storage and is a local that lives across the
+            // co_await below, so we can hand get_statement() a view into it
+            // (get_statement() makes its own copy before it suspends) and still
+            // use it for tracing afterwards.
+            const utils::chunked_string& query_text = query.assume_value();
+            stmt_ptr = co_await qp.local().get_statement(query_text, client_state, dialect);
             ps = stmt_ptr->checked_weak_from_this();
             if (init_trace && trace_state) {
-                tracing::add_query(trace_state, query.assume_value());
+                tracing::add_query(trace_state, query_text);
             }
             break;
         }
         case 1: {
             utils::result_with_exception_ptr<bytes> cache_key_bytes = in.read_short_bytes();
             if (!cache_key_bytes) {
-                return make_exception_future<cql_server::process_fn_return_type>(std::move(cache_key_bytes).assume_error());
+                co_await coroutine::return_exception_ptr(std::move(cache_key_bytes).assume_error());
             }
             cql3::prepared_cache_key_type cache_key(cache_key_bytes.assume_value(), dialect);
             auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
@@ -1799,7 +1805,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             if (!ps) {
                 ps = qp.local().get_prepared(cache_key);
                 if (!ps) {
-                    return make_exception_future<cql_server::process_fn_return_type>(exceptions::prepared_query_not_found_exception(id));
+                    co_await coroutine::return_exception(exceptions::prepared_query_not_found_exception(id));
                 }
                 // authorize a particular prepared statement only once
                 needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
@@ -1810,13 +1816,13 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             break;
         }
         default:
-            return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(
+            co_await coroutine::return_exception(exceptions::protocol_exception(
                     "Invalid query kind in BATCH messages. Must be 0 or 1 but got "
                             + std::to_string(int(kind.assume_value()))));
         }
 
         if (dynamic_cast<cql3::statements::modification_statement*>(ps->statement.get()) == nullptr) {
-            return make_exception_future<cql_server::process_fn_return_type>(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
+            co_await coroutine::return_exception(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
         }
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         if (init_trace && trace_state) {
@@ -1830,13 +1836,12 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         cql3::unset_bind_variable_vector unset;
         auto rvl = in.read_value_view_list(version, tmp, unset);
         if (!rvl) {
-            return make_exception_future<cql_server::process_fn_return_type>(std::move(rvl).assume_error());
+            co_await coroutine::return_exception_ptr(std::move(rvl).assume_error());
         }
 
         auto stmt = ps->statement;
         if (stmt->get_bound_terms() != tmp.size()) {
-            return make_exception_future<cql_server::process_fn_return_type>(
-                    exceptions::invalid_request_exception(format("There were {:d} markers(?) in CQL but {:d} bound variables",
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(format("There were {:d} markers(?) in CQL but {:d} bound variables",
                             stmt->get_bound_terms(), tmp.size())));
         }
         values.emplace_back(cql3::raw_value_view_vector_with_unset(std::move(tmp), std::move(unset)));
@@ -1847,7 +1852,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
     auto o = in.read_options(version, qp.local().get_cql_config());
     if (!o) {
-        return make_exception_future<cql_server::process_fn_return_type>(std::move(o).assume_error());
+        co_await coroutine::return_exception_ptr(std::move(o).assume_error());
     }
     q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*o.assume_value()), std::move(values)));
     auto& options = *q_state->options;
@@ -1866,18 +1871,15 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
     batch->set_audit_info(batch->audit_info());
-    return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
-            .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
-        if (msg->as_bounce()) {
-            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
-        } else if (msg->is_exception()) {
-            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
-        } else {
-            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version, cql_metadata_id_wrapper{})));
-        }
-    });
+    auto msg = co_await qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries));
+    if (msg->as_bounce()) {
+        co_return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
+    } else if (msg->is_exception()) {
+        co_return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
+    } else {
+        tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
+        co_return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, query_state.get_trace_state(), version, cql_metadata_id_wrapper{})));
+    }
 }
 
 // Copy the bytes from an istream into a bytes_ostream.

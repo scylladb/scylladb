@@ -338,7 +338,7 @@ public:
             std::optional<service::group0_guard> guard,
             cql3::cql_warnings_vec warnings);
 
-    statements::prepared_statement::checked_weak_ptr prepare_internal(const sstring& query);
+    future<statements::prepared_statement::checked_weak_ptr> prepare_internal(const sstring& query);
 
     /*!
      * \brief iterate over all cql results using paging
@@ -454,7 +454,7 @@ public:
             statements::prepared_statement::checked_weak_ptr p,
             db::consistency_level,
             service::query_state& query_state,
-            const data_value_list& values = { });
+            const std::vector<data_value_or_unset>& values);
 
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute_with_params(
             service::query_state& query_state,
@@ -513,7 +513,7 @@ public:
     // For the local node, waits directly without an RPC.
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
-    std::unique_ptr<statements::prepared_statement> get_statement(
+    future<std::unique_ptr<statements::prepared_statement>> get_statement(
             utils::chunked_string_view query,
             const service::client_state& client_state,
             dialect d);
@@ -569,10 +569,10 @@ private:
      *
      * When using paging internally a state object is needed.
      */
-    internal_query_state create_paged_state(
+    future<internal_query_state> create_paged_state(
             const sstring& query_string,
             db::consistency_level,
-            const data_value_list& values,
+            std::vector<data_value_or_unset> values,
             int32_t page_size,
             std::optional<service::query_state> qs = std::nullopt);
 

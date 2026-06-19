@@ -24,7 +24,7 @@ namespace functions {
 namespace statements {
 
 class create_aggregate_statement final : public create_function_statement_base {
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    virtual std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
     future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const override;
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 

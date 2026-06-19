@@ -26,7 +26,7 @@ list_effective_service_level_statement::list_effective_service_level_statement(s
 : _role_name(std::move(role_name)) {}
 
 std::unique_ptr<prepared_statement> 
-list_effective_service_level_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+list_effective_service_level_statement::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     return std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_effective_service_level_statement>(*this));
 }
 
