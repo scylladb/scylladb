@@ -9,21 +9,33 @@
 #include "alternator/export.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "alternator/error.hh"
 #include "alternator/serialization.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
+#include "cql3/untyped_result_set.hh"
+#include "db/system_distributed_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "query/query-request.hh"
 #include "schema/schema.hh"
 #include "service/client_state.hh"
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
 #include "service_permit.hh"
+#include "utils/log.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "utils/rjson.hh"
+#include "utils/s3/client.hh"
 #include <algorithm>
+#include <array>
+#include <cstring>
+#include <random>
 #include <string>
 #include <string_view>
+#include <zlib.h>
 
 
 namespace alternator {
@@ -105,6 +117,73 @@ public:
     }
 };
 
+// Gzip compressor - compresses data using gzip format and writes compressed chunks to the storage sink.
+// Not every call to compress() produces output; zlib may buffer data internally.
+// All data is guaranteed to be flushed when flush_and_close() is called.
+class gzip_compressor : public compression_interface {
+    std::unique_ptr<storage_sink_interface> _sink;
+    z_stream _zs;
+    static constexpr size_t _buf_size = 4096;
+
+public:
+    explicit gzip_compressor(std::unique_ptr<storage_sink_interface> sink)
+        : _sink(std::move(sink)) {
+        memset(&_zs, 0, sizeof(_zs));
+        if (deflateInit2(&_zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
+                16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+            throw std::bad_alloc();
+        }
+    }
+
+    ~gzip_compressor() {
+        deflateEnd(&_zs);
+    }
+
+    seastar::future<> compress(std::span<const std::byte> data) override {
+        _zs.next_in = reinterpret_cast<Bytef*>(const_cast<std::byte*>(data.data()));
+        _zs.avail_in = static_cast<uInt>(data.size());
+
+        do {
+            std::array<std::byte, _buf_size> output;
+            _zs.next_out = reinterpret_cast<Bytef*>(output.data());
+            _zs.avail_out = _buf_size;
+
+            int ret = deflate(&_zs, Z_NO_FLUSH);
+            if (ret < Z_OK) {
+                throw std::runtime_error("gzip compression error");
+            }
+
+            auto produced = _buf_size - _zs.avail_out;
+            if (produced > 0) {
+                co_await _sink->write(std::span<const std::byte>(output.data(), produced));
+            }
+        } while (_zs.avail_in > 0 || _zs.avail_out == 0);
+    }
+
+    seastar::future<> flush_and_close() override {
+        int ret;
+        do {
+            std::array<std::byte, _buf_size> output;
+            _zs.next_out = reinterpret_cast<Bytef*>(output.data());
+            _zs.avail_out = _buf_size;
+            _zs.next_in = nullptr;
+            _zs.avail_in = 0;
+
+            ret = deflate(&_zs, Z_FINISH);
+            if (ret < Z_OK) {
+                throw std::runtime_error("gzip compression flush error");
+            }
+
+            auto produced = _buf_size - _zs.avail_out;
+            if (produced > 0) {
+                co_await _sink->write(std::span<const std::byte>(output.data(), produced));
+            }
+        } while (ret != Z_STREAM_END);
+
+        co_await _sink->flush_and_close();
+    }
+};
+
 // Formatter that converts rjson::value item to single JSON line and passes it to the compressor.
 // The line is terminated with a newline character, so that the source pipeline can parse it line by line.
 class json_formatter : public export_pipeline_interface {
@@ -171,6 +250,55 @@ public:
     }
 };
 
+// Gzip decompressor - decompresses gzip data and passes decompressed chunks to the parser.
+class gzip_decompressor : public decompression_interface {
+    std::unique_ptr<parsing_interface> _parser;
+    z_stream _zs;
+    static constexpr size_t _buf_size = 4096;
+
+public:
+    explicit gzip_decompressor(std::unique_ptr<parsing_interface> parser)
+        : _parser(std::move(parser)) {
+        memset(&_zs, 0, sizeof(_zs));
+        if (inflateInit2(&_zs, 16 + MAX_WBITS) != Z_OK) {
+            throw std::bad_alloc();
+        }
+    }
+
+    ~gzip_decompressor() {
+        inflateEnd(&_zs);
+    }
+
+    seastar::future<> decompress(std::span<const std::byte> data) override {
+        _zs.next_in = reinterpret_cast<Bytef*>(const_cast<std::byte*>(data.data()));
+        _zs.avail_in = static_cast<uInt>(data.size());
+
+        do {
+            std::array<std::byte, _buf_size> output;
+            _zs.next_out = reinterpret_cast<Bytef*>(output.data());
+            _zs.avail_out = _buf_size;
+
+            int ret = inflate(&_zs, Z_NO_FLUSH);
+            if (ret != Z_OK && ret != Z_STREAM_END && ret != Z_BUF_ERROR) {
+                throw std::runtime_error("gzip decompression error");
+            }
+
+            auto produced = _buf_size - _zs.avail_out;
+            if (produced > 0) {
+                co_await _parser->parse(std::span<const std::byte>(output.data(), produced));
+            }
+
+            if (ret == Z_STREAM_END) {
+                co_return;
+            }
+        } while (_zs.avail_in > 0 || _zs.avail_out == 0);
+    }
+
+    seastar::future<> flush_and_close() override {
+        co_await _parser->flush_and_close();
+    }
+};
+
 // Json parser that accumulates incoming data until it sees a newline character,
 // then parses the accumulated line as JSON and invokes the on_item callback with the parsed rjson::value.
 // The last line is parsed and sent to callback even if it doesn't end with a newline.
@@ -206,20 +334,6 @@ public:
         co_return;
     }
 };
-
-// Factory function to create in-memory sink pipeline for testing (no compression, JSON formatter).
-std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_memory_test_storage& storage) {
-    auto sink = std::make_unique<in_memory_storage_sink>(storage);
-    auto compressor = std::make_unique<noop_compressor>(std::move(sink));
-    return std::make_unique<json_formatter>(std::move(compressor));
-}
-
-// Factory function to create in-memory source pipeline for testing (no compression, JSON parser).
-std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage& storage, std::function<seastar::future<>(rjson::value)> on_item) {
-    auto parser = std::make_unique<json_parser>(std::move(on_item));
-    auto decompressor = std::make_unique<noop_decompressor>(std::move(parser));
-    return std::make_unique<in_memory_source>(storage, std::move(decompressor));
-}
 
 
 future<> scan_table(
@@ -292,6 +406,264 @@ future<> scan_table(
     }
 }
 
+/// Writes data to an S3 object. Each write() call uploads data immediately.
+class s3_storage_sink : public storage_sink_interface {
+    seastar::shared_ptr<s3::client> _client;
+    seastar::sstring _object_name;
+    seastar::output_stream<char> _upload_stream;
+
+public:
+    s3_storage_sink(seastar::shared_ptr<s3::client> client, seastar::sstring object_name)
+        : _client(std::move(client))
+        , _object_name(std::move(object_name))
+        , _upload_stream(seastar::output_stream<char>(_client->make_upload_sink(_object_name)))
+    {
+    }
+
+    seastar::future<> write(std::span<const std::byte> data) override {
+        // we will return the future from write() directly, no need to add `co_await` here.
+        return _upload_stream.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    seastar::future<> flush_and_close() override {
+        co_await _upload_stream.flush();
+        co_await _upload_stream.close();
+    }
+};
+
+/// Reads data from an S3 object and feeds it through a decompression_interface.
+/// read() streams the entire object, calling decompress() for each chunk,
+/// then calls decompression_interface::flush_and_close().
+class s3_storage_source : public import_pipeline_interface {
+    seastar::shared_ptr<s3::client> _client;
+    seastar::sstring _object_name;
+    std::unique_ptr<decompression_interface> _decompressor;
+
+public:
+    s3_storage_source(seastar::shared_ptr<s3::client> client, seastar::sstring object_name,
+                      std::unique_ptr<decompression_interface> decompressor)
+        : _client(std::move(client))
+        , _object_name(std::move(object_name))
+        , _decompressor(std::move(decompressor))
+    {
+    }
+
+    seastar::future<> read() override {
+        auto input = seastar::input_stream<char>(
+            _client->make_download_source(_object_name));
+        while (true) {
+            auto buf = co_await input.read();
+            if (buf.empty()) {
+                break;
+            }
+            co_await _decompressor->decompress(
+                std::span<const std::byte>(reinterpret_cast<const std::byte*>(buf.get()), buf.size()));
+        }
+        co_await input.close();
+    }
+    seastar::future<> flush_and_close() override {
+        co_await _decompressor->flush_and_close();
+    }
+};
+
+static std::unique_ptr<compression_interface> make_compressor(compression_type compression, std::unique_ptr<storage_sink_interface> sink) {
+    return std::visit([&](auto&& c) -> std::unique_ptr<compression_interface> {
+        using T = std::decay_t<decltype(c)>;
+        if constexpr (std::is_same_v<T, gzip_compression>) {
+            return std::make_unique<gzip_compressor>(std::move(sink));
+        } else {
+            return std::make_unique<noop_compressor>(std::move(sink));
+        }
+    }, compression);
+}
+
+static std::unique_ptr<decompression_interface> make_decompressor(compression_type compression, std::unique_ptr<parsing_interface> parser) {
+    return std::visit([&](auto&& c) -> std::unique_ptr<decompression_interface> {
+        using T = std::decay_t<decltype(c)>;
+        if constexpr (std::is_same_v<T, gzip_compression>) {
+            return std::make_unique<gzip_decompressor>(std::move(parser));
+        } else {
+            return std::make_unique<noop_decompressor>(std::move(parser));
+        }
+    }, compression);
+}
+
+static std::unique_ptr<export_pipeline_interface> create_export_pipeline(std::unique_ptr<storage_sink_interface> sink, compression_type compression) {
+    auto compressor = make_compressor(compression, std::move(sink));
+    return std::make_unique<json_formatter>(std::move(compressor));
+}
+
+static std::unique_ptr<decompression_interface> create_decompression_pipeline(std::function<seastar::future<>(rjson::value)> on_item, compression_type compression) {
+    auto parser = std::make_unique<json_parser>(std::move(on_item));
+    return make_decompressor(compression, std::move(parser));
+}
+
+// Factory function to create in-memory sink pipeline for testing.
+std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_memory_test_storage& storage, compression_type compression) {
+    auto sink = std::make_unique<in_memory_storage_sink>(storage);
+    return create_export_pipeline(std::move(sink), compression);
+}
+
+// Factory function to create in-memory source pipeline for testing.
+std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage& storage, std::function<seastar::future<>(rjson::value)> on_item, compression_type compression) {
+    auto decompressor = create_decompression_pipeline(std::move(on_item), compression);
+    return std::make_unique<in_memory_source>(storage, std::move(decompressor));
+}
+
+// Create s3 sink pipeline for a single file.
+std::unique_ptr<export_pipeline_interface> create_s3_sink_pipeline(seastar::shared_ptr<s3::client> client, seastar::sstring object_name, compression_type compression) {
+    auto sink = std::make_unique<s3_storage_sink>(std::move(client), std::move(object_name));
+    return create_export_pipeline(std::move(sink), compression);
+}
+
+// Create s3 source pipeline for a single file.
+std::unique_ptr<import_pipeline_interface> create_s3_source_pipeline(seastar::shared_ptr<s3::client> client, seastar::sstring object_name, std::function<seastar::future<>(rjson::value)> on_item, compression_type compression) {
+    auto decompressor = create_decompression_pipeline(std::move(on_item), compression);
+    return std::make_unique<s3_storage_source>(std::move(client), std::move(object_name), std::move(decompressor));
+}
+
+// --- Export orchestration helpers ---
+
+static logging::logger elogger("alternator_export");
+
+// Build node_id string: "{host_id}:{gossip_generation}"
+// This uniquely identifies a node incarnation and changes on reboot.
+static sstring make_node_id(gms::gossiper& gossiper) {
+    auto host_id = gossiper.my_host_id();
+    auto ep_state = gossiper.get_this_endpoint_state_ptr();
+    auto generation = ep_state->get_heart_beat_state().get_generation();
+    return fmt::format("{}:{}", host_id, generation.value());
+}
+
+// Canonicalize a JSON request by sorting object members alphabetically.
+// This produces a deterministic string representation for idempotency checks.
+static sstring canonicalize_request(const rjson::value& request) {
+    if (!request.IsObject()) {
+        return rjson::print(request);
+    }
+    // Collect member names and sort them
+    std::vector<std::string_view> names;
+    names.reserve(request.MemberCount());
+    for (auto it = request.MemberBegin(); it != request.MemberEnd(); ++it) {
+        names.push_back(std::string_view(it->name.GetString(), it->name.GetStringLength()));
+    }
+    std::sort(names.begin(), names.end());
+
+    // Build sorted JSON object
+    rjson::value sorted = rjson::empty_object();
+    for (auto& name : names) {
+        const auto* val = rjson::find(request, name);
+        if (val) {
+            rjson::add_with_string_name(sorted, name, rjson::copy(*val));
+        }
+    }
+    return rjson::print(sorted);
+}
+
+// Generate random hex string of specified length (in hex chars).
+static sstring generate_random_hex(size_t hex_chars) {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    static constexpr char hex_digits[] = "0123456789abcdef";
+    sstring result;
+    result.resize(hex_chars);
+    for (size_t i = 0; i < hex_chars; ++i) {
+        result[i] = hex_digits[rng() % 16];
+    }
+    return result;
+}
+
+// Generate a unique export ARN.
+// Format: arn:scylla:alternator:::table/{table_name}/export/{epoch_millis_zero_padded}-{8_hex_chars}
+static sstring generate_export_arn(sstring table_name) {
+    auto epoch_millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    auto random_suffix = generate_random_hex(8);
+    return fmt::format("arn:scylla:alternator:::table/{}/export/{:019d}-{}",
+        table_name, epoch_millis, random_suffix);
+}
+
+// Build an ExportDescription JSON response from a CQL result row.
+static rjson::value build_export_description_response(const cql3::untyped_result_set_row& row) {
+    rjson::value export_desc = rjson::empty_object();
+
+    auto export_arn = row.get_as<sstring>("export_arn");
+    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
+
+    if (row.has("table_arn")) {
+        rjson::add(export_desc, "TableArn", rjson::from_string(row.get_as<sstring>("table_arn")));
+    }
+    if (row.has("export_status")) {
+        rjson::add(export_desc, "ExportStatus", rjson::from_string(row.get_as<sstring>("export_status")));
+    }
+    if (row.has("export_manifest")) {
+        rjson::add(export_desc, "ExportManifest", rjson::from_string(row.get_as<sstring>("export_manifest")));
+    }
+    if (row.has("item_count")) {
+        rjson::add(export_desc, "ItemCount", rjson::value(row.get_as<int64_t>("item_count")));
+    }
+    if (row.has("accepted_at")) {
+        auto accepted = row.get_as<db_clock::time_point>("accepted_at");
+        auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            accepted.time_since_epoch()).count();
+        rjson::add(export_desc, "StartTime", rjson::value(seconds));
+        rjson::add(export_desc, "ExportTime", rjson::value(seconds));
+    }
+    if (row.has("completed_at")) {
+        auto completed = row.get_as<db_clock::time_point>("completed_at");
+        auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            completed.time_since_epoch()).count();
+        rjson::add(export_desc, "EndTime", rjson::value(seconds));
+    }
+    if (row.has("failure_code")) {
+        rjson::add(export_desc, "FailureCode", rjson::from_string(row.get_as<sstring>("failure_code")));
+    }
+    if (row.has("failure_message")) {
+        rjson::add(export_desc, "FailureMessage", rjson::from_string(row.get_as<sstring>("failure_message")));
+    }
+    if (row.has("client_token")) {
+        auto ct = row.get_as<sstring>("client_token");
+        // Strip the prefix (u: or r:) before returning to user
+        if (ct.starts_with("u:")) {
+            rjson::add(export_desc, "ClientToken", rjson::from_string(ct.substr(2)));
+        }
+    }
+
+    // Parse the stored request to extract S3 bucket/prefix/format info
+    if (row.has("request")) {
+        try {
+            auto req_str = row.get_as<sstring>("request");
+            auto req_json = rjson::parse(req_str);
+            const rjson::value* v;
+            if ((v = rjson::find(req_json, "ExportFormat"))) {
+                rjson::add(export_desc, "ExportFormat", rjson::from_string(rjson::to_string_view(*v)));
+            }
+            if ((v = rjson::find(req_json, "ExportType"))) {
+                rjson::add(export_desc, "ExportType", rjson::from_string(rjson::to_string_view(*v)));
+            }
+            if ((v = rjson::find(req_json, "S3Bucket"))) {
+                rjson::add(export_desc, "S3Bucket", rjson::from_string(rjson::to_string_view(*v)));
+            }
+            if ((v = rjson::find(req_json, "S3Prefix"))) {
+                auto prefix = rjson::to_string_view(*v);
+                if (!prefix.empty()) {
+                    rjson::add(export_desc, "S3Prefix", rjson::from_string(prefix));
+                }
+            }
+        } catch (...) {
+            // If we can't parse the stored request, just skip these fields
+        }
+    }
+
+    // BilledSizeBytes - we always report 0 (not applicable for Scylla)
+    if (row.has("item_count")) {
+        rjson::add(export_desc, "BilledSizeBytes", rjson::value(int64_t(0)));
+    }
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    return response;
+}
+
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
 
@@ -347,7 +719,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     }
 
     // ClientToken - for idempotency
-    auto client_token = get_non_empty_string_attribute(request, "ClientToken", "");
+    auto user_client_token = get_non_empty_string_attribute(request, "ClientToken", "");
 
     // S3BucketOwner - accepted but not used
     auto s3_bucket_owner = get_non_empty_string_attribute(request, "S3BucketOwner", "");
@@ -360,22 +732,98 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     }
 
     auto s3_sse_kms_key_id = get_non_empty_string_attribute(request, "S3SseKmsKeyId", "");
-    
+
+    // Build node_id = "{host_id}:{gossip_generation}"
+    auto node_id = make_node_id(_gossiper);
+
+    // Canonicalize the request for idempotency checking
+    auto canonical_request = canonicalize_request(request);
+
+    // Handle ClientToken: prefix with "u:" for user-supplied, "r:" for random
+    sstring client_token;
+    if (user_client_token.empty()) {
+        client_token = fmt::format("r:{}", generate_random_hex(16));
+    } else {
+        client_token = fmt::format("u:{}", user_client_token);
+    }
+
+    // Generate a unique export ARN
+    auto export_arn = generate_export_arn(sstring(parts.table_name));
+    auto accepted_at = db_clock::now();
+
+    // CAS insert client token row for idempotency.
+    // If the client token already exists and the request matches, return the existing export.
+    if (!user_client_token.empty()) {
+        auto ct_result = co_await _sdks.insert_export_client_token(
+            client_token, export_arn, sstring(table_arn), canonical_request, node_id);
+        if (!ct_result->empty()) {
+            auto& row = ct_result->one();
+            bool applied = row.get_as<bool>("[applied]");
+            if (!applied) {
+                // Client token already exists — check if the request matches
+                auto existing_request = row.get_as<sstring>("request");
+                if (existing_request == canonical_request) {
+                    // Idempotent retry: return the existing export description
+                    auto existing_arn = row.get_as<sstring>("export_arn");
+                    auto export_result = co_await _sdks.get_export(existing_arn);
+                    if (!export_result->empty()) {
+                        auto response = build_export_description_response(export_result->one());
+                        co_return rjson::print(std::move(response));
+                    }
+                }
+                // Different request with same client token
+                co_return api_error::export_conflict(
+                    "An export with this ClientToken already exists with different parameters");
+            }
+        }
+    }
+
+    // Generate export_id_token (random identifier used in S3 key paths)
+    auto export_id_token = generate_random_hex(8);
+
+    // CAS insert export metadata row
+    auto export_result = co_await _sdks.insert_export(
+        export_arn, sstring(table_arn), client_token, canonical_request,
+        "IN_PROGRESS", node_id, accepted_at, export_id_token);
+    if (!export_result->empty()) {
+        auto& row = export_result->one();
+        bool applied = row.get_as<bool>("[applied]");
+        if (!applied) {
+            // This should not happen unless there's an ARN collision, which is extremely unlikely.
+            co_return api_error::export_conflict("Export ARN collision detected, please retry");
+        }
+    }
+
+    // Build the S3 key prefix for this export
+    auto s3_key_prefix = s3_prefix.empty()
+        ? fmt::format("AWSDynamoDB/{}/", export_id_token)
+        : fmt::format("{}/AWSDynamoDB/{}/", s3_prefix, export_id_token);
+
+    // Launch background export fiber (fire-and-forget, gate-guarded)
+    auto gate_holder = _export_gate.hold();
+    // Capture all needed state by value for the background fiber
+    (void)run_export(
+        std::move(gate_holder), schema, export_arn, sstring(table_arn),
+        node_id, sstring(s3_bucket), std::move(s3_key_prefix), export_id_token);
+
     // Build the ExportDescription response
-    // The actual export functionality is not implemented yet - this just returns
-    // an IN_PROGRESS status to indicate the export has been accepted.
     rjson::value export_desc = rjson::empty_object();
-    rjson::add(export_desc, "ClientToken", rjson::from_string(client_token));
-    rjson::add(export_desc, "ExportArn",
-            rjson::from_string(fmt::format("arn:scylla:dynamodb:::table/{}/export/export-placeholder",
-                    parts.table_name)));
+    if (!user_client_token.empty()) {
+        rjson::add(export_desc, "ClientToken", rjson::from_string(user_client_token));
+    }
+    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
     rjson::add(export_desc, "ExportFormat", rjson::from_string(export_format));
     rjson::add(export_desc, "ExportStatus", "IN_PROGRESS");
     rjson::add(export_desc, "ExportTime", rjson::value(export_time));
     rjson::add(export_desc, "ExportType", rjson::from_string(export_type));
     rjson::add(export_desc, "S3Bucket", rjson::from_string(s3_bucket));
-    rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
+    if (!s3_prefix.empty()) {
+        rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
+    }
     rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
+    auto start_time_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+        accepted_at.time_since_epoch()).count();
+    rjson::add(export_desc, "StartTime", rjson::value(start_time_seconds));
 
     if (!s3_bucket_owner.empty()) {
         rjson::add(export_desc, "S3BucketOwner", rjson::from_string(s3_bucket_owner));
@@ -391,4 +839,208 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     rjson::add(response, "ExportDescription", std::move(export_desc));
     co_return rjson::print(std::move(response));
 }
+
+future<> executor::run_export(
+        seastar::gate::holder gate_holder,
+        schema_ptr schema,
+        sstring export_arn,
+        sstring table_arn,
+        sstring node_id,
+        sstring s3_bucket,
+        sstring s3_key_prefix,
+        sstring export_id_token) {
+    int64_t item_count = 0;
+    std::exception_ptr ex;
+    try {
+        auto client = get_s3_client(s3_bucket);
+
+        // Create the data file object key
+        auto data_object_key = fmt::format("{}data/{}.json.gz", s3_key_prefix, export_id_token);
+
+        // Create S3 sink pipeline with gzip compression
+        auto pipeline = create_s3_sink_pipeline(client, data_object_key, gzip_compression{});
+
+        // Scan the table and feed items through the pipeline
+        co_await scan_table(_proxy, schema, [&pipeline, &item_count](rjson::value item) -> future<> {
+            rjson::value wrapper = rjson::empty_object();
+            rjson::add(wrapper, "Item", std::move(item));
+            co_await pipeline->process(wrapper);
+            ++item_count;
+        });
+
+        co_await pipeline->flush_and_close();
+
+        // Generate and upload manifest files
+        auto data_file_entry = fmt::format(
+            R"({{"dataFileS3Key":"{}","itemCount":{}}})", data_object_key, item_count);
+
+        // manifest-files.json
+        auto manifest_files_key = fmt::format("{}manifest-files.json", s3_key_prefix);
+        auto manifest_files_content = fmt::format("[{}]", data_file_entry);
+        co_await client->put_object(manifest_files_key,
+            temporary_buffer<char>(manifest_files_content.data(), manifest_files_content.size()));
+
+        // manifest-summary.json
+        auto manifest_summary_key = fmt::format("{}manifest-summary.json", s3_key_prefix);
+        auto manifest_summary_content = fmt::format(
+            R"({{"version":"2020-06-30","exportArn":"{}","startTime":"{}","endTime":"{}",)"
+            R"("tableArn":"{}","exportFormat":"DYNAMODB_JSON","billedSizeBytes":0,)"
+            R"("itemCount":{},"outputFormat":"DYNAMODB_JSON","dataFileCount":1,)"
+            R"("dataFileS3Key":"{}"}})",
+            export_arn,
+            std::chrono::duration_cast<std::chrono::seconds>(db_clock::now().time_since_epoch()).count(),
+            std::chrono::duration_cast<std::chrono::seconds>(db_clock::now().time_since_epoch()).count(),
+            table_arn, item_count, data_object_key);
+        co_await client->put_object(manifest_summary_key,
+            temporary_buffer<char>(manifest_summary_content.data(), manifest_summary_content.size()));
+
+        // Update export status to COMPLETED
+        auto completed_at = db_clock::now();
+        auto export_manifest = fmt::format("{}manifest-summary.json", s3_key_prefix);
+        co_await _sdks.update_export_status(
+            export_arn, node_id, "COMPLETED",
+            item_count, completed_at, export_manifest,
+            std::nullopt, std::nullopt);
+
+        elogger.info("Export {} completed successfully with {} items", export_arn, item_count);
+
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    if (ex) {
+        auto msg = fmt::format("{}", ex);
+        elogger.warn("Export {} failed: {}", export_arn, msg);
+        co_await update_export_status_to_failed(export_arn, node_id, item_count, msg);
+    }
+}
+
+// Helper to update export status to FAILED, used after catching exceptions
+// in run_export (where co_await is not allowed inside catch blocks).
+future<> executor::update_export_status_to_failed(
+        const sstring& export_arn, const sstring& node_id,
+        int64_t item_count, const sstring& failure_message) {
+    try {
+        co_await _sdks.update_export_status(
+            export_arn, node_id, "FAILED",
+            item_count, db_clock::now(), std::nullopt,
+            sstring("INTERNAL_ERROR"), sstring(failure_message));
+    } catch (...) {
+        elogger.error("Export {} failed to update status after failure: {}",
+            export_arn, std::current_exception());
+    }
+}
+
+future<executor::request_return_type> executor::describe_export(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.describe_export++;
+
+    auto export_arn = get_non_empty_string_attribute(request, "ExportArn");
+
+    // Validate that the ARN looks like an export ARN.
+    // Expected format: arn:scylla:alternator:::table/<name>/export/<id>
+    // or AWS format: arn:aws:dynamodb:<region>:<account>:table/<name>/export/<id>
+    if (!export_arn.starts_with("arn:")) {
+        co_return api_error::validation(
+            fmt::format("Invalid Export ARN: {}", export_arn));
+    }
+
+    auto result = co_await _sdks.get_export(sstring(export_arn));
+    if (result->empty()) {
+        co_return api_error::export_not_found(
+            fmt::format("Export not found: {}", export_arn));
+    }
+
+    auto response = build_export_description_response(result->one());
+    co_return rjson::print(std::move(response));
+}
+
+future<executor::request_return_type> executor::list_exports(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.list_exports++;
+
+    // Optional filter by TableArn
+    std::string table_arn_filter;
+    const rjson::value* table_arn_v = rjson::find(request, "TableArn");
+    if (table_arn_v && table_arn_v->IsString()) {
+        table_arn_filter = std::string(rjson::to_string_view(*table_arn_v));
+    }
+
+    // MaxResults (default 25, max 25 per DynamoDB spec)
+    int max_results = 25;
+    const rjson::value* max_results_v = rjson::find(request, "MaxResults");
+    if (max_results_v && max_results_v->IsNumber()) {
+        max_results = std::min(25, static_cast<int>(max_results_v->GetInt()));
+        if (max_results < 1) {
+            max_results = 1;
+        }
+    }
+
+    // NextToken for pagination (last-seen export_arn)
+    std::string next_token;
+    const rjson::value* next_token_v = rjson::find(request, "NextToken");
+    if (next_token_v && next_token_v->IsString()) {
+        next_token = std::string(rjson::to_string_view(*next_token_v));
+    }
+
+    auto result = co_await _sdks.get_all_exports();
+
+    // Collect and filter results
+    struct export_summary {
+        sstring export_arn;
+        sstring export_status;
+        sstring table_arn;
+    };
+    std::vector<export_summary> summaries;
+    for (const auto& row : *result) {
+        auto arn = row.get_as<sstring>("export_arn");
+        auto t_arn = row.get_as<sstring>("table_arn");
+        auto status = row.get_as<sstring>("export_status");
+
+        // Filter by table_arn if specified
+        if (!table_arn_filter.empty() && t_arn != table_arn_filter) {
+            continue;
+        }
+        summaries.push_back({std::move(arn), std::move(status), std::move(t_arn)});
+    }
+
+    // Sort by export_arn ascending
+    std::sort(summaries.begin(), summaries.end(),
+        [](const export_summary& a, const export_summary& b) {
+            return a.export_arn < b.export_arn;
+        });
+
+    // Apply pagination: skip past next_token
+    auto it = summaries.begin();
+    if (!next_token.empty()) {
+        it = std::find_if(summaries.begin(), summaries.end(),
+            [&next_token](const export_summary& s) {
+                return s.export_arn > next_token;
+            });
+    }
+
+    // Build response
+    rjson::value export_summaries = rjson::empty_array();
+    int count = 0;
+    sstring last_arn;
+    while (it != summaries.end() && count < max_results) {
+        rjson::value summary = rjson::empty_object();
+        rjson::add(summary, "ExportArn", rjson::from_string(it->export_arn));
+        rjson::add(summary, "ExportStatus", rjson::from_string(it->export_status));
+        rjson::add(summary, "ExportType", "FULL_EXPORT");
+        rjson::push_back(export_summaries, std::move(summary));
+        last_arn = it->export_arn;
+        ++it;
+        ++count;
+    }
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportSummaries", std::move(export_summaries));
+
+    // If there are more results, include NextToken
+    if (it != summaries.end()) {
+        rjson::add(response, "NextToken", rjson::from_string(last_arn));
+    }
+
+    co_return rjson::print(std::move(response));
+}
+
 } // namespace alternator
