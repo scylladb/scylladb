@@ -409,13 +409,13 @@ public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
-            const data_value_list&,
+            std::vector<data_value_or_unset>,
             cache_internal cache);
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
             service::query_state& query_state,
-            const data_value_list& values,
+            std::vector<data_value_or_unset> values,
             cache_internal cache);
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
@@ -431,8 +431,8 @@ public:
         return execute_internal(query_string, cl, query_state, {}, cache);
     }
     future<::shared_ptr<untyped_result_set>>
-    execute_internal(const sstring& query_string, const data_value_list& values, cache_internal cache) {
-        return execute_internal(query_string, db::consistency_level::ONE, values, cache);
+    execute_internal(const sstring& query_string, std::vector<data_value_or_unset> values, cache_internal cache) {
+        return execute_internal(query_string, db::consistency_level::ONE, std::move(values), cache);
     }
     future<::shared_ptr<untyped_result_set>>
     execute_internal(const sstring& query_string, cache_internal cache) {

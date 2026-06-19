@@ -1017,10 +1017,10 @@ future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
-        const data_value_list& values,
+        std::vector<data_value_or_unset> values,
         cache_internal cache) {
     auto qs = query_state_for_internal_call();
-    co_return co_await execute_internal(query_string, cl, qs, values, cache);
+    co_return co_await execute_internal(query_string, cl, qs, std::move(values), cache);
 }
 
 future<::shared_ptr<untyped_result_set>>
@@ -1028,18 +1028,16 @@ query_processor::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
         service::query_state& query_state,
-        const data_value_list& values,
+        std::vector<data_value_or_unset> values,
         cache_internal cache) {
 
     if (log.is_enabled(logging::log_level::trace)) {
         log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, fmt::join(values, ", "));
     }
     sstring owned_query_string(query_string);
-    // Own values before co_await; data_value_list may reference temporaries.
-    std::vector<data_value_or_unset> owned_values(values.begin(), values.end());
     if (cache) {
         auto p = co_await prepare_internal(owned_query_string);
-        co_return co_await execute_with_params(std::move(p), cl, query_state, owned_values);
+        co_return co_await execute_with_params(std::move(p), cl, query_state, values);
     } else {
         // For internal queries, we want the default dialect, not the user provided one
         auto np_stmt = parse_statement(owned_query_string, dialect{});
@@ -1048,7 +1046,7 @@ query_processor::execute_internal(
         auto&& [p, _] = co_await np_stmt->prepare(_db, _cql_stats, _cql_config);
         p->statement->raw_cql_statement = utils::chunked_string(owned_query_string);
         auto checked_weak_ptr = p->checked_weak_from_this();
-        co_return co_await execute_with_params(std::move(checked_weak_ptr), cl, query_state, owned_values).finally([p = std::move(p)] {});
+        co_return co_await execute_with_params(std::move(checked_weak_ptr), cl, query_state, values).finally([p = std::move(p)] {});
     }
 }
 
