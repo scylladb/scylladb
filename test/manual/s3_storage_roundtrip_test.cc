@@ -10,6 +10,7 @@
 
 #include <exception>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/defer.hh>
 #include "alternator/export.hh"
 #include "utils/rjson.hh"
@@ -85,10 +86,11 @@ SEASTAR_TEST_CASE(test_s3_storage_sink_source_roundtrip) {
         // This should produce ~57 mb of data.
         for(auto i = 0; i < 1000; ++i) {
             items.push_back(make_large_item(i));
+            co_await coroutine::maybe_yield();
         }
 
         // Write via s3_storage_sink.
-        auto sink = alternator::create_sink_pipeline(alternator::s3_target_config{ client, object_name });
+        auto sink = co_await alternator::create_sink_pipeline(alternator::s3_target_config{ client, object_name }, alternator::no_compression{});
         try {
             for(auto &item : items) {
                 co_await sink->process(item);
@@ -123,7 +125,7 @@ SEASTAR_TEST_CASE(test_s3_storage_sink_source_roundtrip) {
         auto source = co_await alternator::create_source_pipeline(alternator::s3_target_config{ client, object_name }, [&](rjson::value v) -> seastar::future<> {
             received.push_back(std::move(v));
             co_return;
-        });
+        }, alternator::no_compression{});
         try {
             co_await source->read_all();
         }
@@ -144,6 +146,7 @@ SEASTAR_TEST_CASE(test_s3_storage_sink_source_roundtrip) {
         BOOST_REQUIRE_EQUAL(received.size(), items.size());
         for (size_t i = 0; i < items.size(); ++i) {
             BOOST_CHECK_EQUAL(rjson::print(received[i]), rjson::print(items[i]));
+            co_await coroutine::maybe_yield();
         }
     } catch (...) {
         if (!exception) {
