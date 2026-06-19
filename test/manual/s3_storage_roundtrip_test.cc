@@ -88,7 +88,7 @@ SEASTAR_TEST_CASE(test_s3_storage_sink_source_roundtrip) {
         }
 
         // Write via s3_storage_sink.
-        auto sink = alternator::create_sink_pipeline(alternator::s3_target_config{ client, object_name });
+        auto sink = co_await alternator::create_sink_pipeline(alternator::s3_target_config{ client, object_name });
         try {
             for(auto &item : items) {
                 co_await sink->process(item);

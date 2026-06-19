@@ -13,8 +13,8 @@
 #include <functional>
 #include <memory>
 #include <span>
-#include <vector>
 #include <variant>
+#include <vector>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -24,6 +24,12 @@
 namespace s3 { class client; }
 
 namespace alternator {
+
+// Compression type selection for export/import pipelines.
+// Pass one of these structs to create_*_sink_pipeline / create_*_source_pipeline to select compression mode.
+struct no_compression {};
+struct gzip_compression {};
+using compression_type = std::variant<no_compression, gzip_compression>;
 
 // An interface encapsulating write (sink) pipeline for exporting data. Is used to implement DynamoDB export api (ExportTableToPointInTime call).
 // The pipeline is a multistage processing unit, which takes `rjson::value` item (of any content), serializes it as-is and writes it depending on the configuration.
@@ -124,14 +130,32 @@ struct s3_target_config {
 //   You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
 //   you need to complete sink pipeline first, then create and run source pipeline.
 // - s3_target_config - creates sink pipeline that will write to S3 object. The object will be created if it doesn't exist, or overwritten if it does.
-std::unique_ptr<export_pipeline_interface> create_sink_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config);
+// The function is a coroutine, because a pipeline which fails to build half way has to close the stages
+// it already created - closing a storage sink is asynchronous. Closing them finalizes the target object,
+// so a failed call can leave an empty object behind - with gzip, a complete, empty gzip stream rather than
+// a zero-byte one. That is deliberate: finalizing an empty object is better than leaking a started
+// multipart upload, which is all the S3 sink could do instead.
+// The object left behind that way is indistinguishable from the result of a successful export of no items -
+// a source pipeline reads it back as zero items, without reporting an error. The outcome of the export is
+// therefore carried solely by this function's exception and by the one from `flush_and_close()`: the caller
+// must not record, publish or otherwise treat the target object as an export unless this function succeeded
+// and the returned pipeline's `flush_and_close()` succeeded as well.
+future<std::unique_ptr<export_pipeline_interface>> create_sink_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, compression_type compression = no_compression{});
 
 // Create source pipeline for a single file. Depending on the configuration:
 // - in_memory_target_config - creates in-memory source pipeline for testing.
 //   You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
 //   you need to complete sink pipeline first, then create and run source pipeline.
 // - s3_target_config - creates source pipeline that will read from S3 object.
-future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<future<>(rjson::value)> on_item);
+// With gzip compression the completeness of the object is checked by `close()`, not by `read_all()` -
+// zlib verifies the CRC32 and ISIZE trailer only at the end of a member, so an object that was cut
+// short decodes (and reports items) as far as it goes and only then fails. The two degenerate cases
+// are treated differently on purpose: an object with no bytes at all is accepted as an empty stream
+// and read back as zero items, because AWS produces zero-byte .gz objects for empty partitions, while
+// an object holding anything less than a complete gzip member makes `close()` fail with a
+// `truncated gzip stream` validation error. A caller that wants to know whether it read a whole export
+// must therefore let `close()` succeed - `read_all()` completing without an exception is not enough.
+future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<future<>(rjson::value)> on_item, compression_type compression = no_compression{});
 
 
 } // namespace alternator

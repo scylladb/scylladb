@@ -198,6 +198,11 @@ class client : public enable_shared_from_this<client> {
                           std::optional<http::reply::status_type> expected = std::nullopt,
                           seastar::abort_source* = nullptr);
     future<> get_object_header(sstring object_name, http::client::reply_handler handler, seastar::abort_source* = nullptr);
+    // The PUT behind put_object(). If `etag` is set, it receives the entity tag the
+    // server reported for the object the request created, exactly as it sent it (i.e.
+    // in double quotes), so that an upload sink can report the tag of the object it
+    // produced without a follow-up HEAD.
+    future<> do_put_object(sstring object_name, temporary_buffer<char> buf, object_metadata metadata, lw_shared_ptr<sstring> etag, seastar::abort_source* as);
 public:
 
     // No defaults, and no fallbacks in the body: make() is the only caller and decides
@@ -228,7 +233,14 @@ public:
 
     file make_readable_file(sstring object_name, seastar::abort_source* = nullptr);
     data_sink make_upload_sink(sstring object_name, object_metadata = {}, seastar::abort_source* = nullptr);
-    data_sink make_upload_jumbo_sink(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
+    // If `etag` is set, the sink stores into it the entity tag of the object it produced,
+    // exactly as S3 reports it (i.e. in double quotes), by the time the future returned by
+    // the sink's flush() resolves. It is the tag of the very object the sink wrote, which a
+    // HEAD issued after the upload would not be - somebody may overwrite the key in between.
+    // The sink leaves it alone if the upload fails, and the caller keeps the pointee alive
+    // for as long as the sink itself.
+    data_sink make_upload_jumbo_sink(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr,
+                                     lw_shared_ptr<sstring> etag = {});
     data_source make_download_source(sstring object_name, range download_range = s3::full_range, seastar::abort_source* = nullptr);
     data_source make_chunked_download_source(sstring object_name, range range = s3::full_range, seastar::abort_source* = nullptr);
     /// upload a file with specified path to s3
