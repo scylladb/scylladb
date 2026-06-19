@@ -13,6 +13,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
+#include "cql3/statements/index_latency.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -74,20 +75,6 @@ namespace statements {
 namespace {
 
 constexpr std::string_view ANN_CUSTOM_INDEX_OPTION = "vector_index";
-
-template <typename Func>
-auto measure_index_latency(const schema& schema, const secondary_index::index& index, Func&& func) -> std::invoke_result_t<Func> {
-    auto start_time = lowres_system_clock::now();
-    auto result = co_await func();
-    auto duration = lowres_system_clock::now() - start_time;
-
-    auto stats = schema.table().get_index_manager().get_index_stats(index.metadata().name());
-    if (stats) {
-        stats->add_latency(duration);
-    }
-
-    co_return result;
-}
 
 } // namespace
 

@@ -33,20 +33,6 @@ static logging::logger logger("vector_indexed_table_select_statement");
 
 namespace {
 
-template <typename Func>
-auto measure_index_latency(const schema& schema, const secondary_index::index& index, Func&& func) -> std::invoke_result_t<Func> {
-    auto start_time = lowres_system_clock::now();
-    auto result = co_await func();
-    auto duration = lowres_system_clock::now() - start_time;
-
-    auto stats = schema.table().get_index_manager().get_index_stats(index.metadata().name());
-    if (stats) {
-        stats->add_latency(duration);
-    }
-
-    co_return result;
-}
-
 std::vector<float> get_ann_ordering_vector(const select_statement::prepared_ann_ordering_type& prepared_ann_ordering, const query_options& options) {
     auto const& [ann_column, ann_vector_expr] = prepared_ann_ordering;
     auto expr_value = expr::evaluate(ann_vector_expr, options);
