@@ -1212,7 +1212,8 @@ utils::chunked_vector<canonical_mutation> storage_service::build_mutation_from_j
 
     if (!ignored_nodes.empty()) {
         auto bad_id = std::find_if_not(ignored_nodes.begin(), ignored_nodes.end(), [&] (auto n) {
-            return _topology_state_machine._topology.normal_nodes.contains(n);
+            return _topology_state_machine._topology.normal_nodes.contains(n)
+                    || _topology_state_machine._topology.left_nodes.contains(n);
         });
         if (bad_id != ignored_nodes.end()) {
             throw std::runtime_error(::format("replace: there is no node with id {} in normal state. Cannot ignore it.", *bad_id));
