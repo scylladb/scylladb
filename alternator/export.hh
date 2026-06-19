@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <variant>
 #include <vector>
 #include <seastar/core/future.hh>
 #include "utils/rjson.hh"
@@ -19,6 +20,12 @@
 namespace s3 { class client; }
 
 namespace alternator {
+
+// Compression type selection for export/import pipelines.
+// Pass one of these structs to create_*_sink_pipeline / create_*_source_pipeline to select compression mode.
+struct no_compression {};
+struct gzip_compression {};
+using compression_type = std::variant<no_compression, gzip_compression>;
 
 // An interface encapsulating write (sink) pipeline for exporting data. Is used to implement DynamoDB export api (ExportTableToPointInTime call).
 // The pipeline is a multistage processing unit, which takes `rjson::value` item (of any content), serializes it as-is and writes it depending on the configuration.
@@ -88,18 +95,18 @@ public:
 // Create in-memory sink pipeline for a single file
 // You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
 // you need to complete sink pipeline first, then create and run source pipeline.
-std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_memory_test_storage&);
+std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_memory_test_storage&, compression_type compression = no_compression{});
 
 // Create in-memory source pipeline for a single file
 // You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
 // you need to complete sink pipeline first, then create and run source pipeline.
-std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage &, std::function<seastar::future<>(rjson::value)> on_item);
+std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage&, std::function<seastar::future<>(rjson::value)> on_item, compression_type compression = no_compression{});
 
 
 // Create s3 sink pipeline for a single file.
-std::unique_ptr<export_pipeline_interface> create_s3_sink_pipeline(seastar::shared_ptr<s3::client> client, seastar::sstring object_name);
+std::unique_ptr<export_pipeline_interface> create_s3_sink_pipeline(seastar::shared_ptr<s3::client> client, seastar::sstring object_name, compression_type compression = no_compression{});
 
 // Create s3 source pipeline for a single file.
-std::unique_ptr<import_pipeline_interface> create_s3_source_pipeline(seastar::shared_ptr<s3::client> client, seastar::sstring object_name, std::function<seastar::future<>(rjson::value)> on_item);
+std::unique_ptr<import_pipeline_interface> create_s3_source_pipeline(seastar::shared_ptr<s3::client> client, seastar::sstring object_name, std::function<seastar::future<>(rjson::value)> on_item, compression_type compression = no_compression{});
 
 } // namespace alternator

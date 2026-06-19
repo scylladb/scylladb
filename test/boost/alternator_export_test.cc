@@ -141,3 +141,164 @@ SEASTAR_TEST_CASE(test_in_memory_roundtrip_special_characters) {
     BOOST_CHECK_EQUAL(rjson::print(received[0]), rjson::print(item1));
     BOOST_CHECK_EQUAL(rjson::print(received[1]), rjson::print(item2));
 }
+
+// SCYLLADB-1880: gzip compression roundtrip tests
+
+SEASTAR_TEST_CASE(test_in_memory_roundtrip_gzip_single_item) {
+    auto storage = alternator::in_memory_test_storage();
+    auto sink = alternator::create_in_memory_sink_pipeline(storage, alternator::gzip_compression{});
+
+    auto item = rjson::parse("{\"key\": \"value\"}");
+    co_await sink->process(item);
+    co_await sink->flush_and_close();
+
+    BOOST_CHECK(storage.is_write_flushed());
+
+    std::vector<rjson::value> received;
+    auto source = alternator::create_in_memory_source_pipeline(storage, [&](rjson::value v) -> seastar::future<> {
+        received.push_back(std::move(v));
+        co_return;
+    }, alternator::gzip_compression{});
+    co_await source->read();
+    co_await source->flush_and_close();
+
+    BOOST_CHECK(storage.is_read_flushed());
+    BOOST_REQUIRE_EQUAL(received.size(), 1u);
+    BOOST_CHECK_EQUAL(rjson::print(received[0]), rjson::print(item));
+}
+
+SEASTAR_TEST_CASE(test_in_memory_roundtrip_gzip_multiple_items) {
+    auto storage = alternator::in_memory_test_storage();
+    auto sink = alternator::create_in_memory_sink_pipeline(storage, alternator::gzip_compression{});
+
+    auto item1 = rjson::parse("{\"id\": 1, \"name\": \"alice\"}");
+    auto item2 = rjson::parse("{\"id\": 2, \"name\": \"bob\"}");
+    auto item3 = rjson::parse("{\"id\": 3, \"name\": \"charlie\"}");
+    co_await sink->process(item1);
+    co_await sink->process(item2);
+    co_await sink->process(item3);
+    co_await sink->flush_and_close();
+
+    std::vector<rjson::value> received;
+    auto source = alternator::create_in_memory_source_pipeline(storage, [&](rjson::value v) -> seastar::future<> {
+        received.push_back(std::move(v));
+        co_return;
+    }, alternator::gzip_compression{});
+    co_await source->read();
+    co_await source->flush_and_close();
+
+    BOOST_REQUIRE_EQUAL(received.size(), 3u);
+    BOOST_CHECK_EQUAL(rjson::print(received[0]), rjson::print(item1));
+    BOOST_CHECK_EQUAL(rjson::print(received[1]), rjson::print(item2));
+    BOOST_CHECK_EQUAL(rjson::print(received[2]), rjson::print(item3));
+}
+
+SEASTAR_TEST_CASE(test_in_memory_roundtrip_gzip_nested_json) {
+    auto storage = alternator::in_memory_test_storage();
+    auto sink = alternator::create_in_memory_sink_pipeline(storage, alternator::gzip_compression{});
+
+    auto item = rjson::parse("{\"nested\": {\"array\": [1, 2, 3], \"obj\": {\"a\": true}}}");
+    co_await sink->process(item);
+    co_await sink->flush_and_close();
+
+    std::vector<rjson::value> received;
+    auto source = alternator::create_in_memory_source_pipeline(storage, [&](rjson::value v) -> seastar::future<> {
+        received.push_back(std::move(v));
+        co_return;
+    }, alternator::gzip_compression{});
+    co_await source->read();
+    co_await source->flush_and_close();
+
+    BOOST_REQUIRE_EQUAL(received.size(), 1u);
+    BOOST_CHECK_EQUAL(rjson::print(received[0]), rjson::print(item));
+}
+
+SEASTAR_TEST_CASE(test_in_memory_roundtrip_gzip_empty_storage) {
+    auto storage = alternator::in_memory_test_storage();
+    auto sink = alternator::create_in_memory_sink_pipeline(storage, alternator::gzip_compression{});
+    co_await sink->flush_and_close();
+
+    BOOST_CHECK(storage.is_write_flushed());
+
+    std::vector<rjson::value> received;
+    auto source = alternator::create_in_memory_source_pipeline(storage, [&](rjson::value v) -> seastar::future<> {
+        received.push_back(std::move(v));
+        co_return;
+    }, alternator::gzip_compression{});
+    co_await source->read();
+    co_await source->flush_and_close();
+
+    BOOST_CHECK(storage.is_read_flushed());
+    BOOST_CHECK(received.empty());
+}
+
+SEASTAR_TEST_CASE(test_in_memory_roundtrip_gzip_special_characters) {
+    auto storage = alternator::in_memory_test_storage();
+    auto sink = alternator::create_in_memory_sink_pipeline(storage, alternator::gzip_compression{});
+
+    auto item1 = rjson::parse("{\"msg\": \"hello\\nworld\\t\\\"quoted1\\\"\"}");
+    auto item2 = rjson::parse("{\"msg\": \"hello\\nworld\\t\\\"quoted2\\\"\"}");
+
+    co_await sink->process(item1);
+    co_await sink->process(item2);
+    co_await sink->flush_and_close();
+
+    std::vector<rjson::value> received;
+    auto source = alternator::create_in_memory_source_pipeline(storage, [&](rjson::value v) -> seastar::future<> {
+        received.push_back(std::move(v));
+        co_return;
+    }, alternator::gzip_compression{});
+    co_await source->read();
+    co_await source->flush_and_close();
+
+    BOOST_REQUIRE_EQUAL(received.size(), 2u);
+    BOOST_CHECK_EQUAL(rjson::print(received[0]), rjson::print(item1));
+    BOOST_CHECK_EQUAL(rjson::print(received[1]), rjson::print(item2));
+}
+
+// Verify that gzip-compressed storage content differs from uncompressed.
+SEASTAR_TEST_CASE(test_in_memory_gzip_compressed_differs_from_uncompressed) {
+    auto item1 = rjson::parse("{\"id\": 1, \"name\": \"alice\"}");
+    auto item2 = rjson::parse("{\"id\": 2, \"name\": \"bob\"}");
+
+    auto storage_plain = alternator::in_memory_test_storage();
+    auto sink_plain = alternator::create_in_memory_sink_pipeline(storage_plain, alternator::no_compression{});
+    co_await sink_plain->process(item1);
+    co_await sink_plain->process(item2);
+    co_await sink_plain->flush_and_close();
+
+    auto storage_gzip = alternator::in_memory_test_storage();
+    auto sink_gzip = alternator::create_in_memory_sink_pipeline(storage_gzip, alternator::gzip_compression{});
+    co_await sink_gzip->process(item1);
+    co_await sink_gzip->process(item2);
+    co_await sink_gzip->flush_and_close();
+
+    auto plain_data = storage_plain.data();
+    auto gzip_data = storage_gzip.data();
+
+    // Compressed data should be different from uncompressed.
+    BOOST_CHECK(plain_data.size() != gzip_data.size()
+        || !std::equal(plain_data.begin(), plain_data.end(), gzip_data.begin()));
+
+    // Both should roundtrip to the same items.
+    std::vector<rjson::value> received_plain;
+    auto source_plain = alternator::create_in_memory_source_pipeline(storage_plain, [&](rjson::value v) -> seastar::future<> {
+        received_plain.push_back(std::move(v));
+        co_return;
+    }, alternator::no_compression{});
+    co_await source_plain->read();
+    co_await source_plain->flush_and_close();
+
+    std::vector<rjson::value> received_gzip;
+    auto source_gzip = alternator::create_in_memory_source_pipeline(storage_gzip, [&](rjson::value v) -> seastar::future<> {
+        received_gzip.push_back(std::move(v));
+        co_return;
+    }, alternator::gzip_compression{});
+    co_await source_gzip->read();
+    co_await source_gzip->flush_and_close();
+
+    BOOST_REQUIRE_EQUAL(received_plain.size(), received_gzip.size());
+    for (size_t i = 0; i < received_plain.size(); ++i) {
+        BOOST_CHECK_EQUAL(rjson::print(received_plain[i]), rjson::print(received_gzip[i]));
+    }
+}
