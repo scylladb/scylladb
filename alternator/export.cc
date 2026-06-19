@@ -11,6 +11,7 @@
 #include "alternator/executor_util.hh"
 #include "alternator/error.hh"
 #include "alternator/serialization.hh"
+#include "alternator/system_distributed_helper.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
 #include "cql3/untyped_result_set.hh"
@@ -39,6 +40,8 @@
 
 
 namespace alternator {
+
+logging::logger elogger("alternator-export");
 
 // Interfaces for `sink` / `source` pipelines.
 // The `sink` pipeline consists of 3 stages:
@@ -524,17 +527,22 @@ std::unique_ptr<import_pipeline_interface> create_s3_source_pipeline(seastar::sh
 
 // --- Export orchestration helpers ---
 
-static logging::logger elogger("alternator_export");
-
 // Build node_id string: "{host_id}:{gossip_generation}"
 // This uniquely identifies a node incarnation and changes on reboot.
-static sstring make_node_id(gms::gossiper& gossiper) {
-    auto host_id = gossiper.my_host_id();
-    auto ep_state = gossiper.get_this_endpoint_state_ptr();
+sstring executor::get_self_node_id() {
+    auto host_id = _gossiper.my_host_id();
+    auto ep_state = _gossiper.get_this_endpoint_state_ptr();
     auto generation = ep_state->get_heart_beat_state().get_generation();
     return fmt::format("{}:{}", host_id, generation.value());
 }
 
+static locator::host_id get_host_id_from_node_id(const sstring& node_id) {
+    auto pos = node_id.find(':');
+    if (pos == sstring::npos) {
+        throw std::invalid_argument(fmt::format("Invalid node_id format: {}", node_id));
+    }
+    return locator::host_id{ utils::UUID{ node_id.substr(0, pos) } };
+}
 // Canonicalize a JSON request by sorting object members alphabetically.
 // This produces a deterministic string representation for idempotency checks.
 static sstring canonicalize_request(const rjson::value& request) {
@@ -573,77 +581,64 @@ static sstring generate_random_hex(size_t hex_chars) {
 }
 
 // Generate a unique export ARN.
-// Format: arn:scylla:alternator:::table/{table_name}/export/{epoch_millis_zero_padded}-{8_hex_chars}
-static sstring generate_export_arn(sstring table_name) {
+// Format: arn:scylla:alternator:::table/{table_name}/export/{epoch_millis_zero_padded}-{16_hex_chars}
+static sstring generate_export_arn(std::string_view keyspace_name, std::string_view table_name) {
     auto epoch_millis = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    auto random_suffix = generate_random_hex(8);
+    auto random_suffix = generate_random_hex(16);
     return fmt::format("arn:scylla:alternator:::table/{}/export/{:019d}-{}",
         table_name, epoch_millis, random_suffix);
 }
 
 // Build an ExportDescription JSON response from a CQL result row.
-static rjson::value build_export_description_response(const cql3::untyped_result_set_row& row) {
+static rjson::value build_export_description_response(const export_row& row) {
     rjson::value export_desc = rjson::empty_object();
 
-    auto export_arn = row.get_as<sstring>("export_arn");
+    auto export_arn = row.export_arn;
     rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
 
-    if (row.has("table_arn")) {
-        rjson::add(export_desc, "TableArn", rjson::from_string(row.get_as<sstring>("table_arn")));
+    rjson::add(export_desc, "ExportStatus", rjson::from_string(row.export_status));
+
+    if (!row.export_manifest.empty()) {
+        rjson::add(export_desc, "ExportManifest", rjson::from_string(row.export_manifest));
     }
-    if (row.has("export_status")) {
-        rjson::add(export_desc, "ExportStatus", rjson::from_string(row.get_as<sstring>("export_status")));
-    }
-    if (row.has("export_manifest")) {
-        rjson::add(export_desc, "ExportManifest", rjson::from_string(row.get_as<sstring>("export_manifest")));
-    }
-    if (row.has("item_count")) {
-        rjson::add(export_desc, "ItemCount", rjson::value(row.get_as<int64_t>("item_count")));
-    }
-    if (row.has("accepted_at")) {
-        auto accepted = row.get_as<db_clock::time_point>("accepted_at");
+    rjson::add(export_desc, "ItemCount", rjson::value(row.item_count));
+
+    if (row.accepted_at != db_clock::time_point{}) {
         auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-            accepted.time_since_epoch()).count();
+            row.accepted_at.time_since_epoch()).count();
         rjson::add(export_desc, "StartTime", rjson::value(seconds));
         rjson::add(export_desc, "ExportTime", rjson::value(seconds));
     }
-    if (row.has("completed_at")) {
-        auto completed = row.get_as<db_clock::time_point>("completed_at");
+    if (row.completed_at != db_clock::time_point{}) {
         auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-            completed.time_since_epoch()).count();
+            row.completed_at.time_since_epoch()).count();
         rjson::add(export_desc, "EndTime", rjson::value(seconds));
     }
-    if (row.has("failure_code")) {
-        rjson::add(export_desc, "FailureCode", rjson::from_string(row.get_as<sstring>("failure_code")));
+    if (!row.failure_code.empty()) {
+        rjson::add(export_desc, "FailureCode", rjson::from_string(row.failure_code));
     }
-    if (row.has("failure_message")) {
-        rjson::add(export_desc, "FailureMessage", rjson::from_string(row.get_as<sstring>("failure_message")));
+    if (!row.failure_message.empty()) {
+        rjson::add(export_desc, "FailureMessage", rjson::from_string(row.failure_message));
     }
-    if (row.has("client_token")) {
-        auto ct = row.get_as<sstring>("client_token");
-        // Strip the prefix (u: or r:) before returning to user
-        if (ct.starts_with("u:")) {
-            rjson::add(export_desc, "ClientToken", rjson::from_string(ct.substr(2)));
-        }
+    if (!row.client_token.empty() && row.client_token.starts_with("u:")) {
+        rjson::add(export_desc, "ClientToken", rjson::from_string(row.client_token.substr(2)));
     }
 
     // Parse the stored request to extract S3 bucket/prefix/format info
-    if (row.has("request")) {
+    if (!row.request.empty()) {
         try {
-            auto req_str = row.get_as<sstring>("request");
-            auto req_json = rjson::parse(req_str);
-            const rjson::value* v;
-            if ((v = rjson::find(req_json, "ExportFormat"))) {
+            auto req_json = rjson::parse(row.request);
+            if (auto v = rjson::find(req_json, "ExportFormat")) {
                 rjson::add(export_desc, "ExportFormat", rjson::from_string(rjson::to_string_view(*v)));
             }
-            if ((v = rjson::find(req_json, "ExportType"))) {
+            if (auto v = rjson::find(req_json, "ExportType")) {
                 rjson::add(export_desc, "ExportType", rjson::from_string(rjson::to_string_view(*v)));
             }
-            if ((v = rjson::find(req_json, "S3Bucket"))) {
+            if (auto v = rjson::find(req_json, "S3Bucket")) {
                 rjson::add(export_desc, "S3Bucket", rjson::from_string(rjson::to_string_view(*v)));
             }
-            if ((v = rjson::find(req_json, "S3Prefix"))) {
+            if (auto v = rjson::find(req_json, "S3Prefix")) {
                 auto prefix = rjson::to_string_view(*v);
                 if (!prefix.empty()) {
                     rjson::add(export_desc, "S3Prefix", rjson::from_string(prefix));
@@ -655,7 +650,7 @@ static rjson::value build_export_description_response(const cql3::untyped_result
     }
 
     // BilledSizeBytes - we always report 0 (not applicable for Scylla)
-    if (row.has("item_count")) {
+    if (row.item_count > 0) {
         rjson::add(export_desc, "BilledSizeBytes", rjson::value(int64_t(0)));
     }
 
@@ -664,8 +659,115 @@ static rjson::value build_export_description_response(const cql3::untyped_result
     return response;
 }
 
+future<> executor::garbage_collect_s3_exports() {
+    auto client_tokens = co_await get_all_client_tokens(_qp);
+    auto exports = co_await get_all_exports(_qp);
+    auto live_nodes = co_await get_live_nodes();
+    auto self_node_id = get_self_node_id();
+
+    elogger.debug("Garbage collection: {} client tokens, {} exports, {} live nodes, self node_id={}",
+        client_tokens.size(), exports.size(), live_nodes.size(), self_node_id);
+
+    auto is_node_alive = [&](const sstring& node_id) {
+        auto host_id = get_host_id_from_node_id(node_id);
+        return std::find(live_nodes.begin(), live_nodes.end(), host_id) != live_nodes.end();
+    };
+
+    std::unordered_map<sstring, export_row&> export_arn_to_export;
+    for (auto& export_row : exports) {
+        // We ignore rows, which are under control of node, which is alive, those are fine.
+        if (!is_node_alive(export_row.node_id)) {
+            elogger.debug("Export row {} is under control of dead node {}", export_row.export_arn, export_row.node_id);
+            export_arn_to_export.insert({ export_row.export_arn, export_row });
+        }
+    }
+    for(auto &ct : client_tokens) {
+        // We ignore rows, which are under control of node, which is alive, those are fine.
+        if (is_node_alive(ct.node_id)) continue;
+
+        elogger.debug("Client token row {} is under control of dead node {}", ct.client_token, ct.node_id);
+        auto it = export_arn_to_export.find(ct.export_arn);
+        if (it == export_arn_to_export.end()) {
+            // Node died before writing the export row, let's fill in the missing row with `FAILED` status.
+            // The export itself never happened, so there's nothing to clean up here on S3.
+
+            elogger.debug("Client token row {} has no corresponding export row, creating a FAILED export row", ct.client_token);
+            // Parse user request from client token row.
+            rjson::value request;
+            try {
+                request = rjson::parse(ct.request);
+            } catch (...) {
+                elogger.debug("Failed to parse request from client token row {}: {}", ct.client_token, ct.request);
+                // This can't happen in normal operation.
+                // If we can't parse the request, we will invent data on the fly.
+                request = rjson::empty_object();
+            }
+
+            elogger.debug("Creating FAILED export row for client token {}: export_arn={}", ct.client_token, ct.export_arn);
+            co_await insert_export(_qp, {
+                .export_arn = ct.export_arn,
+                .client_token = ct.client_token,
+                .request = ct.request,
+                .export_status = "FAILED",
+                .failure_code = "NodeFailure",
+                .failure_message = "The node that initiated the export has failed before the export could start.",
+                .export_id_token = "",
+                .accepted_at = db_clock::now(),
+                .completed_at = db_clock::time_point::min(),
+                .node_id = self_node_id,
+            });
+            continue;
+        }
+
+        elogger.debug("Client token row {} has corresponding export row {}", ct.client_token, it->second.export_arn);
+        auto &export_row = it->second;
+        if (export_row.export_status == "COMPLETED" || export_row.export_status == "FAILED") {
+            // The export completed successfully.
+            elogger.debug("Export row {} is already in terminal state {}, skipping", export_row.export_arn, export_row.export_status);
+            continue;
+        }
+
+        // Either the export is in progress or is in progress of cleaning up, in both cases the node handling it is dead.
+        // We take over by first updating `node_id` and `export_status` to show our ownership.
+
+        auto new_export_row = export_row;
+        new_export_row.export_status = "FAILING";
+        new_export_row.node_id = self_node_id;
+        elogger.debug("Marking export row {} as FAILING", export_row.export_arn);
+
+        if (!co_await update_export(_qp, new_export_row, export_row.export_status, export_row.node_id)) {
+            // Other node is already handling it and is quicker, so we just skip this.
+            elogger.debug("Failed to update export row {} to FAILING, it may have been updated by another node", export_row.export_arn);
+            continue;
+        }
+
+        // TODO: update TTLs
+
+        elogger.debug("Marking export row {} as FAILED", export_row.export_arn);
+        new_export_row.export_status = "FAILED";
+        if (!co_await update_export(_qp, new_export_row, export_row.export_status, export_row.node_id)) {
+            // This should never happen:
+            // - either there was some write issue and node_id / export_status were not correctly updated, or
+            // - another node took over and updated the row to a different status.
+            // In both cases we can't do anything about it, so we just skip - the other node will handle it.
+            elogger.debug("Failed to update export row {} to FAILED, it may have been updated by another node", export_row.export_arn);
+            continue;
+        }
+    }
+    elogger.debug("Garbage collection: finished");
+}
+
+future<> executor::garbage_collector_for_s3_exports() {
+    while(true) {
+        co_await seastar::sleep(std::chrono::hours(4));
+        co_await garbage_collect_s3_exports();
+    }
+}
+
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
+
+    elogger.debug("Request: {}", rjson::print(request));
 
     // Required parameters
     auto table_arn = get_non_empty_string_attribute(request, "TableArn");
@@ -677,6 +779,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     try {
         schema = _proxy.data_dictionary().find_schema(parts.keyspace_name, parts.table_name);
     } catch (const data_dictionary::no_such_column_family&) {
+        elogger.debug("Table not found: {}", table_arn);
         co_return api_error::table_not_found(
                 fmt::format("Table not found: {}", table_arn));
     }
@@ -685,12 +788,14 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     auto s3_prefix = get_non_empty_string_attribute(request, "S3Prefix", "");
     auto export_format = get_non_empty_string_attribute(request, "ExportFormat", "DYNAMODB_JSON");
     if (export_format != "DYNAMODB_JSON") {
+        elogger.debug("Invalid ExportFormat: {}", export_format);
         co_return api_error::validation(
                 fmt::format("ExportFormat attribute: must be DYNAMODB_JSON, not `{}`", export_format));
     }
 
     auto export_type = get_non_empty_string_attribute(request, "ExportType", "FULL_EXPORT");
     if (export_type != "FULL_EXPORT") {
+        elogger.debug("Invalid ExportType: {}", export_type);
         co_return api_error::validation(
                 fmt::format("ExportType attribute: must be FULL_EXPORT, not `{}`", export_type));
     }
@@ -698,6 +803,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     // IncrementalExportSpecification - not supported
     const rjson::value* incremental_v = rjson::find(request, "IncrementalExportSpecification");
     if (incremental_v) {
+        elogger.debug("IncrementalExportSpecification attribute is not supported");
         co_return api_error::validation("IncrementalExportSpecification attribute is not supported");
     }
 
@@ -708,11 +814,13 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     const rjson::value* export_time_v = rjson::find(request, "ExportTime");
     if (export_time_v) {
         if (!export_time_v->IsNumber()) {
+            elogger.debug("Invalid ExportTime: not a number");
             co_return api_error::validation(fmt::format("Expected number attribute ExportTime, got {}.", export_time_v->GetType()));
         }
         export_time = static_cast<int64_t>(export_time_v->GetDouble());
         auto diff = export_time > now ? export_time - now : now - export_time;
         if (diff > 300) {
+            elogger.debug("Invalid ExportTime: {} is more than 5 minutes away from current time {}", export_time, now);
             co_return api_error::invalid_export_time(fmt::format("ExportTime must be within 5 minutes of current time. "
                                 "ExportTime: {}, current time: {}", export_time, now));
         }
@@ -727,14 +835,14 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     // S3SseAlgorithm and S3SseKmsKeyId - accepted but not used
     auto s3_sse_algorithm = get_non_empty_string_attribute(request, "S3SseAlgorithm", "");
     if (!s3_sse_algorithm.empty() && s3_sse_algorithm != "AES256" && s3_sse_algorithm != "KMS") {
+        elogger.debug("Invalid S3SseAlgorithm: {}", s3_sse_algorithm);
         co_return api_error::validation(
                 fmt::format("S3SseAlgorithm parameter must be either AES256 or KMS, not `{}`.", s3_sse_algorithm));
     }
 
     auto s3_sse_kms_key_id = get_non_empty_string_attribute(request, "S3SseKmsKeyId", "");
 
-    // Build node_id = "{host_id}:{gossip_generation}"
-    auto node_id = make_node_id(_gossiper);
+    auto node_id = get_self_node_id();
 
     // Canonicalize the request for idempotency checking
     auto canonical_request = canonicalize_request(request);
@@ -747,66 +855,100 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         client_token = fmt::format("u:{}", user_client_token);
     }
 
-    // Generate a unique export ARN
-    auto export_arn = generate_export_arn(sstring(parts.table_name));
-    auto accepted_at = db_clock::now();
-
-    // CAS insert client token row for idempotency.
-    // If the client token already exists and the request matches, return the existing export.
-    if (!user_client_token.empty()) {
-        auto ct_result = co_await _sdks.insert_export_client_token(
-            client_token, export_arn, sstring(table_arn), canonical_request, node_id);
-        if (!ct_result->empty()) {
-            auto& row = ct_result->one();
-            bool applied = row.get_as<bool>("[applied]");
-            if (!applied) {
-                // Client token already exists — check if the request matches
-                auto existing_request = row.get_as<sstring>("request");
-                if (existing_request == canonical_request) {
-                    // Idempotent retry: return the existing export description
-                    auto existing_arn = row.get_as<sstring>("export_arn");
-                    auto export_result = co_await _sdks.get_export(existing_arn);
-                    if (!export_result->empty()) {
-                        auto response = build_export_description_response(export_result->one());
-                        co_return rjson::print(std::move(response));
-                    }
-                }
-                // Different request with same client token
-                co_return api_error::export_conflict(
-                    "An export with this ClientToken already exists with different parameters");
-            }
-        }
-    }
-
     // Generate export_id_token (random identifier used in S3 key paths)
     auto export_id_token = generate_random_hex(8);
 
-    // CAS insert export metadata row
-    auto export_result = co_await _sdks.insert_export(
-        export_arn, sstring(table_arn), client_token, canonical_request,
-        "IN_PROGRESS", node_id, accepted_at, export_id_token);
-    if (!export_result->empty()) {
-        auto& row = export_result->one();
-        bool applied = row.get_as<bool>("[applied]");
-        if (!applied) {
-            // This should not happen unless there's an ARN collision, which is extremely unlikely.
-            co_return api_error::export_conflict("Export ARN collision detected, please retry");
-        }
-    }
+    // Generate a unique export ARN
+    auto export_arn = generate_export_arn(sstring(parts.table_name));
 
     // Build the S3 key prefix for this export
     auto s3_key_prefix = s3_prefix.empty()
         ? fmt::format("AWSDynamoDB/{}/", export_id_token)
         : fmt::format("{}/AWSDynamoDB/{}/", s3_prefix, export_id_token);
 
+    auto accepted_at = db_clock::now();
+
+    // Start a garbage collection thread on shard 0 if it's not already running.
+    // We need to do this before first writing a client token row to make sure
+    // if something goes wrong during export the written rows will be clean up eventually.
+    co_await container().invoke_on(0, [](executor &ex) {
+        if (ex._garbage_collection_thread_for_s3_export_running) return;
+        ex._garbage_collection_thread_for_s3_export_running = true;
+        (void)ex.garbage_collector_for_s3_exports();
+
+    });
+
+    // We have all we need, let's publish the export request to the database.
+    // We need to do this in two steps - first insert a client token row, then insert the export metadata row.
+    // The order matters, because it's possible that another node is running the export with the same client token -
+    // export metadata table is keyed by export_arn, which contains a random suffix and we can't use it to detect this situation. 
+    auto [ client_row, client_token_inserted ] = co_await get_or_insert_client_row(_qp, client_token);
+
+    // We define it early because of `goto` later on.
+    bool export_row_inserted = false;
+    export_row erow;
+
+    if (!client_token_inserted) {
+        elogger.debug("ClientToken {} already exists", client_token);
+        // Export with this client token already exists. Check if the request matches.
+        if (canonical_request != client_row.request) {
+            // Easy - different request, so we fail with export conflict as Amazon requires us.
+            elogger.debug("Export conflict: different parameters");
+            co_return api_error::export_conflict(
+                "An export with this ClientToken already exists with different parameters");
+        }
+
+        // We need an export row for this client token - the export might be in progress or completed or failed.
+        auto export_row = co_await get_export(_qp, client_row.export_arn);
+        elogger.debug("Export row for ClientToken {}: {}", client_token, export_row ? "found" : "not found");
+        if (!export_row) {
+            // Export row doesn't exist. Two possibilities:
+            // - the other node is doing the export in the same moment and hasn't inserted the export row yet (but managed
+            //   to insert client token row first), or
+            // - the other node doing the export died before inserting the export row, leaving a dangling client token row
+            // In both cases we will return IN_PROGRESS status - the dangling client token row will be taken care of by
+            // garbage collection thread.
+            elogger.debug("Returning IN_PROGRESS status for ClientToken {}", client_token);
+            goto build_in_progress_response;
+        }
+
+        // Export row exists, other node is (or was) running the export. Return as if DescribeExport was called.
+        elogger.debug("Returning existing export description for ClientToken {}", client_token);
+        auto response = build_export_description_response(*export_row);
+        co_return rjson::print(std::move(response));
+    }
+
+    erow = {
+        .export_arn = export_arn,
+        .client_token = client_token,
+        .request = canonical_request,
+        .export_status = "IN_PROGRESS",
+        .export_id_token = export_id_token,
+        .accepted_at = accepted_at,
+        .completed_at = db_clock::time_point::min(),
+        .node_id = node_id,
+    };
+    export_row_inserted = co_await insert_export(_qp, erow);
+
+    if (!export_row_inserted) {
+        // Another node inserted the export row concurrently.
+        // This should never happen, but since we got here we will return as if DescribeExport was called.
+        auto export_row = co_await get_export(_qp, client_row.export_arn);
+        if (!export_row) {
+            on_internal_error(elogger, fmt::format("Failed to insert export row for ClientToken {} and failed to read it back", client_token));
+        }
+        auto response = build_export_description_response(*export_row);
+        elogger.debug("(?) Export row already exists - returning existing export description for ClientToken {}", client_token);
+        co_return rjson::print(std::move(response));
+    }
+
     // Launch background export fiber (fire-and-forget, gate-guarded)
-    auto gate_holder = _export_gate.hold();
-    // Capture all needed state by value for the background fiber
-    (void)run_export(
-        std::move(gate_holder), schema, export_arn, sstring(table_arn),
-        node_id, sstring(s3_bucket), std::move(s3_key_prefix), export_id_token);
+    elogger.debug("Launching background export fiber for ClientToken {}", client_token);
+    (void)run_export(_export_gate.hold(), schema, std::move(erow), table_arn,s3_bucket, s3_key_prefix, export_id_token);
 
     // Build the ExportDescription response
+build_in_progress_response:
+    elogger.debug("Returning IN_PROGRESS response for ClientToken {}", client_token);
     rjson::value export_desc = rjson::empty_object();
     if (!user_client_token.empty()) {
         rjson::add(export_desc, "ClientToken", rjson::from_string(user_client_token));
@@ -843,14 +985,15 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 future<> executor::run_export(
         seastar::gate::holder gate_holder,
         schema_ptr schema,
-        sstring export_arn,
-        sstring table_arn,
-        sstring node_id,
-        sstring s3_bucket,
-        sstring s3_key_prefix,
-        sstring export_id_token) {
+        export_row row,
+        std::string table_arn,
+        std::string s3_bucket,
+        std::string s3_key_prefix,
+        std::string export_id_token) {
     int64_t item_count = 0;
-    std::exception_ptr ex;
+    auto node_id = get_self_node_id();
+    std::string error_msg;
+
     try {
         auto client = get_s3_client(s3_bucket);
 
@@ -867,6 +1010,7 @@ future<> executor::run_export(
             co_await pipeline->process(wrapper);
             ++item_count;
         });
+        row.completed_at = db_clock::now();
 
         co_await pipeline->flush_and_close();
 
@@ -887,49 +1031,57 @@ future<> executor::run_export(
             R"("tableArn":"{}","exportFormat":"DYNAMODB_JSON","billedSizeBytes":0,)"
             R"("itemCount":{},"outputFormat":"DYNAMODB_JSON","dataFileCount":1,)"
             R"("dataFileS3Key":"{}"}})",
-            export_arn,
-            std::chrono::duration_cast<std::chrono::seconds>(db_clock::now().time_since_epoch()).count(),
-            std::chrono::duration_cast<std::chrono::seconds>(db_clock::now().time_since_epoch()).count(),
+            row.export_arn,
+            std::chrono::duration_cast<std::chrono::seconds>(row.accepted_at.time_since_epoch()).count(),
+            std::chrono::duration_cast<std::chrono::seconds>(row.completed_at.time_since_epoch()).count(),
             table_arn, item_count, data_object_key);
         co_await client->put_object(manifest_summary_key,
             temporary_buffer<char>(manifest_summary_content.data(), manifest_summary_content.size()));
 
-        // Update export status to COMPLETED
-        auto completed_at = db_clock::now();
         auto export_manifest = fmt::format("{}manifest-summary.json", s3_key_prefix);
-        co_await _sdks.update_export_status(
-            export_arn, node_id, "COMPLETED",
-            item_count, completed_at, export_manifest,
-            std::nullopt, std::nullopt);
-
-        elogger.info("Export {} completed successfully with {} items", export_arn, item_count);
-
-    } catch (...) {
-        ex = std::current_exception();
+        row.export_status = "COMPLETED";
+        row.export_manifest = export_manifest;
+        auto updated = co_await update_export(_qp, row, "IN_PROGRESS", node_id);
+        if (!updated) {
+            elogger.debug("Export {} failed to update status to IN_PROGRESS after completion", row.export_arn);
+            co_return;
+        }
+        elogger.debug("Export {} completed successfully with {} items", row.export_arn, item_count);
+        co_return;
+    } catch (std::exception &e) {
+        error_msg = e.what();
+    } catch(...) {
+        error_msg = "Unknown error";
     }
-
-    if (ex) {
-        auto msg = fmt::format("{}", ex);
-        elogger.warn("Export {} failed: {}", export_arn, msg);
-        co_await update_export_status_to_failed(export_arn, node_id, item_count, msg);
+    // We have failed with an exception, let's report it.
+    row.completed_at = db_clock::now();
+    elogger.debug("Export {} failed with exception: {}", row.export_arn, error_msg);
+    row.export_status = "FAILED";
+    row.failure_code = "Exception";
+    row.failure_message = std::string(error_msg);
+    auto updated = co_await update_export(_qp, row, "IN_PROGRESS", node_id);
+    if (!updated) {
+        elogger.debug("Export {} failed to update status to FAILED after completion", row.export_arn);
+        co_return;
     }
+    elogger.debug("Export {} failed with {} items", row.export_arn, item_count);
 }
 
-// Helper to update export status to FAILED, used after catching exceptions
-// in run_export (where co_await is not allowed inside catch blocks).
-future<> executor::update_export_status_to_failed(
-        const sstring& export_arn, const sstring& node_id,
-        int64_t item_count, const sstring& failure_message) {
-    try {
-        co_await _sdks.update_export_status(
-            export_arn, node_id, "FAILED",
-            item_count, db_clock::now(), std::nullopt,
-            sstring("INTERNAL_ERROR"), sstring(failure_message));
-    } catch (...) {
-        elogger.error("Export {} failed to update status after failure: {}",
-            export_arn, std::current_exception());
-    }
-}
+// // Helper to update export status to FAILED, used after catching exceptions
+// // in run_export (where co_await is not allowed inside catch blocks).
+// future<> executor::update_export_status_to_failed(
+//         const sstring& export_arn, const sstring& node_id,
+//         int64_t item_count, const sstring& failure_message) {
+//     try {
+//         co_await _sdks.update_export_status(
+//             export_arn, "FAILED",
+//             item_count, db_clock::now(), std::nullopt,
+//             sstring("INTERNAL_ERROR"), sstring(failure_message));
+//     } catch (...) {
+//         elogger.error("Export {} failed to update status after failure: {}",
+//             export_arn, std::current_exception());
+//     }
+// }
 
 future<executor::request_return_type> executor::describe_export(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.describe_export++;
@@ -944,16 +1096,25 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
             fmt::format("Invalid Export ARN: {}", export_arn));
     }
 
-    auto result = co_await _sdks.get_export(sstring(export_arn));
-    if (result->empty()) {
+    auto result = co_await get_export(_qp, sstring(export_arn));
+    if (!result) {
         co_return api_error::export_not_found(
             fmt::format("Export not found: {}", export_arn));
     }
 
-    auto response = build_export_description_response(result->one());
+    auto response = build_export_description_response(*result);
     co_return rjson::print(std::move(response));
 }
 
+static std::string get_table_arn_from_export_arn(std::string_view export_arn) {
+    // Expected format: arn:scylla:alternator:::table/<name>/export/<id>
+    // or AWS format: arn:aws:dynamodb:<region>:<account>:table/<name>/export/<id>
+    auto pos = export_arn.find("/export/");
+    if (pos == std::string::npos) {
+        throw std::invalid_argument(fmt::format("Invalid Export ARN format: {}", export_arn));
+    }
+    return export_arn.substr(0, pos);
+}
 future<executor::request_return_type> executor::list_exports(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.list_exports++;
 
@@ -981,7 +1142,7 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
         next_token = std::string(rjson::to_string_view(*next_token_v));
     }
 
-    auto result = co_await _sdks.get_all_exports();
+    auto result = co_await get_all_exports(_qp);
 
     // Collect and filter results
     struct export_summary {
@@ -990,16 +1151,13 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
         sstring table_arn;
     };
     std::vector<export_summary> summaries;
-    for (const auto& row : *result) {
-        auto arn = row.get_as<sstring>("export_arn");
-        auto t_arn = row.get_as<sstring>("table_arn");
-        auto status = row.get_as<sstring>("export_status");
-
+    for (const auto& row : result) {
         // Filter by table_arn if specified
-        if (!table_arn_filter.empty() && t_arn != table_arn_filter) {
+        auto table_arn = get_table_arn_from_export_arn(row.export_arn);
+        if (!table_arn_filter.empty() && row.table_arn != table_arn_filter) {
             continue;
         }
-        summaries.push_back({std::move(arn), std::move(status), std::move(t_arn)});
+        summaries.push_back({row.export_arn, row.export_status, row.table_arn});
     }
 
     // Sort by export_arn ascending

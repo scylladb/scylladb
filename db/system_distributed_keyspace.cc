@@ -133,7 +133,6 @@ schema_ptr alternator_export_to_s3_exports() {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
         return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS, std::make_optional(id))
                 .with_column("export_arn", utf8_type, column_kind::partition_key)
-                .with_column("table_arn", utf8_type)
                 .with_column("client_token", utf8_type)
                 .with_column("request", utf8_type)
                 .with_column("export_manifest", utf8_type)
@@ -159,7 +158,6 @@ schema_ptr alternator_export_to_s3_client_tokens() {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS);
         return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS, std::make_optional(id))
                 .with_column("client_token", utf8_type, column_kind::partition_key)
-                .with_column("table_arn", utf8_type)
                 .with_column("export_arn", utf8_type)
                 .with_column("request", utf8_type)
                 .with_column("node_id", utf8_type)

@@ -48,6 +48,7 @@ public:
         alternator::rmw_operation::set_default_write_isolation("forbid_rmw");
         _exec.start(
             std::ref(e.gossiper().local()),
+            std::ref(e.local_qp()),
             std::ref(e.get_storage_proxy().local()),
             std::ref(e.get_storage_service().local()),
             std::ref(e.migration_manager().local()),

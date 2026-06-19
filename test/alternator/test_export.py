@@ -389,6 +389,11 @@ def test_export_table_missing_s3_bucket(test_table_s_for_export_only):
 
     with pytest.raises(ClientError, match='ValidationException.*[sS]3Bucket'):
         client.export_table_to_point_in_time(
+            TableArn=table_arn,
+            S3Bucket='',
+        )
+
+
 # ---------------------------------------------------------------------------
 # ExportTableToPointInTime tests
 # ---------------------------------------------------------------------------
