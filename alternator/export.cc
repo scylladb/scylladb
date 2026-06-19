@@ -32,6 +32,7 @@
 #include <exception>
 #include <string>
 #include <string_view>
+#include <zlib.h>
 
 namespace alternator {
 
@@ -150,13 +151,117 @@ class noop_compressor : public compression_interface {
     std::unique_ptr<storage_sink_interface> _sink;
 
 public:
-    noop_compressor(std::unique_ptr<storage_sink_interface> sink) : _sink(std::move(sink)) {}
+    // Nothing here can fail, so the sink is taken over right away - see gzip_compressor below for
+    // why a stage of the pipeline takes over the stage below it only once it no longer can.
+    explicit noop_compressor(std::unique_ptr<storage_sink_interface>&& sink) : _sink(std::move(sink)) {}
 
     future<> compress(std::span<const std::byte> data) override {
         co_await _sink->write(data);
     }
     future<export_pipeline_interface::result> flush_and_close() override {
         return _sink->flush_and_close();
+    }
+};
+
+// Gzip compressor - compresses data using gzip format and writes compressed chunks to the storage sink.
+// Not every call to compress() produces output; zlib may buffer data internally.
+// All data is guaranteed to be flushed when flush_and_close() is called.
+class gzip_compressor : public compression_interface {
+    std::unique_ptr<storage_sink_interface> _sink;
+    z_stream _zs = {};
+    static constexpr size_t _buf_size = 4096;
+    // Upper bound on the input handed to a single deflate() call - see compress().
+    static constexpr size_t _max_input_size = 16 * 1024;
+
+    // Calls deflate() until a call leaves room in the output buffer, writing out whatever it produced.
+    // Leftover output space is how zlib signals that it is done with what it was given, so the single
+    // condition covers both callers: with Z_NO_FLUSH (compress()) it means the input has been consumed,
+    // with Z_FINISH (flush_and_close()) it means deflate() has returned Z_STREAM_END.
+    future<> deflate_to_sink(int flush_type) {
+        do {
+            std::array<std::byte, _buf_size> output;
+            _zs.next_out = reinterpret_cast<Bytef*>(output.data());
+            _zs.avail_out = _buf_size;
+
+            int ret = deflate(&_zs, flush_type);
+            if (ret < Z_OK) {
+                throw std::runtime_error(fmt::format("Alternator S3 export pipeline: gzip compression {}error (deflate returned {}): {}",
+                        flush_type == Z_FINISH ? "flush " : "", ret, _zs.msg ? _zs.msg : "<no message>"));
+            }
+
+            auto produced = _buf_size - _zs.avail_out;
+            if (produced > 0) {
+                co_await _sink->write(std::span<const std::byte>(output.data(), produced));
+            }
+        } while (_zs.avail_out == 0);
+    }
+
+public:
+    // Takes the sink over only once zlib is initialized. Initialization can fail - deflateInit2()
+    // reports Z_MEM_ERROR when zlib's internal state fails to allocate - and a storage sink
+    // destroyed without flush_and_close() is not something a destructor can deal with: the S3
+    // one leaks its upload stream together with a started multipart upload (see ~s3_storage_sink()).
+    // Taking the parameter by reference rather than by value leaves the sink - and with it the
+    // responsibility to close it asynchronously - with the caller until that can no longer happen.
+    explicit gzip_compressor(std::unique_ptr<storage_sink_interface>&& sink) {
+        auto ret = deflateInit2(&_zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
+        if (ret != Z_OK) {
+            throw std::runtime_error(fmt::format("Alternator S3 export pipeline: gzip compressor initialization error (deflateInit2 returned {}): {}", ret, _zs.msg ? _zs.msg : "<no message>"));
+        }
+        _sink = std::move(sink);
+    }
+    gzip_compressor(const gzip_compressor&) = delete;
+    gzip_compressor(gzip_compressor&&) = delete;
+    gzip_compressor& operator=(const gzip_compressor&) = delete;
+    gzip_compressor& operator=(gzip_compressor&&) = delete;
+
+    ~gzip_compressor() {
+        deflateEnd(&_zs);
+    }
+
+    future<> compress(std::span<const std::byte> data) override {
+        // A single deflate() call is CPU bound and returns only once it has consumed all of its
+        // input or filled its output buffer, so bounding its cost means keeping both small. A
+        // small output buffer alone is not enough: on compressible data - and serialized items
+        // are - 4 KB of output can absorb megabytes of input, which is milliseconds of reactor
+        // stall in one call. Feeding the input in slices of at most _max_input_size bounds the
+        // work of each call regardless of the compression ratio; a preemption point between the
+        // slices is what actually breaks the stall up, and it has to be here rather than next to
+        // the sink write in deflate_to_sink(), because a slice may produce no output at all.
+        while (!data.empty()) {
+            auto chunk = data.first(std::min(data.size(), _max_input_size));
+            data = data.subspan(chunk.size());
+            _zs.next_in = reinterpret_cast<Bytef*>(const_cast<std::byte*>(chunk.data()));
+            _zs.avail_in = static_cast<uInt>(chunk.size());
+
+            co_await deflate_to_sink(Z_NO_FLUSH);
+
+            co_await coroutine::maybe_yield();
+        }
+    }
+
+    future<export_pipeline_interface::result> flush_and_close() override {
+        std::exception_ptr exception = nullptr;
+        try {
+            _zs.next_in = nullptr;
+            _zs.avail_in = 0;
+            co_await deflate_to_sink(Z_FINISH);
+        }
+        catch (...) {
+            exception = std::current_exception();
+        }
+        auto res = export_pipeline_interface::result{};
+        try {
+            res = co_await _sink->flush_and_close();
+        } catch (...) {
+            if (!exception) {
+                exception = std::current_exception();
+            }
+        }
+        if (exception) {
+            std::rethrow_exception(exception);
+        }
+        co_return res;
     }
 };
 
@@ -223,6 +328,129 @@ public:
     }
     future<> close() override {
         return _parser->close();
+    }
+};
+
+// Gzip decompressor - decompresses gzip data and passes decompressed chunks to the parser.
+class gzip_decompressor : public decompression_interface {
+    std::unique_ptr<parsing_interface> _parser;
+    z_stream _zs = {};
+    // Set when inflate() reports the end of a gzip member, cleared when the next member is started.
+    // At close() time it tells a complete object from a truncated one: zlib verifies the CRC32 and
+    // ISIZE trailer - gzip's only integrity check - exclusively at the end of a member, so an
+    // object that was cut short (an interrupted export, a partial download) decodes as far as it
+    // goes and would otherwise be reported as a clean, complete import.
+    bool _stream_ended = false;
+    // Set by cancel(), so that close() does not report a truncated stream on top of whatever error
+    // aborted the import in the first place.
+    bool _cancelled = false;
+
+    // True if we have not yet processed any data. Needed to distinguish between an empty stream
+    // and a truncated one.
+    bool _no_input_yet = true;
+
+    static constexpr size_t _buf_size = 4096;
+
+    // A gzip file may consist of several members concatenated (RFC 1952 2.2) - what pigz,
+    // `cat a.gz b.gz` and any producer that compresses in chunks emit. zlib stops at the end of
+    // each member and keeps returning Z_STREAM_END without consuming anything until the stream is
+    // reset, so continuing into the next member has to be done explicitly.
+    void start_next_member() {
+        auto res = inflateReset(&_zs);
+        if (res != Z_OK) {
+            throw std::runtime_error(fmt::format("Alternator S3 import pipeline: gzip decompression error (inflateReset returned {}): {}", res, _zs.msg ? _zs.msg : "<no message>"));
+        }
+        _stream_ended = false;
+    }
+
+public:
+    explicit gzip_decompressor(std::unique_ptr<parsing_interface> parser)
+        : _parser(std::move(parser)) {
+        auto res = inflateInit2(&_zs, 16 + MAX_WBITS);
+        if (res != Z_OK) {
+            throw std::runtime_error(fmt::format("Alternator S3 import pipeline: gzip decompression error (inflateInit2 returned {}): {}", res, _zs.msg ? _zs.msg : "<no message>"));
+        }
+    }
+    gzip_decompressor(const gzip_decompressor&) = delete;
+    gzip_decompressor(gzip_decompressor&&) = delete;
+    gzip_decompressor& operator=(const gzip_decompressor&) = delete;
+    gzip_decompressor& operator=(gzip_decompressor&&) = delete;
+
+    ~gzip_decompressor() {
+        inflateEnd(&_zs);
+    }
+
+    future<> decompress(std::span<const std::byte> data) override {
+        if (data.empty()) {
+            co_return;
+        }
+
+        _no_input_yet = false;
+
+        // The previous chunk ended exactly on a member boundary, so this one opens a new member.
+        if (_stream_ended) {
+            start_next_member();
+        }
+
+        _zs.next_in = reinterpret_cast<Bytef*>(const_cast<std::byte*>(data.data()));
+        _zs.avail_in = static_cast<uInt>(data.size());
+
+        do {
+            std::array<std::byte, _buf_size> output;
+            _zs.next_out = reinterpret_cast<Bytef*>(output.data());
+            _zs.avail_out = _buf_size;
+
+            int ret = inflate(&_zs, Z_NO_FLUSH);
+            if (ret != Z_OK && ret != Z_STREAM_END && ret != Z_BUF_ERROR) {
+                throw api_error::validation(fmt::format("Alternator S3 import pipeline: gzip decompression error: {}", _zs.msg ? _zs.msg : "<no message>"));
+            }
+
+            auto produced = _buf_size - _zs.avail_out;
+            if (produced > 0) {
+                // The loop's preemption point: co_await yields once the task quota is used up, even on a ready future.
+                co_await _parser->parse(std::span<const std::byte>(output.data(), produced));
+            }
+
+            if (ret == Z_STREAM_END) {
+                _stream_ended = true;
+                // Anything left in the input buffer belongs to the next member. Resetting only
+                // when there is input left keeps an object whose last member ends on a chunk
+                // boundary from being restarted into a member that never arrives.
+                if (_zs.avail_in == 0) {
+                    co_return;
+                }
+                start_next_member();
+            } else if (ret == Z_BUF_ERROR && produced == 0) {
+                // No progress is possible - inflate() needs more input than this chunk holds.
+                // Every iteration hands zlib an empty _buf_size output buffer, so the only way it
+                // can stall is on input, which means it has already taken the whole chunk into its
+                // internal state - nothing of `data` is left to carry over, and the next chunk
+                // resumes from there. If the object ends here instead, close() reports the
+                // truncation. The check guards the carry-over-free assumption: `data` does not
+                // outlive this call, so anything zlib left behind would be silently lost.
+                if (_zs.avail_in != 0) {
+                    on_internal_error(xlogger, "gzip decompression stalled with unconsumed input");
+                }
+                co_return;
+            }
+        } while (_zs.avail_in > 0 || _zs.avail_out == 0);
+    }
+    void cancel() noexcept override {
+        inflateEnd(&_zs);
+        _zs = {};
+        _cancelled = true;
+        _parser->cancel();
+    }
+
+    future<> close() override {
+        // We consider stream of size 0 (_no_input_yet set to true) as valid, not truncated and empty stream
+        // (this is done because AWS can produce .gz files of size 0 for empty partitions).
+        if (_cancelled || _stream_ended || _no_input_yet) {
+            co_return co_await _parser->close();
+        }
+        // Cancel the parser (to prevent any complaining from it) before throwing the error.
+        _parser->cancel();
+        throw api_error::validation("Alternator S3 import pipeline: gzip decompression error: truncated gzip stream");
     }
 };
 
@@ -296,17 +524,26 @@ static std::string_view strip_etag_quotes(std::string_view etag) {
 class s3_storage_sink : public storage_sink_interface {
     shared_ptr<s3::client> _client;
     sstring _object_name;
-    abort_source* _as;
+    // Filled by the upload sink with the etag S3 assigned to the object it wrote - see
+    // flush_and_close(). Shared with the sink, which outlives this object when the
+    // destructor below has to leak it.
+    lw_shared_ptr<sstring> _etag = make_lw_shared<sstring>();
     std::unique_ptr<output_stream<char>> _upload_stream;
     sink_result_builder _result;
+    abort_source *_as;
     bool _closed = false;
 
 public:
     s3_storage_sink(shared_ptr<s3::client> client, sstring object_name, abort_source *as)
         : _client(std::move(client))
         , _object_name(std::move(object_name))
-        , _as(as)
+#if 0
+        // revert this once #31703 is merged
+        , _upload_stream(std::make_unique<output_stream<char>>(_client->make_upload_jumbo_sink(_object_name, s3::object_metadata{}, std::nullopt, as, _etag)))
+#else
         , _upload_stream(std::make_unique<output_stream<char>>(_client->make_upload_jumbo_sink(_object_name, s3::object_metadata{}, std::nullopt, as)))
+#endif
+        , _as(as)
     {
     }
     ~s3_storage_sink() {
@@ -448,41 +685,112 @@ public:
     }
 };
 
-static std::unique_ptr<export_pipeline_interface> create_export_pipeline(std::unique_ptr<storage_sink_interface> sink) {
-    auto compressor = std::make_unique<noop_compressor>(std::move(sink));
-    return std::make_unique<json_formatter>(std::move(compressor));
+// Note: `sink` is taken over by the created compressor only if the construction succeeds - on failure
+// it is left with the caller, which has to close it asynchronously. See gzip_compressor's constructor.
+static std::unique_ptr<compression_interface> make_compressor(compression_type compression, std::unique_ptr<storage_sink_interface>&& sink) {
+    return std::visit(overloaded_functor{
+        [&](const no_compression&) -> std::unique_ptr<compression_interface> {
+            return std::make_unique<noop_compressor>(std::move(sink));
+        },
+        [&](const gzip_compression&) -> std::unique_ptr<compression_interface> {
+            return std::make_unique<gzip_compressor>(std::move(sink));
+        }
+    }, compression);
 }
 
-static std::unique_ptr<decompression_interface> create_decompression_pipeline(std::function<future<>(rjson::value)> on_item) {
+static std::unique_ptr<decompression_interface> make_decompressor(compression_type compression, std::unique_ptr<parsing_interface> parser) {
+    return std::visit(overloaded_functor{
+        [&](const no_compression&) -> std::unique_ptr<decompression_interface> {
+            return std::make_unique<noop_decompressor>(std::move(parser));
+        },
+        [&](const gzip_compression&) -> std::unique_ptr<decompression_interface> {
+            return std::make_unique<gzip_decompressor>(std::move(parser));
+        }
+    }, compression);
+}
+
+static std::unique_ptr<decompression_interface> create_decompression_pipeline(std::function<future<>(rjson::value)> on_item, compression_type compression) {
     auto parser = std::make_unique<json_parser>(std::move(on_item));
-    return std::make_unique<noop_decompressor>(std::move(parser));
+    return make_decompressor(compression, std::move(parser));
 }
 
 // Factory function to create sink pipeline. Depending on target_config it will be either
 // - in_memory_target_config - in-memory sink pipeline for testing.
 // - s3_target_config - pipeline that will write to S3 object.
-std::unique_ptr<export_pipeline_interface> create_sink_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config) {
-    return std::visit(overloaded_functor{
-        [](in_memory_target_config &cfg) -> std::unique_ptr<export_pipeline_interface> {
-            if (!cfg.storage) {
-                on_internal_error(xlogger, "in_memory_target_config::storage is null");
+future<std::unique_ptr<export_pipeline_interface>> create_sink_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, compression_type compression) {
+    std::unique_ptr<storage_sink_interface> sink;
+    std::unique_ptr<compression_interface> compressor;
+
+    // Unfortunately we can't rely on destructors, as those don't handle exceptions and don't work in asynchronous context.
+    // A half-built pipeline has to be torn down explicitly: the stages above the sink can fail to construct
+    // (zlib initialization allocates, and so does every `make_unique` here), while an s3_storage_sink
+    // destroyed without flush_and_close() leaks its upload stream together with a started multipart
+    // upload - see its destructor. Each stage therefore takes the stage below it over only once it can
+    // no longer fail, so that whatever the failing step did not take is still owned here and can be closed.
+    std::exception_ptr exception;
+    try {
+        sink = std::visit(overloaded_functor{
+            [&](in_memory_target_config &cfg) -> std::unique_ptr<storage_sink_interface> {
+                if (!cfg.storage) {
+                    on_internal_error(xlogger, "in_memory_target_config::storage is null");
+                }
+                return std::make_unique<in_memory_storage_sink>(std::move(cfg.storage));
+            },
+            [&](s3_target_config &cfg) -> std::unique_ptr<storage_sink_interface> {
+                if (!cfg.client) {
+                    on_internal_error(xlogger, "s3_target_config::client is null");
+                }
+                return std::make_unique<s3_storage_sink>(std::move(cfg.client), std::move(cfg.object_name), cfg.as);
             }
-            return create_export_pipeline(std::make_unique<in_memory_storage_sink>(std::move(cfg.storage)));
-        },
-        [](s3_target_config &cfg) -> std::unique_ptr<export_pipeline_interface> {
-            if (!cfg.client) {
-                on_internal_error(xlogger, "s3_target_config::client is null");
+        }, target_config);
+        // json_formatter's own constructor cannot fail, but the allocation which precedes it can - and
+        // then the compressor, with the sink already inside it, is still owned by the local below.
+        compressor = make_compressor(compression, std::move(sink));
+        co_return std::make_unique<json_formatter>(std::move(compressor));
+    } catch(...) {
+        exception = std::current_exception();
+    }
+
+    // Closing the pipeline on this path finalizes the target object, so a failed export can leave an
+    // empty object behind - with gzip that is a header-and-trailer-only member, or zero bytes when it was
+    // the compressor itself which failed to construct and only the bare sink is closed below - overwriting
+    // whatever was stored under that name before. It is the `output_stream` inside s3_storage_sink which
+    // forces that: it cannot be disposed of without flushing, and flushing a stream which wrote nothing
+    // PUTs an empty object (no multipart upload has been started yet at this point, so there is nothing
+    // to abort either). The caller learns about the failure from the exception rethrown below.
+    // Note that such an object reads back as a valid, empty export rather than as a failure: a
+    // header-and-trailer-only member ends with Z_STREAM_END like any other, and an object with no bytes
+    // at all is accepted as an empty stream by gzip_decompressor::close(). The caller must therefore not
+    // take the presence of the object for success. See the contract on
+    // export_pipeline_interface::flush_and_close() in export.hh.
+    if (compressor) {
+        // The compressor got the sink, so closing it closes the sink too.
+        try {
+            auto z = std::exchange(compressor, nullptr);
+            co_await z->flush_and_close().discard_result();
+        } catch(...) {
+            if (!exception) {
+                exception = std::current_exception();
             }
-            return create_export_pipeline(std::make_unique<s3_storage_sink>(std::move(cfg.client), std::move(cfg.object_name), cfg.as));
         }
-    }, target_config);
+    } else if (sink) {
+        try {
+            auto z = std::exchange(sink, nullptr);
+            co_await z->flush_and_close().discard_result();
+        } catch(...) {
+            if (!exception) {
+                exception = std::current_exception();
+            }
+        }
+    }
+    std::rethrow_exception(exception);
 }
 
 // Factory function to create source pipeline. Depending on target_config it will be either
 // - in_memory_target_config - in-memory source pipeline for testing.
 // - s3_target_config - pipeline that will read from S3 object.
 // Note: `on_item` callback must be valid until `import_pipeline_interface::close()` is resolved.
-future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<future<>(rjson::value)> on_item) {
+future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<future<>(rjson::value)> on_item, compression_type compression) {
     std::unique_ptr<source_interface> source;
     std::unique_ptr<decompression_interface> decompressor;
 
@@ -503,7 +811,7 @@ future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::v
                 return std::make_unique<s3_storage_source>(std::move(cfg.client), std::move(cfg.object_name), cfg.as);
             }
         }, target_config);
-        decompressor = create_decompression_pipeline(std::move(on_item));
+        decompressor = create_decompression_pipeline(std::move(on_item), compression);
 
         co_return std::make_unique<import_pipeline_impl>(std::move(source), std::move(decompressor));
     } catch(...) {
