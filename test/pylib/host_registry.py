@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
+import asyncio
 import errno
 import fcntl
 import os
@@ -96,6 +97,28 @@ class HostRegistry:
 
         self.pool = Pool[Host](254, create_host, destroy_host)
 
+        # The HostRegistry singleton is shared across all test modules running
+        # concurrently in a single test.py worker process. Each module drives
+        # its own ScyllaClusterManager on a separate thread with its own asyncio
+        # event loop, yet they all lease addresses from this one registry. Pool
+        # guards its state (self.pool / self.total, and our next_host_id) with
+        # an asyncio.Condition, but asyncio primitives are not thread-safe: the
+        # Condition's lock only serializes coroutines on the SAME event loop, so
+        # driven from several threads/loops at once the read-modify-write of the
+        # pool state is unsynchronized and can hand out the same IP twice. (Its
+        # futures are also loop-bound, so awaiting one from another loop is
+        # invalid.) Run every pool operation on one dedicated event loop and
+        # marshal lease/release calls onto it: a single loop restores real
+        # mutual exclusion while keeping Pool's blocking "wait for a free slot"
+        # behavior unchanged (SCYLLADB-2540).
+        self._pool_loop = asyncio.new_event_loop()
+        self._pool_thread = threading.Thread(
+            target=self._pool_loop.run_forever,
+            name="host-registry-pool",
+            daemon=True,
+        )
+        self._pool_thread.start()
+
         async def cleanup() -> None:
             if self.lock_filename:
                 self.lock_filename.unlink()
@@ -104,7 +127,12 @@ class HostRegistry:
         self.cleanup = cleanup
 
     async def lease_host(self) -> Host:
-        return await self.pool.get()
+        # Marshal onto the dedicated pool loop so Pool's asyncio.Condition is
+        # only ever touched from a single event loop. wrap_future ties the
+        # cross-thread result back to the caller's loop without blocking it.
+        cfut = asyncio.run_coroutine_threadsafe(self.pool.get(), self._pool_loop)
+        return await asyncio.wrap_future(cfut)
 
     async def release_host(self, host: Host) -> None:
-        return await self.pool.put(host, is_dirty=False)
+        cfut = asyncio.run_coroutine_threadsafe(self.pool.put(host, is_dirty=False), self._pool_loop)
+        await asyncio.wrap_future(cfut)
