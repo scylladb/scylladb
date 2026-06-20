@@ -41,7 +41,7 @@
 //      .nodes                       number of nodes
 //      .total_values                how many entries to append to leader nodes (default 100)
 //      .initial_term                initial term # for setup
-//      .initial_leader              what server is leader
+//      .initial_leader              what server is leader (always 0, required by fast bootstrap)
 //      .initial_states              initial logs of servers
 //          .le                      log entries
 //      .initial_snapshots           snapshots present at initial state for servers
@@ -271,7 +271,10 @@ struct test_case {
     const size_t nodes;
     const size_t total_values = 100;
     uint64_t initial_term = 1;
-    const size_t initial_leader = 0;
+    // The initial leader is always node 0 (smallest server_id). With fast
+    // bootstrap the smallest-id node starts an election immediately, so
+    // start_all() relies on this being 0.
+    static constexpr size_t initial_leader = 0;
     const std::vector<struct initial_log> initial_states;
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<raft::server::configuration> config;
@@ -848,7 +851,7 @@ raft_cluster<Clock>::raft_cluster(test_case test,
         , _rpc_config(rpc_config)
         , _prevote(prevote)
         , _apply(apply)
-        , _leader(first_leader)
+        , _leader(test_case::initial_leader)
         , _tick_delta(tick_delta)
         , _verify_persisted_snapshots(test.verify_persisted_snapshots) {
 
@@ -1433,9 +1436,7 @@ template <typename Clock>
 std::vector<initial_state> raft_cluster<Clock>::get_states(test_case test, bool prevote) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
-    size_t leader = test.initial_leader;
-
-    states[leader].term = raft::term_t{test.initial_term};
+    states[test.initial_leader].term = raft::term_t{test.initial_term};
 
     // Server initial logs, etc
     for (size_t i = 0; i < states.size(); ++i) {
