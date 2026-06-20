@@ -336,7 +336,9 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             m.set_clustered_cell(ck, "raft_group_id", raft_info.group_id.uuid(), ts);
         }
 
-        tid = *tablets.next_tablet(tid);
+        if (auto next_tid = tablets.next_tablet(tid)) {
+            tid = *next_tid;
+        }
     }
     co_await process_mutation(std::move(m));
 }
@@ -768,7 +770,7 @@ using updating = bool_class<struct updating_tag>;
 
 // is_updating == updating::yes means we're making random updates of an already populated tablet_map.
 // Otherwise, we're populating a tablet_map constructed with tablet_map::initialized_later.
-tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid,
+std::optional<tablet_id> process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid,
                           const cql3::untyped_result_set_row& row, updating is_updating) {
     tablet_replica_set tablet_replicas;
     if (row.has("replicas")) {
@@ -879,7 +881,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         }
     }
 
-    return *map.next_tablet(tid);
+    return map.next_tablet(tid);
 }
 
 struct tablet_metadata_builder {
@@ -964,7 +966,9 @@ struct tablet_metadata_builder {
         }
 
         if (row.has("last_token")) {
-            current->tid = process_one_row(db, current->table, current->map, current->tid, row, updating::no);
+            if (auto next_tid = process_one_row(db, current->table, current->map, current->tid, row, updating::no)) {
+                current->tid = *next_tid;
+            }
         }
     }
 
