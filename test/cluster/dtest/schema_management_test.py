@@ -239,7 +239,7 @@ class TestSchemaManagement(Tester):
         expected_cols = 1 + col_number - columns_to_drop  # pk + remaining columns
         assert len(rows_to_list(rows)[0]) == expected_cols, f"Expected {expected_cols} columns but got {len(rows_to_list(rows)[0])}"
 
-    @pytest.mark.skip_not_implemented(reason="unimplemented")
+    @pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-2785", reason="unimplemented")
     def commitlog_replays_after_schema_change(self):
         """
         Commitlog can be replayed even though schema has been changed

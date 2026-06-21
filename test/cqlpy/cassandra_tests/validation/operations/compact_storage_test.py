@@ -21,7 +21,7 @@ def all_tests_in_this_file_use_compact_storage(compact_storage):
 # flag is used) by Cassandra, and it was never implemented in Scylla, so
 # let's skip its test.
 # See issue #3882
-@pytest.mark.skip_not_implemented(reason="issue #3882 - COMPACT STORAGE not implemented")
+@pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/3882", reason="issue #3882 - COMPACT STORAGE not implemented")
 def testSparseCompactTableIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(key ascii PRIMARY KEY, val ascii) WITH COMPACT STORAGE") as table:
 
