@@ -504,11 +504,38 @@ def wait_for_services(pid, checkers):
 def wait_for_cql(pid, ip):
     wait_for_services(pid, [lambda: check_cql(ip)])
 
+
+def _has_marker_expression(pytest_args: list[str]) -> bool:
+    """Return True when *pytest_args* already defines a pytest marker expression."""
+    for i, arg in enumerate(pytest_args):
+        if arg == "-m":
+            return i + 1 < len(pytest_args)
+        if arg.startswith("-m="):
+            return True
+    return False
+
+
+def _prepare_pytest_args(pytest_args: list[str]) -> list[str]:
+    """Prepare pytest arguments for runpy wrappers.
+
+    By default, runpy wrappers skip tests marked ``nightly`` to keep
+    local and per-PR runs focused and fast.
+
+    Marker policy:
+    * if no marker expression is provided, add ``-m 'not nightly'``;
+    * if marker expression is provided, keep it unchanged.
+    """
+    prepared_args = list(pytest_args)
+    if _has_marker_expression(prepared_args):
+        return prepared_args
+    return ["-m", "not nightly"] + prepared_args
+
 def run_pytest(pytest_dir, additional_parameters):
     global run_with_temporary_dir_pids
     global run_pytest_pids
     sys.stdout.flush()
     sys.stderr.flush()
+    additional_parameters = _prepare_pytest_args(additional_parameters)
     pid = os.fork()
     if pid == 0:
         # child:

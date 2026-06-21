@@ -189,7 +189,7 @@ def testBatchWithInRestriction(cql, test_keyspace):
 # TTLs. These sleeps also make it dependent on timing - in the very unlikely
 # case that the test code is delayed by a large fraction of a second, we can
 # end up with the wrong TTL.
-@pytest.mark.skip_slow(reason="slow test, remove skip to try it anyway")
+@pytest.mark.nightly
 def testBatchTTLConditionalInteraction(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id int, clustering1 int, clustering2 int, clustering3 int, val int, PRIMARY KEY (id, clustering1, clustering2, clustering3))") as clustering:
         execute(cql, clustering, "DELETE FROM %s WHERE id=1")
@@ -338,7 +338,7 @@ def testBatchTTLConditionalInteraction(cql, test_keyspace):
 # TTLs. These sleeps also make it dependent on timing - in the very unlikely
 # case that the test code is delayed by a large fraction of a second, we can
 # end up with the wrong TTL.
-@pytest.mark.skip_slow(reason="slow test, remove skip to try it anyway")
+@pytest.mark.nightly
 def testBatchStaticTTLConditionalInteraction(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id int, clustering1 int, clustering2 int, clustering3 int, sval int static, val int, PRIMARY KEY (id, clustering1, clustering2, clustering3))") as clustering_static:
         execute(cql, clustering_static, f"DELETE FROM {clustering_static} WHERE id=1")

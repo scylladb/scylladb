@@ -77,7 +77,6 @@ def test_skip_bug_marker_skips_with_prefix(skippytest):
 
 @pytest.mark.parametrize("marker, skip_type, reason", [
     ("skip_not_implemented", "not_implemented", "feature X not built yet"),
-    ("skip_slow", "slow", "takes 10 minutes"),
     ("skip_env", "env", "need --special-flag"),
 ])
 def test_non_bug_typed_marker_skips_with_prefix(skippytest, marker, skip_type, reason):
@@ -109,7 +108,6 @@ def test_skip_bug_positional_reason_rejected(skippytest):
 
 @pytest.mark.parametrize("marker, skip_type", [
     ("skip_not_implemented", "not_implemented"),
-    ("skip_slow", "slow"),
     ("skip_env", "env"),
 ])
 def test_typed_marker_positional_reason_accepted(skippytest, marker, skip_type):
@@ -129,7 +127,7 @@ def test_typed_marker_positional_reason_accepted(skippytest, marker, skip_type):
 
 # -- Missing reason ---------------------------------------------------------
 
-@pytest.mark.parametrize("marker", ["skip_not_implemented", "skip_slow", "skip_env"])
+@pytest.mark.parametrize("marker", ["skip_not_implemented", "skip_env"])
 def test_missing_reason_is_rejected(skippytest, marker):
     skippytest.makepyfile(f"""
         import pytest
@@ -180,7 +178,7 @@ def test_bare_skip_rejected_and_lists_alternatives(skippytest):
     result.stderr.fnmatch_lines(["*Untyped skip*some bare reason*"])
     assert result.ret != 0
     out = result.stderr.str()
-    for m in ("skip_bug", "skip_not_implemented", "skip_slow",
+    for m in ("skip_bug", "skip_not_implemented",
               "skip_env"):
         assert m in out, f"expected '{m}' in error output"
 

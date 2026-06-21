@@ -46,7 +46,6 @@ def _is_valid_skip_bug_link(link: str) -> bool:
 class SkipType(StrEnum):
     SKIP_BUG = "bug"
     SKIP_NOT_IMPLEMENTED = "not_implemented"
-    SKIP_SLOW = "slow"
     SKIP_ENV = "env"
 
     @staticmethod
@@ -99,11 +98,6 @@ def skip_bug(*, link: str, reason: str) -> None:
 def skip_not_implemented(reason: str) -> None:
     """Runtime skip for a feature that is not yet implemented."""
     skip(reason, skip_type=SkipType.SKIP_NOT_IMPLEMENTED)
-
-
-def skip_slow(reason: str) -> None:
-    """Runtime skip for a test that is too slow for regular CI."""
-    skip(reason, skip_type=SkipType.SKIP_SLOW)
 
 
 def skip_env(reason: str) -> None:
