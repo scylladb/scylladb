@@ -10,6 +10,7 @@
 
 #include "cql3/description.hh"
 #include "utils/assert.hh"
+#include "utils/wrapped_function.hh"
 #include <functional>
 #include <optional>
 #include <unordered_map>
@@ -684,7 +685,7 @@ private:
     lw_shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def) const;
     void rebuild();
     void compute_all_columns_in_select_order();
-    schema(const schema&, const std::function<void(schema&)>&);
+    schema(const schema&, const utils::wrapped_function<void(schema&)>&);
     class private_tag{};
 public:
     schema(private_tag, const raw_schema&, const schema_static_props& props, schema_ptr cdc_schema, std::optional<std::variant<schema_ptr, db::view::base_dependent_view_info>> base = std::nullopt);
