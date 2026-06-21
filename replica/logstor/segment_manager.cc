@@ -226,12 +226,12 @@ future<> writeable_segment::do_write(log_location loc, bytes_view data) {
 
     const auto alignment = _file.disk_write_dma_alignment();
     const uint64_t total = data.size();
-    auto offset = absolute_offset(loc.offset);
+    auto base_offset = absolute_offset(loc.offset);
     uint64_t written = 0;
 
     while (written < total) {
         auto new_written = co_await _file.dma_write(
-                offset, data.data() + written, total - written);
+                base_offset + written, data.data() + written, total - written);
 
         written += new_written;
         if (written == total) {
@@ -239,7 +239,6 @@ future<> writeable_segment::do_write(log_location loc, bytes_view data) {
         }
 
         written = align_down(written, alignment);
-        offset += written;
     }
 }
 
