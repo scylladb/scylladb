@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-@pytest.mark.skip_not_implemented(reason="tombstone_gc repair mode is not supported yet for MVs due to #24816")
+@pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/24816", reason="tombstone_gc repair mode is not supported yet for MVs due to #24816")
 async def test_mv_tombstone_gc_setting(manager):
     """
     Test that the tombstone_gc parameter can be set on a materialized view,

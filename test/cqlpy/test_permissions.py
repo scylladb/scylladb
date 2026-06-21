@@ -1241,28 +1241,28 @@ def test_drop_keyspace_cleans_up_function_level_permissions(cql, scylla_only):
 
 # Test EXECUTE permission is required to use UDF in WHERE clause
 # Scylla does not support UDF calls in WHERE clauses
-@pytest.mark.skip_not_implemented(reason="Scylla does not support UDF calls in WHERE clauses")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-440", reason="Scylla does not support UDF calls in WHERE clauses")
 def test_udf_permissions_in_select_where_clause(cql, test_keyspace, scylla_only):
     _verify_udf_execute_permission(cql, test_keyspace,
         lambda table, func: f"SELECT k, v FROM {table} WHERE k = {test_keyspace}.{func}(0)")
 
 # Test EXECUTE permission is required to use UDF in INSERT
 # Scylla does not support UDF calls in INSERT values
-@pytest.mark.skip_not_implemented(reason="Scylla does not support UDF calls in INSERT/UPDATE/DELETE contexts")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-440", reason="Scylla does not support UDF calls in INSERT/UPDATE/DELETE contexts")
 def test_udf_permissions_in_insert(cql, test_keyspace, scylla_only):
     _verify_udf_execute_permission(cql, test_keyspace,
         lambda table, func: f"INSERT INTO {table} (k, v) VALUES (1, {test_keyspace}.{func}(1))")
 
 # Test EXECUTE permission is required to use UDF in UPDATE
 # Scylla does not support UDF calls in UPDATE/DELETE contexts
-@pytest.mark.skip_not_implemented(reason="Scylla does not support UDF calls in INSERT/UPDATE/DELETE contexts")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-440", reason="Scylla does not support UDF calls in INSERT/UPDATE/DELETE contexts")
 def test_udf_permissions_in_update(cql, test_keyspace, scylla_only):
     _verify_udf_execute_permission(cql, test_keyspace,
         lambda table, func: f"UPDATE {table} SET v = {test_keyspace}.{func}(2) WHERE k = {test_keyspace}.{func}(0)")
 
 # Test EXECUTE permission is required to use UDF in DELETE
 # Scylla does not support UDF calls in DELETE WHERE
-@pytest.mark.skip_not_implemented(reason="Scylla does not support UDF calls in INSERT/UPDATE/DELETE contexts")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-440", reason="Scylla does not support UDF calls in INSERT/UPDATE/DELETE contexts")
 def test_udf_permissions_in_delete(cql, test_keyspace, scylla_only):
     _verify_udf_execute_permission(cql, test_keyspace,
         lambda table, func: f"DELETE FROM {table} WHERE k = {test_keyspace}.{func}(0)")
