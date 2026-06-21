@@ -15,6 +15,7 @@
 #include <seastar/core/future.hh>
 
 #include "seastarx.hh"
+#include "utils/wrapped_function.hh"
 
 namespace bs2 = boost::signals2;
 
@@ -27,7 +28,7 @@ extern thread_local disk_error_signal_type general_disk_error;
 
 bool should_stop_on_system_error(const std::system_error& e);
 
-using io_error_handler = std::function<void (std::exception_ptr)>;
+using io_error_handler = utils::wrapped_function<void (std::exception_ptr)>;
 // stores a function that generates a io handler for a given signal.
 using io_error_handler_gen = std::function<io_error_handler (disk_error_signal_type&)>;
 

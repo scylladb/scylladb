@@ -11,6 +11,7 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <vector>
 #include <algorithm>
+#include "utils/wrapped_function.hh"
 
 namespace utils {
 
@@ -128,7 +129,7 @@ public:
         }
     }
     // Adds an observer to an observable
-    observer observe(std::function<void (Args...)> callback) {
+    observer observe(utils::wrapped_function<void (Args...)> callback) {
         observer ob(this, std::move(callback));
         _observers.push_back(&ob);
         return ob;

@@ -79,7 +79,7 @@ updateable_value_base::updateable_value_base::operator=(std::nullptr_t) {
 }
 
 void
-updateable_value_source_base::for_each_ref(std::function<void (updateable_value_base* ref)> func) {
+updateable_value_source_base::for_each_ref(utils::wrapped_function<void (updateable_value_base* ref)> func) {
     for (auto ref : _refs) {
         func(ref);
     }

@@ -13,6 +13,7 @@
 #include <seastar/http/client.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/reply.hh>
+#include "utils/wrapped_function.hh"
 #include <seastar/http/exception.hh>
 
 #include "utils/rjson.hh"
@@ -90,7 +91,7 @@ public:
         }
     };
 
-    using handler_func = std::function<void(const seastar::http::reply&, std::string_view)>;
+    using handler_func = utils::wrapped_function<void(const seastar::http::reply&, std::string_view)>;
 
     seastar::future<result_type> send(seastar::abort_source* = nullptr);
     seastar::future<> send(const handler_func&, seastar::abort_source* = nullptr);
@@ -189,7 +190,7 @@ future<> send_request(std::string_view uri
     , seastar::shared_ptr<seastar::tls::certificate_credentials>
     , std::string body
     , std::string_view content_type
-    , const std::function<void(const httpclient::reply_type&, std::string_view)>& handler
+    , const utils::wrapped_function<void(const httpclient::reply_type&, std::string_view)>& handler
     , httpclient::method_type op
     , key_values headers = {}
     , seastar::abort_source* = nullptr

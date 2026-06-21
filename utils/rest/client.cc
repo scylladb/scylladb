@@ -198,7 +198,7 @@ future<> rest::send_request(std::string_view uri
     , seastar::shared_ptr<seastar::tls::certificate_credentials> creds
     , std::string body
     , std::string_view content_type
-    , const std::function<void(const http::reply&, std::string_view)>& handler
+    , const utils::wrapped_function<void(const http::reply&, std::string_view)>& handler
     , httpd::operation_type op
     , key_values headers
     , seastar::abort_source* as)

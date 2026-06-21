@@ -75,7 +75,7 @@ public:
     const T& operator()() const { return _value; }
     operator const T& () const { return _value; }
     const T& get() const { return _value; }
-    observer<T> observe(std::function<void (const T&)> callback) const;
+    observer<T> observe(utils::wrapped_function<void (const T&)> callback) const;
 
     friend class updateable_value_source_base;
     template <typename U>
@@ -91,7 +91,7 @@ protected:
     // such references const operations since they don't change the logical
     // state of the object (they don't allow changing the carried value).
     mutable std::vector<updateable_value_base*> _refs; // all connected updateable_values on this shard
-    void for_each_ref(std::function<void (updateable_value_base* ref)> func);
+    void for_each_ref(utils::wrapped_function<void (updateable_value_base* ref)> func);
 protected:
     ~updateable_value_source_base();
     void add_ref(updateable_value_base* ref) const;
@@ -105,7 +105,7 @@ template <typename T>
 class updateable_value_source : public updateable_value_source_base {
     T _value;
     mutable observable<T> _updater;
-    void for_each_ref(std::function<void (updateable_value<T>*)> func) {
+    void for_each_ref(utils::wrapped_function<void (updateable_value<T>*)> func) {
         updateable_value_source_base::for_each_ref([func = std::move(func)] (updateable_value_base* ref) {
             func(static_cast<updateable_value<T>*>(ref));
         });
@@ -147,7 +147,7 @@ public:
     observable<T>& as_observable() const {
         return _updater;
     }
-    observer<T> observe(std::function<void (const T&)> callback) const {
+    observer<T> observe(utils::wrapped_function<void (const T&)> callback) const {
         return _updater.observe(std::move(callback));
     }
 
@@ -206,7 +206,7 @@ updateable_value<T>::source() const {
 
 template <typename T>
 [[nodiscard]] observer<T>
-updateable_value<T>::observe(std::function<void (const T&)> callback) const {
+updateable_value<T>::observe(utils::wrapped_function<void (const T&)> callback) const {
     auto* src = source();
     return src ? src->observe(std::move(callback)) : dummy_observer<T>();
 }
