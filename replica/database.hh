@@ -45,6 +45,7 @@
 #include "db/row_cache.hh"
 #include "query/query-result.hh"
 #include "compaction/compaction_strategy.hh"
+#include "compaction/compaction_descriptor.hh"
 #include "utils/estimated_histogram.hh"
 #include <seastar/core/metrics_registration.hh>
 #include "db/view/view_stats.hh"
@@ -752,6 +753,34 @@ private:
     // Unsafe reference to all storage groups. Don't use it across preemption points.
     const storage_group_map& storage_groups() const;
 
+    // Private helper — iterates all compaction groups in `sg` and all their
+    // views, applying the filter-capture-then-rewrite pattern.  For each
+    // view, all sstables matching `filter` (from both the main and maintenance
+    // sstable sets) are captured while compaction is disabled on that view,
+    // and registered as compacting before re-enabling.  This guarantees:
+    //   1) every captured sstable belongs to the correct compaction group at
+    //      capture time (no cross-CG routing surprises), and
+    //   2) no other operation can move the inputs to a different compaction
+    //      group while the rewrite is in flight.
+    future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(
+            storage_group& sg,
+            tasks::task_info info,
+            std::function<bool(const sstables::shared_sstable&)> filter,
+            sstables::component_type component,
+            std::function<void(sstables::sstable&)> modifier,
+            compaction::compaction_type_options::component_rewrite::update_sstable_id update_id = compaction::compaction_type_options::component_rewrite::update_sstable_id::yes);
+public:
+    // Rewrite a component (e.g., Statistics) on all sstables matching `filter`
+    // in every view of every compaction group in every storage group that
+    // overlaps `range`.  Returns a map from each old sstable to its replacement.
+    future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(
+            dht::token_range range,
+            tasks::task_info info,
+            std::function<bool(const sstables::shared_sstable&)> filter,
+            sstables::component_type component,
+            std::function<void(sstables::sstable&)> modifier,
+            compaction::compaction_type_options::component_rewrite::update_sstable_id update_id = compaction::compaction_type_options::component_rewrite::update_sstable_id::yes);
+private:
     // Returns a sstable set that can be safely used for purging any expired tombstone in a compaction group.
     // Only the sstables in the compaction group is not sufficient, since there might be other compaction
     // groups during tablet split with overlapping token range, and we need to include them all in a single

@@ -255,7 +255,7 @@ private:
                                                   can_purge_tombstones can_purge = can_purge_tombstones::yes, sstring options_desc = "");
 
     future<compaction_stats_opt> rewrite_sstables_component(compaction_group_view& t,
-                                                            std::vector<sstables::shared_sstable>& sstables,
+                                                            std::function<bool(const sstables::shared_sstable&)> filter,
                                                             compaction_type_options options,
                                                             std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables,
                                                             tasks::task_info info);
@@ -368,9 +368,24 @@ public:
     // Submit a table to be scrubbed and wait for its termination.
     future<compaction_stats_opt> perform_sstable_scrub(compaction::compaction_group_view& t, compaction_type_options::scrub opts, tasks::task_info info);
 
-    future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(compaction::compaction_group_view& t,
+    // Picks sstables from view `t` that match `filter` and rewrites the given
+    // component using `modifier`.  The input sstables are captured from
+    // `t.main_sstable_set()` while compaction is disabled on `t`, and
+    // registered in `_compacting_sstables` before re-enabling.  This
+    // guarantees that:
+    //   1) every input sstable belongs to `t`'s compaction group at capture
+    //      time (no cross-CG routing surprises), and
+    //   2) no other operation can move the inputs to a different compaction
+    //      group while the rewrite is in flight.
+    //
+    // The caller is responsible for iterating storage_group -> compaction_group
+    // -> view to cover the desired range; the filter is applied per view.
+    //
+    // Returns a map from each old sstable to its rewritten replacement.
+    future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(
+            compaction::compaction_group_view& t,
             tasks::task_info info,
-            std::vector<sstables::shared_sstable> sstables,
+            std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
             compaction_type_options::component_rewrite::update_sstable_id update_id = compaction_type_options::component_rewrite::update_sstable_id::yes);
