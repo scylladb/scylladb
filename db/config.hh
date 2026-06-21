@@ -275,7 +275,6 @@ public:
     named_value<uint32_t> logstor_file_size_in_mb;
     named_value<uint32_t> logstor_compaction_trigger_threshold_percent;
     named_value<uint32_t> logstor_compaction_soft_pressure_threshold_percent;
-    named_value<uint32_t> logstor_separator_delay_limit_ms;
     named_value<uint32_t> logstor_separator_max_memory_in_mb;
     named_value<uint32_t> file_cache_size_in_mb;
     named_value<uint32_t> memtable_flush_queue_size;

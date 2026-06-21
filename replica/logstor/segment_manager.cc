@@ -854,7 +854,6 @@ private:
     segment_sequence allocate_segment_seq() noexcept {
         return _next_segment_seq++;
     }
-    std::chrono::microseconds calculate_separator_delay() const;
     future<> run_separator_fiber();
 
     future<> write_to_separator(std::vector<write_buffer::record_in_buffer>&, segment_ref, segment_sequence);
@@ -1128,8 +1127,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Current number of separator buffers in use.")),
         sm::make_gauge("separator_task_queue_size", [this]() { return _separator_task_queue.size(); },
                        sm::description("Current number of pending tasks in the separator task queue.")),
-        sm::make_gauge("separator_flow_control_delay", [this]() { return calculate_separator_delay().count(); },
-                       sm::description("Current delay applied to writes to control separator debt in microseconds.")),
     });
 }
 
@@ -2028,18 +2025,6 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer buf, l
 
     // the separator buffer is destroyed and frees the segment if it's the last holder
     buf.flushed = true;
-}
-
-std::chrono::microseconds segment_manager_impl::calculate_separator_delay() const {
-    auto soft_limit = _separator_buffer_pool.size() / 2;
-    auto hard_limit = _separator_buffer_pool.size();
-    auto used_buffers = _separator_buffer_pool.used_buffer_count();
-    if (used_buffers < soft_limit) {
-        return std::chrono::microseconds(0);
-    }
-    float debt_ratio = float(used_buffers - soft_limit) / (hard_limit - soft_limit);
-    auto adjust = [] (float x) { return x * x * x; };
-    return std::chrono::microseconds(size_t(adjust(debt_ratio) * _cfg.separator_delay_limit_ms * 1000));
 }
 
 future<> segment_manager_impl::do_recovery(replica::database& db) {

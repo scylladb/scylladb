@@ -162,7 +162,6 @@ logstor_config make_test_logstor_config(const std::filesystem::path& base_dir) {
             .compaction_sg = seastar::current_scheduling_group(),
             .compaction_static_shares = utils::updateable_value<float>(0.0f),
             .separator_sg = seastar::current_scheduling_group(),
-            .separator_delay_limit_ms = 0,
             .max_separator_memory = 4 * segment_size,
         },
         .flush_sg = seastar::current_scheduling_group(),

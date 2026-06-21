@@ -964,7 +964,6 @@ database::init_logstor() {
             .compaction_sg = _dbcfg.logstor_compaction_scheduling_group,
             .compaction_static_shares = _cfg.compaction_static_shares,
             .separator_sg = _dbcfg.memtable_scheduling_group,
-            .separator_delay_limit_ms = _cfg.logstor_separator_delay_limit_ms(),
             .max_separator_memory = _cfg.logstor_separator_max_memory_in_mb() * 1024ull * 1024ull,
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
