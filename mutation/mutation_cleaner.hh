@@ -12,6 +12,7 @@
 
 #include "partition_version.hh"
 #include "partition_version_list.hh"
+#include "utils/wrapped_function.hh"
 
 #include "utils/logalloc.hh"
 
@@ -36,7 +37,7 @@ private:
     lw_shared_ptr<worker> _worker_state;
     mutation_application_stats& _app_stats;
     seastar::scheduling_group _scheduling_group;
-    std::function<void(size_t)> _on_space_freed;
+    utils::wrapped_function<void(size_t)> _on_space_freed;
 private:
     stop_iteration merge_some(partition_snapshot& snp) noexcept;
     stop_iteration merge_some() noexcept;
@@ -45,7 +46,7 @@ public:
     mutation_cleaner_impl(logalloc::region& r, cache_tracker* t, mutation_cleaner* cleaner,
             mutation_application_stats& app_stats,
             seastar::scheduling_group sg = seastar::current_scheduling_group(),
-            std::function<void(size_t)> on_space_freed = nullptr)
+            utils::wrapped_function<void(size_t)> on_space_freed = {})
         : _region(r)
         , _tracker(t)
         , _cleaner(cleaner)
@@ -128,7 +129,7 @@ class mutation_cleaner final {
 public:
     mutation_cleaner(logalloc::region& r, cache_tracker* t, mutation_application_stats& app_stats,
             seastar::scheduling_group sg = seastar::current_scheduling_group(),
-            std::function<void(size_t)> on_space_freed = nullptr)
+            utils::wrapped_function<void(size_t)> on_space_freed = {})
         : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, this, app_stats, sg, std::move(on_space_freed))) {
     }
 

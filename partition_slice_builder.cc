@@ -84,7 +84,7 @@ partition_slice_builder::with_ranges(std::vector<query::clustering_range> ranges
 }
 
 partition_slice_builder&
-partition_slice_builder::mutate_ranges(std::function<void(std::vector<query::clustering_range>&)> func) {
+partition_slice_builder::mutate_ranges(utils::wrapped_function<void(std::vector<query::clustering_range>&)> func) {
     if (_row_ranges) {
         func(*_row_ranges);
     }
@@ -92,7 +92,7 @@ partition_slice_builder::mutate_ranges(std::function<void(std::vector<query::clu
 }
 
 partition_slice_builder&
-partition_slice_builder::mutate_specific_ranges(std::function<void(query::specific_ranges&)> func) {
+partition_slice_builder::mutate_specific_ranges(utils::wrapped_function<void(query::specific_ranges&)> func) {
     if (_specific_ranges) {
         func(*_specific_ranges);
     }

@@ -318,7 +318,7 @@ auto fmt::formatter<mutation>::format(const mutation& m, fmt::format_context& ct
 namespace mutation_json {
 
 void mutation_partition_json_writer::write_each_collection_cell(collection_mutation_view cmv, data_type type,
-        std::function<void(atomic_cell_view, data_type)> func) {
+        utils::wrapped_function<void(atomic_cell_view, data_type)> func) {
     std::function<void(size_t, managed_bytes_view)> write_key;
     std::function<void(size_t, atomic_cell_view)> write_value;
     if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {

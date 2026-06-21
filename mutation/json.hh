@@ -12,6 +12,7 @@
 #include "dht/token.hh"
 #include "schema/schema.hh"
 #include "utils/rjson.hh"
+#include "utils/wrapped_function.hh"
 
 /*
  * Utilities for converting mutations, mutation-fragments and their parts into json.
@@ -69,7 +70,7 @@ class mutation_partition_json_writer {
     json_writer _writer;
 
 private:
-    void write_each_collection_cell(collection_mutation_view cmv, data_type type, std::function<void(atomic_cell_view, data_type)> func);
+    void write_each_collection_cell(collection_mutation_view cmv, data_type type, utils::wrapped_function<void(atomic_cell_view, data_type)> func);
 
 public:
     explicit mutation_partition_json_writer(const schema& s, std::ostream& os = std::cout)

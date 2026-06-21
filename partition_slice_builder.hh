@@ -13,6 +13,7 @@
 
 #include "query/query-request.hh"
 #include "schema/schema_fwd.hh"
+#include "utils/wrapped_function.hh"
 
 //
 // Fluent builder for query::partition_slice.
@@ -42,9 +43,9 @@ public:
     partition_slice_builder& with_range(query::clustering_range range);
     partition_slice_builder& with_ranges(std::vector<query::clustering_range>);
     // noop if no ranges have been set yet
-    partition_slice_builder& mutate_ranges(std::function<void(std::vector<query::clustering_range>&)>);
+    partition_slice_builder& mutate_ranges(utils::wrapped_function<void(std::vector<query::clustering_range>&)>);
     // noop if no specific ranges have been set yet
-    partition_slice_builder& mutate_specific_ranges(std::function<void(query::specific_ranges&)>);
+    partition_slice_builder& mutate_specific_ranges(utils::wrapped_function<void(query::specific_ranges&)>);
     partition_slice_builder& set_specific_ranges(query::specific_ranges);
     partition_slice_builder& without_partition_key_columns();
     partition_slice_builder& without_clustering_key_columns();
