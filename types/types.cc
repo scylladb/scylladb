@@ -3530,7 +3530,7 @@ const std::type_info& abstract_type::native_typeid() const {
 }
 
 bytes abstract_type::decompose(const data_value& value) const {
-    if (!value._value) {
+    if (value.is_null()) {
         return {};
     }
     bytes b(bytes::initialized_later(), serialized_size(*this, value._value));
@@ -3553,20 +3553,20 @@ bool operator==(const data_value& x, const data_value& y) {
 }
 
 size_t data_value::serialized_size() const {
-    if (!_value) {
+    if (is_null()) {
         return 0;
     }
     return ::serialized_size(*_type, _value);
 }
 
 void data_value::serialize(bytes::iterator& out) const {
-    if (_value) {
+    if (!is_null()) {
         ::serialize(*_type, _value, out);
     }
 }
 
 bytes_opt data_value::serialize() const {
-    if (!_value) {
+    if (is_null()) {
         return std::nullopt;
     }
     bytes b(bytes::initialized_later(), serialized_size());
@@ -3576,7 +3576,7 @@ bytes_opt data_value::serialize() const {
 }
 
 bytes data_value::serialize_nonnull() const {
-    if (!_value) {
+    if (is_null()) {
         on_internal_error(tlogger, "serialize_nonnull called on null");
     }
     return std::move(*serialize());
@@ -3910,22 +3910,44 @@ data_type abstract_type::parse_type(const sstring& name)
 }
 
 data_value::~data_value() {
-    if (_value) {
+    // Only external (heap) values own a separate allocation; inline values hold
+    // only trivially-destructible natives and the null value owns nothing.
+    if (_value && !stored_internally()) {
         native_value_delete(*_type, _value);
     }
 }
 
-data_value::data_value(const data_value& v) : _value(nullptr), _type(v._type) {
-    if (v._value) {
+// Lock the layout: _value (8) + _internal (internal_storage_size, 24) + _type
+// (data_type, a 16-byte shared_ptr) = 48, no padding. internal_storage_size is
+// 24 (rather than 16) so the 16-byte natives stored as maybe_empty<T> (UUID,
+// timeuuid, cql_duration, which round up to 24) stay inline. Guard against a
+// silent size regression if any of these change.
+static_assert(sizeof(data_value) == 48);
+static_assert(alignof(data_value) == alignof(void*));
+
+data_value::data_value(const data_value& v) : _type(v._type) {
+    // Copy the inline buffer unconditionally: it always holds defined bytes
+    // (value-initialized), so this is branchless and harmless when v stored its
+    // value externally or is null. Then fix up _value: null stays null, an inline
+    // value points into our own buffer, and an external value is deep-cloned onto
+    // the heap (the inline copy above is unused in that case).
+    std::memcpy(static_cast<void*>(&_internal), static_cast<const void*>(&v._internal), internal_storage_size);
+    if (v._value == nullptr) {
+        _value = nullptr;
+    } else if (v.stored_internally()) {
+        // Inline storage holds only trivially-copyable natives.
+        _value = &_internal;
+    } else {
         _value = _type->native_value_clone(v._value);
     }
 }
 
 data_value&
 data_value::operator=(data_value&& x) noexcept {
-    auto tmp = std::move(x);
-    std::swap(tmp._value, this->_value);
-    std::swap(tmp._type, this->_type);
+    if (this != &x) {
+        this->~data_value();
+        new (this) data_value(std::move(x));
+    }
     return *this;
 }
 
