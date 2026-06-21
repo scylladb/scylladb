@@ -37,6 +37,11 @@ class logstor_group;
 
 using separator_write_completion = seastar::noncopyable_function<void(log_location, seastar::gate::holder)>;
 
+// How much reclamation efficiency a batch may give up in exchange for being larger. On its own the
+// efficiency score picks short batches, which is per-job overhead for no write-amplification
+// benefit; extending within this tolerance trades about 1% of efficiency for half as many jobs.
+constexpr double compaction_batch_extension_tolerance = 0.8;
+
 // Watermarks, in available segments, that drive automatic compaction. It starts once the number of
 // available segments drops below `low` - the free-segment target - and stops once it is back at
 // `high`. Both are zero when the trigger is disabled.
@@ -60,6 +65,63 @@ free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, dou
 //
 // This is only the space half of the decision; whether compaction may run at all is the caller's.
 bool auto_compaction_wanted(bool running, uint64_t available_segments, free_segment_watermarks watermarks) noexcept;
+
+// The cost of one candidate compaction batch: `n_in` segments are read and rewritten into `n_out`
+// segments, copying `live_bytes` of live data.
+struct compaction_candidate_score {
+    size_t n_in;
+    size_t n_out;
+    uint64_t live_bytes;
+
+    size_t reclaimed() const noexcept {
+        return n_in > n_out ? n_in - n_out : 0;
+    }
+
+    // Segments reclaimed per segment-worth of data copied, which is exactly the reciprocal of the
+    // batch's marginal write amplification. Comparisons cancel the segment_size factor, so it is
+    // needed only where the absolute value is wanted, i.e. for logging.
+    double efficiency(uint64_t segment_size) const noexcept {
+        return live_bytes == 0
+                ? std::numeric_limits<double>::infinity()
+                : double(reclaimed()) * double(segment_size) / double(live_bytes);
+    }
+
+    // Whether this batch's efficiency is at least `fraction` of `other`'s.
+    bool efficiency_at_least(const compaction_candidate_score& other, double fraction) const noexcept {
+        if (live_bytes == 0) {
+            return true;
+        }
+        if (other.live_bytes == 0) {
+            return false;
+        }
+        return double(reclaimed()) * double(other.live_bytes)
+                >= fraction * double(other.reclaimed()) * double(live_bytes);
+    }
+
+    bool operator==(const compaction_candidate_score& other) const noexcept = default;
+
+    // Orders batches by reclamation efficiency, so that the score is the reciprocal of the write
+    // amplification the batch would incur, and ties by how much the batch reclaims.
+    bool operator<(const compaction_candidate_score& other) const noexcept;
+};
+
+// The batch select_compaction_batch() chose: the segments to compact, least utilized first, and the
+// score of the batch as a whole - which is also the score its group is ranked by, so that the batch
+// that wins the ranking is the one that would run.
+struct compaction_batch {
+    std::vector<const segment_descriptor*> segments;
+    compaction_candidate_score score;
+};
+
+// Picks the segments one compaction job should read, out of the ones a group owns.
+//
+// The set's free-space histogram is already ordered by ascending utilization, which is near-optimal
+// for victim ordering, so the only decision left is where to stop: the candidate set is the
+// histogram's first `batch_cap` segments, and select_compaction_prefix() picks a prefix of it.
+// Returns nothing when no prefix reclaims a segment, which answers for the whole group rather than
+// only for this batch, since a longer prefix would only add fuller segments.
+std::optional<compaction_batch> select_compaction_batch(const segment_set& segments,
+        uint64_t segment_size, size_t batch_cap);
 
 inline constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
 

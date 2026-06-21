@@ -1547,6 +1547,34 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     assert_that(*actual).is_equal_to(expected);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_candidate_score_ranks_by_efficiency) {
+    constexpr uint64_t segment_size = 128 * 1024;
+
+    // Rewriting 8 segments into 6 reclaims two segments, but copies 5.28 segments worth of live
+    // data to do it - a marginal write amplification of 2.6. Rewriting the emptiest 3 into 2
+    // reclaims only one segment, for 1.98 segments copied. The efficiency rule prefers the latter.
+    const compaction_candidate_score big{.n_in = 8, .n_out = 6, .live_bytes = 528 * segment_size / 100};
+    const compaction_candidate_score cheap{.n_in = 3, .n_out = 2, .live_bytes = 198 * segment_size / 100};
+    BOOST_REQUIRE_EQUAL(big.reclaimed(), 2u);
+    BOOST_REQUIRE_EQUAL(cheap.reclaimed(), 1u);
+    BOOST_REQUIRE_LT(big.efficiency(segment_size), cheap.efficiency(segment_size));
+    BOOST_REQUIRE(big < cheap);
+
+    // Efficiency is the reciprocal of the batch's marginal write amplification.
+    BOOST_REQUIRE_CLOSE(cheap.efficiency(segment_size), 1.0 / 1.98, 0.1);
+
+    // Equal efficiency is broken by reclaiming more per job.
+    const compaction_candidate_score two_in{.n_in = 2, .n_out = 1, .live_bytes = segment_size};
+    const compaction_candidate_score four_in{.n_in = 4, .n_out = 2, .live_bytes = 2 * segment_size};
+    BOOST_REQUIRE_EQUAL(two_in.efficiency(segment_size), four_in.efficiency(segment_size));
+    BOOST_REQUIRE(two_in < four_in);
+
+    // A batch of fully dead segments copies nothing and outranks any batch that copies.
+    const compaction_candidate_score all_dead{.n_in = 2, .n_out = 0, .live_bytes = 0};
+    BOOST_REQUIRE(cheap < all_dead);
+    BOOST_REQUIRE(four_in < all_dead);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     auto schema = make_kv_schema();
     tmpdir dir;
