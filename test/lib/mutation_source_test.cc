@@ -1956,7 +1956,7 @@ static const mutation_sets& get_mutation_sets() {
     return ms;
 }
 
-void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal)> callback) {
+void for_each_mutation_pair(utils::wrapped_function<void(const mutation&, const mutation&, are_equal)> callback) {
     auto&& ms = get_mutation_sets();
     for (auto&& mutations : ms.equal) {
         auto i = mutations.begin();
@@ -1978,7 +1978,7 @@ void for_each_mutation_pair(std::function<void(const mutation&, const mutation&,
     }
 }
 
-void for_each_mutation(std::function<void(const mutation&)> callback) {
+void for_each_mutation(utils::wrapped_function<void(const mutation&)> callback) {
     auto&& ms = get_mutation_sets();
     for (auto&& mutations : ms.equal) {
         for (auto&& m : mutations) {
@@ -2444,8 +2444,8 @@ void random_mutation_generator::set_key_cardinality(size_t n_keys) {
     _impl->set_key_cardinality(n_keys);
 }
 
-void for_each_schema_change(std::function<void(schema_ptr, const utils::chunked_vector<mutation>&,
-                                               schema_ptr, const utils::chunked_vector<mutation>&)> fn) {
+void for_each_schema_change(utils::wrapped_function<void(schema_ptr, const utils::chunked_vector<mutation>&,
+                                                schema_ptr, const utils::chunked_vector<mutation>&)> fn) {
     auto map_of_int_to_int = map_type_impl::get_instance(int32_type, int32_type, true);
     auto map_of_int_to_bytes = map_type_impl::get_instance(int32_type, bytes_type, true);
     auto frozen_map_of_int_to_int = map_type_impl::get_instance(int32_type, int32_type, false);
