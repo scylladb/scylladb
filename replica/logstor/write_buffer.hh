@@ -213,15 +213,17 @@ private:
 // follow-up work such as index updates. For mixed buffers it also keeps copies
 // of appended records so separator rewriting can replay them after the flush.
 class write_buffer {
-    raw_write_buffer _raw;
-    shared_promise<log_location> _written;
-    seastar::gate _write_gate;
-
+public:
     struct record_in_buffer {
         log_record_writer writer;
         future<log_location> loc;
         write_target target;
     };
+
+private:
+    raw_write_buffer _raw;
+    shared_promise<log_location> _written;
+    seastar::gate _write_gate;
 
     std::vector<record_in_buffer> _records_copy;
 
@@ -277,7 +279,7 @@ private:
         return _raw.kind() == segment_kind::mixed;
     }
 
-    std::vector<record_in_buffer>& records_for_separator();
+    std::vector<record_in_buffer> take_separator_records();
 
     friend class buffered_writer;
     friend class segment_manager_impl;
