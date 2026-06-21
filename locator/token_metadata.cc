@@ -234,7 +234,7 @@ public:
         return _normal_token_owners;
     }
 
-    void for_each_token_owner(std::function<void(const node&)> func) const;
+    void for_each_token_owner(utils::wrapped_function<void(const node&)> func) const;
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
@@ -729,7 +729,7 @@ size_t token_metadata_impl::count_normal_token_owners() const {
     return _normal_token_owners.size();
 }
 
-void token_metadata_impl::for_each_token_owner(std::function<void(const node&)> func) const {
+void token_metadata_impl::for_each_token_owner(utils::wrapped_function<void(const node&)> func) const {
     _topology.for_each_node([this, func = std::move(func)] (const node& node) {
         if (is_normal_token_owner(node.host_id())) {
             func(node);
@@ -1117,7 +1117,7 @@ token_metadata::get_normal_token_owners() const {
     return _impl->get_normal_token_owners();
 }
 
-void token_metadata::for_each_token_owner(std::function<void(const node&)> func) const {
+void token_metadata::for_each_token_owner(utils::wrapped_function<void(const node&)> func) const {
     return _impl->for_each_token_owner(func);
 }
 
