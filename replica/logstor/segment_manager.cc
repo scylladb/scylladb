@@ -474,8 +474,9 @@ private:
     }
 
     struct stats {
-        uint64_t segments_compacted{0};
-        uint64_t compaction_segments_freed{0};
+        uint64_t compaction_segments_in{0};
+        uint64_t compaction_segments_out{0};
+        uint64_t compaction_segments_reclaimed{0};
         uint64_t compaction_records_skipped{0};
         uint64_t compaction_records_rewritten{0};
         uint64_t separator_buffer_flushed{0};
@@ -498,10 +499,46 @@ private:
         }
     };
 
+    struct compaction_candidate_score {
+        size_t n_in;
+        size_t n_out;
+        size_t estimated_live_bytes;
+
+        size_t reclaimed() const noexcept {
+            return n_in > n_out ? n_in - n_out : 0;
+        }
+
+        double reclamation_yield() const noexcept {
+            return n_out == 0 ? std::numeric_limits<double>::infinity() : double(reclaimed()) / double(n_out);
+        }
+
+        bool operator==(const compaction_candidate_score& other) const noexcept = default;
+
+        bool operator<(const compaction_candidate_score& other) const noexcept {
+            if (reclaimed() != other.reclaimed()) {
+                return reclaimed() < other.reclaimed();
+            }
+
+            if (estimated_live_bytes == 0 || other.estimated_live_bytes == 0) {
+                if (estimated_live_bytes != other.estimated_live_bytes) {
+                    return estimated_live_bytes != 0;
+                }
+            } else {
+                const auto lhs = reclaimed() * other.estimated_live_bytes;
+                const auto rhs = other.reclaimed() * estimated_live_bytes;
+                if (lhs != rhs) {
+                    return lhs < rhs;
+                }
+            }
+
+            return n_in < other.n_in;
+        }
+    };
+
     struct compaction_candidate {
         logstor_group* group;
         std::vector<log_segment_id> segments;
-        ssize_t score;
+        compaction_candidate_score score;
     };
 
     using group_compaction_state_map = absl::flat_hash_map<logstor_group*, std::unique_ptr<group_compaction_state>>;
@@ -535,6 +572,7 @@ public:
     }
 
     const stats& get_stats() const noexcept { return _stats; }
+    float compaction_pressure() const noexcept;
     float current_backlog() const noexcept;
 
     separator_buffer allocate_separator_buffer() override;
@@ -951,15 +989,18 @@ private:
     friend class segment_stream_sink_impl;
 };
 
-float compaction_manager_impl::current_backlog() const noexcept {
-    const auto available_segments = _sm.available_segment_count();
+float compaction_manager_impl::compaction_pressure() const noexcept {
+    const auto available_segments = _sm.available_segment_count(write_source::normal_write);
     const auto soft_pressure_available_segments = static_cast<size_t>(std::ceil(_sm._max_segments.configured * (std::min(_sm._cfg.compaction_soft_pressure_threshold_percent, uint32_t(100)) / 100.0f)));
     if (available_segments >= soft_pressure_available_segments) {
         return 0.0f;
     }
-    return logstor_compaction_controller::normalization_factor
-            * float(soft_pressure_available_segments - available_segments)
+    return float(soft_pressure_available_segments - available_segments)
             / std::max<size_t>(1, soft_pressure_available_segments);
+}
+
+float compaction_manager_impl::current_backlog() const noexcept {
+    return logstor_compaction_controller::normalization_factor * compaction_pressure();
 }
 
 compaction_manager_impl::group_compaction_state& compaction_manager_impl::get_group_state(logstor_group& cg) {
@@ -1131,10 +1172,12 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of bytes written to the disk by compaction.")),
         sm::make_counter("compaction_data_bytes_written", _stats.data_bytes_written[static_cast<size_t>(write_source::compaction)],
                        sm::description("Counts number of data bytes written to the disk by compaction.")),
-        sm::make_counter("segments_compacted", _compaction_mgr.get_stats().segments_compacted,
-                       sm::description("Counts number of segments compacted.")),
-        sm::make_counter("compaction_segments_freed", _compaction_mgr.get_stats().compaction_segments_freed,
-                       sm::description("Counts number of segments freed by compaction.")),
+        sm::make_counter("compaction_segments_in", _compaction_mgr.get_stats().compaction_segments_in,
+                       sm::description("Counts number of input segments selected for compaction.")),
+        sm::make_counter("compaction_segments_out", _compaction_mgr.get_stats().compaction_segments_out,
+                       sm::description("Counts number of output segments written by compaction.")),
+        sm::make_counter("compaction_segments_reclaimed", _compaction_mgr.get_stats().compaction_segments_reclaimed,
+                       sm::description("Counts number of segments reclaimed by compaction.")),
         sm::make_counter("compaction_records_skipped", _compaction_mgr.get_stats().compaction_records_skipped,
                        sm::description("Counts number of records skipped during compaction.")),
         sm::make_counter("compaction_records_rewritten", _compaction_mgr.get_stats().compaction_records_rewritten,
@@ -1578,16 +1621,27 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 }
 
 std::optional<compaction_manager_impl::compaction_candidate> compaction_manager_impl::select_segments_for_compaction(logstor_group& cg) {
+    static constexpr double compaction_max_used_fraction_low_pressure = 0.25;
+    static constexpr double compaction_max_used_fraction_high_pressure = 0.90;
+
     uint64_t accum_net_data_size = 0;
     uint64_t accum_record_count = 0;
-    int64_t max_gain = 0;
+    std::optional<compaction_candidate_score> best_score;
     uint64_t best_count = 0;
     std::vector<log_segment_id> candidates;
     const auto segment_size = _sm.get_segment_size();
     const auto& segments = cg.logstor_segments()._segments;
+    const auto pressure = compaction_pressure();
+    const auto max_used_fraction = compaction_max_used_fraction_low_pressure
+            + pressure * (compaction_max_used_fraction_high_pressure - compaction_max_used_fraction_low_pressure);
 
     for (const auto& desc : segments) {
         if (candidates.size() >= _cfg.max_segments_per_compaction) {
+            break;
+        }
+
+        const auto used_fraction = double(desc.net_data_size(segment_size)) / double(segment_size);
+        if (used_fraction > max_used_fraction) {
             break;
         }
 
@@ -1597,31 +1651,42 @@ std::optional<compaction_manager_impl::compaction_candidate> compaction_manager_
         accum_net_data_size += desc.net_data_size(segment_size);
         accum_record_count += desc.record_count;
 
-        auto required_segments = raw_write_buffer::estimate_required_segments(
-            accum_net_data_size, accum_record_count, segment_size);
+        auto estimated_segments_out = raw_write_buffer::estimate_required_segments(
+                accum_net_data_size, accum_record_count, segment_size);
 
-        logstor_logger.trace("Evaluating compaction candidate {} with net data size {} accumulated {} required segments {}",
-                           seg_id, desc.net_data_size(segment_size), accum_net_data_size, required_segments);
+        compaction_candidate_score score{
+            .n_in = candidates.size(),
+            .n_out = estimated_segments_out,
+            .estimated_live_bytes = accum_net_data_size,
+        };
 
-        auto gain = static_cast<int64_t>(candidates.size()) - static_cast<int64_t>(required_segments);
-        if (gain > max_gain) {
-            max_gain = gain;
+        logstor_logger.trace("Evaluating compaction candidate {} with net data size {} used_fraction {} accumulated {} estimated n_in {} n_out {} reclaimed {} max_used_fraction {}",
+                           seg_id, desc.net_data_size(segment_size), accum_net_data_size,
+                           used_fraction, score.n_in, score.n_out, score.reclaimed(), max_used_fraction);
+
+        if (score.reclaimed() == 0) {
+            continue;
+        }
+
+        if (!best_score || *best_score < score) {
+            best_score = score;
             best_count = candidates.size();
         }
     }
 
-    logstor_logger.debug("Selected {} segments for compaction for estimated gain of {} segments", best_count, max_gain);
-
-    if (best_count == 0 || max_gain <= 0) {
+    if (!best_score || best_count == 0) {
         return std::nullopt;
     }
+
+    logstor_logger.trace("Selected {} segments for compaction with estimated n_in {} n_out {} reclaimed {} reclamation_yield {} max_used_fraction {} pressure {}",
+            best_count, best_score->n_in, best_score->n_out, best_score->reclaimed(), best_score->reclamation_yield(), max_used_fraction, pressure);
 
     return compaction_candidate{
         .group = &cg,
         .segments = candidates
             | std::views::take(best_count)
             | std::ranges::to<std::vector<log_segment_id>>(),
-        .score = max_gain,
+        .score = *best_score,
     };
 }
 
@@ -1791,8 +1856,10 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
 
     co_await cb.close();
 
-    logstor_logger.debug("Compaction complete: {} records rewritten, {} skipped from {} segments, flushed {} times",
-                       cb.stats.records_rewritten, cb.stats.records_skipped, segments.size(), cb.stats.flush_count);
+    const size_t compaction_segments_in = segments.size();
+    const size_t compaction_segments_out = cb.stats.flush_count;
+
+    logstor_logger.debug("Compaction complete: in {} out {}", compaction_segments_in, compaction_segments_out);
 
     // wait for read operations that use the old locations
     co_await index.await_pending_reads();
@@ -1809,9 +1876,9 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
         }
     }
 
-    uint64_t new_segments = segments.size() > cb.stats.flush_count ? segments.size() - cb.stats.flush_count : 0;
-    _stats.segments_compacted += segments.size();
-    _stats.compaction_segments_freed += new_segments;
+    _stats.compaction_segments_in += compaction_segments_in;
+    _stats.compaction_segments_out += compaction_segments_out;
+    _stats.compaction_segments_reclaimed += compaction_segments_in > compaction_segments_out ? compaction_segments_in - compaction_segments_out : 0;
     _stats.compaction_records_rewritten += cb.stats.records_rewritten;
     _stats.compaction_records_skipped += cb.stats.records_skipped;
 }
