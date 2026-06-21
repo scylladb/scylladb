@@ -486,7 +486,6 @@ private:
     logstor_compaction_controller _shares_controller;
     utils::observer<float> _compaction_static_shares_observer;
 
-    seastar::semaphore _separator_flush_sem{0};
     seastar::semaphore _compaction_sem{1};
 
     struct group_compaction_state {
@@ -567,16 +566,11 @@ public:
     future<> start();
     future<> stop();
 
-    void enable_separator_flush(size_t max_concurrency) {
-        _separator_flush_sem.signal(max_concurrency);
-    }
-
     const stats& get_stats() const noexcept { return _stats; }
     float compaction_pressure() const noexcept;
     float current_backlog() const noexcept;
 
-    separator_buffer allocate_separator_buffer() override;
-    future<> flush_separator_buffer(separator_buffer buf, logstor_group&) override;
+    future<> flush_separator_buffer(separator_buffer&, logstor_group&) override;
     future<> flush_all_separator_buffers(std::optional<segment_sequence>);
 
     void add(logstor_group&) override;
@@ -625,7 +619,6 @@ future<> compaction_manager_impl::stop() {
         co_await entry.second->completion.get_future().handle_exception([] (std::exception_ptr) {});
     });
 
-    _separator_flush_sem.broken();
     _compaction_sem.broken();
 
     co_await _auto_compaction_completion.get_future().handle_exception([] (std::exception_ptr) {});
@@ -781,13 +774,8 @@ class segment_manager_impl {
     future<> _reserve_replenisher{make_ready_future<>()};
     seastar::condition_variable _segment_freed_cv;
 
-    static constexpr size_t separator_flush_max_concurrency = 4;
-
     std::vector<write_buffer> _compaction_buffer_pool;
     std::vector<write_buffer*> _available_compaction_buffers;
-
-    std::vector<write_buffer> _separator_buffer_pool;
-    std::vector<write_buffer*> _available_separator_buffers;
 
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
@@ -849,7 +837,7 @@ public:
     future<> discard_segments(segment_set&);
 
     size_t get_memory_usage() const {
-        return _cfg.max_separator_memory + sizeof(_segment_descs);
+        return sizeof(_segment_descs);
     }
 
     future<> await_pending_writes() {
@@ -889,10 +877,9 @@ private:
     segment_sequence allocate_segment_seq() noexcept {
         return _next_segment_seq++;
     }
-    std::chrono::microseconds calculate_separator_delay() const;
 
     future<> write_to_separator(write_buffer&, segment_ref, segment_sequence);
-    void write_to_separator(table&, log_location prev_loc, log_record, segment_ref);
+    future<> write_to_separator(table&, log_location prev_loc, log_record, segment_ref);
 
     future<std::optional<segment_header>> read_segment_header(log_segment_id);
 
@@ -1115,15 +1102,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
         _available_compaction_buffers.push_back(&_compaction_buffer_pool.back());
     }
 
-    // pre-allocate write buffers for separator
-    size_t separator_buffer_count = _cfg.max_separator_memory / _cfg.segment_size;
-    _available_separator_buffers.reserve(separator_buffer_count);
-    _separator_buffer_pool.reserve(separator_buffer_count);
-    for (size_t i = 0; i < separator_buffer_count; ++i) {
-        _separator_buffer_pool.emplace_back(config.segment_size, segment_kind::full);
-        _available_separator_buffers.push_back(&_separator_buffer_pool.back());
-    }
-
     namespace sm = seastar::metrics;
 
     _metrics.add_group("logstor_sm", {
@@ -1181,10 +1159,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of segments freed by the separator.")),
         sm::make_gauge("compaction_controller_backlog", [this] { return _compaction_mgr.current_backlog(); },
                        sm::description("Current normalized backlog used by the logstor compaction shares controller.")),
-        sm::make_gauge("separator_buffers_in_use", [this]() { return _separator_buffer_pool.size() - _available_separator_buffers.size(); },
-                       sm::description("Current number of separator buffers in use.")),
-        sm::make_gauge("separator_flow_control_delay", [this]() { return calculate_separator_delay().count(); },
-                       sm::description("Current delay applied to writes to control separator debt in microseconds.")),
     });
 }
 
@@ -1197,8 +1171,6 @@ future<> segment_manager_impl::start() {
     co_await _compaction_mgr.start();
 
     co_await switch_active_segment();
-
-    _compaction_mgr.enable_separator_flush(separator_flush_max_concurrency);
 
     logstor_logger.info("Segment manager started with base directory {}", _cfg.base_dir.string());
 }
@@ -1283,11 +1255,6 @@ future<> segment_manager_impl::write(write_buffer& wb) {
             return write_to_separator(wb, std::move(seg_ref), seq_num);
         });
         write_to_separator_failed.cancel();
-    }
-
-    // flow control for separator debt
-    if (auto separator_delay = calculate_separator_delay(); separator_delay.count() > 0) {
-        co_await seastar::sleep(separator_delay);
     }
 }
 
@@ -1975,16 +1942,6 @@ future<> compaction_manager_impl::flush_all_separator_buffers(std::optional<segm
     });
 }
 
-separator_buffer compaction_manager_impl::allocate_separator_buffer() {
-    if (_sm._available_separator_buffers.empty()) {
-        throw std::runtime_error("No available separator buffers");
-    }
-    write_buffer* wb = _sm._available_separator_buffers.back();
-    _sm._available_separator_buffers.pop_back();
-
-    return separator_buffer(wb);
-}
-
 future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref seg_ref, segment_sequence segment_seq_num) {
     for (auto&& w : wb.records_for_separator()) {
         co_await coroutine::maybe_yield();
@@ -1993,7 +1950,7 @@ future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref 
         log_location prev_loc = co_await std::move(w.loc);
         auto* index_ptr = &w.target.cg->logstor_index();
 
-        w.target.cg->write_to_separator(std::move(w.writer), seg_ref, segment_seq_num,
+        co_await w.target.cg->write_to_separator(std::move(w.writer), seg_ref, segment_seq_num,
             [this, index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
                 if (index_ptr->update_record_location(key, prev_loc, new_loc)) {
                     free_record(prev_loc);
@@ -2005,13 +1962,13 @@ future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref 
     }
 }
 
-void segment_manager_impl::write_to_separator(table& t, log_location prev_loc, log_record record, segment_ref seg_ref) {
+future<> segment_manager_impl::write_to_separator(table& t, log_location prev_loc, log_record record, segment_ref seg_ref) {
     auto key = record.header.key;
     auto& cg = t.get_logstor_group(key.dk.token());
     auto* index_ptr = &cg.logstor_index();
     log_record_writer writer(std::move(record));
 
-    cg.write_to_separator(std::move(writer), std::move(seg_ref), std::nullopt,
+    co_await cg.write_to_separator(std::move(writer), std::move(seg_ref), std::nullopt,
         [this, index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
             if (index_ptr->update_record_location(key, prev_loc, new_loc)) {
                 free_record(prev_loc);
@@ -2022,44 +1979,44 @@ void segment_manager_impl::write_to_separator(table& t, log_location prev_loc, l
     );
 }
 
-future<> compaction_manager_impl::flush_separator_buffer(separator_buffer buf, logstor_group& cg) {
-    logstor_logger.trace("Flushing separator buffer with {} bytes", buf.buf->offset_in_buffer());
+future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, logstor_group& cg) {
+    logstor_logger.trace("Flushing separator buffer with {} bytes", buf.buf.offset_in_buffer());
 
     utils::get_local_injector().inject("fail_flush_separator_buffer", []() {
         throw std::runtime_error("flush_separator_buffer failed by injection");
     });
 
-    if (buf.buf->has_data()) {
-        auto sem_units = co_await get_units(_separator_flush_sem, 1);
-        co_await with_scheduling_group(_cfg.separator_sg, [&] {
-            return _sm.write_full_segment(*buf.buf, cg, write_source::separator);
-        });
-        _stats.separator_buffer_flushed++;
+    auto flush_result = co_await coroutine::as_future([this, &buf, &cg] () -> future<> {
+        if (buf.buf.has_data()) {
+            co_await with_scheduling_group(_cfg.separator_sg, [&] {
+                return _sm.write_full_segment(buf.buf, cg, write_source::separator);
+            });
+            _stats.separator_buffer_flushed++;
+        }
+
+        co_await when_all_succeed(buf.pending_updates.begin(), buf.pending_updates.end());
+        co_await buf.buf.close();
+
+        // wait for read operations that use the old locations before freeing the old segments
+        co_await cg.logstor_index().await_pending_reads();
+    }());
+
+    if (flush_result.failed()) {
+        auto ep = flush_result.get_exception();
+        logstor_logger.debug("logstor separator flush failure: {}", ep);
+
+        auto abort_result = co_await coroutine::as_future(buf.abort(ep));
+        if (abort_result.failed()) {
+            logstor_logger.warn("logstor separator buffer abort failed after flush failure: {}", abort_result.get_exception());
+        }
+
+        buf.reset();
+
+        co_await coroutine::return_exception_ptr(std::move(ep));
     }
-    co_await when_all_succeed(buf.pending_updates.begin(), buf.pending_updates.end());
-    co_await buf.buf->close();
 
-    auto wb = std::move(buf.buf);
-    wb->reset();
-    _sm._available_separator_buffers.push_back(std::move(wb));
-
-    // wait for read operations that use the old locations before freeing the old segments
-    co_await cg.logstor_index().await_pending_reads();
-
-    // the separator buffer is destroyed and frees the segment if it's the last holder
-    buf.flushed = true;
-}
-
-std::chrono::microseconds segment_manager_impl::calculate_separator_delay() const {
-    auto soft_limit = _separator_buffer_pool.size() / 2;
-    auto hard_limit = _separator_buffer_pool.size();
-    auto used_buffers = _separator_buffer_pool.size() - _available_separator_buffers.size();
-    if (used_buffers < soft_limit) {
-        return std::chrono::microseconds(0);
-    }
-    float debt_ratio = float(used_buffers - soft_limit) / (hard_limit - soft_limit);
-    auto adjust = [] (float x) { return x * x * x; };
-    return std::chrono::microseconds(size_t(adjust(debt_ratio) * _cfg.separator_delay_limit_ms * 1000));
+    // reset the buffer and release all held segments
+    buf.reset();
 }
 
 future<> segment_manager_impl::do_recovery(replica::database& db) {
@@ -2298,11 +2255,10 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
             [this, seg_ref, &db] (log_location prev_loc, log_record record) -> future<> {
                 try {
                     auto& t = db.find_column_family(record.header.table);
-                    write_to_separator(t, prev_loc, std::move(record), seg_ref);
+                    co_await write_to_separator(t, prev_loc, std::move(record), seg_ref);
                 } catch (const replica::no_such_column_family&) {
                     // ignore
                 }
-                return make_ready_future<>();
             });
         write_to_separator_failed.cancel();
     }
@@ -2476,34 +2432,72 @@ future<std::unique_ptr<segment_stream_sink>> segment_manager::create_segment_out
     return _impl->create_segment_output_stream(db);
 }
 
+future<> separator_buffer::abort(std::exception_ptr ep) {
+    for (auto& seg_ref : held_segments) {
+        seg_ref.set_flush_failure();
+    }
+    if (buf.has_data()) {
+        co_await buf.abort_writes(std::move(ep));
+    }
+}
+
 // logstor_group
 
-void logstor_group::write_to_separator(log_record_writer writer, segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, separator_write_completion after_written) {
-    if (!_logstor_separator || !_logstor_separator->can_fit(writer.size())) {
-        auto& cm = logstor_compaction_manager();
-        if (_logstor_separator) {
-            auto b = std::move(*_logstor_separator);
-            _logstor_separator.reset();
+logstor_group::logstor_group(size_t separator_buffer_size)
+    : _separator_buffers{separator_buffer(separator_buffer_size), separator_buffer(separator_buffer_size)}
+{
+}
 
-            std::erase_if(_separator_flushes, [] (future<>& f) { return f.available(); });
-            _separator_flushes.push_back(cm.flush_separator_buffer(std::move(b), *this));
-        }
-        _logstor_separator.emplace(cm.allocate_separator_buffer());
+void logstor_group::switch_active_separator_buffer() {
+    if (!_separator_flush.available()) {
+        on_internal_error(logstor_logger, "Attempted to switch active separator buffer while flush is in progress");
     }
 
-    _logstor_separator->write(std::move(seg_ref), segment_seq_num, std::move(writer), std::move(after_written));
+    _active_separator_buffer = 1 - _active_separator_buffer;
+    ++_separator_generation;
+
+    auto& buf = inactive_separator_buffer();
+    _separator_flush = shared_future(logstor_compaction_manager().flush_separator_buffer(buf, *this));
+}
+
+future<> logstor_group::write_to_separator(log_record_writer writer, segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, separator_write_completion after_written) {
+    while (!active_separator_buffer().can_fit(writer.size())) {
+        if (!_separator_flush.available()) {
+            co_await _separator_flush.get_future().handle_exception([] (std::exception_ptr) {});
+            continue;
+        }
+
+        switch_active_separator_buffer();
+    }
+
+    active_separator_buffer().write(std::move(seg_ref), segment_seq_num, std::move(writer), std::move(after_written));
 }
 
 future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num) {
-    auto units = co_await get_units(_separator_flush_sem, 1);
-    auto pending = std::exchange(_separator_flushes, {});
-    if (_logstor_separator && (!seq_num || _logstor_separator->min_seq_num < *seq_num)) {
-        auto& cm = logstor_compaction_manager();
-        auto b = std::move(*_logstor_separator);
-        _logstor_separator.reset();
-        pending.push_back(cm.flush_separator_buffer(std::move(b), *this));
+    auto should_flush = [seq_num] (separator_buffer& buf) {
+        return !buf.empty() && (!seq_num || (buf.min_seq_num && buf.min_seq_num < *seq_num));
+    };
+
+    auto target_generation = _separator_generation;
+    if (!should_flush(active_separator_buffer())) {
+        if (_separator_flush.available()) {
+            co_return;
+        }
+        target_generation--;
     }
-    co_await when_all(pending.begin(), pending.end());
+
+    while (target_generation >= _separator_generation) {
+        if (!_separator_flush.available()) {
+            co_await _separator_flush.get_future().handle_exception([] (std::exception_ptr) {});
+            continue;
+        }
+
+        switch_active_separator_buffer();
+    }
+
+    if (target_generation == _separator_generation - 1 && !_separator_flush.available()) {
+        co_await _separator_flush.get_future().handle_exception([] (std::exception_ptr) {});
+    }
 }
 
 }
