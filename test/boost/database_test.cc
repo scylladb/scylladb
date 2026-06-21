@@ -156,7 +156,6 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
         }).get();
 
         assert_query_result(keys_per_shard);
-        return make_ready_future<>();
     }, cfg);
 }
 
@@ -2107,8 +2106,6 @@ SEASTAR_TEST_CASE(test_query_tombstone_gc) {
             const auto res = replica::query_mutations_on_all_shards(env.db(), schema, cmd, {pr}, {}, db::no_timeout).get();
             BOOST_CHECK_EQUAL(std::get<0>(res)->partitions().size(), 0);
         }
-
-        return make_ready_future<>();
     });
 }
 

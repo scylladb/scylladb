@@ -510,7 +510,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
     db_cfg.enable_cache(false);
     db_cfg.enable_commitlog(false);
 
-    do_with_cql_env_thread([] (cql_test_env& e) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table t (p text, c text, v text, primary key (p, c))").get();
         e.execute_cql("create materialized view tv as select * from t "
                       "where p is not null and c is not null and v is not null "
@@ -568,8 +568,6 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         eventually_true([&] {
             return sem.get_stats().permit_based_evictions > 0;
         });
-
-        return make_ready_future<>();
     }, std::move(test_cfg)).get();
 }
 

@@ -1248,7 +1248,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *test_label::la
         return;
     }
 
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         auto populate = [&env] (schema_ptr s, const utils::chunked_vector<mutation>& mutations) {
             const auto remote_shard = (this_shard_id() + 1) % this_smp_shard_count();
             auto frozen_mutations =
@@ -1299,7 +1299,6 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *test_label::la
         };
 
         run_mutation_source_tests(populate);
-        return make_ready_future<>();
     }).get();
 }
 
@@ -1651,7 +1650,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
         return;
     }
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         std::vector<std::atomic<bool>> shards_touched(this_smp_shard_count());
         simple_schema s;
 
@@ -1682,8 +1681,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
         for (unsigned i = 0; i < this_smp_shard_count(); ++i) {
             BOOST_REQUIRE(shards_touched.at(i));
         }
-
-        return make_ready_future<>();
     }).get();
 }
 
@@ -1821,7 +1818,7 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
         return;
     }
 
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         const auto shard_of_interest = (this_shard_id() + 1) % this_smp_shard_count();
         auto s = simple_schema();
         auto remote_control_remote_reader = smp::submit_to(shard_of_interest, [&env, gs = global_simple_schema(s)] {
@@ -1871,8 +1868,6 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
         }).get();
 
         BOOST_REQUIRE(destroyed_after_close.get());
-
-        return make_ready_future<>();
     }).get();
 }
 
@@ -1958,7 +1953,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
 
     auto no_shards = this_smp_shard_count() - 1;
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         std::vector<std::atomic<bool>> shards_touched(this_smp_shard_count());
         simple_schema s;
         auto sharder = std::make_unique<dht::static_sharder>(no_shards, 0);
@@ -1986,8 +1981,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
             BOOST_REQUIRE(shards_touched[i]);
         }
         BOOST_REQUIRE(!shards_touched[no_shards]);
-
-        return make_ready_future<>();
     }).get();
 }
 
@@ -1998,7 +1991,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
         return;
     }
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         std::vector<std::atomic<bool>> shards_touched(this_smp_shard_count());
         simple_schema s;
         auto factory = [&shards_touched] (
@@ -2056,8 +2049,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
             testlog.info("[{}]: {} == {}", i, shards_touched[i], expected_shards_touched[i]);
             BOOST_CHECK(shards_touched[i] == expected_shards_touched[i]);
         }
-
-        return make_ready_future<>();
     }).get();
 }
 
@@ -2091,7 +2082,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         return;
     }
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         auto s = simple_schema();
 
         auto reader_sharder_remote_controls__ = prepare_multishard_reader_for_read_ahead_test(s, make_reader_permit(env));
@@ -2137,8 +2128,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
                 true,
                 std::logical_and<bool>()).get();
         }));
-
-        return make_ready_future<>();
     }).get();
 }
 
@@ -2148,7 +2137,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
         return;
     }
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         auto s = simple_schema();
 
         auto reader_sharder_remote_controls_pr = prepare_multishard_reader_for_read_ahead_test(s, make_reader_permit(env));
@@ -2212,13 +2201,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
                 true,
                 std::logical_and<bool>()).get();
         }));
-
-        return make_ready_future<>();
     }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         env.execute_cql("CREATE KEYSPACE multishard_combining_reader_next_partition_ks"
                 " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
         env.execute_cql("CREATE TABLE multishard_combining_reader_next_partition_ks.test (pk int, v int, PRIMARY KEY(pk));").get();
@@ -2290,8 +2277,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
             assertions.produces(pkeys[i]);
         }
         assertions.produces_end_of_stream();
-
-        return make_ready_future<>();
     }).get();
 }
 
@@ -2305,7 +2290,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         return;
     }
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         env.execute_cql("CREATE KEYSPACE multishard_streaming_reader_ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
         env.execute_cql("CREATE TABLE multishard_streaming_reader_ks.test (pk int, v int, PRIMARY KEY(pk));").get();
 
@@ -2374,8 +2359,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
             testlog.trace("Comparing mutation {:d}/{:d}", i, min_size - 1);
             assert_that(tested_muts[i]).is_equal_to(reference_muts[i]);
         }
-
-        return make_ready_future<>();
     }).get();
 }
 

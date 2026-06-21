@@ -1679,7 +1679,6 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_oom) {
                 assert_that(fut.get()).is_rows().with_rows_ignore_order({ {serialized(tbl.value)} });
             });
         }).get();
-        return make_ready_future<>();
     }, std::move(db_cfg_ptr));
 }
 
@@ -1762,8 +1761,6 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
 
         // All failures must be caused by the kill limit triggering.
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().total_reads_killed_due_to_kill_limit, failed_reads);
-
-        return make_ready_future<>();
     }, std::move(db_cfg_ptr));
 }
 

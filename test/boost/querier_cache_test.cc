@@ -741,7 +741,6 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 query::full_partition_range,
                 nullptr,
                 db::no_timeout).get();
-        return make_ready_future<>();
     }, std::move(db_cfg_ptr)).get();
 }
 

@@ -66,8 +66,6 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection) {
             .is_rows()
             .with_size(1)
             .with_row({"42", "b", "tbl"});
-
-        return make_ready_future<>();
     }, cfg).get();
 }
 
@@ -142,8 +140,6 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
         assert_that(e.execute_cql("select partition_key from system.large_partitions where table_name = 'tbl' allow filtering;").get())
             .is_rows()
             .is_empty();
-
-        return make_ready_future<>();
     }, cfg).get();
 }
 
@@ -164,8 +160,6 @@ SEASTAR_THREAD_TEST_CASE(test_large_row_count_warning) {
             .with_row({ { utf8_type->decompose("42") },
                         { long_type->decompose(11L) },
                         { utf8_type->decompose("tbl") } });
-
-        return make_ready_future<>();
     }, cfg).get();
 }
 
@@ -197,8 +191,6 @@ SEASTAR_THREAD_TEST_CASE(test_large_partitions_dual_threshold) {
                 "where table_name = 'tbl' allow filtering;").get())
             .is_rows()
             .with_size(1);
-
-        return make_ready_future<>();
     }, cfg).get();
 }
 
@@ -229,8 +221,6 @@ SEASTAR_THREAD_TEST_CASE(test_large_cells_dual_threshold) {
                 "where table_name = 'tbl' allow filtering;").get())
             .is_rows()
             .with_size(1);
-
-        return make_ready_future<>();
     }, cfg).get();
 }
 

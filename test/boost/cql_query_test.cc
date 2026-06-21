@@ -3828,7 +3828,7 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
 }
 
 uint64_t
-run_and_examine_cache_read_stats_change(cql_test_env& e, std::string_view cf_name, std::function<void (cql_test_env& e)> func) {
+run_and_examine_cache_read_stats_change(cql_test_env& e, std::string_view cf_name, utils::wrapped_function<void (cql_test_env& e)> func) {
     auto read_stat = [&] {
         return e.db().map_reduce0([&cf_name] (const replica::database& db) {
             auto& t = db.find_column_family("ks", cf_name);
@@ -3904,7 +3904,6 @@ SEASTAR_TEST_CASE(test_aggregate_and_simple_selection_together) {
         require_rows(e, "select c, avg(c) from t", {{I(1), I(2)}});
         require_rows(e, "select p, sum(v) from t", {{I(1), I(58)}});
         require_rows(e, "select p, count(c) from t group by p", {{I(1), L(3)}, {I(2), L(1)}});
-        return make_ready_future<>();
     });
 }
 
@@ -5421,11 +5420,11 @@ SEASTAR_TEST_CASE(timeuuid_fcts_prepared_re_evaluation) {
     });
 }
 
-static future<> with_parallelized_aggregation_enabled_thread(std::function<void(cql_test_env&)>&& func) {
+static future<> with_parallelized_aggregation_enabled_thread(utils::wrapped_function<void(cql_test_env&)>&& func) {
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
     db_cfg.enable_parallelized_aggregation({true}, db::config::config_source::CommandLine);
-    return do_with_cql_env_thread(std::forward<std::function<void(cql_test_env&)>>(func), db_cfg_ptr);
+    return do_with_cql_env_thread(std::forward<utils::wrapped_function<void(cql_test_env&)>>(func), db_cfg_ptr);
 }
 
 SEASTAR_TEST_CASE(test_parallelized_select_count) {
@@ -5641,14 +5640,14 @@ SEASTAR_TEST_CASE(test_single_partition_aggregation_is_not_parallelized) {
     });
 }
 
-static future<> with_udf_and_parallel_aggregation_enabled_thread(std::function<void(cql_test_env&)>&& func) {
+static future<> with_udf_and_parallel_aggregation_enabled_thread(utils::wrapped_function<void(cql_test_env&)>&& func) {
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
     db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
     db_cfg.user_defined_function_time_limit_ms(1000);
     db_cfg.experimental_features({db::experimental_features_t::feature::UDF}, db::config::config_source::CommandLine);
     db_cfg.enable_parallelized_aggregation({true}, db::config::config_source::CommandLine);
-    return do_with_cql_env_thread(std::forward<std::function<void(cql_test_env&)>>(func), db_cfg_ptr);
+    return do_with_cql_env_thread(std::forward<utils::wrapped_function<void(cql_test_env&)>>(func), db_cfg_ptr);
 }
 
 SEASTAR_TEST_CASE(test_parallelized_select_uda) {
