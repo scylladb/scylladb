@@ -9,6 +9,7 @@
 
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_group_registry.hh"
+#include "utils/wrapped_function.hh"
 #include "service/raft/discovery.hh"
 #include "service/raft/group0_fwd.hh"
 #include "gms/feature.hh"
@@ -268,7 +269,7 @@ public:
     // Returns true after the group 0 server has been started.
     bool joined_group0() const;
 
-    utils::observer<bool> observe_leadership(std::function<void(bool)>);
+    utils::observer<bool> observe_leadership(utils::wrapped_function<void(bool)>);
 
     // Returns scheduling group group0 is configured to run with
     seastar::scheduling_group get_scheduling_group() {

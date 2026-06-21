@@ -13,6 +13,7 @@
 #include <vector>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
+#include "utils/wrapped_function.hh"
 #include "utils/atomic_vector.hh"
 #include "utils/chunked_vector.hh"
 
@@ -126,7 +127,7 @@ class migration_notifier {
 private:
     atomic_vector<migration_listener*> _listeners;
 
-    future<> on_schema_change(std::function<void(migration_listener*)> notify, std::function<std::string(std::exception_ptr)> describe_error);
+    future<> on_schema_change(utils::wrapped_function<void(migration_listener*)> notify, std::function<std::string(std::exception_ptr)> describe_error);
 public:
     /// Register a migration listener on current shard.
     void register_listener(migration_listener* listener);
