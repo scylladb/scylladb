@@ -11,6 +11,7 @@
 
 #include "version.hh"
 #include "shared_sstable.hh"
+#include "utils/wrapped_function.hh"
 #include "open_info.hh"
 #include "sstables_registry.hh"
 #include <seastar/core/file.hh>
@@ -336,7 +337,7 @@ public:
     // (e.g. parse error), it will return with validation error count seen up to
     // the abort. In the latter case it will call the error-handler before doing so.
     future<uint64_t> validate(reader_permit permit, abort_source& abort,
-            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor(), bool validate_index = false);
+            utils::wrapped_function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor(), bool validate_index = false);
 
     encoding_stats get_encoding_stats_for_compaction() const;
 
@@ -478,11 +479,11 @@ public:
         return _now;
     }
 
-    utils::observer<sstable&> add_on_closed_handler(std::function<void (sstable&)> on_closed_handler) noexcept {
+    utils::observer<sstable&> add_on_closed_handler(utils::wrapped_function<void (sstable&)> on_closed_handler) noexcept {
         return _on_closed.observe(on_closed_handler);
     }
 
-    utils::observer<sstable&> add_on_delete_handler(std::function<void (sstable&)> on_delete_handler) noexcept {
+    utils::observer<sstable&> add_on_delete_handler(utils::wrapped_function<void (sstable&)> on_delete_handler) noexcept {
         return _on_delete.observe(on_delete_handler);
     }
 
@@ -1188,7 +1189,7 @@ public:
     // Returns the newly created and sealed sstable.
     future<shared_sstable> link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
             component_type component,
-            std::function<void(sstable&)> modifier,
+            utils::wrapped_function<void(sstable&)> modifier,
             bool update_sstable_id);
     // Must be called in a seastar thread
     void write_component_with_metadata(component_type type, scylla_metadata metadata);

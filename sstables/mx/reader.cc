@@ -2045,7 +2045,7 @@ public:
 private:
     schema_ptr _schema;
     reader_permit _permit;
-    std::function<void(sstring)> _error_handler;
+    utils::wrapped_function<void(sstring)> _error_handler;
     // For static-compact tables C* stores the only row in the static row but in our representation they're regular rows.
     const bool _treat_static_row_as_regular;
     mutation_fragment_stream_validator _validator;
@@ -2093,7 +2093,7 @@ private:
     }
 
 public:
-    validating_consumer(const schema_ptr schema, reader_permit permit, const shared_sstable& sst, std::function<void(sstring)> error_handler)
+    validating_consumer(const schema_ptr schema, reader_permit permit, const shared_sstable& sst, utils::wrapped_function<void(sstring)> error_handler)
         : _schema(schema)
         , _permit(std::move(permit))
         , _error_handler(std::move(error_handler))
@@ -2250,7 +2250,7 @@ future<uint64_t> validate(
         shared_sstable sstable,
         reader_permit permit,
         abort_source& abort,
-        std::function<void(sstring)> error_handler,
+        utils::wrapped_function<void(sstring)> error_handler,
         sstables::read_monitor& monitor) {
     auto schema = sstable->get_schema();
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));

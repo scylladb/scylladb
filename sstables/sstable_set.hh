@@ -10,6 +10,7 @@
 
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
+#include "utils/wrapped_function.hh"
 #include "sstables/progress_monitor.hh"
 #include "sstables/types_fwd.hh"
 #include "sstables/file_size_stats.hh"
@@ -141,7 +142,7 @@ public:
     // Return all sstables. It's not guaranteed that sstable_set will keep a reference to the returned list, so user should keep it.
     lw_shared_ptr<const sstable_list> all() const;
     // Prefer for_each_sstable() over all() for iteration purposes, as the latter may have to copy all sstables into a temporary
-    void for_each_sstable(std::function<void(const shared_sstable&)> func) const;
+    void for_each_sstable(utils::wrapped_function<void(const shared_sstable&)> func) const;
     template <typename Func>
     requires std::same_as<typename futurize<std::invoke_result_t<Func, shared_sstable>>::type, future<>>
     future<> for_each_sstable_gently(Func&& func) const {
