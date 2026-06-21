@@ -17,6 +17,7 @@
 #include "sstables/sstable_set.hh"
 #include "compaction_fwd.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
+#include "utils/wrapped_function.hh"
 #include "utils/chunked_vector.hh"
 
 namespace compaction {
@@ -47,7 +48,7 @@ struct compaction_completion_desc {
 // creates a new SSTable for a given shard
 using compaction_sstable_creator_fn = std::function<sstables::shared_sstable(shard_id shard)>;
 // Replaces old sstable(s) by new one(s) which contain all non-expired data.
-using compaction_sstable_replacer_fn = std::function<void(compaction_completion_desc)>;
+using compaction_sstable_replacer_fn = utils::wrapped_function<void(compaction_completion_desc)>;
 
 class compaction_type_options {
 public:
@@ -97,7 +98,7 @@ public:
     };
     struct component_rewrite {
         sstables::component_type component_to_rewrite;
-        std::function<void(sstables::sstable&)> modifier;
+        utils::wrapped_function<void(sstables::sstable&)> modifier;
 
         using update_sstable_id = bool_class<class update_sstable_id_tag>;
         update_sstable_id update_id = update_sstable_id::yes;
@@ -141,7 +142,7 @@ public:
         return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables});
     }
 
-    static compaction_type_options make_component_rewrite(component_type component, std::function<void(sstables::sstable&)> modifier, component_rewrite::update_sstable_id update_id = component_rewrite::update_sstable_id::yes) {
+    static compaction_type_options make_component_rewrite(component_type component, utils::wrapped_function<void(sstables::sstable&)> modifier, component_rewrite::update_sstable_id update_id = component_rewrite::update_sstable_id::yes) {
         return compaction_type_options(component_rewrite{.component_to_rewrite = component, .modifier = std::move(modifier), .update_id = update_id});
     }
 

@@ -1114,7 +1114,7 @@ void compaction_manager::enable() {
     cmlog.info("Enabled");
 }
 
-std::function<void()> compaction_manager::compaction_submission_callback() {
+utils::wrapped_function<void()> compaction_manager::compaction_submission_callback() {
     return [this] () mutable {
         auto now = gc_clock::now();
         for (auto& [table, state] : _compaction_state) {
@@ -2397,7 +2397,7 @@ future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> c
             tasks::task_info info,
             std::vector<sstables::shared_sstable> sstables,
             sstables::component_type component,
-            std::function<void(sstables::sstable&)> modifier,
+            utils::wrapped_function<void(sstables::sstable&)> modifier,
             compaction_type_options::component_rewrite::update_sstable_id update_id) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten_sstables;
     rewritten_sstables.reserve(sstables.size());
