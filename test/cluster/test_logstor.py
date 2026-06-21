@@ -288,7 +288,9 @@ async def test_recovery_with_segment_reuse(manager: ManagerClient):
 
         # Verify compaction ran
         metrics = await manager.metrics.query(servers[0].ip_addr)
-        segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
+        segments_in = metrics.get("scylla_logstor_sm_compaction_segments_in") or 0
+        segments_out = metrics.get("scylla_logstor_sm_compaction_segments_out") or 0
+        segments_compacted = segments_in - segments_out
         logger.info(f"Segments compacted: {segments_compacted}")
         assert segments_compacted > 0, "Compaction should have run when filling disk twice"
 
@@ -650,7 +652,9 @@ async def test_compaction(manager: ManagerClient):
 
         async def segments_compacted():
             metrics = await manager.metrics.query(servers[0].ip_addr)
-            segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
+            segments_in = metrics.get("scylla_logstor_sm_compaction_segments_in") or 0
+            segments_out = metrics.get("scylla_logstor_sm_compaction_segments_out") or 0
+            segments_compacted = segments_in - segments_out
             if segments_compacted == 4:
                 return True
             await manager.api.logstor_compaction(servers[0].ip_addr)
