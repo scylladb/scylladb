@@ -52,6 +52,51 @@ struct free_segment_watermarks {
 free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, double target_fraction,
         size_t max_segments_per_compaction) noexcept;
 
+// The cost of one candidate compaction batch: `n_in` segments are read and rewritten into `n_out`
+// segments, copying `live_bytes` of live data.
+struct compaction_candidate_score {
+    size_t n_in;
+    size_t n_out;
+    uint64_t live_bytes;
+
+    size_t reclaimed() const noexcept {
+        return n_in > n_out ? n_in - n_out : 0;
+    }
+
+    // Segments reclaimed per segment-worth of data copied, which is exactly the reciprocal of the
+    // batch's marginal write amplification. Comparisons cancel the segment_size factor, so it is
+    // needed only where the absolute value is wanted, i.e. for logging.
+    double efficiency(uint64_t segment_size) const noexcept {
+        return live_bytes == 0
+                ? std::numeric_limits<double>::infinity()
+                : double(reclaimed()) * double(segment_size) / double(live_bytes);
+    }
+
+    // Whether this batch's efficiency is at least `fraction` of `other`'s.
+    bool efficiency_at_least(const compaction_candidate_score& other, double fraction) const noexcept {
+        if (live_bytes == 0) {
+            return true;
+        }
+        if (other.live_bytes == 0) {
+            return false;
+        }
+        return double(reclaimed()) * double(other.live_bytes)
+                >= fraction * double(other.reclaimed()) * double(live_bytes);
+    }
+
+    bool operator==(const compaction_candidate_score& other) const noexcept = default;
+
+    // Orders batches by reclamation efficiency, so that the score is the reciprocal of the write
+    // amplification the batch would incur, and ties by how much the batch reclaims.
+    bool operator<(const compaction_candidate_score& other) const noexcept;
+};
+
+// Decides how many segments to compact, where `prefix_scores[i]` scores the batch made of the first
+// i+1 candidate segments in ascending utilization order. Returns 0 if no prefix reclaims a segment.
+// The most efficient prefix is extended to the longest prefix that stays within
+// `extension_tolerance` of it, trading a little efficiency for fewer and larger jobs.
+size_t select_compaction_prefix(std::span<const compaction_candidate_score> prefix_scores, double extension_tolerance) noexcept;
+
 constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {

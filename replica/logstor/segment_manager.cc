@@ -473,8 +473,9 @@ private:
     }
 
     struct stats {
-        uint64_t segments_compacted{0};
-        uint64_t compaction_segments_freed{0};
+        uint64_t compaction_segments_in{0};
+        uint64_t compaction_segments_out{0};
+        uint64_t compaction_segments_reclaimed{0};
         uint64_t compaction_records_skipped{0};
         uint64_t compaction_records_rewritten{0};
         uint64_t separator_buffer_flushed{0};
@@ -500,7 +501,7 @@ private:
     struct compaction_candidate {
         logstor_group* group;
         std::vector<log_segment_id> segments;
-        ssize_t score;
+        compaction_candidate_score score;
     };
 
     using group_compaction_state_map = absl::flat_hash_map<logstor_group*, std::unique_ptr<group_compaction_state>>;
@@ -1164,10 +1165,12 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of bytes written to the disk by compaction.")),
         sm::make_counter("compaction_data_bytes_written", _stats.data_bytes_written[static_cast<size_t>(write_source::compaction)],
                        sm::description("Counts number of data bytes written to the disk by compaction.")),
-        sm::make_counter("segments_compacted", _compaction_mgr.get_stats().segments_compacted,
-                       sm::description("Counts number of segments compacted.")),
-        sm::make_counter("compaction_segments_freed", _compaction_mgr.get_stats().compaction_segments_freed,
-                       sm::description("Counts number of segments freed by compaction.")),
+        sm::make_counter("compaction_segments_in", _compaction_mgr.get_stats().compaction_segments_in,
+                       sm::description("Counts number of input segments selected for compaction.")),
+        sm::make_counter("compaction_segments_out", _compaction_mgr.get_stats().compaction_segments_out,
+                       sm::description("Counts number of output segments written by compaction.")),
+        sm::make_counter("compaction_segments_reclaimed", _compaction_mgr.get_stats().compaction_segments_reclaimed,
+                       sm::description("Counts number of segments reclaimed by compaction.")),
         sm::make_counter("compaction_records_skipped", _compaction_mgr.get_stats().compaction_records_skipped,
                        sm::description("Counts number of records skipped during compaction.")),
         sm::make_counter("compaction_records_rewritten", _compaction_mgr.get_stats().compaction_records_rewritten,
@@ -1632,13 +1635,19 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 }
 
 std::optional<compaction_manager_impl::compaction_candidate> compaction_manager_impl::select_segments_for_compaction(logstor_group& cg) {
+    // How much reclamation efficiency a batch may give up in exchange for being larger.
+    static constexpr double compaction_batch_extension_tolerance = 0.8;
+
     uint64_t accum_net_data_size = 0;
     uint64_t accum_record_count = 0;
-    int64_t max_gain = 0;
-    uint64_t best_count = 0;
     std::vector<log_segment_id> candidates;
+    // prefix_scores[i] scores the batch made of candidates[0..i].
+    std::vector<compaction_candidate_score> prefix_scores;
     const auto segment_size = _sm.get_segment_size();
     const auto& segments = cg.logstor_segments()._segments;
+
+    candidates.reserve(_cfg.max_segments_per_compaction);
+    prefix_scores.reserve(_cfg.max_segments_per_compaction);
 
     for (const auto& desc : segments) {
         if (candidates.size() >= _cfg.max_segments_per_compaction) {
@@ -1651,31 +1660,36 @@ std::optional<compaction_manager_impl::compaction_candidate> compaction_manager_
         accum_net_data_size += desc.net_data_size(segment_size);
         accum_record_count += desc.record_count;
 
-        auto required_segments = raw_write_buffer::estimate_required_segments(
-            accum_net_data_size, accum_record_count, segment_size);
+        auto estimated_segments_out = raw_write_buffer::estimate_required_segments(
+                accum_net_data_size, accum_record_count, segment_size);
 
-        logstor_logger.trace("Evaluating compaction candidate {} with net data size {} accumulated {} required segments {}",
-                           seg_id, desc.net_data_size(segment_size), accum_net_data_size, required_segments);
+        const auto score = compaction_candidate_score{
+            .n_in = candidates.size(),
+            .n_out = estimated_segments_out,
+            .live_bytes = accum_net_data_size,
+        };
+        prefix_scores.push_back(score);
 
-        auto gain = static_cast<int64_t>(candidates.size()) - static_cast<int64_t>(required_segments);
-        if (gain > max_gain) {
-            max_gain = gain;
-            best_count = candidates.size();
-        }
+        logstor_logger.trace("Evaluating compaction candidate {} with net data size {} accumulated {} estimated n_in {} n_out {} reclaimed {} efficiency {}",
+                           seg_id, desc.net_data_size(segment_size), accum_net_data_size,
+                           score.n_in, score.n_out, score.reclaimed(), score.efficiency(segment_size));
     }
 
-    logstor_logger.debug("Selected {} segments for compaction for estimated gain of {} segments", best_count, max_gain);
-
-    if (best_count == 0 || max_gain <= 0) {
+    const auto selected_count = select_compaction_prefix(prefix_scores, compaction_batch_extension_tolerance);
+    if (selected_count == 0) {
         return std::nullopt;
     }
+
+    const auto& score = prefix_scores[selected_count - 1];
+    logstor_logger.trace("Selected {} of {} candidate segments for compaction with estimated n_in {} n_out {} reclaimed {} efficiency {}",
+            selected_count, candidates.size(), score.n_in, score.n_out, score.reclaimed(), score.efficiency(segment_size));
 
     return compaction_candidate{
         .group = &cg,
         .segments = candidates
-            | std::views::take(best_count)
+            | std::views::take(selected_count)
             | std::ranges::to<std::vector<log_segment_id>>(),
-        .score = max_gain,
+        .score = score,
     };
 }
 
@@ -1843,8 +1857,10 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
 
     co_await cb.close();
 
-    logstor_logger.debug("Compaction complete: {} records rewritten, {} skipped from {} segments, flushed {} times",
-                       cb.stats.records_rewritten, cb.stats.records_skipped, segments.size(), cb.stats.flush_count);
+    const size_t compaction_segments_in = segments.size();
+    const size_t compaction_segments_out = cb.stats.flush_count;
+
+    logstor_logger.debug("Compaction complete: in {} out {}", compaction_segments_in, compaction_segments_out);
 
     // wait for read operations that use the old locations
     co_await index.await_pending_reads();
@@ -1861,9 +1877,9 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
         }
     }
 
-    uint64_t new_segments = segments.size() > cb.stats.flush_count ? segments.size() - cb.stats.flush_count : 0;
-    _stats.segments_compacted += segments.size();
-    _stats.compaction_segments_freed += new_segments;
+    _stats.compaction_segments_in += compaction_segments_in;
+    _stats.compaction_segments_out += compaction_segments_out;
+    _stats.compaction_segments_reclaimed += compaction_segments_in > compaction_segments_out ? compaction_segments_in - compaction_segments_out : 0;
     _stats.compaction_records_rewritten += cb.stats.records_rewritten;
     _stats.compaction_records_skipped += cb.stats.records_skipped;
 }

@@ -28,4 +28,50 @@ free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, dou
     return {low, low + std::max<uint64_t>(1, low / 4)};
 }
 
+bool compaction_candidate_score::operator<(const compaction_candidate_score& other) const noexcept {
+    if (live_bytes == 0 || other.live_bytes == 0) {
+        // A batch that copies nothing has infinite efficiency.
+        if ((live_bytes == 0) != (other.live_bytes == 0)) {
+            return live_bytes != 0;
+        }
+    } else {
+        // efficiency() < other.efficiency(), with the common segment_size factor cancelled out.
+        const auto lhs = reclaimed() * other.live_bytes;
+        const auto rhs = other.reclaimed() * live_bytes;
+        if (lhs != rhs) {
+            return lhs < rhs;
+        }
+    }
+
+    return reclaimed() < other.reclaimed();
+}
+
+size_t select_compaction_prefix(std::span<const compaction_candidate_score> prefix_scores, double extension_tolerance) noexcept {
+    size_t best = 0;
+    for (size_t i = 0; i < prefix_scores.size(); ++i) {
+        if (prefix_scores[i].reclaimed() == 0) {
+            continue;
+        }
+        // Strictly better, so that the shortest of equally efficient prefixes wins: extending is
+        // only worth it when the tolerance below says so.
+        if (best == 0 || prefix_scores[best - 1] < prefix_scores[i]) {
+            best = i + 1;
+        }
+    }
+
+    if (best == 0) {
+        return 0;
+    }
+
+    // Efficiency along the prefix is a sawtooth - it jumps whenever one more segment is reclaimed
+    // and decays as live bytes accumulate without reclaiming - so the longest prefix within the
+    // tolerance is not necessarily the one just before the first prefix that falls outside it.
+    for (size_t i = prefix_scores.size(); i > best; --i) {
+        if (prefix_scores[i - 1].efficiency_at_least(prefix_scores[best - 1], extension_tolerance)) {
+            return i;
+        }
+    }
+    return best;
+}
+
 } // namespace replica::logstor
