@@ -706,6 +706,13 @@ public:
     }
 };
 
+struct separator_task {
+    std::vector<write_buffer::record_in_buffer> records;
+    segment_ref seg_ref;
+    segment_sequence seq_num{};
+    utils::phased_barrier::operation write_op;
+};
+
 class segment_manager_impl {
 
     struct stats {
@@ -743,14 +750,19 @@ class segment_manager_impl {
     seastar::gate _async_gate;
     future<> _reserve_replenisher{make_ready_future<>()};
     seastar::condition_variable _segment_freed_cv;
+    seastar::abort_source _abort_source;
 
     std::vector<segment_descriptor> _segment_descs;
     seastar::circular_buffer<log_segment_id> _free_segments;
 
     static constexpr size_t separator_flush_max_concurrency = 4;
+    static constexpr size_t separator_queue_depth = 16;
 
     write_buffer_pool _compaction_buffer_pool;
     write_buffer_pool _separator_buffer_pool;
+    seastar::queue<separator_task> _separator_task_queue;
+    seastar::semaphore _separator_enqueue_sem{1};
+    future<> _separator_fiber{make_ready_future<>()};
 
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
@@ -843,8 +855,9 @@ private:
         return _next_segment_seq++;
     }
     std::chrono::microseconds calculate_separator_delay() const;
+    future<> run_separator_fiber();
 
-    future<> write_to_separator(write_buffer&, segment_ref, segment_sequence);
+    future<> write_to_separator(std::vector<write_buffer::record_in_buffer>&, segment_ref, segment_sequence);
     future<> write_to_separator(table&, log_location prev_loc, log_record, segment_ref);
 
     future<std::optional<segment_header>> read_segment_header(log_segment_id);
@@ -1048,7 +1061,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     // at most a single compaction/split running at a time
     // and at most two buffers used at a time by split.
     , _compaction_buffer_pool(2, config.segment_size, segment_kind::full)
-     , _separator_buffer_pool(config.max_separator_memory / config.segment_size, config.segment_size, segment_kind::full)
+    , _separator_buffer_pool(config.max_separator_memory / config.segment_size, config.segment_size, segment_kind::full)
+    , _separator_task_queue(separator_queue_depth)
     {
 
     _free_segments.reserve(_max_segments);
@@ -1112,6 +1126,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Current normalized backlog used by the logstor compaction shares controller.")),
         sm::make_gauge("separator_buffers_in_use", [this]() { return _separator_buffer_pool.used_buffer_count(); },
                        sm::description("Current number of separator buffers in use.")),
+        sm::make_gauge("separator_task_queue_size", [this]() { return _separator_task_queue.size(); },
+                       sm::description("Current number of pending tasks in the separator task queue.")),
         sm::make_gauge("separator_flow_control_delay", [this]() { return calculate_separator_delay().count(); },
                        sm::description("Current delay applied to writes to control separator debt in microseconds.")),
     });
@@ -1125,6 +1141,10 @@ future<> segment_manager_impl::start() {
 
     co_await _compaction_mgr.start();
 
+    _separator_fiber = with_scheduling_group(_cfg.separator_sg, [this] {
+        return run_separator_fiber();
+    });
+
     co_await switch_active_segment();
 
     _compaction_mgr.enable_separator_flush(separator_flush_max_concurrency);
@@ -1137,6 +1157,10 @@ future<> segment_manager_impl::stop() {
         co_return;
     }
     logstor_logger.info("Stopping segment manager");
+
+    _abort_source.request_abort();
+
+    co_await std::move(_separator_fiber).handle_exception([] (std::exception_ptr) {});
 
     co_await _async_gate.close();
 
@@ -1162,6 +1186,32 @@ future<> segment_manager_impl::stop() {
     co_await _file_mgr.stop();
 
     logstor_logger.info("Segment manager stopped");
+}
+
+future<> segment_manager_impl::run_separator_fiber() {
+    auto abort_sub = _abort_source.subscribe([this] () noexcept {
+        _separator_task_queue.abort(_abort_source.abort_requested_exception_ptr());
+    });
+
+    while (true) {
+        separator_task task;
+        try {
+            task = co_await _separator_task_queue.pop_eventually();
+        } catch (seastar::abort_requested_exception&) {
+            co_return;
+        }
+
+        auto write_to_separator_failed = defer([seg_ref = task.seg_ref] mutable {
+            seg_ref.set_flush_failure();
+        });
+
+        try {
+            co_await write_to_separator(task.records, std::move(task.seg_ref), task.seq_num);
+            write_to_separator_failed.cancel();
+        } catch (...) {
+            logstor_logger.warn("Writing to separator failed: {}", std::current_exception());
+        }
+    }
 }
 
 future<> segment_manager_impl::write(write_buffer& wb) {
@@ -1210,15 +1260,18 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         // for them to be updated in the index.
         co_await wb.complete_writes(loc);
 
-        co_await with_scheduling_group(_cfg.separator_sg, [&] {
-            return write_to_separator(wb, std::move(seg_ref), seq_num);
-        });
+        auto records = wb.take_separator_records();
+        if (!records.empty()) {
+            co_await with_semaphore(_separator_enqueue_sem, 1, [&] {
+                return _separator_task_queue.push_eventually(separator_task{
+                    .records = std::move(records),
+                    .seg_ref = seg_ref,
+                    .seq_num = seq_num,
+                    .write_op = std::move(write_op),
+                });
+            });
+        }
         write_to_separator_failed.cancel();
-    }
-
-    // flow control for separator debt
-    if (auto separator_delay = calculate_separator_delay(); separator_delay.count() > 0) {
-        co_await seastar::sleep(separator_delay);
     }
 }
 
@@ -1916,8 +1969,8 @@ future<separator_buffer> compaction_manager_impl::allocate_separator_buffer() {
     co_return separator_buffer(std::move(*buf));
 }
 
-future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref seg_ref, segment_sequence segment_seq_num) {
-    for (auto&& w : wb.records_for_separator()) {
+future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::record_in_buffer>& records, segment_ref seg_ref, segment_sequence segment_seq_num) {
+    for (auto&& w : records) {
         co_await coroutine::maybe_yield();
 
         auto key = w.writer.record().header.key;

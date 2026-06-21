@@ -233,11 +233,8 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, w
     });
 }
 
-std::vector<write_buffer::record_in_buffer>& write_buffer::records_for_separator() {
-    if (!with_record_copy()) {
-        on_internal_error(logstor_logger, "requesting records but the write buffer has no record copy enabled");
-    }
-    return _records_copy;
+std::vector<write_buffer::record_in_buffer> write_buffer::take_separator_records() {
+    return std::move(_records_copy);
 }
 
 size_t raw_write_buffer::estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size) {
