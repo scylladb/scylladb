@@ -141,7 +141,7 @@ private:
     // Tracks the rolling maximum of gross bytes allocated during CQL parsing
     utils::rolling_max_tracker _parsing_cost_tracker{1000};
 
-    std::function<void(uint32_t)> _auth_prepared_cache_cfg_cb;
+    utils::wrapped_function<void(uint32_t)> _auth_prepared_cache_cfg_cb;
     serialized_action _authorized_prepared_cache_config_action;
     utils::observer<uint32_t> _authorized_prepared_cache_update_interval_in_ms_observer;
     utils::observer<uint32_t> _authorized_prepared_cache_validity_in_ms_observer;
