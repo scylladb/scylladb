@@ -277,6 +277,7 @@ private:
 
     friend class buffered_writer;
     friend class segment_manager_impl;
+    friend struct separator_buffer;
 };
 
 // Configuration passed to buffered_writer constructor (excluding the flush function).
