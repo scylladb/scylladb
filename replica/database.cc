@@ -3590,13 +3590,13 @@ bool database::tables_metadata::contains(std::pair<std::string_view, std::string
     return _ks_cf_to_uuid.contains(kscf);
 }
 
-void database::tables_metadata::for_each_table(std::function<void(table_id, lw_shared_ptr<table>)> f) const {
+void database::tables_metadata::for_each_table(utils::wrapped_function<void(table_id, lw_shared_ptr<table>)> f) const {
     for (auto& [id, table]: _column_families) {
         f(id, table);
     }
 }
 
-void database::tables_metadata::for_each_table_id(std::function<void(const ks_cf_t&, table_id)> f) const {
+void database::tables_metadata::for_each_table_id(utils::wrapped_function<void(const ks_cf_t&, table_id)> f) const {
     for (auto& [kscf, id]: _ks_cf_to_uuid) {
         f(kscf, id);
     }

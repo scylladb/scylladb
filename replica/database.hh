@@ -21,6 +21,7 @@
 #include "types/user.hh"
 #include "utils/assert.hh"
 #include "utils/hash.hh"
+#include "utils/wrapped_function.hh"
 #include "cell_locking.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
@@ -751,8 +752,8 @@ private:
     compaction_group& compaction_group_for_logstor_segment(logstor::log_segment_id, dht::token first_token, dht::token last_token) const;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
-    void for_each_compaction_group(std::function<void(compaction_group&)> action);
-    void for_each_compaction_group(std::function<void(const compaction_group&)> action) const;
+    void for_each_compaction_group(utils::wrapped_function<void(compaction_group&)> action);
+    void for_each_compaction_group(utils::wrapped_function<void(const compaction_group&)> action) const;
     // Unsafe reference to all storage groups. Don't use it across preemption points.
     const storage_group_map& storage_groups() const;
 
@@ -829,7 +830,7 @@ private:
              const tracing::trace_state_ptr& trace_state,
              streamed_mutation::forwarding fwd,
              mutation_reader::forwarding fwd_mr,
-             std::function<void(size_t)> reserve_fn) const;
+             utils::wrapped_function<void(size_t)> reserve_fn) const;
 public:
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
@@ -1633,8 +1634,8 @@ public:
         table_id get_table_id_if_exists(const std::pair<std::string_view, std::string_view>& kscf) const;
         bool contains(table_id id) const;
         bool contains(std::pair<std::string_view, std::string_view> kscf) const;
-        void for_each_table(std::function<void(table_id, lw_shared_ptr<table>)> f) const;
-        void for_each_table_id(std::function<void(const ks_cf_t&, table_id)> f) const;
+        void for_each_table(utils::wrapped_function<void(table_id, lw_shared_ptr<table>)> f) const;
+        void for_each_table_id(utils::wrapped_function<void(const ks_cf_t&, table_id)> f) const;
         future<> for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<table>)> f);
         future<> parallel_for_each_table(std::function<future<>(table_id, lw_shared_ptr<table>)> f);
         const std::unordered_map<table_id, lw_shared_ptr<table>> get_column_families_copy() const;

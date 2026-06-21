@@ -73,8 +73,8 @@ public:
                                        const query::partition_slice& slice,
                                        tracing::trace_state_ptr trace_state = nullptr);
 
-    void set_trigger_compaction_hook(std::function<void()> fn);
-    void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn);
+    void set_trigger_compaction_hook(utils::wrapped_function<void()> fn);
+    void set_trigger_separator_flush_hook(utils::wrapped_function<void(segment_sequence)> fn);
 };
 
 } // namespace logstor

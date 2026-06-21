@@ -9,6 +9,7 @@
 
 #include "types.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/wrapped_function.hh"
 #include "write_buffer.hh"
 #include "utils/log_heap.hh"
 #include <seastar/coroutine/maybe_yield.hh>
@@ -118,8 +119,8 @@ struct segment_set {
 class segment_ref {
     struct state {
         log_segment_id id;
-        std::function<void()> on_last_release;
-        std::function<void()> on_failure;
+        utils::wrapped_function<void()> on_last_release;
+        utils::wrapped_function<void()> on_failure;
         bool flush_failure{false};
         ~state() {
             if (!flush_failure) {
@@ -146,7 +147,7 @@ public:
 
 private:
     friend class segment_manager_impl;
-    explicit segment_ref(log_segment_id id, std::function<void()> on_last_release, std::function<void()> on_failure)
+    explicit segment_ref(log_segment_id id, utils::wrapped_function<void()> on_last_release, utils::wrapped_function<void()> on_failure)
         : _state(make_lw_shared<state>(id, std::move(on_last_release), std::move(on_failure)))
     {}
 };
@@ -194,10 +195,10 @@ struct separator_buffer {
 };
 
 class compaction_reenabler {
-    std::function<void()> _release;
+    utils::wrapped_function<void()> _release;
 public:
     compaction_reenabler() = default;
-    explicit compaction_reenabler(std::function<void()> release)
+    explicit compaction_reenabler(utils::wrapped_function<void()> release)
         : _release(std::move(release)) {}
     ~compaction_reenabler() { if (_release) _release(); }
 
