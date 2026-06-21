@@ -1872,6 +1872,22 @@ protected:
         // SSTable that doesn't require split can bypass compaction and the table will be able to place
         // it into the correct compaction group. Similar approach is done in off-strategy compaction for
         // sstables that don't require reshape and are ready to be moved across sets.
+        co_await utils::get_local_injector().inject("split_bypass_before_completion",
+                [this, &sst] (auto& handler) -> future<> {
+            bool aborted = false;
+            cmlog.info("split_bypass_before_completion: parked sst={}", sst->get_filename());
+            try {
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5),
+                        &_compaction_data.abort);
+            } catch (const abort_requested_exception&) {
+                aborted = true;
+            }
+            if (aborted) {
+                cmlog.info("split_bypass_before_completion: aborted due to stop_compaction sst={}", sst->get_filename());
+            } else {
+                cmlog.info("split_bypass_before_completion: released sst={}", sst->get_filename());
+            }
+        }, false);
         compaction_completion_desc desc { .old_sstables = {sst}, .new_sstables = {sst} };
         co_await _compacting_table->on_compaction_completion(std::move(desc), sstables::offstrategy::no);
         // It's fine to return empty results (zeroed stats) as compaction was bypassed.
@@ -1941,7 +1957,7 @@ compaction_manager::rewrite_sstables(compaction_group_view& t, compaction_type_o
 
 future<compaction_manager::compaction_stats_opt>
 compaction_manager::rewrite_sstables_component(compaction_group_view& t,
-                                     std::vector<sstables::shared_sstable>& sstables,
+                                     std::function<bool(const sstables::shared_sstable&)> filter,
                                      compaction_type_options options,
                                      std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables,
                                      tasks::task_info info) {
@@ -1950,12 +1966,27 @@ compaction_manager::rewrite_sstables_component(compaction_group_view& t,
         co_return std::nullopt;
     }
 
+    // Capture candidates from view `t` and register them as compacting while
+    // compaction is disabled on `t`, so that:
+    //   1) every captured sstable belongs to `t`'s compaction group (no
+    //      cross-CG routing mismatch), and
+    //   2) no other operation can move them to a different CG or pick them up
+    //      for a different compaction while the rewrite is in flight.
+    std::vector<sstables::shared_sstable> sstables;
+    compacting_sstable_registration compacting(*this, get_compaction_state(&t));
+    co_await run_with_compaction_disabled(t, [&t, &sstables, &compacting, &filter] () -> future<> {
+        auto candidates = co_await get_all_sstables(t);
+        for (auto& sst : candidates) {
+            if (filter(sst)) {
+                sstables.push_back(sst);
+            }
+        }
+        compacting.register_compacting(sstables);
+    }, "component_rewrite");
+
     if (sstables.empty()) {
         co_return std::nullopt;
     }
-
-    compacting_sstable_registration compacting(*this, get_compaction_state(&t));
-    compacting.register_compacting(sstables);
 
     co_return co_await perform_compaction<rewrite_sstables_component_compaction_task_executor>(throw_if_stopping::no, info, &t, info.id,
         std::move(options), std::move(sstables), std::move(compacting), rewritten_sstables);
@@ -2396,13 +2427,14 @@ compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compac
 
 future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> compaction_manager::perform_component_rewrite(compaction::compaction_group_view& t,
             tasks::task_info info,
-            std::vector<sstables::shared_sstable> sstables,
+            std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
             compaction_type_options::component_rewrite::update_sstable_id update_id) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten_sstables;
-    rewritten_sstables.reserve(sstables.size());
-    co_await rewrite_sstables_component(t, sstables, compaction_type_options::make_component_rewrite(component, std::move(modifier), update_id), rewritten_sstables, info);
+    co_await rewrite_sstables_component(t, std::move(filter),
+            compaction_type_options::make_component_rewrite(component, std::move(modifier), update_id),
+            rewritten_sstables, info);
     co_return rewritten_sstables;
 }
 

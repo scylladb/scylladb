@@ -7517,10 +7517,12 @@ static future<> test_perform_component_rewrite_single_sstable(compaction::compac
 
         auto& compaction_group_view = table->compaction_group_view_for_sstable(original_sst);
 
-        std::vector<sstables::shared_sstable> sstables_to_rewrite = {original_sst};
+        auto filter = [&] (const sstables::shared_sstable& sst) {
+            return sst == original_sst;
+        };
         auto rewritten_map = cm.perform_component_rewrite(compaction_group_view,
                                                           tasks::task_info{},
-                                                          std::move(sstables_to_rewrite),
+                                                          filter,
                                                           component_type::Statistics,
                                                           std::move(modifier),
                                                           update_id).get();
@@ -7607,9 +7609,13 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
             auto modifier = [new_level] (sstable& sst) {
                 sst.mutate_sstable_level(new_level);
             };
+            std::unordered_set<sstables::shared_sstable> sst_set(ssts.begin(), ssts.end());
+            auto filter = [sst_set = std::move(sst_set)] (const sstables::shared_sstable& sst) {
+                return sst_set.contains(sst);
+            };
             auto rewritten_map = cm.perform_component_rewrite(*cg_view,
                                                               tasks::task_info{},
-                                                              std::move(ssts),
+                                                              std::move(filter),
                                                               component_type::Statistics,
                                                               std::move(modifier)).get();
             merged_rewritten_map.insert(rewritten_map.begin(), rewritten_map.end());
