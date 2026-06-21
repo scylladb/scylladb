@@ -18,6 +18,7 @@
 #include "distributed_loader.hh"
 #include "replica/database.hh"
 #include "replica/global_table_ptr.hh"
+#include "replica/schema_boot.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/system_keyspace.hh"
@@ -588,7 +589,7 @@ future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database
         const auto& cfg = db.local().get_config();
 
         for (bool prio_only : { true, false}) {
-            std::vector<future<>> futures;
+            std::vector<sstring> keyspaces;
 
             for (auto& ks : db.local().get_keyspaces()) {
                 auto& ks_name = ks.first;
@@ -607,10 +608,17 @@ future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database
                     continue;
                 }
 
-                futures.emplace_back(distributed_loader::populate_keyspace(db, sys_ks, ks.second, ks_name, storage_mode));
+                keyspaces.push_back(ks_name);
             }
 
-            when_all_succeed(futures.begin(), futures.end()).discard_result().get();
+            dblog.info("Populating {} {}non-system keyspaces with concurrency {}",
+                    keyspaces.size(),
+                    prio_only ? "priority " : "",
+                    schema_boot::max_concurrent_keyspace_population);
+            schema_boot::for_each_keyspace_population(keyspaces, [&] (const sstring& ks_name) -> future<> {
+                auto& ks = db.local().get_keyspaces().at(ks_name);
+                co_await distributed_loader::populate_keyspace(db, sys_ks, ks, ks_name, storage_mode);
+            }).get();
         }
     });
 }

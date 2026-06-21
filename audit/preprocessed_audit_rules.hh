@@ -28,6 +28,8 @@ public:
     using known_table_set = std::unordered_set<known_table, utils::tuple_hash>;
     using rule_bitset = boost::dynamic_bitset<uint64_t>;
 
+    static constexpr size_t max_preprocessed_known_tables = 4096;
+
     preprocessed_audit_rules() noexcept = default;
     explicit preprocessed_audit_rules(std::vector<audit_rule> rules) noexcept;
 
@@ -46,8 +48,14 @@ public:
     audit_sink_set matching_sinks(statement_category category, std::string_view keyspace,
                                   std::string_view table, std::string_view role) const;
 
+    bool wants_eager_known_tables(size_t table_count) const noexcept;
+
     const std::vector<audit_rule>& rules() const noexcept { return _rules; }
     const std::unordered_set<sstring>& known_roles() const noexcept { return _known_roles; }
+    static constexpr size_t max_preprocessed_known_tables_for_tests() noexcept { return max_preprocessed_known_tables; }
+    bool table_cache_enabled_for_tests() const noexcept { return _known_table_cache_enabled; }
+    size_t known_tables_size_for_tests() const noexcept { return _known_tables.size(); }
+    size_t cached_tables_size_for_tests() const noexcept { return _table_to_matching_rules.size(); }
 
 private:
     rule_bitset compute_role_bits(const std::vector<audit_rule>& rules, const sstring& role) const;
@@ -62,6 +70,7 @@ private:
     std::vector<audit_rule> _rules;
     std::unordered_set<sstring> _known_roles;
     known_table_set _known_tables;
+    bool _known_table_cache_enabled = true;
     size_t _cache_generation = 0;
 
     /// For each known role, a bitset indicating which rules match that role.

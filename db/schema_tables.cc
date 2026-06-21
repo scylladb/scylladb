@@ -2785,13 +2785,15 @@ void check_no_legacy_secondary_index_mv_schema(replica::database& db, const view
 
 static auto GET_COLUMN_MAPPING_QUERY = format("SELECT column_name, clustering_order, column_name_bytes, kind, position, type FROM system.{} WHERE cf_id = ? AND schema_version = ?",
     db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
+static auto COLUMN_MAPPING_EXISTS_QUERY = format("SELECT column_name FROM system.{} WHERE cf_id = ? AND schema_version = ? LIMIT 1",
+    db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
 
 future<std::optional<column_mapping>> get_column_mapping_if_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version) {
     shared_ptr<cql3::untyped_result_set> results = co_await sys_ks.query_processor().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
         {table_id.uuid(), version.uuid()},
-        cql3::query_processor::cache_internal::no
+        cql3::query_processor::cache_internal::yes
     );
     if (results->empty()) {
         co_return std::nullopt;
@@ -2836,7 +2838,7 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_i
 
 future<bool> column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version) {
     shared_ptr<cql3::untyped_result_set> results = co_await sys_ks._qp.execute_internal(
-        GET_COLUMN_MAPPING_QUERY,
+        COLUMN_MAPPING_EXISTS_QUERY,
         db::consistency_level::LOCAL_ONE,
         {table_id.uuid(), version.uuid()},
         cql3::query_processor::cache_internal::yes
