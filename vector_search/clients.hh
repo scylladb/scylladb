@@ -10,6 +10,7 @@
 
 #include "client.hh"
 #include "dns.hh"
+#include "utils/wrapped_function.hh"
 #include "truststore.hh"
 #include <seastar/core/future.hh>
 #include "uri.hh"
@@ -27,7 +28,7 @@ namespace vector_search {
 
 class clients {
 public:
-    using refresh_trigger_callback = std::function<void()>;
+    using refresh_trigger_callback = utils::wrapped_function<void()>;
 
     using request_error = std::variant<aborted_error, addr_unavailable_error, service_unavailable_error>;
     using request_result = std::expected<client::response, request_error>;
