@@ -10,6 +10,7 @@
 
 #include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
+#include "utils/wrapped_function.hh"
 #include "service/topology_guard.hh"
 #include "streaming/stream_reason.hh"
 #include "tasks/task_manager.hh"
@@ -296,7 +297,7 @@ public:
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
     named_semaphore& range_parallelism_semaphore();
-    future<> run(repair_uniq_id id, std::function<void ()> func);
+    future<> run(repair_uniq_id id, utils::wrapped_function<void()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress();
     future<bool> is_aborted(const tasks::task_id& uuid, shard_id shard);
