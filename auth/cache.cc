@@ -55,7 +55,7 @@ lw_shared_ptr<const cache::role_record> cache::get(std::string_view role) const 
     return it->second;
 }
 
-void cache::for_each_role(const std::function<void(const role_name_t&, const role_record&)>& func) const {
+void cache::for_each_role(const utils::wrapped_function<void(const role_name_t&, const role_record&)>& func) const {
     for (const auto& [name, record] : _roles) {
         func(name, *record);
     }

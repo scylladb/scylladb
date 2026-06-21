@@ -16,6 +16,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
+#include "utils/wrapped_function.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -66,7 +67,7 @@ public:
 
     // The callback doesn't suspend (no co_await) so it observes the state
     // of the cache atomically.
-    void for_each_role(const std::function<void(const role_name_t&, const role_record&)>& func) const;
+    void for_each_role(const utils::wrapped_function<void(const role_name_t&, const role_record&)>& func) const;
 
 private:
     using roles_map = absl::flat_hash_map<role_name_t, lw_shared_ptr<role_record>, sstring_hash, sstring_eq>;
