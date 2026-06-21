@@ -1267,7 +1267,7 @@ template data_value map_type_impl::deserialize<>(managed_bytes_view) const;
 template <FragmentedView View>
 static void validate_aux(const map_type_impl& t, View v) {
     auto size = read_collection_size(v);
-    for (int i = 0; i < size; ++i) {
+    for (int i = 0; i != size; ++i) {
         t.get_keys_type()->validate(read_collection_key(v));
         t.get_values_type()->validate(read_collection_value_nonnull(v));
     }
