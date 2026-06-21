@@ -278,7 +278,7 @@ public:
 };
 }
 
-future<> for_each_split_mutation(mutation source, size_t max_size, std::function<void(mutation)> process_mutation) {
+future<> split_mutation(mutation source, utils::chunked_vector<mutation>& target, size_t max_size) {
     reader_concurrency_semaphore sem(reader_concurrency_semaphore::no_limits{}, "split_mutation",
         reader_concurrency_semaphore::register_metrics::no);
     {
@@ -287,16 +287,12 @@ future<> for_each_split_mutation(mutation source, size_t max_size, std::function
             sem.make_tracking_only_permit(s, "split_mutation", db::no_timeout, {}),
             std::move(source));
         co_await with_closeable(std::move(reader), [&] (mutation_reader& reader) {
-            return reader.consume(mutation_by_size_splitter(s, max_size, std::move(process_mutation)));
+            return reader.consume(mutation_by_size_splitter(s, max_size, [&target] (mutation m) {
+                target.emplace_back(std::move(m));
+            }));
         });
     }
     co_await sem.stop();
-}
-
-future<> split_mutation(mutation source, utils::chunked_vector<mutation>& target, size_t max_size) {
-    return for_each_split_mutation(std::move(source), max_size, [&target] (mutation m) {
-        target.emplace_back(std::move(m));
-    });
 }
 
 auto fmt::formatter<mutation>::format(const mutation& m, fmt::format_context& ctx) const
