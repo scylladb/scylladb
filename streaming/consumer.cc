@@ -30,7 +30,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
         stream_reason reason,
         sstables::offstrategy offstrategy,
         service::frozen_topology_guard frozen_guard,
-        std::function<void (sstables::shared_sstable sst)> on_sstable_written) {
+        utils::wrapped_function<void (sstables::shared_sstable sst)> on_sstable_written) {
     return [&db, &vb = vb.container(), &vbw, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, on_sstable_written] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {

@@ -10,6 +10,7 @@
 
 #include "sstables/sstable_set.hh"
 #include "streaming/stream_reason.hh"
+#include "utils/wrapped_function.hh"
 #include "service/topology_guard.hh"
 #include <optional>
 
@@ -34,6 +35,6 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
     stream_reason reason,
     sstables::offstrategy offstrategy,
     service::frozen_topology_guard,
-    std::function<void (sstables::shared_sstable sst)> on_sstable_written = {});
+    utils::wrapped_function<void (sstables::shared_sstable sst)> on_sstable_written = {});
 
 }
