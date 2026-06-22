@@ -76,8 +76,9 @@ sstring large_data_soft_violation_warning(large_data_violation_type violations) 
     if (violations == large_data_violation_type::none) {
         return {};
     }
-    // List categories in a stable row, cell, collection order.
+    // List categories in a stable partition, row, cell, collection order.
     static constexpr std::pair<large_data_violation_type, std::string_view> categories[] = {
+        {large_data_violation_type::partition, "partition"},
         {large_data_violation_type::row, "row"},
         {large_data_violation_type::cell, "cell"},
         {large_data_violation_type::collection, "collection"},

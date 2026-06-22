@@ -116,14 +116,15 @@ private:
     record_set<record_type::collection> _collections;
 };
 
-// Coordinator-side soft limit violation categories.  Used as a set of bit
-// flags so a single write can accumulate violations across all of its rows,
-// cells, and collections (see the operators below).
+// Soft limit violation categories.  Used as a set of bit flags so a single
+// write can accumulate violations across all of its partitions, rows, cells,
+// and collections (see the operators below).
 enum class large_data_violation_type : uint8_t {
     none       = 0,
     row        = 1 << 0,
     cell       = 1 << 1,
     collection = 1 << 2,
+    partition  = 1 << 3,
 };
 
 inline constexpr large_data_violation_type operator|(large_data_violation_type a, large_data_violation_type b) {
@@ -140,8 +141,8 @@ inline constexpr large_data_violation_type operator&(large_data_violation_type a
 
 // Translate a set of soft-limit violation categories into the client-facing CQL
 // warning string, or an empty string when no categories are set.  The message
-// lists the violated categories in row, cell, collection order, e.g.
-//   "Large data guardrail: Soft limit violation for cell, collection"
+// lists the violated categories in partition, row, cell, collection order, e.g.
+//   "Large data guardrail: Soft limit violation for partition, cell"
 sstring large_data_soft_violation_warning(large_data_violation_type violations);
 
 // Each replica::table holds a shared_ptr to either a real guardrail or a
