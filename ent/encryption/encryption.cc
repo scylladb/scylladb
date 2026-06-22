@@ -743,7 +743,7 @@ public:
         co_return file{};
     }
 
-    future<bool> wrap_writeonly(const sstables::sstable& sst, sstables::component_type type, std::function<void(shared_ptr<symmetric_key>)> apply) {
+    future<bool> wrap_writeonly(const sstables::sstable& sst, sstables::component_type type, utils::wrapped_function<void(shared_ptr<symmetric_key>)> apply) {
         auto s = sst.get_schema();
         shared_ptr<encryption_schema_extension> esx;
         auto e = s->extensions().find(encryption_attribute);
