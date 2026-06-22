@@ -124,9 +124,7 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bo
         serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
         request_timeout=200)
     if use_ssl:
-        # Scylla does not support any earlier TLS protocol. If you try,
-        # you will get mysterious EOF errors (see issue #6971) :-(
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     else:
         ssl_context = None
 

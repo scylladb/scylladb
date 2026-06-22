@@ -215,9 +215,7 @@ def cql_session(host, port, is_ssl, username, password, request_timeout=120, pro
         # 10 seconds may not be enough, so let's increase it. See issue #7838.
         request_timeout=request_timeout)
     if is_ssl:
-        # Scylla does not support any earlier TLS protocol. If you try,
-        # you will get mysterious EOF errors (see issue #6971) :-(
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     else:
         ssl_context = None
     cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},

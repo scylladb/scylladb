@@ -439,9 +439,7 @@ def check_cql(ip, ssl_context=None):
         raise NotYetUp
     # Any other exception may indicate a problem, and is passed to the caller.
 def check_ssl_cql(ip):
-    # Note that Scylla does not support any earlier TLS protocol. If you
-    # try, you get mysterious EOF errors (see issue #6971) :-(
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     check_cql(ip, ssl_context)
 
 # Test that the Scylla REST API is serving.

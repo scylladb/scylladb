@@ -12,6 +12,12 @@ import signal
 import sqlalchemy
 from sqlalchemy.pool import StaticPool
 
+# Python 3.15 removed ssl.PROTOCOL_TLSv1_2. The kmip library references it
+# in TLS12AuthenticationSuite.__init__. Provide a shim so the import (and
+# super().__init__) doesn't crash. We override _protocol immediately after.
+if not hasattr(ssl, 'PROTOCOL_TLSv1_2'):
+    ssl.PROTOCOL_TLSv1_2 = ssl.PROTOCOL_TLS_SERVER
+
 from kmip.services import auth
 from kmip.services.server.server import KmipServer, build_argument_parser, exceptions
 
