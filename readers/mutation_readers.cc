@@ -42,7 +42,7 @@ mutation_reader make_delegating_reader(mutation_reader& r) {
 namespace {
 class partition_slicer {
 public:
-    using fragment_consumer = std::function<void(mutation_fragment_v2)>;
+    using fragment_consumer = utils::wrapped_function<void(mutation_fragment_v2)>;
 private:
     schema_ptr _schema;
     reader_permit _permit;
