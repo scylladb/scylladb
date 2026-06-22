@@ -249,7 +249,24 @@ future<semaphore_units<>> client::claim_memory(size_t size, abort_source* as) {
     return get_units(_memory, size);
 }
 
-client::group_client::group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
+client::group_client::group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn)
+        : http(std::move(f), max_conn)
+        , write_slots(max_conn)
+        , max_connections(max_conn) {
+}
+
+future<> client::group_client::set_max_connections(unsigned nr) {
+    // Keep the write-slots semaphore in sync with the connection limit. Growing
+    // the pool releases the extra slots; shrinking consumes them. consume() may
+    // drive the count negative when slots are currently held -- new acquirers
+    // then simply wait until enough in-flight uploads complete.
+    if (nr > max_connections) {
+        write_slots.signal(nr - max_connections);
+    } else if (nr < max_connections) {
+        write_slots.consume(max_connections - nr);
+    }
+    max_connections = nr;
+    return http.set_maximum_connections(nr);
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -340,14 +357,14 @@ future<> client::rebalance_connections() {
                   total_shares,
                   _cfg->connections_per_shard,
                   max_connections);
-        co_await gc.http.set_maximum_connections(max_connections);
+        co_await gc.set_max_connections(max_connections);
     }
 
     // Assign remainder to the group with the most shares
     unsigned remainder;
     if (!__builtin_sub_overflow(_cfg->connections_per_shard, total_assigned, &remainder) && remainder > 0) {
         s3l.debug("Assigning {} remainder connections to scheduling group '{}'", remainder, max_shares_sg.name());
-        co_await _https.at(max_shares_sg).http.set_maximum_connections(max_shares_connections + remainder);
+        co_await _https.at(max_shares_sg).set_max_connections(max_shares_connections + remainder);
     }
 }
 
@@ -813,6 +830,12 @@ protected:
     named_gate _bg_flushes;
     std::optional<tag> _tag;
     seastar::abort_source* _as;
+    // Per-sink cap on the number of parts uploaded concurrently. Layered on top
+    // of the group's shared write_slots so that a single sink can't grab the
+    // whole per-scheduling-group connection budget and starve other sinks
+    // (flushes / compactions) in the same group. Also bounds this sink's
+    // in-flight producer buffers to _max_multipart_concurrency * part_size.
+    seastar::semaphore _inflight_parts{_max_multipart_concurrency};
 
     future<> start_upload();
     future<> finalize_upload();
@@ -1049,7 +1072,25 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         co_await start_upload();
     }
 
-    auto claim = co_await _client->claim_memory(bufs.size(), _as);
+    // Reserve two slots *before* launching the background request, both held
+    // until the whole request completes (a connection is busy until the
+    // response arrives -- see the finally() at the end):
+    //
+    //  - _inflight_parts: a per-sink cap, so this single sink can never hold
+    //    more than _max_multipart_concurrency parts in flight and thus can't
+    //    monopolize the group's connection budget and starve other sinks
+    //    (flushes / compactions) sharing the same scheduling group.
+    //  - gc.write_slots: the shared per-scheduling-group budget, whose count
+    //    equals the number of HTTP connections configured for the group, so
+    //    the total parts in flight across all sinks -- and therefore the
+    //    aggregate producer-owned buffers we hold -- is bounded by the
+    //    connection budget.
+    //
+    auto sink_slot = _as ? co_await get_units(_inflight_parts, 1, *_as)
+                         : co_await get_units(_inflight_parts, 1);
+    auto& gc = co_await _client->find_or_create_client();
+    auto slot = _as ? co_await get_units(gc.write_slots, 1, *_as)
+                    : co_await get_units(gc.write_slots, 1);
 
     unsigned part_number = _part_etags.size();
     _part_etags.emplace_back();
@@ -1059,7 +1100,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     req._headers["Content-Length"] = seastar::format("{}", size);
     req.set_query_param("partNumber", seastar::format("{}", part_number + 1));
     req.set_query_param("uploadId", _upload_id);
-    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs), p = std::move(claim)] (output_stream<char>&& out_) mutable -> future<> {
+    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);
         std::exception_ptr ex;
         s3l.trace("upload {} part data (upload id {})", part_number, _upload_id);
@@ -1075,8 +1116,6 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        // note: At this point the buffers are sent, but the response is not yet
-        // received. However, claim is released and next part may start uploading
     });
 
     // Do upload in the background so that several parts could go in parallel.
@@ -1084,9 +1123,10 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     // before checking the progress.
     //
     // Upload parallelizm is managed per-sched-group -- client maintains a set
-    // of http clients each with its own max-connections. When upload happens it
-    // will naturally be limited with the relevant http client's connections
-    // limit not affecting other groups' requests concurrency
+    // of http clients each with its own max-connections, mirrored by the
+    // write_slots semaphore reserved above. When upload happens it will
+    // naturally be limited with the relevant http client's connections limit
+    // not affecting other groups' requests concurrency.
     //
     // In case part upload goes wrong and doesn't happen, the _part_etags[part]
     // is not set, so the finalize_upload() sees it and aborts the whole thing.
@@ -1100,7 +1140,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-    }).finally([gh = std::move(gh)] {});
+    }).finally([gh = std::move(gh), slot = std::move(slot), sink_slot = std::move(sink_slot)] {});
 }
 
 future<> client::multipart_upload::abort_upload() {
