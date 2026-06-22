@@ -2650,7 +2650,6 @@ def testTokenFctRejectsInvalidColumnCount(cql, test_keyspace):
 # name as a built-in and is compatible with the argument types in a function
 # call, Scylla should prefer the UDF over the built-in (which, if used, will
 # just result in an error like "2 required but 1 provided").
-@pytest.mark.xfail(reason="SCYLLADB-2799: Scylla doesn't prefer UDF over built-in system function when argument types are compatible")
 def testCreatingUDFWithSameNameAsBuiltin_PrefersCompatibleArgs_SameKeyspace(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
         lang = "lua" if is_scylla(cql) else "java"
