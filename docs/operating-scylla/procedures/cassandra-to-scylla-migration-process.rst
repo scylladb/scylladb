@@ -218,8 +218,6 @@ If the node that failed was a node you were loading sstables to, then the sstabl
 Notes, Limitations and Known Issues
 -----------------------------------
 
-#. The ``Duration`` data type is only supported in ScyllaDB 2.1 and later (`issue-2240 <https://github.com/scylladb/scylla/issues/2240>`_). This is relevant only when migrating from Apache Cassandra 3.X.
-
 #. Changes in table schema from Apache Cassandra 3.0 that requires adjustments for ScyllaDB 2.x, 1.x table schema:
 
    - Changes in create table (`issue-8384 <https://issues.apache.org/jira/browse/CASSANDRA-8384>`_)
