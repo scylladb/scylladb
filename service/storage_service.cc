@@ -6012,7 +6012,30 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     }
 }
 
+future<utils::UUID> storage_service::submit_quiesce_topology_request() {
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+        auto request_id = guard.new_group0_state_id();
 
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.queue_global_topology_request_id(request_id);
+
+        topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+        rtbuilder.set("done", false)
+                 .set("request_type", global_topology_request::quiesce);
+
+        topology_change change{{builder.build(), rtbuilder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
+            ::format("quiesce topology request from {}", _group0->group0_server().id()));
+
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            co_return request_id;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("quiesce: concurrent modification while submitting request, retrying");
+        }
+    }
+}
 
 future<> storage_service::await_topology_quiesced() {
     auto holder = _async_gate.hold();
@@ -6025,8 +6048,33 @@ future<> storage_service::await_topology_quiesced() {
         co_return;
     }
 
-    co_await _group0->group0_server().read_barrier(&_group0_as);
-    co_await _topology_state_machine.await_not_busy();
+    if (!_feature_service.quiesce_topology_enhanced
+            || !_feature_service.topology_global_request_queue) {
+        // Old behavior — fallback for mixed-version clusters.
+        co_await _group0->group0_server().read_barrier(&_group0_as);
+        co_await _topology_state_machine.await_not_busy();
+        co_return;
+    }
+
+    // New behavior — submit a topology request and retry until the
+    // coordinator observes an empty tablet balance plan with fresh stats.
+    while (true) {
+        auto request_id = co_await submit_quiesce_topology_request();
+        auto error = co_await wait_for_topology_request_completion(request_id);
+        if (error.empty()) {
+            co_return;
+        }
+        if (error.starts_with("quiesce request failed")) {
+            slogger.warn("quiesce request {}: {}", request_id, error);
+        } else {
+            slogger.debug("quiesce request {}: topology not idle: {}", request_id, error);
+        }
+        // Wait locally for topology to settle before resubmitting.
+        co_await _topology_state_machine.await_not_busy();
+        co_await _topology_state_machine.event.when([this] {
+            return get_token_metadata_ptr()->tablets().is_idle();
+        });
+    }
 }
 
 future<bool> storage_service::verify_topology_quiesced(token_metadata::version_t expected_version) {

@@ -971,6 +971,7 @@ public:
     future<> restore_tablets(table_id, sstring snap_name, sstring endpoint, sstring bucket);
     future<> set_tablet_balancing_enabled(bool);
 
+    future<utils::UUID> submit_quiesce_topology_request();
     future<> await_topology_quiesced();
     // Verifies topology is not busy, and also that topology version hasn't changed since the one provided
     // by the caller.

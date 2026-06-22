@@ -965,6 +965,20 @@ public:
     size_t external_memory_usage() const;
     bool has_replica_on(host_id) const;
 
+    // Returns true if no table has a pending resize decision (split or merge)
+    // that replicas are still processing locally. A table may have needs_split()
+    // or needs_merge() set while replicas compact/prepare, but the balancer won't
+    // include it in the plan until all replicas report readiness. This check
+    // catches the window where plan.empty() is true but work is still in progress.
+    bool is_idle() const {
+        for (auto& [table, tmap_ptr] : _tablets) {
+            if (tmap_ptr->has_transitions() || tmap_ptr->needs_split() || tmap_ptr->needs_merge()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // get all tables with their tablet maps, including both base and children tables.
     // for a child table we get the tablet map of the base table.
     const table_to_tablet_map& all_tables_ungrouped() const { return _tablets; }
