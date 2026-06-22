@@ -669,11 +669,15 @@ def testSelectWithToken(cql, test_keyspace):
         assert_invalid(cql, table, "select * from %s where token(key) > token(int(3030343330393233)) limit 1")
 
 # Migrated from cql_tests.py:TestCQL.clustering_order_and_functions_test()
+# NOTE: The original test used dateOf() but this name was deprecated in favor
+# of toDate() in Cassandra 3, CASSANDRA-9229, and removed from Cassandra 5
+# (CASSANDRA-18328), so the test was updated to use toDate(), which is
+# supported by both Cassandra and Scylla.
 def testFunctionsWithClusteringDesc(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, t timeuuid, PRIMARY KEY (k, t) ) WITH CLUSTERING ORDER BY (t DESC)") as table:
         for i in range(5):
             execute(cql, table, "INSERT INTO %s (k, t) VALUES (?, now())", i)
-        execute(cql, table, "SELECT dateOf(t) FROM %s")
+        execute(cql, table, "SELECT toDate(t) FROM %s")
 
 # Migrated from cql_tests.py:TestCQL.select_with_alias_test()
 def testSelectWithAlias(cql, test_keyspace):
