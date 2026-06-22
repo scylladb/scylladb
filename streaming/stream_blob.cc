@@ -252,7 +252,8 @@ future<> stream_blob_handler(replica::database& db,
         // Reject any file_ops that is not support by this node
         if (meta.fops != streaming::file_ops::stream_sstables &&
             meta.fops != streaming::file_ops::load_sstables &&
-            meta.fops != streaming::file_ops::stream_logstor_segments) {
+            meta.fops != streaming::file_ops::stream_logstor_segments &&
+            meta.fops != streaming::file_ops::reference_sstable) {
             auto msg = format("fstream[{}] Unsupported file_ops={} peer={} file={}",
                     meta.ops_id, int(meta.fops), from, meta.filename);
             blogger.warn("{}", msg);
@@ -297,6 +298,10 @@ future<> stream_blob_handler(replica::database& db,
                 blogger.debug("fstream[{}] Follower got stream_blob_cmd::end_of_stream from peer={} file={}",
                         meta.ops_id, from, meta.filename);
                 got_end_of_stream = true;
+            } else if (cmd == streaming::stream_blob_cmd::reference) {
+                blogger.debug("fstream[{}] Follower got stream_blob_cmd::reference from peer={} file={}",
+                        meta.ops_id, from, meta.filename);
+                got_end_of_stream = true;
             } else if (cmd == streaming::stream_blob_cmd::data) {
                 std::optional<streaming::stream_blob_data> data = std::move(cmd_data.data);
                 if (data) {
@@ -330,8 +335,10 @@ future<> stream_blob_handler(replica::database& db,
         }
 
         status->check_valid_stream();
-        co_await fstream->flush();
-        co_await fstream->close();
+        if (fstream) {
+            co_await fstream->flush();
+            co_await fstream->close();
+        }
         fstream_closed = true;
 
         may_inject_error(meta, inject_errors, "flush_and_close");
@@ -476,6 +483,45 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
                 },
                 std::move(out)
             };
+        } else if (meta.fops == file_ops::reference_sstable) {
+            blogger.debug("reference_sstable[{}] Creating sstable reference on shard {}", meta.ops_id, meta.dst_shard_id);
+            if (!meta.sstable_meta) {
+                throw std::runtime_error(format("reference_sstable[{}] missing sstable_meta", meta.ops_id));
+            }
+            auto sst_meta = *meta.sstable_meta;
+            co_return output_result{
+                [&meta, &db, sst_meta](store_result res) -> future<> {
+                    if (res != store_result::ok) {
+                        co_return;
+                    }
+                    auto shard = meta.dst_shard_id;
+                    auto table_id = meta.table;
+                    auto ops_id = meta.ops_id;
+                    co_await db.container().invoke_on(shard, [table_id, sst_meta, ops_id, shard] (replica::database& db) -> future<> {
+                        replica::table& t = db.find_column_family(table_id);
+                        auto erm = t.get_effective_replication_map();
+                        auto& sstm = t.get_sstables_manager();
+                        auto gen = t.get_sstable_generation_generator()();
+                        auto sid = optimized_optional<sstables::sstable_id>(sst_meta.id);
+
+                        // Create an sstable object with the shared sstable_id
+                        auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), gen, sid,
+                            sstables::sstable_state::normal, sst_meta.version, sst_meta.format);
+
+                        // Register the entry and create the reference
+                        co_await sst->clone(gen, /* leave_unsealed */ false);
+
+                        // Load the sealed sstable directly from storage
+                        co_await sst->load(erm->get_sharder(*t.schema()), sstables::sstable_open_config{});
+
+                        blogger.info("reference_sstable[{}] Loaded shared sstable_id={} generation={} on shard {}",
+                            ops_id, sst_meta.id, gen, shard);
+
+                        co_await t.add_new_sstable_and_update_cache(sst, [] (sstables::shared_sstable) { return make_ready_future<>(); });
+                    });
+                },
+                std::nullopt
+            };
         } else {
             throw std::runtime_error(format("Unexpected file_ops={} in stream_blob_handler", int(meta.fops)));
         }
@@ -554,7 +600,9 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             meta.filename = info.filename;
             meta.sstable_state = info.sstable_state;
             meta.sstable_meta = info.sstable_meta;
-            fstream = co_await info.source(stream_options);
+            if (info.fops != file_ops::reference_sstable) {
+                fstream = co_await info.source(stream_options);
+            }
         } catch (...) {
             blogger.warn("fstream[{}] Master failed sources={} targets={} error={}",
                 ops_id, sources, targets, std::current_exception());
@@ -577,6 +625,17 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             // This fiber sends data to peer node
             auto send_data_to_peer = [&] () mutable -> future<> {
                 try {
+                    if (meta.fops == file_ops::reference_sstable) {
+                        // For reference mode, just send the reference command — no data.
+                        for (auto& s : ss) {
+                            blogger.debug("fstream[{}] Master sending reference for file={} to node={}", ops_id, filename, s.node);
+                            co_await s.sink(streaming::stream_blob_cmd_data(streaming::stream_blob_cmd::reference));
+                            s.status_sent = true;
+                            co_await s.sink.close();
+                            s.sink_closed = true;
+                        }
+                        co_return;
+                    }
                     while (!got_error_from_peer) {
                         may_inject_error(meta, inject_errors, "read_data");
                         auto buf = co_await fstream->read_up_to(file_stream_buffer_size);
@@ -785,27 +844,37 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                 on_internal_error(blogger, format("sstable {} has no identifier", sst->get_filename()));
             }
 
-            auto sources = co_await create_stream_sources(sst_snapshot, reader);
-            auto newgen = fmt::to_string(sst_gen());
-
-            for (auto&& s : sources) {
-                auto oldname = s->component_basename();
-                auto newname = get_sstable_name_with_generation(req.ops_id, oldname, newgen);
-
-                blogger.debug("fstream[{}] Get name oldname={}, newname={}", req.ops_id, oldname, newname);
-
+            if (req.use_reference_sharing && table.get_storage_options().is_object_storage_type()) {
+                // For object storage, we only need to send a reference command.
+                // The receiver will create its own reference to the shared sstable.
                 auto& info = files.emplace_back();
-                info.fops = file_ops::stream_sstables;
+                info.fops = file_ops::reference_sstable;
                 info.sstable_state = sst_state;
                 info.sstable_meta = stream_sstable_meta{*sst_id, sst->get_version(), sst->get_format()};
-                info.filename = std::move(newname);
-                info.source = [s = std::move(s)](const file_input_stream_options& options) {
-                    return s->input(options);
-                };
-            }
-            // ensure we mark the end of each component sequence.
-            if (!files.empty()) {
-                files.back().fops = file_ops::load_sstables;
+                info.filename = sstables::sstable_version_constants::get_component_map(sst->get_version()).at(sstables::component_type::TOC);
+            } else {
+                auto sources = co_await create_stream_sources(sst_snapshot, reader);
+                auto newgen = fmt::to_string(sst_gen());
+
+                for (auto&& s : sources) {
+                    auto oldname = s->component_basename();
+                    auto newname = get_sstable_name_with_generation(req.ops_id, oldname, newgen);
+
+                    blogger.debug("fstream[{}] Get name oldname={}, newname={}", req.ops_id, oldname, newname);
+
+                    auto& info = files.emplace_back();
+                    info.fops = file_ops::stream_sstables;
+                    info.sstable_state = sst_state;
+                    info.sstable_meta = stream_sstable_meta{*sst_id, sst->get_version(), sst->get_format()};
+                    info.filename = std::move(newname);
+                    info.source = [s = std::move(s)](const file_input_stream_options& options) {
+                        return s->input(options);
+                    };
+                }
+                // ensure we mark the end of each component sequence.
+                if (!files.empty()) {
+                    files.back().fops = file_ops::load_sstables;
+                }
             }
         }
         auto sstable_nr = sstables.size();
@@ -842,7 +911,8 @@ future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id,
         seastar::shard_id dst_shard_id,
         netw::messaging_service& ms,
         abort_source& as,
-        service::frozen_topology_guard topo_guard) {
+        service::frozen_topology_guard topo_guard,
+        bool use_reference_sharing) {
     stream_files_response resp;
     std::exception_ptr error;
     try {
@@ -860,6 +930,7 @@ future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id,
             req.range = range;
             req.targets = std::vector<node_and_shard>{node_and_shard{dst_host, dst_shard_id}};
             req.topo_guard = topo_guard;
+            req.use_reference_sharing = use_reference_sharing;
             resp = co_await ser::streaming_rpc_verbs::send_tablet_stream_files(&ms, src_host, as, req);
         } catch (...) {
             error = std::current_exception();

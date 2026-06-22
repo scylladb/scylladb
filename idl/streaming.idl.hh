@@ -79,11 +79,14 @@ enum class stream_blob_cmd : uint8_t {
     error,
     data,
     end_of_stream,
+    reference,
 };
 
 enum class file_ops : uint16_t {
     stream_sstables,
     load_sstables,
+    stream_logstor_segments,
+    reference_sstable,
 };
 
 class stream_blob_data {
@@ -125,8 +128,8 @@ class stream_files_request {
     dht::token_range range;
     std::vector<streaming::node_and_shard> targets;
     service::frozen_topology_guard topo_guard;
+    bool use_reference_sharing;
 };
-
 class stream_files_response {
     size_t stream_bytes;
 };

@@ -5197,6 +5197,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
         auto& table = _db.local().find_column_family(tablet.table);
         const bool file_stream_enabled = _feature_service.file_stream && _db.local().get_config().enable_file_stream();
+        const bool reference_sharing_enabled = file_stream_enabled && _feature_service.sstable_reference_sharing;
         if (table.uses_logstor() && !file_stream_enabled) {
             throw std::runtime_error(fmt::format("Table {}.{} uses logstor, which requires file streaming to be enabled", table.schema()->ks_name(), table.schema()->cf_name()));
         }
@@ -5221,7 +5222,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                     auto& table = _db.local().find_column_family(tablet.table);
                     slogger.debug("stream_sstables[{}] Streaming for tablet {} of {} started table={}.{} range={} src={}",
                             ops_id, transition, tablet, table.schema()->ks_name(), table.schema()->cf_name(), range, src);
-                    auto resp = co_await streaming::tablet_stream_files(ops_id, table, range, src.host, dst_node, dst_shard_id, _messaging.local(), _abort_source, topo_guard);
+                    auto resp = co_await streaming::tablet_stream_files(ops_id, table, range, src.host, dst_node, dst_shard_id, _messaging.local(), _abort_source, topo_guard, reference_sharing_enabled);
                     stream_bytes = resp.stream_bytes;
                     slogger.debug("stream_sstables[{}] Streaming for tablet migration of {} successful", ops_id, tablet);
                     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
