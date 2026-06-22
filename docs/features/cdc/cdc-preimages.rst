@@ -196,7 +196,7 @@ returns:
 
 The preimage of ``v`` for the second update is ``{a252bb60-3f95-11eb-9a61-000000000001: 1, a252bb61-3f95-11eb-9a61-000000000001: 2}``. Performing a standard read before the second update would return the list ``[1, 2]``. Observe that this list can also be obtained from the preimage by listing the (key, value) pairs in the order shown in the preimage map and removing the keys.
 
-.. caution:: When using CDC with large collections, note that generating a preimage requires reading (and storing) the entire value, which may be costly.
+.. note:: When using CDC with large collections, note that generating a preimage requires reading (and storing) the entire value, which may be costly.
 
 Preimages vs concurrent writes
 ******************************
