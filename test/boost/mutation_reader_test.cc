@@ -3713,6 +3713,98 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_next_pos_is_partition_start) {
     BOOST_REQUIRE_LE(buf1.size(), 10);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_evictable_reader_buffer_overfill) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 0);
+    auto stop_sem = deferred_stop(semaphore);
+    simple_schema s;
+    auto schema = s.schema();
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
+
+    auto pks = s.make_pkeys(2);
+    const auto prange = dht::partition_range::make_open_ended_both_sides();
+
+    sstring value(1024, 'v');
+
+    std::deque<mutation_fragment_v2> frags;
+    uint32_t ck = 1000;
+
+    // first buffer
+    size_t first_buffer_size{0};
+
+    frags.emplace_back(*schema, permit, partition_start(pks[0], {}));
+    first_buffer_size += frags.back().memory_usage();
+    for (; ck < 1100; ++ck) {
+        frags.emplace_back(s.make_row_v2(permit, s.make_ckey(ck), value));
+        first_buffer_size += frags.back().memory_usage();
+    }
+
+    const uint32_t first_buffer_last_ck = ck - 1;
+
+    // second buffer
+    size_t second_buffer_size{0};
+
+    for (; ck < 1110; ++ck) {
+        frags.emplace_back(s.make_row_v2(permit, s.make_ckey(ck), value));
+        second_buffer_size += frags.back().memory_usage();
+    }
+
+    frags.emplace_back(*schema, permit, partition_end{});
+    second_buffer_size += frags.back().memory_usage();
+
+    frags.emplace_back(*schema, permit, partition_start(pks[1], {}));
+    second_buffer_size += frags.back().memory_usage();
+
+    ck = 0; // reset ck in new partition
+    BOOST_REQUIRE_LT(second_buffer_size, first_buffer_size); // sanity check
+
+    for  (; second_buffer_size < first_buffer_size; second_buffer_size += frags.back().memory_usage(), ++ck) {
+        frags.emplace_back(s.make_row_v2(permit, s.make_ckey(ck), value));
+    }
+
+    // pop enough rows to go back below first buffer size
+    second_buffer_size -= frags.back().memory_usage();
+    frags.pop_back();
+    // fill remaining room with range tombstone changes, so last fragment is a range tombstone change
+    for  (; second_buffer_size < first_buffer_size; second_buffer_size += frags.back().memory_usage(), ++ck) {
+        frags.emplace_back(*schema, permit, range_tombstone_change(position_in_partition::before_key(s.make_ckey(ck)), tombstone(s.new_timestamp(), {})));
+    }
+
+    // the below fragments should not make it into buffer 2, we add enough data here so the test can reliably detect overfill
+    frags.emplace_back(*schema, permit, range_tombstone_change(position_in_partition::before_key(s.make_ckey(ck)), tombstone()));
+    for (ck = 0; ck < 1000; ++ck) {
+        frags.emplace_back(s.make_row_v2(permit, s.make_ckey(ck), value));
+    }
+    frags.emplace_back(*schema, permit, partition_end{});
+
+    auto ms = mutation_source([&frags, first_buffer_size] (
+            schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& ps) {
+        auto rd = make_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(frags), pr, ps);
+        rd.set_max_buffer_size(first_buffer_size);
+        return rd;
+    });
+
+    auto tri_cmp = position_in_partition::tri_compare(*s.schema());
+
+    auto [rd, handle] = make_manually_paused_evictable_reader_v2(ms, schema, permit, prange, schema->full_slice(), {},
+            mutation_reader::forwarding::no);
+    auto stop_rd = deferred_close(rd);
+    rd.set_max_buffer_size(first_buffer_size);
+
+    testlog.info("first buffer fill");
+    rd.fill_buffer().get();
+
+    BOOST_REQUIRE_EQUAL(rd.buffer_size(), first_buffer_size);
+    auto first_buffer = rd.detach_buffer();
+    BOOST_REQUIRE_EQUAL(tri_cmp(first_buffer.back().position(), position_in_partition::for_key(s.make_ckey(first_buffer_last_ck))), std::strong_ordering::equal);
+
+    testlog.info("second buffer fill");
+    rd.fill_buffer().get();
+    BOOST_REQUIRE_LT(rd.buffer_size(), first_buffer_size + 2048);
+}
+
 struct mutation_bounds {
     std::optional<mutation> m;
     position_in_partition lower;
