@@ -192,11 +192,10 @@ seastar::file create_file_for_seekable_source(seekable_data_source src, seekable
             , _src_func(std::move(src_func))
         {}
         future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
-            co_await _source.seek(pos);
             size_t res = 0;
             auto dst = reinterpret_cast<char*>(buffer);
             while (len) {
-                auto buf = co_await _source.get(len);
+                auto buf = co_await _source.get_at(pos + res, len);
                 assert(buf.size() <= len);
                 if (buf.empty()) {
                     break;
