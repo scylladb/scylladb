@@ -1649,7 +1649,7 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
     }
 }
 
-void invoke_on_user_type(const data_type& t, const std::function<void(const user_type_impl&)>& f) {
+void invoke_on_user_type(const data_type& t, const utils::wrapped_function<void(const user_type_impl&)>& f) {
     if (t->is_user_type()) {
         const auto udt = dynamic_pointer_cast<const user_type_impl>(t);
 

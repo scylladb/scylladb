@@ -763,8 +763,8 @@ int collection_index_l(lua_State* l) {
         return 1;
     } else if (strcmp(field, "values") == 0) {
         const auto size = cmv.size();
-        std::function<void(size_t, managed_bytes_view)> push_key;
-        std::function<void(size_t, atomic_cell_view)> push_value;
+        utils::wrapped_function<void(size_t, managed_bytes_view)> push_key;
+        utils::wrapped_function<void(size_t, atomic_cell_view)> push_value;
         if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
             push_key = [l, t = t->name_comparator()] (size_t, managed_bytes_view k) {
                 k.with_linearized([&](bytes_view bv) {
