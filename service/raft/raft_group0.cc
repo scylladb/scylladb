@@ -452,13 +452,16 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
     auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm, enable_sm_immediately);
     auto& persistence = srv_for_group0.persistence;
     auto& server = *srv_for_group0.server;
-    co_await with_scheduling_group(_sg, [this, &srv_for_group0, group0_id] (this auto self) -> future<> {
-        _group0_sm = &dynamic_cast<group0_state_machine&>(srv_for_group0.state_machine);
+    co_await with_scheduling_group(_sg, [this, &srv_for_group0, group0_id, enable_sm_immediately] (this auto self) -> future<> {
+        auto& state_machine = dynamic_cast<group0_state_machine&>(srv_for_group0.state_machine);
         co_await _raft_gr.start_server_for_group(std::move(srv_for_group0));
         // Set _group0 immediately after the server is registered in _raft_gr._servers.
         // This ensures abort_and_drain()/destroy() can find and clean up the server
-        // even if enable_group0_state_machine() or later steps throw.
+        // even if enable_in_memory_state_machine() or later steps throw.
         _group0.emplace<raft::group_id>(group0_id);
+        if (!enable_sm_immediately) {
+            co_await state_machine.enable_in_memory_state_machine();
+        }
     });
 
     // Fix for scylladb/scylladb#16683:
@@ -475,11 +478,6 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
             group0_log.warn("Could not create new snapshot, there are no entries applied");
         }
     }
-}
-
-future<> raft_group0::enable_group0_state_machine() {
-    SCYLLA_ASSERT(_group0_sm);
-    co_await _group0_sm->enable_in_memory_state_machine();
 }
 
 future<> raft_group0::leadership_monitor_fiber() {
