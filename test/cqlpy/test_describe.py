@@ -107,6 +107,19 @@ def assert_element_listing(cql, elements, name_column, name_f):
 def test_keyspaces(cql, test_keyspace):
     assert_element_listing(cql, "keyspaces", "keyspace_name", lambda r: r.keyspace_name)
 
+# Contrasting with test_keyspaces_with_use(), a `DESC TABLES` should only
+# list tables inside a USEd keyspace - not all the tables in the database.
+def test_tables_with_use(cql, test_keyspace):
+    # Create a table in test_keyspace so the check below will see some
+    # table in the keyspace, not just an empty list.
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY") as table:
+        with new_cql(cql) as ncql:
+            ncql.execute(f"USE {test_keyspace}")
+            desc_tables = [x.name for x in ncql.execute("DESC TABLES")]
+            # Note expected are just tables inside test_keyspace, not all
+            # tables in the database.
+            expected_tables = [x.table_name for x in ncql.execute(f"SELECT table_name FROM system_schema.tables WHERE keyspace_name='{test_keyspace}'")]
+            assert sorted(expected_tables) ==  sorted(desc_tables)
 # Test that `DESC TABLES` contains all tables
 def test_tables(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "id int PRIMARY KEY"):
