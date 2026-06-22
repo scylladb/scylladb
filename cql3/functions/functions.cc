@@ -402,6 +402,42 @@ functions::get(data_dictionary::database db,
         }
     });
 
+    // For unqualified names, look for a UDF in the current keyspace before
+    // falling through to the built-in handlers below (see SCYLLADB-2799).
+    // An exact-matching UDF always wins. A sole weak-matching UDF wins over
+    // special-cased builtins (token, tojson, ...) that are not in _declared,
+    // but falls through to the candidates block for declared builtins so that
+    // the standard EXACT-beats-WEAK logic there can still pick the builtin.
+    // Note: for special-cased builtins, a weak UDF wins even if the builtin
+    // would be an exact match (e.g. token(blob) vs token(int)); this deviates
+    // from Cassandra, but is required because Scylla lacks Cassandra's
+    // preferred-type mechanism, which makes untyped literals (e.g. token(10))
+    // only a weak match for UDF parameters in Scylla.
+    if (!name.has_keyspace()) {
+        auto user_range = _declared.equal_range(function_name(keyspace, name.name));
+        shared_ptr<function> sole_weak_udf;
+        bool multiple_weak = false;
+        for (auto i = user_range.first; i != user_range.second; ++i) {
+            auto r = match_arguments(db, keyspace, schema.get(), i->second, provided_args, receiver_ks, receiver_cf);
+            if (r == assignment_testable::test_result::EXACT_MATCH) {
+                return i->second;
+            }
+            if (r == assignment_testable::test_result::WEAKLY_ASSIGNABLE) {
+                if (sole_weak_udf) {
+                    multiple_weak = true;
+                } else {
+                    sole_weak_udf = i->second;
+                }
+            }
+        }
+        if (sole_weak_udf && !multiple_weak) {
+            auto native_range = _declared.equal_range(name.as_native_function());
+            if (native_range.first == native_range.second) {
+                return sole_weak_udf;
+            }
+        }
+    }
+
     const auto func_name = name.has_keyspace() ? name : name.as_native_function();
     if (SIMILARITY_FUNCTIONS.contains(func_name)) {
         auto arg_types = retrieve_vector_arg_types(func_name, provided_args);
@@ -471,7 +507,9 @@ functions::get(data_dictionary::database db,
         }
     };
     if (!name.has_keyspace()) {
-        // add 'SYSTEM' (native) candidates
+        // Collect system (native) candidates and any UDFs with this name.
+        // Exact UDF matches are already handled by the early block above, so
+        // any UDF that reaches here will only contribute as a weak candidate.
         add_declared(name.as_native_function());
         add_declared(function_name(keyspace, name.name));
     } else {
