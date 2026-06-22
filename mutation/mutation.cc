@@ -213,7 +213,7 @@ class mutation_by_size_splitter {
     };
     const schema_ptr _schema;
     const size_t _max_size;
-    std::function<void(mutation)> _process_mutation;
+    utils::wrapped_function<void(mutation)> _process_mutation;
     std::optional<partition_state> _state;
     template <typename T>
     stop_iteration consume_fragment(T&& fragment) {
@@ -234,7 +234,7 @@ class mutation_by_size_splitter {
         return stop_iteration::no;
     }
 public:
-    mutation_by_size_splitter(schema_ptr schema, size_t max_size, std::function<void(mutation)> process_mutation)
+    mutation_by_size_splitter(schema_ptr schema, size_t max_size, utils::wrapped_function<void(mutation)> process_mutation)
         : _schema(std::move(schema))
         , _max_size(max_size)
         , _process_mutation(process_mutation)
@@ -319,8 +319,8 @@ namespace mutation_json {
 
 void mutation_partition_json_writer::write_each_collection_cell(collection_mutation_view cmv, data_type type,
         utils::wrapped_function<void(atomic_cell_view, data_type)> func) {
-    std::function<void(size_t, managed_bytes_view)> write_key;
-    std::function<void(size_t, atomic_cell_view)> write_value;
+    utils::wrapped_function<void(size_t, managed_bytes_view)> write_key;
+    utils::wrapped_function<void(size_t, atomic_cell_view)> write_value;
     if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
         write_key = [this, t = t->name_comparator()] (size_t, managed_bytes_view k) {
             k.with_linearized([&](bytes_view bv) { _writer.String(t->to_string(bv)); });
