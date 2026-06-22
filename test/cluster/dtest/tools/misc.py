@@ -10,6 +10,7 @@ import hashlib
 import logging
 import time
 from typing import TYPE_CHECKING
+from uuid import UUID
 from concurrent.futures import ThreadPoolExecutor
 
 if TYPE_CHECKING:
@@ -76,3 +77,31 @@ def set_trace_probability(nodes: list[ScyllaNode], probability_value: float) -> 
     with ThreadPoolExecutor(max_workers=len(nodes)) as executor:
         threads = [executor.submit(_set_trace_probability_for_node, node) for node in nodes]
         [thread.result() for thread in threads]
+
+
+def wait_for_view(cluster, session, ks, view, timeout=600):
+    """Wait until a materialized view has finished building on all live nodes."""
+    from cassandra import ConsistencyLevel
+    from cassandra.query import SimpleStatement
+
+    query = SimpleStatement(
+        f"SELECT host_id, status FROM system_distributed.view_build_status WHERE keyspace_name='{ks}' AND view_name='{view}'",
+        consistency_level=ConsistencyLevel.ONE,
+    )
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        done = set()
+        for row in session.execute(query):
+            if row.status == "SUCCESS":
+                done.add(row.host_id)
+        all_done = True
+        for node in cluster.nodelist():
+            if node.is_running() and UUID(node.hostid()) not in done:
+                all_done = False
+                break
+        if all_done:
+            return
+        time.sleep(1)
+
+    raise Exception(f"View {ks}.{view} not built within {timeout}s")

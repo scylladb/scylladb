@@ -232,6 +232,11 @@ class ScyllaCluster:
             if node.is_running():
                 node.flush()
 
+    def compact(self, keyspace: str = "", tables: list[str] | None = None) -> None:
+        for node in self.nodelist():
+            if node.is_running():
+                node.compact(keyspace=keyspace, tables=tables)
+
     @staticmethod
     def debug(message: str) -> None:
         logger.debug(message)

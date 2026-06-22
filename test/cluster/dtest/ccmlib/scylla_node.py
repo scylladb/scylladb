@@ -104,6 +104,7 @@ class ScyllaNode:
         self.data_center = server.datacenter
         self.rack = server.rack
 
+        self._hostid = None
         self._smp_set_during_test = None
         self._smp = None
         self._memory = None
@@ -465,6 +466,9 @@ class ScyllaNode:
         if wait_for_binary_proto:
             self.wait_for_binary_interface(from_mark=self.mark)
 
+        if not self._hostid:
+            self.hostid()
+
         if wait_other_notice:
             timeout = self.cluster.default_wait_other_notice_timeout
             for node, mark in marks:
@@ -584,11 +588,12 @@ class ScyllaNode:
         else:
             self.cluster.manager.api.flush_all_keyspaces(node_ip=self.address())
 
-    def compact(self, keyspace: str = "", tables: str | None = ()) -> None:
+    def compact(self, keyspace: str = "", tables: list[str] | None = None) -> None:
         compact_cmd = ["compact"]
         if keyspace:
             compact_cmd.append(keyspace)
-        compact_cmd += tables
+        if tables:
+            compact_cmd.extend(tables)
         self.nodetool(" ".join(compact_cmd))
 
     def drain(self, block_on_log: bool = False) -> None:
@@ -761,10 +766,13 @@ class ScyllaNode:
         assert timeout is None, "argument `timeout` is not supported"  # not used in scylla-dtest
         assert force_refresh is None, "argument `force_refresh` is not supported"  # not used in scylla-dtest
 
-        try:
-            return self.cluster.manager.get_host_id(server_id=self.server_id)
-        except Exception as exc:
-            self.error(f"Failed to get hostid: {exc}")
+        if not self._hostid:
+            try:
+                self._hostid = self.cluster.manager.get_host_id(server_id=self.server_id)
+            except Exception as exc:
+                self.error(f"Failed to get hostid: {exc}")
+
+        return self._hostid
 
     def rmtree(self, path: str | Path) -> None:
         """Delete a directory content without removing the directory.
