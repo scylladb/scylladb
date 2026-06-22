@@ -218,18 +218,7 @@ If the node that failed was a node you were loading sstables to, then the sstabl
 Notes, Limitations and Known Issues
 -----------------------------------
 
-#. The ``Duration`` data type is only supported in ScyllaDB 2.1 and later (`issue-2240 <https://github.com/scylladb/scylla/issues/2240>`_). This is relevant only when migrating from Apache Cassandra 3.X.
-
-#. Changes in table schema from Apache Cassandra 3.0 that requires adjustments for ScyllaDB 2.x, 1.x table schema:
-
-   - Changes in create table (`issue-8384 <https://issues.apache.org/jira/browse/CASSANDRA-8384>`_)
-   - ``crc_check_chance`` out of compression options (`issue-9839 <https://issues.apache.org/jira/browse/CASSANDRA-9839>`_)
-
-#. ScyllaDB 2.x CQL client ``cqlsh`` does not display the millisecond values of a ``timestamp`` data type. (`scylla-tools-java/issues #36 <https://github.com/scylladb/scylla-tools-java/issues/36>`_)
-
-#. ``Nodetool tablestats`` partition keys (estimated) number in ScyllaDB, post migration from Apache Cassandra, differs by 20% less up to 120% more than the original amount in Cassandra (`issue-2545 <https://github.com/scylladb/scylla/issues/2545>`_)
-
-#. ScyllaDB 2.x is using Apache Cassandra 2.x file format. This means that migrating from Apache Cassandra 3.x to ScyllaDB 2.x will result in a different storage space of the same data on the ScyllaDB cluster. ScyllaDB 3.x uses the same format as Cassandra 3.x
+#. In older ScyllaDB releases, the estimated partition count reported by ``nodetool tablestats`` could differ significantly from Apache Cassandra because the value is derived from estimation algorithms rather than exact counts. This discrepancy did not indicate data loss. (`issue-2545 <https://github.com/scylladb/scylla/issues/2545>`_)
 
 Counters
 ^^^^^^^^
