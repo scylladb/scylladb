@@ -199,6 +199,17 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
         co_await coroutine::return_exception(exceptions::invalid_request_exception("Full-text search query term must not be null"));
     }
 
+    const auto has_bm25_lhs = [](const expr::binary_operator& o) {
+        return expr::is_bm25_function_call(o.lhs);
+    };
+    const auto* where_binop = expr::find_binop(_restrictions->get_nonprimary_key_restrictions(), has_bm25_lhs)
+                                      ?: expr::find_binop(_restrictions->get_clustering_columns_restrictions(), has_bm25_lhs);
+    const auto& fc = expr::as<expr::function_call>(where_binop->lhs);
+    const auto where_search_term_val = expr::evaluate(fc.args[1], options);
+    if (where_search_term_val != search_term_val) {
+        throw exceptions::invalid_request_exception("Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
+    }
+
     auto search_term_bytes = std::move(search_term_val).to_bytes();
     sstring search_term_text = value_cast<sstring>(utf8_type->deserialize(search_term_bytes));
 

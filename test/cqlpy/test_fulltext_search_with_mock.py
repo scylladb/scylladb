@@ -73,6 +73,40 @@ def test_fts_bind_markers_execute(cql, fts_setup_with_mock):
     assert [r.id for r in rows] == RESPONSE_PK_REVERSED
 
 
+def test_bm25_mixed_constant_and_bind_marker_search_term(cql, fts_setup_with_mock):
+    """Both WHERE and ORDER BY must use the same search term, even if that term is a bind marker."""
+    table, _ = fts_setup_with_mock
+
+    stmt = cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, ?) LIMIT {NUM_ROWS}")
+    with pytest.raises(InvalidRequest, match="same search term"):
+        cql.execute(stmt, ['world'])
+    cql.execute(stmt, ['hello'])
+
+    stmt = cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, ?) > 0 ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}")
+    with pytest.raises(InvalidRequest, match="same search term"):
+        cql.execute(stmt, ['world'])
+    cql.execute(stmt, ['hello'])
+
+
+def test_bm25_two_bind_markers_search_term(cql, fts_setup_with_mock):
+    """Both WHERE and ORDER BY must use the same search term, even if both are bind markers."""
+    table, _ = fts_setup_with_mock
+
+    stmt = cql.prepare(f"SELECT * FROM {table} WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT {NUM_ROWS}")
+    with pytest.raises(InvalidRequest, match="same search term"):
+        cql.execute(stmt, ['hello', 'world'])
+    cql.execute(stmt, ['hello', 'hello'])
+
+
+def test_bm25_named_bind_markers_search_term(cql, fts_setup_with_mock):
+    """BM25 query with named bind markers (:name) should execute."""
+    table, _ = fts_setup_with_mock
+
+    stmt = cql.prepare(f"SELECT id FROM {table} WHERE BM25(content, :term) > 0 ORDER BY BM25(content, :term) LIMIT {NUM_ROWS}")
+    rows = list(cql.execute(stmt, {"term": "hello"}))
+    assert [r.id for r in rows] == RESPONSE_PK_REVERSED
+
+
 def test_fts_request_sent_to_correct_endpoint(cql, test_keyspace, vector_store_mock, fts_setup_with_mock):
     """Scylla must POST to /api/v1/indexes/<ks>/<idx>/bm25 with the query term and limit."""
     table, idx = fts_setup_with_mock

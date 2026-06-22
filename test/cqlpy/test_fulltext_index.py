@@ -589,6 +589,12 @@ def test_bm25_different_columns_rejected(cql, test_keyspace):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'world') LIMIT 1")
 
 
+def test_bm25_different_search_terms_rejected(cql, fulltext_table):
+    """WHERE BM25 and ORDER BY BM25 with different search terms must be rejected."""
+    with pytest.raises(InvalidRequest, match="same search term"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'world') LIMIT 1")
+
+
 def test_bm25_literal_as_column_reference_rejected(cql, fulltext_table):
     """BM25 with a string literal as the first argument must be rejected with a clear error."""
     with pytest.raises(InvalidRequest, match="First argument to BM25 must be a column"):
