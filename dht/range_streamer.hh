@@ -132,7 +132,8 @@ private:
     std::unordered_map<locator::host_id, dht::token_range_vector>
     get_range_fetch_map(const std::unordered_map<dht::token_range, std::vector<locator::host_id>>& ranges_with_sources,
                         const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
-                        const sstring& keyspace);
+                        const sstring& keyspace,
+                        const locator::vnode_effective_replication_map* erm);
 
 #if 0
 

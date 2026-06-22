@@ -29,7 +29,8 @@ using inet_address = gms::inet_address;
 std::unordered_map<locator::host_id, dht::token_range_vector>
 range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, std::vector<locator::host_id>>& ranges_with_sources,
                                     const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
-                                    const sstring& keyspace) {
+                                    const sstring& keyspace,
+                                    const locator::vnode_effective_replication_map* erm) {
     std::unordered_map<locator::host_id, dht::token_range_vector> range_fetch_map_map;
     const auto& topo = _token_metadata_ptr->get_topology();
     for (const auto& x : ranges_with_sources) {
@@ -62,8 +63,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
         }
 
         if (!found_source) {
-            auto& ks = _db.local().find_keyspace(keyspace);
-            auto rf = ks.get_static_effective_replication_map()->get_replication_factor();
+            auto rf = erm->get_replication_factor();
             // When a replacing node replaces a dead node with keyspace of RF
             // 1, it is expected that replacing node could not find a peer node
             // that contains data to stream from.
@@ -232,7 +232,7 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::stati
         }
     }
 
-    std::unordered_map<locator::host_id, dht::token_range_vector> range_fetch_map = get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name);
+    std::unordered_map<locator::host_id, dht::token_range_vector> range_fetch_map = get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name, erm);
     utils::clear_gently(ranges_for_keyspace).get();
 
     if (logger.is_enabled(logging::log_level::debug)) {
