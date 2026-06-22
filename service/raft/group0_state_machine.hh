@@ -234,12 +234,16 @@ class group0_state_machine : public raft_state_machine {
     // mutations of a single command atomically, in a single commitlog entry -
     // therefore, we should not observe broken invariants in the schema module.
     bool _in_memory_state_machine_enabled;
+    // Whether non-system keyspaces are loaded, so the in-memory state built
+    // from their schemas (see do_reload_schema_dependent_state()) can be loaded.
+    bool _schema_dependent_state_enabled;
 
     modules_to_reload get_modules_to_reload(const utils::chunked_vector<canonical_mutation>& mutations);
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
     future<> reload_state();
     future<> sync_audit_known_entities();
+    future<> do_reload_schema_dependent_state();
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
             gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately);
@@ -250,6 +254,10 @@ public:
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override;
     future<> abort() override;
     future<> enable_in_memory_state_machine();
+    // Load the in-memory state built from non-system table schemas. Called
+    // once non-system keyspaces are loaded; reload_state() includes this
+    // state from then on.
+    future<> reload_schema_dependent_state();
 };
 
 bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db);

@@ -38,6 +38,7 @@
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "mutation/timestamp.hh"
+#include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
 #include "utils/error_injection.hh"
@@ -60,7 +61,8 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
     , _gate("group0_state_machine")
     , _state_id_handler(ss._topology_state_machine, sp.local_db(), gossiper)
     , _feature_service(feat)
-    , _in_memory_state_machine_enabled(enable_immediately || utils::get_local_injector().is_enabled("group0_enable_sm_immediately")) {
+    , _in_memory_state_machine_enabled(enable_immediately || utils::get_local_injector().is_enabled("group0_enable_sm_immediately"))
+    , _schema_dependent_state_enabled(enable_immediately) {
     _state_id_handler.run();
 }
 
@@ -488,6 +490,19 @@ future<> group0_state_machine::enable_in_memory_state_machine() {
     }
 }
 
+future<> group0_state_machine::reload_schema_dependent_state() {
+    SCYLLA_ASSERT(_in_memory_state_machine_enabled);
+    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
+    _schema_dependent_state_enabled = true;
+    co_await do_reload_schema_dependent_state();
+}
+
+future<> group0_state_machine::do_reload_schema_dependent_state() {
+    // we assume that the apply mutex is held and that non-system keyspaces are loaded
+    co_await _ss.view_building_transition();
+    co_await sync_audit_known_entities();
+}
+
 future<> group0_state_machine::sync_audit_known_entities() {
     if (audit::audit::audit_instance().local_is_initialized()) {
         std::unordered_set<sstring> known_roles;
@@ -511,7 +526,6 @@ future<> group0_state_machine::reload_state() {
     // we assume that the apply mutex is held, topology_state_load applies
     // persisted state machine into memory so it needs to be protected with it
     co_await _ss.topology_state_load();
-    co_await _ss.view_building_state_load();
     if (_feature_service.compression_dicts) {
         co_await _ss.compression_dictionary_updated_callback_all();
     }
@@ -520,11 +534,16 @@ future<> group0_state_machine::reload_state() {
         co_await _ss.load_cdc_streams();
     }
     co_await _ss.auth_cache().load_all();
-
-    co_await sync_audit_known_entities();
+    // State built from non-system table schemas belongs in
+    // do_reload_schema_dependent_state(): on restart the state machine is
+    // enabled before non-system keyspaces are loaded, and that state is
+    // loaded only once they are. The audit known roles come from the auth
+    // cache loaded above.
+    if (_schema_dependent_state_enabled) {
+        co_await do_reload_schema_dependent_state();
+    }
 
     _ss._topology_state_machine.event.broadcast();
-    _ss._view_building_state_machine.event.broadcast();
 }
 
 future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) {

@@ -2220,8 +2220,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             if (!group0_service.maintenance_mode() && sys_ks.local().bootstrap_complete()) {
                 // Start group0 raft server early so that its log is replayed and
                 // mutations are applied to system tables before non-system keyspaces
-                // are loaded. The in-memory state machine is enabled later, after
-                // all its dependencies are initialized.
+                // are loaded. start_server_for_group0() then enables the in-memory
+                // state machine, so the in-memory group0 state (topology, tablet
+                // metadata, service levels, ...) is consistent with the persisted one
+                // before the rest of startup relies on it.
                 group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
             }
 
@@ -2542,18 +2544,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             db.local().enable_autocompaction_toggle();
 
             if (!group0_service.maintenance_mode() && sys_ks.local().bootstrap_complete() && group0_service.joined_group0()) {
-                // Enable the in-memory state machine now that non-system keyspaces
-                // are loaded — reload_state() reads tablet metadata and view building
-                // state which reference user table schemas.
-                group0_service.enable_group0_state_machine().get();
+                // The in-memory group0 state machine was enabled before non-system
+                // keyspaces were loaded, so the state built from their schemas is
+                // loaded only now.
+                group0_service.reload_schema_dependent_state().get();
             }
 
             cluster_config_manager.local().refresh().get();
 
-            // The call to enable_group0_state_machine() above guarantees that, if group0 is
-            // created and started, the locally persisted group0 state has been applied
-            // before it returns. As a result, tablet Raft groups are started using
-            // tablet metadata that is at least as recent as the locally persisted version.
+            // By this point the in-memory group0 state machine is enabled and the
+            // locally persisted group0 state has been applied:
+            // - Restart path: setup_group0_if_exist() enabled it before loading
+            //   non-system keyspaces (above).
+            // - Join path: start_server_for_group0() is called with enable_sm_immediately=true
+            //   in join_group0(), so the state machine is active from construction and
+            //   the raft log is fully replayed synchronously during server startup.
+            // As a result, tablet Raft groups are started using tablet metadata that is
+            // at least as recent as the locally persisted version.
             // groups_manager::start() starts all these Raft groups, so when we begin
             // RPC messaging below, the system is ready to accept proxied requests
             // from other replicas.
