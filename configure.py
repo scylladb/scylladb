@@ -532,6 +532,7 @@ scylla_tests = set([
     'test/boost/advanced_rpc_compressor_test',
     'test/boost/allocation_strategy_test',
     'test/boost/alternator_unit_test',
+    'test/boost/alternator_export_test',
     'test/boost/anchorless_list_test',
     'test/boost/auth_passwords_test',
     'test/boost/audit_rule_test',
@@ -684,6 +685,7 @@ scylla_tests = set([
     'test/manual/streaming_histogram_test',
     'test/manual/bti_cassandra_compatibility_test',
     'test/manual/sstable_scan_footprint_test',
+    'test/manual/s3_storage_roundtrip_test',
     'test/perf/memory_footprint_test',
     'test/perf/perf_cache_eviction',
     'test/perf/perf_commitlog',
@@ -1473,7 +1475,8 @@ alternator = [
        'alternator/auth.cc',
        'alternator/streams.cc',
        'alternator/ttl.cc',
-       'alternator/http_compression.cc'
+       'alternator/http_compression.cc',
+       'alternator/export.cc'
 ]
 
 idls = ['idl/gossip_digest.idl.hh',
