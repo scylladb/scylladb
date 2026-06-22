@@ -44,11 +44,19 @@ using error_injection_parameters = std::unordered_map<sstring, sstring>;
 // in class error_injection below). Parameters:
 // timeout - the timeout after which the pause is aborted
 // as (optional) - abort_source used to abort the pause
+// in class error_injection below). Parameters:
+// timeout - the timeout after which the pause is aborted
+// as (optional) - abort_source used to abort the pause
+// share - if true (default), injection handlers share received messages:
+//         every message can be received by all handlers (even if they start
+//         waiting in the future). If false, only one handler can receive a
+//         specific message; other handlers will wait for new messages.
 struct wait_for_message {
     std::chrono::milliseconds timeout;
-    abort_source* as = nullptr;
-    wait_for_message(std::chrono::milliseconds tmo) noexcept : timeout(tmo) {}
-    wait_for_message(std::chrono::milliseconds tmo, abort_source* a) noexcept : timeout(tmo), as(a) {}
+    abort_source* as;
+    bool share;
+    wait_for_message(std::chrono::milliseconds tmo, abort_source* a = nullptr, bool share_ = true) noexcept
+        : timeout(tmo), as(a), share(share_) {}
 };
 
 /**
@@ -142,6 +150,8 @@ class error_injection {
     struct injection_shared_data {
         size_t received_message_count{0};
         size_t shared_read_message_count{0};
+        size_t waiter_count{0};
+        bool disabled{false};
         condition_variable received_message_cv;
         error_injection_parameters parameters;
         sstring injection_name;
@@ -216,6 +226,9 @@ public:
 
             try {
                 co_await _shared_data->received_message_cv.wait(timeout, [&] {
+                    if (_shared_data->disabled) {
+                        return true;
+                    }
                     if (as) {
                         as->check();
                     }
@@ -380,10 +393,24 @@ public:
     }
 
     void disable(const std::string_view& injection_name) {
-        _enabled.erase(injection_name);
+        errinj_logger.debug("Disabling injection \"{}\"", injection_name);
+        auto it = _enabled.find(injection_name);
+        if (it != _enabled.end()) {
+            // Release any handlers currently waiting for messages on this
+            // injection. They hold a shared_ptr to the shared_data, so it
+            // stays alive after we erase the map entry.
+            it->second.shared_data->disabled = true;
+            it->second.shared_data->received_message_cv.broadcast();
+            _enabled.erase(it);
+        }
     }
 
     void disable_all() {
+        errinj_logger.debug("Disabling all injections");
+        for (auto& [_, data] : _enabled) {
+            data.shared_data->disabled = true;
+            data.shared_data->received_message_cv.broadcast();
+        }
         _enabled.clear();
     }
 
@@ -482,7 +509,7 @@ public:
             errinj_logger.info("{}: waiting for message", name);
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + wfm.timeout, wfm.as);
             errinj_logger.info("{}: message received", name);
-        });
+        }, wfm.share);
     }
 
     template <typename T = std::string_view>

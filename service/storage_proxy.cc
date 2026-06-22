@@ -1571,6 +1571,10 @@ public:
         if (cancellable) {
             register_cancellable();
         }
+        attach_to(_proxy->_write_handlers_gate);
+    }
+    void attach_to(gate& g) {
+        _holders.push_back(g.hold());
     }
     virtual ~abstract_write_response_handler() {
         --_stats.writes;
@@ -6985,12 +6989,8 @@ void storage_proxy::on_down(const gms::inet_address& endpoint, locator::host_id 
 };
 
 future<> storage_proxy::drain_on_shutdown() {
-    //NOTE: the thread is spawned here because there are delicate lifetime issues to consider
-    // and writing them down with plain futures is error-prone.
-    return async([this] {
-        cancel_all_write_response_handlers().get();
-        _hints_resource_manager.stop().get();
-    });
+    co_await cancel_all_write_response_handlers();
+    co_await _hints_resource_manager.stop();
 }
 
 future<> storage_proxy::abort_view_writes() {
@@ -7019,6 +7019,7 @@ future<utils::chunked_vector<dht::token_range_endpoints>> storage_proxy::describ
 }
 
 future<> storage_proxy::cancel_all_write_response_handlers() {
+    auto f = _write_handlers_gate.close();
     while (!_response_handlers.empty()) {
         _response_handlers.begin()->second->timeout_cb();
 
@@ -7026,5 +7027,36 @@ future<> storage_proxy::cancel_all_write_response_handlers() {
             co_await maybe_yield();
         }
     }
+    co_await std::move(f);
+}
+
+future<> storage_proxy::cancel_nonlocal_write_response_handlers() {
+    // Cancel handlers that have pending remote targets. After
+    // stop_transport(), MUTATION_DONE responses from remote nodes can
+    // no longer arrive, so these handlers are stuck. Handlers whose
+    // only pending targets are local can still complete via
+    // apply_locally and are left alone.
+    gate g;
+    // Collect IDs first to avoid iterator invalidation during cancellation.
+    // No yield here — the loop body is trivial (integer comparison + push_back).
+    std::vector<response_id_type> to_cancel;
+    to_cancel.reserve(_response_handlers.size());
+    for (auto& [id, handler] : _response_handlers) {
+        auto dominated_by_local = std::ranges::all_of(handler->get_targets(), [&] (locator::host_id target) {
+            return is_me(*handler->_effective_replication_map_ptr, target);
+        });
+        if (!dominated_by_local) {
+            to_cancel.push_back(id);
+        }
+    }
+    for (auto id : to_cancel) {
+        auto it = _response_handlers.find(id);
+        if (it != _response_handlers.end()) {
+            it->second->attach_to(g);
+            it->second->timeout_cb();
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_await g.close();
 }
 }
