@@ -24,7 +24,7 @@ namespace secondary_index {
 static const std::vector<sstring> analyzer_values = {
         "standard", "english", "german", "french", "spanish", "italian", "portuguese", "russian", "simple", "whitespace"};
 
-const static std::unordered_map<sstring, std::function<void(std::string_view, const sstring&, const sstring&)>> fulltext_index_options = {
+const static std::unordered_map<sstring, utils::wrapped_function<void(std::string_view, const sstring&, const sstring&)>> fulltext_index_options = {
         // 'analyzer' specifies the built-in text analyzer to use for tokenization.
         {"analyzer", std::bind_front(util::validate_enumerated_option, analyzer_values)},
         // 'positions' controls whether token positions are stored in the index.
