@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from cassandra.connection import EndPoint
 
     from test.pylib.internal_types import IPAddress
-    from test.pylib.suite.python import PythonTest
+    from test.pylib.suite.python import PythonTestSuite
 
 
 Session.run_async = run_async     # patch Session for convenience
@@ -159,17 +159,20 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bo
 
 
 @pytest.fixture(scope="module")
-async def manager_api_sock_path(testpy_test: PythonTest) -> AsyncGenerator[str]:
-    test_uname = testpy_test.uname
-    clusters = testpy_test.suite.clusters
-    base_dir = str(testpy_test.suite.log_dir)
+async def manager_api_sock_path(testpy_suite: PythonTestSuite, testpy_uname: str) -> AsyncGenerator[str]:
+    base_dir = str(testpy_suite.log_dir)
     sock_path = f"{tempfile.mkdtemp(prefix='manager-', dir='/tmp')}/api"
 
     start_event = Event()
     stop_event = Event()
 
     async def run_manager() -> None:
-        mgr = ScyllaClusterManager(test_uname=test_uname, clusters=clusters, base_dir=base_dir, sock_path=sock_path)
+        mgr = ScyllaClusterManager(
+            test_uname=testpy_uname,
+            clusters=testpy_suite.clusters,
+            base_dir=base_dir,
+            sock_path=sock_path,
+        )
         await mgr.start()
         start_event.set()
         try:
@@ -214,16 +217,16 @@ async def manager_internal(request: pytest.FixtureRequest, manager_api_sock_path
 async def manager(request: pytest.FixtureRequest,
                   manager_internal: Callable[[], ManagerClient],
                   record_property: Callable[[str, object], None],
-                  testpy_test: PythonTest,
+                  testpy_suite: PythonTestSuite,
+                  testpy_uname: str,
                   build_mode: str) -> AsyncGenerator[ManagerClient]:
     """
     Per test fixture to notify Manager client object when tests begin so it can perform checks for cluster state.
     """
     test_case_name = request.node.name
-    suite_testpy_log = testpy_test.log_filename
-    test_log = suite_testpy_log.parent / f"{Path(suite_testpy_log.stem).stem}.{test_case_name}.log"
+    test_log = testpy_suite.log_dir / f"{Path(testpy_uname).stem}.{test_case_name}.log"
     # this should be consistent with scylla_cluster.py handler name in _before_test method
-    test_py_log_test = suite_testpy_log.parent / f"{test_log.stem}_cluster.log"
+    test_py_log_test = testpy_suite.log_dir / f"{test_log.stem}_cluster.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
     await manager_client.before_test(test_case_name, test_log)
@@ -246,7 +249,7 @@ async def manager(request: pytest.FixtureRequest,
             # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
             # all related logs in one dir.
             # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
-            failed_test_dir_path = testpy_test.suite.log_dir / "failed_test" / test_case_name.translate(
+            failed_test_dir_path = testpy_suite.log_dir / "failed_test" / test_case_name.translate(
                 str.maketrans('[]', '()'))
             failed_test_dir_path.mkdir(parents=True, exist_ok=True)
 

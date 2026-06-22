@@ -41,14 +41,14 @@ from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
-from test.pylib.scylla_cluster import merge_cmdline_options
+from test.pylib.scylla_cluster import ScyllaCluster, merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
-from test.pylib.suite.python import PythonTest, PythonTestSuite
+from test.pylib.suite.python import PythonTestSuite
 from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, AsyncGenerator
 
     import _pytest.nodes
     import _pytest.scope
@@ -240,6 +240,20 @@ def build_mode(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="module")
+def testpy_shortname(request: pytest.FixtureRequest) -> str:
+    return str(request.path.relative_to(get_params_stash(node=request.node)[TEST_SUITE].path).with_suffix(""))
+
+
+@pytest.fixture(scope="module")
+def testpy_uname(request: pytest.FixtureRequest, testpy_shortname: str) -> str:
+    params_stash = get_params_stash(node=request.node)
+    uname = f"{params_stash[TEST_SUITE].name}.{testpy_shortname.replace("/", "_")}.{params_stash[RUN_ID]}"
+    if worker_id := get_xdist_worker_id():
+        uname = f"{worker_id}.{uname}"
+    return uname
+
+
+@pytest.fixture(scope="module")
 def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     def scale_timeout_inner(timeout: int | float) -> int | float:
         return scale_timeout_by_mode(build_mode, timeout)
@@ -248,11 +262,8 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
 
 
 @pytest.fixture(scope="module")
-def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> PythonTest:
-    """Create an instance of Test class for the current test.py test."""
-
-    params_stash = get_params_stash(node=request.node)
-    suite_config = params_stash[TEST_SUITE]
+def testpy_suite(request: pytest.FixtureRequest, build_mode: str) -> PythonTestSuite:
+    suite_config = get_params_stash(node=request.node)[TEST_SUITE]
     suite_key = os.path.join(suite_config.path, build_mode)
     suite = _suites.get(suite_key)
     if not suite:
@@ -262,17 +273,58 @@ def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> PythonTest:
             options=request.config.option,
             mode=build_mode,
         )
-    run_id = params_stash[RUN_ID]
-    shortname = str(request.path.relative_to(suite.suite_path).with_suffix(""))
-    uname = f"{suite_config.name}.{shortname.replace("/", "_")}.{run_id}"
-    if worker_id := get_xdist_worker_id():
-        uname = f"{worker_id}.{uname}"
-    return PythonTest(test_no=run_id, uname=uname, shortname=shortname, suite=suite)
+    return suite
 
 
 @pytest.fixture(scope="function")
-def scylla_binary(testpy_test: PythonTest) -> Path:
-    return testpy_test.suite.scylla_exe
+def scylla_binary(testpy_suite: PythonTestSuite) -> Path:
+    return testpy_suite.scylla_exe
+
+
+@pytest.fixture(scope="module")
+async def scylla_cluster(request: pytest.FixtureRequest,
+                         testpy_suite: PythonTestSuite,
+                         build_mode: str,
+                         testpy_shortname: str,
+                         testpy_uname: str) -> AsyncGenerator[ScyllaCluster]:
+    """Lease a ScyllaCluster from the pool for the tests in a module.
+
+    Gets a cluster from the suite's pool, runs the before-test hook and
+    yields it to the module's tests. Once the module is done the cluster is
+    always returned to the pool marked dirty, so it is recycled rather than
+    reused by a later module.
+    """
+    logger_prefix = f"{build_mode}/"
+    cluster_logger = LogPrefixAdapter(logging.getLogger(logger_prefix), {"prefix": logger_prefix})
+    cluster: ScyllaCluster | None = None
+    server_log_filename: pathlib.Path | None = None
+    testpy_name = os.path.join(testpy_suite.name, testpy_shortname.split('.')[0])
+    is_before_test_ok = False
+    is_after_test_ok = False
+    try:
+        cluster: ScyllaCluster = await testpy_suite.clusters.get(cluster_logger)
+        cluster.before_test(testpy_uname)
+        cluster_logger.info("Leasing Scylla cluster %s for test %s", cluster, testpy_uname)
+        server_log_filename = cluster.server_log_filename()
+        is_before_test_ok = True
+        cluster.take_log_savepoint()
+
+        yield cluster
+
+        cluster.after_test(testpy_uname)
+        is_after_test_ok = True
+    except Exception as exc:
+        if not is_before_test_ok:
+            logger.info("Test %s pre-check failed: %s\ncheck server logs: %s", testpy_name, exc, server_log_filename)
+            cluster_logger.info("Discarding cluster after failed start for test %s...", testpy_name)
+        elif not is_after_test_ok:
+            logger.info("Test %s post-check failed: %s\ncheck server logs: %s", testpy_name, exc, server_log_filename)
+            cluster_logger.info("Discarding cluster after failed test %s...", testpy_name)
+        raise
+    finally:
+        if cluster is not None:
+            cluster_logger.info("Test %s finished", testpy_uname)
+            await testpy_suite.clusters.put(cluster, is_dirty=True)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:

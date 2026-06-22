@@ -20,7 +20,8 @@ import time
 import random
 
 from test.pylib.skip_types import skip_env
-from test.pylib.suite.python import PythonTest, add_host_option, add_cql_connection_options, add_s3_options
+from test.pylib.suite.python import add_host_option, add_cql_connection_options, add_s3_options
+from test.pylib.scylla_cluster import ScyllaCluster
 from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
 from .nodetool import scylla_log
 from ..conftest import dynamic_scope
@@ -39,12 +40,10 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture(scope=dynamic_scope())
-async def host(request, testpy_test: PythonTest | None):
-    if testpy_test is None:
-        yield request.config.getoption("--host")
-    else:
-        async with testpy_test.run_ctx() as cluster:
-            yield cluster.endpoint()
+async def host(request, scylla_cluster: ScyllaCluster | None) -> str:
+    if scylla_cluster is None:
+        return request.config.getoption("--host")
+    return scylla_cluster.endpoint()
 
 
 # "cql" fixture: set up client object for communicating with the CQL API.

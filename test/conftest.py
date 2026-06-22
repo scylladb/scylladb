@@ -28,7 +28,7 @@ def dynamic_scope() -> _pytest.scope._ScopeName:
 
 if TEST_RUNNER == "runpy":
     @pytest.fixture(scope="session")
-    def testpy_test() -> None:
+    def scylla_cluster() -> None:
         return None
 else:
     pytest_plugins.append("test.pylib.runner")

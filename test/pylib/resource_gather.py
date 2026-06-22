@@ -40,8 +40,6 @@ from test.pylib.db.writer import (
 if TYPE_CHECKING:
     from typing import IO, TextIO
 
-    from test.pylib.suite.python import PythonTest as TestPyTest
-
 logger = logging.getLogger(__name__)
 
 
@@ -100,7 +98,7 @@ class ResourceGatherRecord(ResourceGather):
     Used when --gather-metrics is OFF so all tests still appear in the tests table.
     """
 
-    def __init__(self, temp_dir: Path, test: TestPyTest | SimpleNamespace, worker_id: str | None = None):
+    def __init__(self, temp_dir: Path, test: SimpleNamespace, worker_id: str | None = None):
         self.test = test
         self.worker_id = worker_id or "master"
         self.db_path = temp_dir / DEFAULT_DB_NAME
@@ -144,7 +142,7 @@ class ResourceGatherOn(ResourceGatherRecord):
     all Scylla node processes running under that worker, giving accurate memory readings.
     """
 
-    def __init__(self, temp_dir: Path, test: TestPyTest | SimpleNamespace, worker_id: str | None = None):
+    def __init__(self, temp_dir: Path, test: SimpleNamespace, worker_id: str | None = None):
         super().__init__(temp_dir, test, worker_id)
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.future = None
@@ -262,7 +260,7 @@ def gather_host_info() -> HostInfo:
     return HostInfo(host_id=HOST_ID, cpu_model=cpu_model, cpu_cores=cpu_cores, ram_bytes=ram_bytes)
 
 
-def get_resource_gather(temp_dir: Path, is_switched_on: bool, test: TestPyTest | SimpleNamespace, worker_id: str | None = None) -> ResourceGather:
+def get_resource_gather(temp_dir: Path, is_switched_on: bool, test: SimpleNamespace, worker_id: str | None = None) -> ResourceGather:
     """Return a resource gatherer for the given test. Always creates a test record in the DB."""
     if is_switched_on:
         return ResourceGatherOn(temp_dir, test, worker_id)

@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
-from contextlib import asynccontextmanager
 from functools import cache
 from typing import TYPE_CHECKING
 
@@ -17,11 +16,10 @@ from test import path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.pool import Pool
 from test.pylib.scylla_cluster import ScyllaCluster, ScyllaServer, merge_cmdline_options, get_current_version_description
-from test.pylib.util import LogPrefixAdapter
 
 if TYPE_CHECKING:
     import argparse
-    from collections.abc import Callable, Awaitable, AsyncGenerator
+    from collections.abc import Callable, Awaitable
 
     from pytest import Parser
 
@@ -152,69 +150,6 @@ class PythonTestSuite:
             return cluster
 
         return create_cluster
-
-
-class PythonTest:
-    """Run a pytest collection of cases against a standalone Scylla"""
-
-    def __init__(self, test_no: int, uname: str, shortname: str, suite: PythonTestSuite) -> None:
-        self.id = test_no
-        # Name with test suite name
-        self.name = os.path.join(suite.name, shortname.split('.')[0])
-        # Name within the suite
-        self.shortname = shortname
-        self.mode = suite.mode
-        self.suite = suite
-        # Unique file name, which is also readable by human, as filename prefix
-        self.uname = uname
-        self.log_filename = self.suite.log_dir / f"{self.uname}.log"
-        self.success = False
-        self.time_start: float = 0
-        self.time_end: float = 0
-
-    @asynccontextmanager
-    async def run_ctx(self) -> AsyncGenerator[ScyllaCluster]:
-        """A test's setup/teardown context manager.
-
-        Important part of this code is getting a ScyllaDB node from the pool and providing an address to the host
-        as a `--host` argument.  This node returned to the pool after test is finished.  If the test was failed then
-        the node will be marked as dirty.
-        """
-        loggerPrefix = self.mode + '/' + self.uname
-        logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
-        cluster: ScyllaCluster | None = None
-        server_log_filename: pathlib.Path | None = None
-        is_before_test_ok = False
-        is_after_test_ok = False
-        try:
-            cluster: ScyllaCluster = await self.suite.clusters.get(logger)
-            cluster.before_test(self.uname)
-            logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            server_log_filename = cluster.server_log_filename()
-            is_before_test_ok = True
-            cluster.take_log_savepoint()
-
-            yield cluster
-
-            if self.shortname in self.suite.dirties_cluster:
-                cluster.is_dirty = True
-            cluster.after_test(self.uname, self.success)
-            is_after_test_ok = True
-        except Exception as e:
-            if not is_before_test_ok:
-                print(f"Test {self.name} pre-check failed: {str(e)}\ncheck server logs: {server_log_filename}")
-                logger.info(f"Discarding cluster after failed start for test %s...", self.name)
-            elif not is_after_test_ok:
-                print(f"Test {self.name} post-check failed: {str(e)}\ncheck server logs: {server_log_filename}")
-                logger.info(f"Discarding cluster after failed test %s...", self.name)
-            self.success = False
-            if cluster is not None:
-                cluster.is_dirty = True
-            raise
-        finally:
-            if cluster is not None:
-                await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
-                logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
 
 
 # Use cache to execute this function once per pytest session.

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from _pytest.nodes import Collector
     from cassandra.cluster import Session
 
-    from test.pylib.suite.python import PythonTest
+    from test.pylib.suite.python import PythonTestSuite
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -75,7 +75,7 @@ def keyspace(cql: Session, this_dc: str) -> Generator[str]:
 
 
 @pytest.fixture(scope="module", autouse=True)
-async def output_path(testpy_test: PythonTest) -> Path:
+async def output_path(testpy_suite: PythonTestSuite, testpy_uname: str) -> Path:
     """A file to collect real output of test's CQL queries to compare with .result file."""
 
-    return testpy_test.suite.log_dir / f"{testpy_test.uname}.reject"
+    return testpy_suite.log_dir / f"{testpy_uname}.reject"
