@@ -9,12 +9,14 @@
 #include "utils/gcp/object_storage.hh"
 #include "utils/gcp/gcp_credentials.hh"
 
+#include <ranges>
 #include <unordered_set>
 #include <filesystem>
 #include <boost/test/unit_test.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/file.hh>
@@ -31,6 +33,7 @@
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/io-wrappers.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/testing/test_fixture.hh>
 
@@ -104,10 +107,15 @@ static future<> compare_stream_data(seastar::input_stream<char>& is1, seastar::i
     BOOST_REQUIRE_EQUAL(read, total);
 }
 
-static std::tuple<seastar::input_stream<char>, size_t> stream_from_buffers(std::vector<temporary_buffer<char>>&& bufs) {
+static size_t total_size(const std::vector<temporary_buffer<char>>& bufs) {
     auto total = std::accumulate(bufs.begin(), bufs.end(), size_t{}, [](size_t s, auto& buf) {
         return s + buf.size();
     });
+    return total;
+}
+
+static std::tuple<seastar::input_stream<char>, size_t> stream_from_buffers(std::vector<temporary_buffer<char>>&& bufs) {
+    auto total = total_size(bufs);
     auto is = seastar::input_stream<char>(create_memory_source(std::move(bufs)));
     return std::make_tuple(std::move(is), total);
 }
@@ -313,6 +321,63 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_large_object_iov, local_gcs_wrap
     BOOST_REQUIRE_EQUAL(total, total2);
     co_await compare_stream_data(is1, is2, total);
 
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_in_parallel, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+
+    // just a random number reasonably large size that is not a
+    // even sector size or anything. 32mb + change
+    auto dest_size = 32*1024*1024 + 357 + 1022*67 + 23324;
+
+    // ensure we remove the object
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, dest_size, &written);
+    auto source = c.create_download_source(bucket, name);
+    auto f = create_file_for_seekable_source(std::move(source));
+    auto total = total_size(written);
+
+    utils::get_local_injector().enable("gcp_storage_stall_requests", true);
+    auto def = defer([]() noexcept {
+        utils::get_local_injector().disable("gcp_storage_stall_requests");
+    });
+
+    auto read_file = [&]() -> future<std::tuple<seastar::input_stream<char>, size_t>> {
+        std::vector<temporary_buffer<char>> bufs;
+        for (size_t i = 0; i < total; ) {
+            auto n = std::min(total - i, size_t(64*1024));
+            auto buf = co_await f.dma_read_bulk<char>(i, n);
+            i += buf.size();
+            bufs.emplace_back(std::move(buf));
+        }
+        co_return stream_from_buffers(std::move(std::move(bufs)));
+    };
+
+    auto fut = read_file();
+    BOOST_REQUIRE(!fut.available());
+    auto [is1, t1] = co_await read_file();
+    auto [is2, t2] = co_await std::move(fut);
+
+    co_await f.close();
+
+    auto written2 = written | std::views::transform([](auto& buf) {
+        return buf.share();
+    }) | std::ranges::to<std::vector>();
+
+    {
+        BOOST_TEST_MESSAGE("Check stream 1");
+        auto [is_ref, total] = stream_from_buffers(std::move(written));
+        BOOST_REQUIRE_EQUAL(t1, total);
+        co_await compare_stream_data(is1, is_ref, total);
+    }
+    {
+        BOOST_TEST_MESSAGE("Check stream 2");
+        auto [is_ref, total] = stream_from_buffers(std::move(written2));
+        BOOST_REQUIRE_EQUAL(t2, total);
+        co_await compare_stream_data(is2, is_ref, total);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

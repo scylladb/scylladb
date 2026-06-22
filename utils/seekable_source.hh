@@ -14,6 +14,10 @@
 class seekable_data_source_impl : public seastar::data_source_impl {
 public:
     virtual seastar::future<seastar::temporary_buffer<char>> get(size_t limit) = 0;
+    // implementors must guarantee this is atomic-eqsue such that any state
+    // is consistent so that the next get_at call will be equally valid.
+    // Simplest impl is a serialized seek + get.
+    virtual seastar::future<seastar::temporary_buffer<char>> get_at(uint64_t pos, size_t limit) = 0;
     virtual seastar::future<> seek(uint64_t pos) = 0;
     virtual seastar::future<uint64_t> size() {
         return seastar::make_ready_future<uint64_t>(0);
@@ -31,6 +35,13 @@ public:
     seastar::future<seastar::temporary_buffer<char>> get(size_t limit) noexcept {
         try {
             return static_cast<seekable_data_source_impl*>(impl())->get(limit);
+        } catch (...) {
+            return seastar::current_exception_as_future<seastar::temporary_buffer<char>>();
+        }
+    }
+    seastar::future<seastar::temporary_buffer<char>> get_at(uint64_t pos, size_t limit) noexcept {
+        try {
+            return static_cast<seekable_data_source_impl*>(impl())->get_at(pos, limit);
         } catch (...) {
             return seastar::current_exception_as_future<seastar::temporary_buffer<char>>();
         }
