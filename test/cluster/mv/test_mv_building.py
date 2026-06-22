@@ -18,6 +18,31 @@ from cassandra.query import SimpleStatement  # type: ignore
 
 logger = logging.getLogger(__name__)
 
+PAUSE_VIEW_BUILDER_INJECTION = "view_builder_pause_before_mark_success"
+
+async def mark_server_logs(manager: ManagerClient, servers) -> dict:
+    marks = {}
+    for s in servers:
+        log = await manager.server_open_log(s.server_id)
+        marks[s.server_id] = await log.mark()
+    return marks
+
+async def wait_for_view_building_in_progress(manager: ManagerClient, servers, marks: dict,
+                                             view_name: str, timeout: float = 120):
+    # Either outcome means the node is no longer in the "not started building yet" state.
+    pattern = (f"{PAUSE_VIEW_BUILDER_INJECTION}: waiting for message"
+               f"|Finished building view [^ ]*\\.{view_name}\\b")
+
+    async def wait_one(server) -> None:
+        log = await manager.server_open_log(server.server_id)
+        await log.wait_for(pattern, from_mark=marks[server.server_id], timeout=timeout)
+    await asyncio.gather(*(wait_one(s) for s in servers))
+
+async def resume_view_builder(manager: ManagerClient, servers):
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, PAUSE_VIEW_BUILDER_INJECTION)
+        await manager.api.disable_injection(s.ip_addr, PAUSE_VIEW_BUILDER_INJECTION)
+
 # This test makes sure that view building is done mainly in the streaming
 # scheduling group. We check that by grepping all relevant logs in TRACE mode
 # and verifying that they come from the streaming scheduling group.
@@ -459,6 +484,95 @@ async def test_do_not_finish_view_builder_with_nodes_down(manager: ManagerClient
         await wait_for_view(cql, 'mv_cf_view', node_count)
 
         # Verify all data
+        base_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.tab"))
+        view_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.mv_cf_view"))
+        assert view_rows == base_rows
+
+# Migrated from dtest secondary_indexes_test.py node action tests.
+# Verifies that node operations during view building complete correctly (vnodes).
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("operation", ["stop", "remove", "decommission", "add"])
+async def test_node_operation_during_view_building(manager: ManagerClient, operation: str):
+    """Test that node operations during view building don't break the build (vnodes)."""
+    if operation in ["remove", "decommission"]:
+        node_count = 4
+        rack_layout = ["r1", "r2", "r3", "r4"]
+    else:
+        node_count = 3
+        rack_layout = ["r1", "r2", "r3"]
+
+    property_file = [{"dc": "dc1", "rack": rack} for rack in rack_layout]
+    servers = await manager.servers_add(node_count, config={
+        "hinted_handoff_enabled": False,
+    }, property_file=property_file)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+
+        n_partitions = 100
+        for i in range(n_partitions):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, '{i}')")
+
+        # Pause view building to ensure build is in progress when we perform node action
+        for s in servers:
+            await manager.api.enable_injection(s.ip_addr, PAUSE_VIEW_BUILDER_INJECTION, one_shot=False)
+        marks = await mark_server_logs(manager, servers)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL AND key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v)")
+
+        await wait_for_view_building_in_progress(manager, servers, marks, 'mv_cf_view')
+
+        target = servers[-1]
+        expected_node_count = node_count
+
+        if operation == "stop":
+            await manager.server_stop(target.server_id, convict=False)
+            await resume_view_builder(manager, servers[:-1])
+            await manager.server_start(target.server_id)
+            await manager.servers_see_each_other(servers)
+            cql, _ = await manager.get_ready_cql(servers)
+        elif operation == "remove":
+            await manager.server_stop(target.server_id, convict=True)
+            await manager.remove_node(servers[0].server_id, target.server_id)
+            await resume_view_builder(manager, servers[:-1])
+            expected_node_count -= 1
+        elif operation == "decommission":
+            await manager.decommission_node(target.server_id)
+            expected_node_count -= 1
+            await resume_view_builder(manager, servers[:-1])
+        elif operation == "add":
+            await resume_view_builder(manager, servers)
+            await manager.server_add(property_file=property_file[-1])
+            expected_node_count += 1
+
+        await wait_for_view(cql, 'mv_cf_view', expected_node_count)
+
+        # Wait for all staging sstables to be processed and view updates to be applied.
+        async def view_updates_drained():
+            for server in await manager.running_servers():
+                metrics = await manager.metrics.query(server.ip_addr)
+                for name in ["scylla_database_view_update_backlog",
+                             "scylla_view_update_generator_queued_batches_count",
+                             "scylla_view_update_generator_sstables_to_move_count",
+                             "scylla_view_update_generator_sstables_pending_work"]:
+                    val = metrics.get(name)
+                    if val is not None and val > 0:
+                        return None
+            return True
+        await wait_for(view_updates_drained, deadline=time.time() + 30)
+
+        if operation in ["remove", "decommission"]:
+            # View updates from staging SSTables can be skipped during topology changes because the
+            # receiving node may process them before the replication map reflects the new owner.
+            # Repair the view before checking local contents so this test focuses on node operations
+            # completing during view build, not on that known staging-update race.
+            # This is known issue with vnode views and topology operations, we're not going to fix it.
+            await manager.api.repair(servers[0].ip_addr, ks, "mv_cf_view")
+
+        # Verify data correctness
         base_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.tab"))
         view_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.mv_cf_view"))
         assert view_rows == base_rows
