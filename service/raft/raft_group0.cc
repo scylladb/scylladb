@@ -521,8 +521,9 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
     auto group0_id = raft::group_id{co_await sys_ks.get_raft_group0_id()};
     if (group0_id) {
         // Group 0 ID present means we've already joined group 0 before.
+        // enable_immediately=true: the state machine is enabled from construction,
+        // so apply() and transfer_snapshot() process entries correctly from the start.
         co_await start_server_for_group0(group0_id, ss, qp, mm, true);
-        co_await enable_group0_state_machine();
         co_return;
     }
 
@@ -591,8 +592,9 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
             utils::get_local_injector().inject("stop_after_bootstrapping_initial_raft_configuration",
                 [] { std::raise(SIGSTOP); });
 
+            // enable_immediately=true: the state machine is enabled from construction,
+            // so apply() and transfer_snapshot() process entries correctly from the start.
             co_await start_server_for_group0(group0_id, ss, qp, mm, true);
-            co_await enable_group0_state_machine();
             server = &_raft_gr.group0();
             // FIXME if we crash now or after getting added to the config but before storing group 0 ID,
             // we'll end with a bootstrapped server that possibly added some entries, but we won't remember that we have such a server
