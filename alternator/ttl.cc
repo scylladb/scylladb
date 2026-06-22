@@ -23,6 +23,7 @@
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/tablet_metadata_guard.hh"
 #include "utils/log.hh"
 #include "gc_clock.hh"
 #include "replica/database.hh"
@@ -661,17 +662,6 @@ static future<> scan_table_ranges(
     }
 }
 
-static future<> scan_tablet(locator::tablet_id tablet, service::storage_proxy& proxy, abort_source& abort_source, named_semaphore& page_sem,
-            expiration_service::stats& expiration_stats, const scan_ranges_context& scan_ctx, const locator::tablet_map& tablet_map) {
-    auto tablet_token_range = tablet_map.get_token_range(tablet);
-    dht::ring_position tablet_start(tablet_token_range.start()->value(), dht::ring_position::token_bound::start),
-                       tablet_end(tablet_token_range.end()->value(), dht::ring_position::token_bound::end);
-    auto partition_range = dht::partition_range::make(std::move(tablet_start), std::move(tablet_end));
-    // Note that because of issue #9167 we need to run a separate query on each partition range, and can't pass
-    // several of them into one partition_range_vector that is passed to scan_table_ranges().
-    return scan_table_ranges(proxy, scan_ctx, {partition_range}, abort_source, page_sem, expiration_stats);
-}
-
 // scan_table() scans, in one table, data "owned" by this shard, looking for
 // expired items and deleting them.
 // We consider each node to "own" its primary token ranges, i.e., the tokens
@@ -749,32 +739,61 @@ static future<bool> scan_table(
     scan_ranges_context scan_ctx{s, proxy, std::move(column_name), std::move(member)};
 
     if (s->table().uses_tablets()) {
-        locator::effective_replication_map_ptr erm = s->table().get_effective_replication_map();
-        auto my_host_id = erm->get_topology().my_host_id();
-        const auto &tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
-        for (std::optional tablet = tablet_map.first_tablet(); tablet; tablet = tablet_map.next_tablet(*tablet)) {
-            auto tablet_primary_replica = tablet_map.get_primary_replica(*tablet, erm->get_topology());
-            // check if this is the primary replica for the current tablet
-            if (tablet_primary_replica.host == my_host_id && tablet_primary_replica.shard == this_shard_id()) {
-                co_await scan_tablet(*tablet, proxy, abort_source, page_sem, expiration_stats, scan_ctx, tablet_map);
-            } else if(erm->get_replication_factor() > 1) {
-                // Check if this is the secondary replica for the current tablet
-                // and if the primary replica is down which means we will take over this work.
-                // If each node only scans its own primary ranges, then when any node is
-                // down part of the token range will not get scanned. This can be viewed
-                // as acceptable (when the comes back online, it will resume its scan),
-                // but as noted in issue #9787, we can allow more prompt expiration
-                // by tasking another node to take over scanning of the dead node's primary
-                // ranges. What we do here is that this node will also check expiration
-                // on its *secondary* ranges - but only those whose primary owner is down.
-                auto tablet_secondary_replica = tablet_map.get_secondary_replica(*tablet, erm->get_topology()); // throws if no secondary replica
-                if (tablet_secondary_replica.host == my_host_id && tablet_secondary_replica.shard == this_shard_id()) {
-                    if (!gossiper.is_alive(tablet_primary_replica.host)) {
-                        co_await scan_tablet(*tablet, proxy, abort_source, page_sem, expiration_stats, scan_ctx, tablet_map);
+        std::optional<dht::token> last_token;
+        do {
+            std::optional<locator::tablet_metadata_guard> tablet_guard;
+            std::optional<dht::partition_range> range;
+            {
+                auto erm = s->table().get_effective_replication_map();
+                auto my_host_id = erm->get_topology().my_host_id();
+                const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+                std::optional<locator::tablet_id> tablet = last_token ? tablet_map.get_tablet_id(dht::next_token(*last_token)) : tablet_map.first_tablet();
+
+                // The loop finds the tablet range to scan, one which we are the primary replica for,
+                // or if the primary replica is down, one which we are the secondary replica for.
+                do {
+                    auto tablet_token_range = tablet_map.get_token_range(*tablet);
+                    last_token = tablet_map.get_last_token(*tablet);
+                    auto tablet_primary_replica = tablet_map.get_primary_replica(*tablet, erm->get_topology());
+                    if (tablet_primary_replica.host == my_host_id && tablet_primary_replica.shard == this_shard_id()) {
+                        range = dht::to_partition_range(std::move(tablet_token_range));
+                    } else if (erm->get_replication_factor() > 1) {
+                        // If each node only scans its own primary ranges, then when any node is
+                        // down part of the token range will not get scanned. This can be viewed
+                        // as acceptable (when it comes back online, it will resume its scan),
+                        // but as noted in issue #9787, we can allow more prompt expiration
+                        // by tasking another node to take over scanning of the dead node's primary
+                        // ranges. What we do here is that this node will also check expiration
+                        // on its *secondary* ranges - but only those whose primary owner is down.
+                        auto tablet_secondary_replica = tablet_map.get_secondary_replica(*tablet, erm->get_topology()); // throws if no secondary replica
+                        if (tablet_secondary_replica.host == my_host_id && tablet_secondary_replica.shard == this_shard_id()) {
+                            if (!gossiper.is_alive(tablet_primary_replica.host)) {
+                                range = dht::to_partition_range(std::move(tablet_token_range));
+                            }
+                        }
                     }
+                    if (range) {
+                        break;
+                    }
+                    tablet = tablet_map.next_tablet(*tablet);
+                } while (tablet);
+
+                if (range) {
+                    // Take the tablet guard to protect the tablet while we scan it.
+                    tablet_guard.emplace(s->table(), locator::global_tablet_id{s->id(), *tablet});
+                } else {
+                    // No range was found means all tablets have been iterated and we are done.
+                    break;
                 }
-            }
-        }
+            } // Drop the ERM before the scan so to unblock any tablet operations,
+              // which would otherwise be held up by us keeping the ERM.
+              // tablet_guard blocks only the selected tablet.
+
+            // Note that because of issue #9167 we need to run a separate query on each partition range, and can't pass
+            // several of them into one partition_range_vector that is passed to scan_table_ranges().
+            co_await scan_table_ranges(proxy, scan_ctx, {std::move(*range)}, abort_source, page_sem, expiration_stats);
+            tablet_guard.reset();
+        } while (*last_token < dht::last_token());
     } else {  // VNodes
         locator::static_effective_replication_map_ptr ermp =
                 db.real_database().find_keyspace(s->ks_name()).get_static_effective_replication_map();
@@ -798,7 +817,7 @@ static future<bool> scan_table(
         }
         // If each node only scans its own primary ranges, then when any node is
         // down part of the token range will not get scanned. This can be viewed
-        // as acceptable (when the comes back online, it will resume its scan),
+        // as acceptable (when it comes back online, it will resume its scan),
         // but as noted in issue #9787, we can allow more prompt expiration
         // by tasking another node to take over scanning of the dead node's primary
         // ranges. What we do here is that this node will also check expiration
