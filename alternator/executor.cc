@@ -141,7 +141,10 @@ extern const sstring SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANG
 // Setting this tag to any non-numeric value (e.g., an empty string or the
 // word "none") will ask to disable tablets.
 static constexpr auto INITIAL_TABLETS_TAG_KEY = "system:initial_tablets";
-
+// Setting this tag with a numeric value on a table being created will
+// determine its replication factor (in each DC), instead of the default
+// (RF=3 on clusters with 3 or more nodes, RF=1 on smaller clusters).
+static constexpr auto REPLICATION_FACTOR_TAG_KEY = "system:replication_factor";
 
 enum class table_status {
     active = 0,
@@ -1013,18 +1016,25 @@ void rmw_operation::set_default_write_isolation(std::string_view value) {
 // Alternator uses tags whose keys start with the "system:" prefix for
 // internal purposes. Those should not be readable by ListTagsOfResource,
 // nor writable with TagResource or UntagResource (see #24098).
-// Only a few specific system tags, currently only "system:write_isolation"
-// and "system:initial_tablets", are deliberately intended to be set and read
-// by the user, so are not considered "internal".
+// Only a few specific system tags, currently only "system:write_isolation",
+// "system:initial_tablets", and "system:replication_factor", are deliberately
+// intended to be set and read by the user, so are not considered "internal".
 static bool tag_key_is_internal(std::string_view tag_key) {
     return tag_key.starts_with("system:")
         && tag_key != rmw_operation::WRITE_ISOLATION_TAG_KEY
-        && tag_key != INITIAL_TABLETS_TAG_KEY;
+        && tag_key != INITIAL_TABLETS_TAG_KEY
+        && tag_key != REPLICATION_FACTOR_TAG_KEY;
 }
 
-enum class update_tags_action { add_tags, delete_tags };
+// "add_tags_initial" is used when adding tags while the table is being created
+// (CreateTable). "add_tags" is used for subsequent tag updates (TagResource),
+// and "delete_tags" is used for removing tags (UntagResource).
+// The main distinction between "add_tags" and "add_tags_initial" is to let us
+// permit setting some tags when the table is being created, but forbid
+// changing these tags later.
+enum class update_tags_action { add_tags, add_tags_initial, delete_tags };
 static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>& tags_map, update_tags_action action) {
-    if (action == update_tags_action::add_tags) {
+    if (action == update_tags_action::add_tags || action == update_tags_action::add_tags_initial) {
         for (auto it = tags.Begin(); it != tags.End(); ++it) {
             if (!it->IsObject()) {
                 throw api_error::validation("invalid tag object");
@@ -1049,6 +1059,19 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
             if (tag_key_is_internal(tag_key)) {
                 throw api_error::validation(fmt::format("Tag key '{}' is reserved for internal use", tag_key));
             }
+            // system:replication_factor only takes effect during CreateTable.
+            // On subsequent tag updates (add_tags, not add_tags_initial), only
+            // allow setting it to the same value it already has (a no-op);
+            // reject any attempt to change it or introduce it on an existing table.
+            if (action == update_tags_action::add_tags && tag_key == REPLICATION_FACTOR_TAG_KEY) {
+                auto existing = tags_map.find(sstring(tag_key));
+                if (existing == tags_map.end() || existing->second != sstring(tag_value)) {
+                    throw api_error::validation(fmt::format(
+                        "Tag '{}' can only be set during CreateTable and cannot be changed afterwards",
+                        REPLICATION_FACTOR_TAG_KEY));
+                }
+                continue; // same value - silently allow
+            }
             // Note tag values are limited similarly to tag keys, but have a
             // longer length limit, and *can* be empty.
             if (tag_value.size() > 256) {
@@ -1064,6 +1087,11 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
             auto tag_key = rjson::to_string_view(*it);
             if (tag_key_is_internal(tag_key)) {
                 throw api_error::validation(fmt::format("Tag key '{}' is reserved for internal use", tag_key));
+            }
+            if (tag_key == REPLICATION_FACTOR_TAG_KEY) {
+                throw api_error::validation(fmt::format(
+                    "Tag '{}' can only be set during CreateTable and cannot be changed afterwards",
+                    REPLICATION_FACTOR_TAG_KEY));
             }
             tags_map.erase(sstring(tag_key));
         }
@@ -1698,7 +1726,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     const rjson::value* tags = rjson::find(request, "Tags");
     std::map<sstring, sstring> tags_map;
     if (tags && tags->IsArray()) {
-        update_tags_map(*tags, tags_map, update_tags_action::add_tags);
+        update_tags_map(*tags, tags_map, update_tags_action::add_tags_initial);
     }
     if (bm.provisioned) {
         tags_map[RCU_TAG_KEY] = std::to_string(bm.rcu);
@@ -4619,12 +4647,52 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
         }
     }
 
-    int endpoint_count = gossiper.num_endpoints();
-    int rf = 3;
-    if (endpoint_count < rf) {
-        rf = 1;
-        elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
-                     keyspace_name, rf, endpoint_count);
+    // The system:replication_factor tag allows overriding the default RF per DC.
+    int rf;
+    auto rf_tag_it = tags_map.find(REPLICATION_FACTOR_TAG_KEY);
+    if (rf_tag_it != tags_map.end()) {
+        const auto& s = rf_tag_it->second;
+        int requested_rf = 0;
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), requested_rf);
+        if (ec != std::errc{} || ptr != s.data() + s.size() || requested_rf < 1) {
+            throw api_error::validation(fmt::format("Tag {} value must be a positive integer", REPLICATION_FACTOR_TAG_KEY));
+        }
+        // Validate the requested RF against the topology constraints that
+        // the downstream DDL code would enforce, to produce a user-friendly
+        // ValidationException instead of an InternalServerError:
+        // - With tablets, expand_to_racks() in ks_prop_defs.cc enforces
+        //   RF <= rack count per DC.
+        // - With vnodes, check_enough_endpoints() in network_topology_strategy.cc
+        //   enforces RF <= node count per DC.
+        for (const auto& [dc, racks] : sp.get_token_metadata_ptr()->get_datacenter_racks_token_owners()) {
+            if (initial_tablets) {
+                int num_racks = static_cast<int>(racks.size());
+                if (requested_rf > num_racks) {
+                    throw api_error::validation(fmt::format(
+                        "Tag {} value {} exceeds the number of racks ({}) in datacenter {}",
+                        REPLICATION_FACTOR_TAG_KEY, requested_rf, num_racks, dc));
+                }
+            } else {
+                int num_nodes = 0;
+                for (const auto& [rack, hosts] : racks) {
+                    num_nodes += static_cast<int>(hosts.size());
+                }
+                if (requested_rf > num_nodes) {
+                    throw api_error::validation(fmt::format(
+                        "Tag {} value {} exceeds the number of nodes ({}) in datacenter {}",
+                        REPLICATION_FACTOR_TAG_KEY, requested_rf, num_nodes, dc));
+                }
+            }
+        }
+        rf = requested_rf;
+    } else {
+        int endpoint_count = gossiper.num_endpoints();
+        rf = 3;
+        if (endpoint_count < rf) {
+            rf = 1;
+            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
+                         keyspace_name, rf, endpoint_count);
+        }
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
     cql3::statements::ks_prop_defs props;
