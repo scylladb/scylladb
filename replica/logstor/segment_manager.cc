@@ -647,7 +647,7 @@ public:
     }
 
     future<> load_segment(replica::database&, log_segment_id);
-    future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, std::function<void(const segment_header&)> on_header);
+    future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, utils::wrapped_function<void(const segment_header&)> on_header);
     future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&);
 
     void trigger_compaction() {
@@ -1825,7 +1825,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
 }
 
 future<> segment_manager_impl::recover_segment(replica::database& db, log_segment_id segment_id,
-        primary_index::entry_cmp_fn cmp, std::function<void(const segment_header&)> on_header) {
+        primary_index::entry_cmp_fn cmp, utils::wrapped_function<void(const segment_header&)> on_header) {
     auto& desc = get_segment_descriptor(segment_id);
     desc.reset(_cfg.segment_size);
 
