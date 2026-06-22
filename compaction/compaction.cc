@@ -383,7 +383,7 @@ class compacted_fragments_writer {
     compaction& _c;
     std::optional<compaction_writer> _compaction_writer = {};
     using creator_func_t = std::function<compaction_writer(const dht::decorated_key&)>;
-    using stop_func_t = std::function<void(compaction_writer*)>;
+    using stop_func_t = utils::wrapped_function<void(compaction_writer*)>;
     creator_func_t _create_compaction_writer;
     stop_func_t _stop_compaction_writer;
     std::optional<utils::observer<>> _stop_request_observer;
@@ -1577,7 +1577,7 @@ private:
         compaction_type_options::scrub::drop_unfixable_sstables _drop_unfixable_sstables;
 
     private:
-        void maybe_abort_scrub(std::function<void()> report_error) {
+        void maybe_abort_scrub(utils::wrapped_function<void()> report_error) {
             if (_scrub_mode == compaction_type_options::scrub::mode::abort) {
                 report_error();
                 throw compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
