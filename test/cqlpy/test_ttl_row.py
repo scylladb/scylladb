@@ -15,7 +15,7 @@
 
 import pytest
 import time
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, ConfigurationException
 from .util import new_test_table, new_materialized_view, new_secondary_index, ScyllaMetrics
 
 # All tests in this file check the Scylla-only per-row TTL feature, so
@@ -590,3 +590,30 @@ def test_row_ttl_metrics(cql, test_keyspace, ttl_period):
         # the exactly 2 items deleted (we assume that no other TTL activity
         # is running on the same Scylla instance in parallel...)
         assert end.get('scylla_expiration_items_deleted') == (start.get('scylla_expiration_items_deleted') or 0) + 2
+
+# Per-row TTL is not compatible with TimeWindowCompactionStrategy (TWCS).
+# TWCS never compacts across windows, so tombstones produced by per-row TTL
+# expirations in a new window will never remove the shadowed data in an old
+# window. The following three tests verify that the combination is rejected
+# in all CQL paths: CREATE TABLE, ALTER TABLE to TWCS, and ALTER TABLE TTL.
+# Reproduces scylladb/scylladb#19805.
+
+def test_create_table_with_twcs_and_ttl_column(cql, test_keyspace):
+    with pytest.raises(ConfigurationException, match='not compatible'):
+        cql.execute(f"CREATE TABLE {test_keyspace}.tbl ("
+                    f"p int PRIMARY KEY, e timestamp TTL) WITH "
+                    f"compaction = {{'class': 'TimeWindowCompactionStrategy'}}")
+
+def test_alter_table_twcs_then_ttl(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            'p int PRIMARY KEY, e timestamp',
+            "WITH compaction = {'class': 'TimeWindowCompactionStrategy'}") as table:
+        with pytest.raises(ConfigurationException, match='not compatible'):
+            cql.execute(f'ALTER TABLE {table} TTL e')
+
+def test_alter_table_ttl_then_twcs(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            'p int PRIMARY KEY, e timestamp TTL') as table:
+        with pytest.raises(ConfigurationException, match='not compatible'):
+            cql.execute(f"ALTER TABLE {table} WITH "
+                        f"compaction = {{'class': 'TimeWindowCompactionStrategy'}}")

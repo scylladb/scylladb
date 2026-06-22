@@ -209,6 +209,11 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         // See https://github.com/scylladb/scylladb/issues/20945
         mylogger.warn("{}", *warning);
     }
+    if (_ttl_column
+            && _properties.properties()->get_compaction_strategy_class() == compaction::compaction_strategy_type::time_window) {
+        throw exceptions::configuration_exception(
+            "Per-row TTL is not compatible with TimeWindowCompactionStrategy");
+    }
     const bool has_default_ttl = _properties.properties()->get_default_time_to_live() > 0;
 
     auto stmt = ::make_shared<create_table_statement>(*_cf_name, _properties.properties(), _if_not_exists, _static_columns, _ttl_column, _properties.properties()->get_id());

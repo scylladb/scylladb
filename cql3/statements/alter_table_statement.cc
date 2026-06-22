@@ -450,6 +450,15 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                 }
             }
 
+            // Check if a table which already has a per-row TTL column is
+            // now altered to use TWCS - that combination is not allowed.
+            auto strategy = _properties->get_compaction_strategy_class();
+            if (strategy == compaction::compaction_strategy_type::time_window
+                    && db::find_tag(*s, TTL_TAG_KEY)) {
+                throw exceptions::configuration_exception(
+                    "Per-row TTL is not compatible with TimeWindowCompactionStrategy");
+            }
+
             _properties->apply_to_builder(cfm, std::move(schema_extensions), db, keyspace(), !is_cdc_log_table);
         }
         break;
@@ -498,6 +507,10 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
         }
         if (_ttl_change) {
             // Enable per-row TTL with chosen column for expiration time
+            if (s->compaction_strategy() == compaction::compaction_strategy_type::time_window) {
+                throw exceptions::configuration_exception(
+                    "Per-row TTL is not compatible with TimeWindowCompactionStrategy");
+            }
             const column_definition *cdef = 
                 s->get_column_definition(to_bytes(_ttl_change->text()));
             if (!cdef) {
