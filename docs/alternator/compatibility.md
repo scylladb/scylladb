@@ -289,10 +289,6 @@ Alternator Streams differ in some respects from DynamoDB Streams:
   after it was written, in Alternator Streams there is currently a 10
   second delay by default.
   <https://github.com/scylladb/scylla/issues/6929>
-* In GetRecords responses, Alternator sets `eventSource` to
-  `scylladb:alternator`, rather than `aws:dynamodb`, and doesn't set the
-  `SizeBytes` subfield inside the `dynamodb` field.
-  <https://github.com/scylladb/scylla/issues/6931>
 * By default (with `alternator_streams_increased_compatibility` off)
   Alternator Streams are optimized for performance: write operations
   do not read the previous state of the item, which has two
