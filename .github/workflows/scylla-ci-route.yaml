@@ -20,6 +20,31 @@ jobs:
       JENKINS_URL: "https://jenkins.scylladb.com"
 
     steps:
+      - name: Set up gh api retry helper
+        run: |
+          # Write a reusable retry wrapper for gh api calls into BASH_ENV
+          # so it is automatically available in every subsequent step.
+          cat >> "$BASH_ENV" << 'RETRY_EOF'
+          gh_api_retry() {
+            local max_attempts=4 attempt=1 delay=1 output rc
+            while [ $attempt -le $max_attempts ]; do
+              if output=$(gh api "$@" 2>&1); then
+                echo "$output"
+                return 0
+              fi
+              rc=$?
+              if [ $attempt -eq $max_attempts ]; then
+                echo "$output" >&2
+                return $rc
+              fi
+              echo "gh api attempt $attempt failed, retrying in ${delay}s..." >&2
+              sleep $delay
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+          RETRY_EOF
+
       - name: Check for code changes on synchronize
         if: github.event.action == 'synchronize'
         id: code-changes
@@ -32,8 +57,8 @@ jobs:
           fi
 
           # Use the GitHub API to compare trees
-          BEFORE_TREE=$(gh api "repos/$PR_REPO/git/commits/$BEFORE" --jq '.tree.sha' 2>/dev/null || true)
-          AFTER_TREE=$(gh api "repos/$PR_REPO/git/commits/$AFTER" --jq '.tree.sha' 2>/dev/null || true)
+          BEFORE_TREE=$(gh_api_retry "repos/$PR_REPO/git/commits/$BEFORE" --jq '.tree.sha' 2>/dev/null || true)
+          AFTER_TREE=$(gh_api_retry "repos/$PR_REPO/git/commits/$AFTER" --jq '.tree.sha' 2>/dev/null || true)
 
           if [ -n "$BEFORE_TREE" ] && [ -n "$AFTER_TREE" ] && [ "$BEFORE_TREE" = "$AFTER_TREE" ]; then
             echo "No code changes detected (commit message edit only), skipping CI"
@@ -59,7 +84,7 @@ jobs:
           # Fetch all pages of PR files
           PAGE=1
           while true; do
-            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
+            FILES=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
             if [ -z "$FILES" ]; then
               break
             fi
@@ -117,7 +142,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching PR #$PR_NUMBER details..."
-          PR_JSON=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER")
+          PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
 
           MERGEABLE_STATE=$(echo "$PR_JSON" | jq -r '.mergeable_state')
           LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
@@ -197,7 +222,7 @@ jobs:
           ALL_FILES=""
           PAGE=1
           while true; do
-            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
+            FILES=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
             if [ -z "$FILES" ]; then
               break
             fi
@@ -212,6 +237,7 @@ jobs:
           # build: required if any file does NOT match scripts/pull_github_pr.sh
           BUILD_REQUIRED=false
           while IFS= read -r FILE; do
+            [ -z "$FILE" ] && continue
             if [ "$FILE" != "scripts/pull_github_pr.sh" ]; then
               BUILD_REQUIRED=true
               break
@@ -221,6 +247,7 @@ jobs:
           # dtest: required if any file does NOT match test*, dist/docker/*, dist/common/scripts/*
           DTEST_REQUIRED=false
           while IFS= read -r FILE; do
+            [ -z "$FILE" ] && continue
             if ! echo "$FILE" | grep -qE '^(test(\.py|/)|dist/docker/|dist/common/scripts/)'; then
               DTEST_REQUIRED=true
               break
@@ -230,6 +257,7 @@ jobs:
           # unittest: required if any file does NOT match dist/docker/*, dist/common/scripts*
           UNITTEST_REQUIRED=false
           while IFS= read -r FILE; do
+            [ -z "$FILE" ] && continue
             if ! echo "$FILE" | grep -qE '^(dist/docker/|dist/common/scripts)'; then
               UNITTEST_REQUIRED=true
               break
@@ -239,6 +267,7 @@ jobs:
           # artifacts: required if any file matches dist/* or tools/toolchain*
           ARTIFACTS_REQUIRED=false
           while IFS= read -r FILE; do
+            [ -z "$FILE" ] && continue
             if echo "$FILE" | grep -qE '^(dist|tools/toolchain)'; then
               ARTIFACTS_REQUIRED=true
               break
@@ -295,12 +324,12 @@ jobs:
           TRUSTED=false
 
           # Check if user is a ScyllaDB org member
-          HTTP_CODE=$(gh api "orgs/scylladb/members/$PR_USER" --silent 2>/dev/null && echo "204" || echo "other")
+          HTTP_CODE=$(gh_api_retry "orgs/scylladb/members/$PR_USER" --silent 2>/dev/null && echo "204" || echo "other")
           if [ "$HTTP_CODE" = "204" ]; then
             TRUSTED=true
           else
             # Check if user is in the external-contributors team
-            TEAM_STATE=$(gh api "orgs/scylladb/teams/external-contributors/memberships/$PR_USER" --jq '.state' 2>/dev/null || echo "none")
+            TEAM_STATE=$(gh_api_retry "orgs/scylladb/teams/external-contributors/memberships/$PR_USER" --jq '.state' 2>/dev/null || echo "none")
             if [ "$TEAM_STATE" = "active" ]; then
               TRUSTED=true
             fi
@@ -309,7 +338,7 @@ jobs:
           if [ "$TRUSTED" = "false" ]; then
             echo "::warning::PR submitted by external contributor ($PR_USER), CI will not trigger automatically"
             TARGET_FOLDER="${{ steps.target-folder.outputs.folder }}"
-            gh api "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
+            gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
               -f body="@scylladb/scylla-maint please review and trigger CI for this pull request
           **CI Build:** https://jenkins.scylladb.com/job/${TARGET_FOLDER}/job/scylla-ci/parambuild/?PR_NUMBER=${PR_NUMBER}"
           fi
@@ -395,7 +424,7 @@ jobs:
           fi
 
           # Set pending commit status
-          gh api "repos/$PR_REPO/statuses/$PR_SHA" \
+          gh_api_retry "repos/$PR_REPO/statuses/$PR_SHA" \
             -f state="pending" \
             -f context="Checkout" \
             -f description="Waiting for CI to start" \
