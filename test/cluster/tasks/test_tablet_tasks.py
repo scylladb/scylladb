@@ -525,16 +525,25 @@ async def test_tablet_resize_list(manager: ManagerClient):
         keys = range(total_keys)
         await prepare_split(manager, servers[0], keyspace, table1, keys)
 
+        injection = "tablet_split_finalization_postpone"
+        compaction_injection = "split_sstable_rewrite"
+        await manager.api.enable_injection(servers[0].ip_addr, injection, False)
+        await manager.api.enable_injection(servers[0].ip_addr, compaction_injection, one_shot=True)
+
+        # Trigger split with only 1 server so the load balancer cannot schedule
+        # a concurrent tablet migration (which would stop the split compaction
+        # and consume the one_shot injection).
+        await manager.enable_tablet_balancing()
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "split_sstable_rewrite")
+
+        # Now add the second server while the split compaction is held by the
+        # injection. The split is already in progress so the coordinator won't
+        # schedule a migration for this tablet.
         servers.append(await manager.server_add(cmdline=cmdline, config={
             'tablet_load_stats_refresh_interval_in_seconds': 1
         }))
+        await manager.api.enable_injection(servers[1].ip_addr, injection, False)
 
-        injection = "tablet_split_finalization_postpone"
-        compaction_injection = "split_sstable_rewrite"
-        await enable_injection(manager, servers, injection)
-        await manager.api.enable_injection(servers[0].ip_addr, compaction_injection, one_shot=True)
-
-        await manager.enable_tablet_balancing()
         task0 = (await wait_tasks_created(tm, servers[0], module_name, 1, "split", keyspace, table1))[0]
         task1 = (await wait_tasks_created(tm, servers[1], module_name, 1, "split", keyspace, table1))[0]
 
@@ -548,7 +557,6 @@ async def test_tablet_resize_list(manager: ManagerClient):
             assert task.table == table1
             assert task.keyspace == keyspace
 
-        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "split_sstable_rewrite")
         await manager.api.message_injection(servers[0].ip_addr, "split_sstable_rewrite")
 
         status1 = await tm.get_task_status(servers[1].ip_addr, task0.task_id)
