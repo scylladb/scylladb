@@ -40,9 +40,11 @@ namespace {
 using namespace std::chrono_literals;
 
 using ann_error = vector_search::vector_store_client::ann_error;
+using fts_error = vector_search::vector_store_client::fts_error;
 using configuration_exception = exceptions::configuration_exception;
 using duration = lowres_clock::duration;
 using vs_vector = vector_search::vector_store_client::vs_vector;
+using query_string = vector_search::vector_store_client::query_string;
 using limit = vector_search::vector_store_client::limit;
 using host_name = vector_search::vector_store_client::host_name;
 using http_path = sstring;
@@ -83,6 +85,24 @@ auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
         return {};
     }
     return {{schema, host, *port}};
+}
+
+auto decode_error_message(const std::vector<seastar::temporary_buffer<char>>& content) -> sstring {
+    if (content.size() == 1) {
+        auto body = std::string_view(content.front().get(), content.front().size());
+        auto json = rjson::try_parse(body);
+        if (json && json->IsString()) {
+            return sstring(rjson::to_string_view(*json));
+        }
+        return sstring(body);
+    }
+
+    auto body = vector_search::response_content_to_sstring(content);
+    auto json = rjson::try_parse(body);
+    if (json && json->IsString()) {
+        return sstring(rjson::to_string_view(*json));
+    }
+    return body;
 }
 
 auto get_key_column_value(const rjson::value& item, std::size_t idx, const column_definition& column) -> std::expected<bytes, ann_error> {
@@ -141,7 +161,8 @@ auto write_ann_json(vs_vector vs_vector, limit limit, const rjson::value& filter
     return seastar::format(R"({{"vector":[{}],"limit":{},"filter":{}}})", fmt::join(vs_vector, ","), limit, rjson::print(filter));
 }
 
-auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
+auto read_scored_primary_keys_json(rjson::value const& json, schema_ptr const& schema, std::string_view score_field_name)
+        -> std::expected<primary_keys, ann_error> {
     if (!json.HasMember("primary_keys")) {
         vslogger.error("Vector Store returned invalid JSON: missing 'primary_keys'");
         return std::unexpected{service_reply_format_error{}};
@@ -152,23 +173,24 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         return std::unexpected{service_reply_format_error{}};
     }
 
-    if (!json.HasMember("similarity_scores")) {
-        vslogger.error("Vector Store returned invalid JSON: missing 'similarity_scores'");
+    auto const* score_json = rjson::find(json, score_field_name);
+    if (score_json == nullptr) {
+        vslogger.error("Vector Store returned invalid JSON: missing '{}'", score_field_name);
         return std::unexpected{service_reply_format_error{}};
     }
-    auto const& similarity_json = json["similarity_scores"];
-    if (!similarity_json.IsArray()) {
-        vslogger.error("Vector Store returned invalid JSON: 'similarity_scores' is not an array");
+    if (!score_json->IsArray()) {
+        vslogger.error("Vector Store returned invalid JSON: '{}' is not an array", score_field_name);
         return std::unexpected{service_reply_format_error{}};
     }
-    auto const& similarity_arr = json["similarity_scores"].GetArray();
+    auto const& score_arr = score_json->GetArray();
 
-    // We assume that the similarity_arr, and all the key arrays in keys_json
-    // have the same length, which is the number of nearest neighbors returned
+    // We assume that the score_arr, and all the key arrays in keys_json
+    // have the same length, which is the number of results returned
     // by the vector store.
-    auto size = similarity_arr.Size();
+    auto size = score_arr.Size();
 
     auto keys = primary_keys{};
+    keys.reserve(size);
     for (auto idx = 0U; idx < size; ++idx) {
         auto pk = pk_from_json(keys_json, idx, schema);
         if (!pk) {
@@ -178,25 +200,29 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         if (!ck) {
             return std::unexpected{ck.error()};
         }
-        auto const& sim_val = similarity_arr[idx];
-        if (sim_val.IsNumber()) {
-            keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, sim_val.GetFloat()});
-        } else if (sim_val.IsNull()) {
-            // JSON does not support infinite values, and serde_json serializes
-            // both +inf and -inf as null. This can only happen with the
-            // DOT_PRODUCT similarity function when the dot product overflows
-            // float32 (very high magnitude vectors). Since we can't distinguish
-            // +inf from -inf here, we use +inf as a conservative approximation
-            // (the item will be ranked highly, which is appropriate for a very
-            // large positive dot product; the -inf case is very unlikely in
-            // practice).
-            keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, std::numeric_limits<float>::infinity()});
+        auto const& score_val = score_arr[idx];
+        float score = 0;
+        if (score_val.IsNumber()) {
+            score = score_val.GetFloat();
         } else {
-            vslogger.error("Vector Store returned invalid JSON: 'similarity_scores[{}]'={} is not a number", idx, rjson::print(sim_val));
+            vslogger.error("Vector Store returned invalid JSON: '{}[{}]'={} is not a number", score_field_name, idx, rjson::print(score_val));
             return std::unexpected{service_reply_format_error{}};
         }
+        keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, score});
     }
     return std::move(keys);
+}
+
+auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
+    return read_scored_primary_keys_json(json, schema, "similarity_scores");
+}
+
+auto write_bm25_json(query_string query, limit limit) -> json_content {
+    return seastar::format(R"({{"query":{},"limit":{}}})", rjson::from_string(query), limit);
+}
+
+auto read_bm25_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, fts_error> {
+    return read_scored_primary_keys_json(json, schema, "scores");
 }
 
 bool should_vector_store_service_be_disabled(std::vector<sstring> const& uris) {
@@ -329,7 +355,7 @@ struct vector_store_client::impl {
             co_return index_status::creating;
         }
         try {
-            auto json = rjson::parse(response_content_to_sstring(resp->content));
+            auto json = rjson::parse(std::move(resp->content));
             const auto* status = rjson::find(json, "status");
             if (!status || !status->IsString()) {
                 co_return index_status::creating;
@@ -367,7 +393,7 @@ struct vector_store_client::impl {
         }
 
         if (resp->status != status_type::ok) {
-            auto error_content = response_content_to_sstring(resp->content);
+            auto error_content = decode_error_message(resp->content);
             vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, error_content);
             co_return std::unexpected{service_error{resp->status, std::move(error_content)}};
         }
@@ -379,6 +405,40 @@ struct vector_store_client::impl {
             co_return std::unexpected{service_reply_format_error{}};
         }
     }
+
+    auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, fts_error>> {
+        if (is_disabled()) {
+            vslogger.error("Disabled Vector Store while calling bm25");
+            co_return std::unexpected{disabled{}};
+        }
+
+        auto path = format("/api/v1/indexes/{}/{}/bm25", keyspace, name);
+        auto content = write_bm25_json(std::move(fts_query), limit);
+
+        auto resp = co_await request(operation_type::POST, std::move(path), std::move(content), as);
+        if (!resp) {
+            co_return std::unexpected{std::visit(
+                    [](auto&& err) {
+                        return fts_error{err};
+                    },
+                    resp.error())};
+        }
+
+        if (resp->status != status_type::ok) {
+            auto error_content = decode_error_message(resp->content);
+            vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, error_content);
+            co_return std::unexpected{service_error{resp->status, std::move(error_content)}};
+        }
+
+        try {
+            co_return read_bm25_json(rjson::parse(std::move(resp->content)), schema);
+        } catch (const rjson::error& e) {
+            vslogger.error("Vector Store returned invalid JSON: {}", e.what());
+            co_return std::unexpected{service_reply_format_error{}};
+        }
+    }
+
 
     future<clients::request_result> request(
             seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as) {
@@ -432,7 +492,12 @@ auto vector_store_client::get_index_status(keyspace_name keyspace, index_name na
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
         abort_source& as) -> future<std::expected<primary_keys, ann_error>> {
-    return _impl->ann(keyspace, name, schema, vs_vector, limit, filter, as);
+    return _impl->ann(std::move(keyspace), std::move(name), schema, std::move(vs_vector), limit, filter, as);
+}
+
+auto vector_store_client::bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
+        -> future<std::expected<primary_keys, fts_error>> {
+    return _impl->bm25(std::move(keyspace), std::move(name), schema, std::move(fts_query), limit, as);
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {

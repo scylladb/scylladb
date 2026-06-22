@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "schema/schema_builder.hh"
+#include "types/types.hh"
 #include "test/lib/cql_test_env.hh"
 #include "db/config.hh"
 #include <seastar/core/future.hh>
@@ -123,6 +125,26 @@ constexpr auto CORRECT_RESPONSE_FOR_TEST_TABLE = R"({
     },
     "similarity_scores": [0.1, 0.2]
 })";
+
+// A sample correct BM25 response for the test table schema (make_test_schema()).
+constexpr auto CORRECT_BM25_RESPONSE_FOR_TEST_TABLE = R"({
+    "primary_keys": {
+        "pk1": [5, 6],
+        "pk2": [7, 8],
+        "ck1": [9, 1],
+        "ck2": [2, 3]
+    },
+    "scores": [0.1, 0.2]
+})";
+
+inline schema_ptr make_test_schema(const seastar::sstring& ks = "ks", const seastar::sstring& cf = "idx") {
+    return schema_builder(this_smp_shard_count(), ks, cf)
+            .with_column("pk1", byte_type, column_kind::partition_key)
+            .with_column("pk2", byte_type, column_kind::partition_key)
+            .with_column("ck1", byte_type, column_kind::clustering_key)
+            .with_column("ck2", byte_type, column_kind::clustering_key)
+            .build();
+}
 
 inline auto create_test_table(cql_test_env& env, const seastar::sstring& ks, const seastar::sstring& cf) -> future<schema_ptr> {
     co_await env.execute_cql(fmt::format(R"(

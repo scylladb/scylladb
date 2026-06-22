@@ -361,7 +361,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 vs.start_background_tasks();
 
                 // server responds with 404 - client should return service_error
-                server->next_ann_response({status_type::not_found, "idx2 not found"});
+                server->next_ann_response({status_type::not_found, R"("idx2 not found")"});
                 auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!server->ann_requests().empty());
                 BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.3,0.2,0.1],"limit":1})");
@@ -1146,4 +1146,106 @@ SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
             .finally(seastar::coroutine::lambda([&] -> future<> {
                 co_await server->stop();
             }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_test_bm25_aborted) {
+    auto server = co_await make_unavailable_server();
+    auto cfg = config();
+    cfg.vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    auto vs = vector_store_client{cfg};
+    auto schema = make_test_schema();
+    auto as = abort_source_timeout();
+    configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&server](auto const& host) -> future<std::optional<inet_address>> {
+        BOOST_CHECK_EQUAL(host, "good.authority.here");
+        co_await sleep(milliseconds(100));
+        co_return inet_address(server->host());
+    });
+
+    vs.start_background_tasks();
+
+    auto keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset(milliseconds(10)));
+    BOOST_REQUIRE(!keys);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(keys.error()));
+
+    co_await vs.stop();
+    co_await server->stop();
+}
+
+SEASTAR_TEST_CASE(vector_store_client_test_bm25_request) {
+    auto server = co_await make_vs_mock_server(vs_mock_server::mode::bm25);
+    auto cfg = config();
+    cfg.vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    auto vs = vector_store_client{cfg};
+    auto schema = make_test_schema();
+    auto as = abort_source_timeout();
+    configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
+
+    vs.start_background_tasks();
+
+    // server responds with 404 - client should return service_error
+    server->next_search_response({status_type::not_found, "idx2 not found"});
+    auto keys = co_await vs.bm25("ks", "idx2", schema, "quote\"back\\slash\nnewline", 1, as.reset());
+    BOOST_REQUIRE(!server->search_requests().empty());
+    BOOST_REQUIRE_EQUAL(server->search_requests().back().body, R"({"query":"quote\"back\\slash\nnewline","limit":1})");
+    BOOST_REQUIRE_EQUAL(server->search_requests().back().path, "/api/v1/indexes/ks/idx2/bm25");
+    BOOST_REQUIRE(!keys);
+    auto* err = std::get_if<vector_store_client::service_error>(&keys.error());
+    BOOST_CHECK(err != nullptr);
+    BOOST_CHECK_EQUAL(err->status, status_type::not_found);
+    BOOST_CHECK_EQUAL(err->message, "idx2 not found");
+
+    // missing primary_keys in the reply - service should return format error
+    server->next_search_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"scores":[0.1,0.2]})"});
+    keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
+    BOOST_REQUIRE(!keys);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+    // missing scores in the reply - service should return format error
+    server->next_search_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"scores1":[0.1,0.2]})"});
+    keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
+    BOOST_REQUIRE(!keys);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+    // missing pk1 key in the reply - service should return format error
+    server->next_search_response({status_type::ok, R"({"primary_keys":{"pk11":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"scores":[0.1,0.2]})"});
+    keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
+    BOOST_REQUIRE(!keys);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+    // missing ck1 key in the reply - service should return format error
+    server->next_search_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck11":[9,1],"ck2":[2,3]},"scores":[0.1,0.2]})"});
+    keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
+    BOOST_REQUIRE(!keys);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+    // wrong size of pk2 key in the reply - service should return format error
+    server->next_search_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7],"ck1":[9,1],"ck2":[2,3]},"scores":[0.1,0.2]})"});
+    keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
+    BOOST_REQUIRE(!keys);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+    // wrong size of ck2 key in the reply - service should return format error
+    server->next_search_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2]},"scores":[0.1,0.2]})"});
+    keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
+    BOOST_REQUIRE(!keys);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+    // non-numeric scores element in the reply - service should return format error
+    server->next_search_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"scores":[null,0.2]})"});
+    keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
+    BOOST_REQUIRE(!keys);
+    BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+    // correct reply - service should return keys with relevance scores
+    server->next_search_response({status_type::ok, CORRECT_BM25_RESPONSE_FOR_TEST_TABLE});
+    keys = co_await vs.bm25("ks", "idx", schema, "hello world", 2, as.reset());
+    BOOST_REQUIRE(keys);
+    BOOST_REQUIRE_EQUAL(keys->size(), 2);
+    BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).partition.key().explode()), "[05, 07]");
+    BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).clustering.explode()), "[09, 02]");
+    BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).partition.key().explode()), "[06, 08]");
+    BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).clustering.explode()), "[01, 03]");
+
+    co_await vs.stop();
+    co_await server->stop();
 }

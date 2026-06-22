@@ -13,11 +13,16 @@
 #include "seastarx.hh"
 #include "error.hh"
 #include "utils/rjson.hh"
-#include <seastar/core/shared_future.hh>
-#include <seastar/core/shared_ptr.hh>
-#include <seastar/http/reply.hh>
-#include <seastar/core/sharded.hh>
+#include <chrono>
 #include <expected>
+#include <functional>
+#include <variant>
+#include <vector>
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sharded.hh>
+#include <seastar/http/reply.hh>
 
 class schema;
 namespace db {
@@ -48,6 +53,7 @@ class vector_store_client final : public seastar::peering_sharded_service<vector
 public:
     using config = db::config;
     using vs_vector = std::vector<float>;
+    using query_string = std::string;
     using host_name = sstring;
     using index_name = sstring;
     using keyspace_name = sstring;
@@ -66,6 +72,7 @@ public:
 
     using ann_error = std::variant<disabled, aborted, addr_unavailable, service_unavailable, service_error, service_reply_format_error>;
     using ann_error_visitor = error_visitor;
+    using fts_error = ann_error;
 
     explicit vector_store_client(config const& cfg);
     ~vector_store_client();
@@ -101,6 +108,14 @@ public:
     /// similar).
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
             -> future<std::expected<primary_keys, ann_error>>;
+
+    /// Request the vector store service for the primary keys of the top
+    /// full-text search results. Each returned primary_key has its similarity
+    /// field set to the BM25 relevance score returned by the vector store,
+    /// which sorts the results in decreasing relevance order (higher score =
+    /// more relevant).
+    auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, fts_error>>;
 
 private:
     friend struct vector_store_client_tester;
