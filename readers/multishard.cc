@@ -599,11 +599,13 @@ future<> evictable_reader::fill_buffer() {
     _reader->move_buffer_content_to(*this);
 
     // Ensure that each buffer represents forward progress. Only a concern when
-    // the last fragment in the buffer is range tombstone change. In this case
-    // ensure that:
+    // the last fragment in the buffer is range tombstone change and the entire
+    // buffer comes from the same partition from which the last fragment of the
+    // previous buffer came from. In this case ensure that:
     // * buffer().back().position() > _next_position_in_partition;
     // * _reader.peek()->position() > buffer().back().position();
-    if (!is_buffer_empty() && buffer().back().is_range_tombstone_change()) {
+    if (!is_buffer_empty() && buffer().back().is_range_tombstone_change()
+            && std::ranges::none_of(buffer(), std::mem_fn(&mutation_fragment_v2::is_partition_start))) {
         auto* next_mf = co_await _reader->peek();
 
         // First make sure we've made progress w.r.t. _next_position_in_partition.
