@@ -221,6 +221,11 @@ public:
     static constexpr auto CDC_TIMESTAMPS = "cdc_timestamps";
     static constexpr auto CDC_STREAMS = "cdc_streams";
 
+    // alternator export to s3
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_EXPORTS = "alternator_export_to_s3_exports";
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS = "alternator_export_to_s3_client_tokens";
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_EXPORT_SUMMARIES = "alternator_export_to_s3_export_summaries";
+
     // auth
     static constexpr auto ROLES = "roles";
     static constexpr auto ROLE_MEMBERS = "role_members";
@@ -269,6 +274,11 @@ public:
     static schema_ptr client_routes();
     static schema_ptr views_builds_in_progress();
     static schema_ptr scylla_views_builds_in_progress();
+
+    // alternator export to s3
+    static schema_ptr alternator_export_to_s3_exports();
+    static schema_ptr alternator_export_to_s3_client_tokens();
+    static schema_ptr alternator_export_to_s3_export_summaries();
 
     // auth
     static schema_ptr roles();
