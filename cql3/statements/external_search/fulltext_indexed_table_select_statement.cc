@@ -105,9 +105,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         throw exceptions::invalid_request_exception("Only BM25 scoring function is supported in ORDER BY");
     }
 
-    if (fc->args.size() != 2) {
-        throw exceptions::invalid_request_exception("BM25 requires both a column and a query term argument");
-    }
+    throwing_assert(fc->args.size() == 2);
 
     const auto* column = extract_column_from_first_argument(*fc);
     auto search_term = extract_search_term_from_second_argument(*fc);
