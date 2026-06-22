@@ -19,7 +19,6 @@ from argparse import BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count
 from functools import cache, cached_property
-from pathlib import Path
 from random import randint
 from typing import TYPE_CHECKING, Callable
 from types import SimpleNamespace
@@ -31,23 +30,29 @@ import yaml
 from _pytest.junitxml import xml_key
 
 
-from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID
+from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
+from test.pylib.pool import Pool
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
     SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
-from test.pylib.scylla_cluster import ScyllaCluster, merge_cmdline_options
+from test.pylib.scylla_cluster import (
+    ScyllaCluster,
+    ScyllaServer,
+    get_current_version_description,
+    merge_cmdline_options,
+)
 from test.pylib.skip_reason_plugin import skip_marker
-from test.pylib.suite.python import PythonTestSuite
 from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 if TYPE_CHECKING:
+    import argparse
     from collections.abc import Generator, AsyncGenerator
 
     import _pytest.nodes
@@ -72,7 +77,7 @@ _pytest_config: pytest.Config | None = None
 
 _system_resource_monitor: SystemResourceMonitor | None = None
 
-_suites: dict[str, PythonTestSuite] = {}
+_cluster_pools: dict[str, Pool[ScyllaCluster]] = {}
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -262,28 +267,37 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
 
 
 @pytest.fixture(scope="module")
-def testpy_suite(request: pytest.FixtureRequest, build_mode: str) -> PythonTestSuite:
+def testpy_suite_clusters(request: pytest.FixtureRequest,
+                          build_mode: str,
+                          suite_log_dir: pathlib.Path,
+                          scylla_binary: str) -> Pool[ScyllaCluster]:
     suite_config = get_params_stash(node=request.node)[TEST_SUITE]
     suite_key = os.path.join(suite_config.path, build_mode)
-    suite = _suites.get(suite_key)
-    if not suite:
-        _suites[suite_key] = suite = PythonTestSuite(
-            path=suite_config.path,
-            cfg=suite_config.cfg,
+    pool = _cluster_pools.get(suite_key)
+    if not pool:
+        _cluster_pools[suite_key] = pool = create_suite_pool(
+            suite_config=suite_config,
             options=request.config.option,
             mode=build_mode,
+            log_dir=suite_log_dir,
+            scylla_exe=scylla_binary,
         )
-    return suite
+    return pool
 
 
-@pytest.fixture(scope="function")
-def scylla_binary(testpy_suite: PythonTestSuite) -> Path:
-    return testpy_suite.scylla_exe
+@pytest.fixture(scope="module")
+def suite_log_dir(request: pytest.FixtureRequest, build_mode: str) -> pathlib.Path:
+    return pathlib.Path(request.config.getoption("--tmpdir")).joinpath(build_mode).absolute()
+
+
+@pytest.fixture(scope="module")
+def scylla_binary(request: pytest.FixtureRequest, build_mode: str) -> str:
+    return request.config.getoption("--exe-path") or path_to(build_mode, "scylla")
 
 
 @pytest.fixture(scope="module")
 async def scylla_cluster(request: pytest.FixtureRequest,
-                         testpy_suite: PythonTestSuite,
+                         testpy_suite_clusters: Pool[ScyllaCluster],
                          build_mode: str,
                          testpy_shortname: str,
                          testpy_uname: str) -> AsyncGenerator[ScyllaCluster]:
@@ -298,11 +312,11 @@ async def scylla_cluster(request: pytest.FixtureRequest,
     cluster_logger = LogPrefixAdapter(logging.getLogger(logger_prefix), {"prefix": logger_prefix})
     cluster: ScyllaCluster | None = None
     server_log_filename: pathlib.Path | None = None
-    testpy_name = os.path.join(testpy_suite.name, testpy_shortname.split('.')[0])
+    testpy_name = os.path.join(get_params_stash(node=request.node)[TEST_SUITE].name, testpy_shortname.split('.')[0])
     is_before_test_ok = False
     is_after_test_ok = False
     try:
-        cluster: ScyllaCluster = await testpy_suite.clusters.get(cluster_logger)
+        cluster: ScyllaCluster = await testpy_suite_clusters.get(cluster_logger)
         cluster.before_test(testpy_uname)
         cluster_logger.info("Leasing Scylla cluster %s for test %s", cluster, testpy_uname)
         server_log_filename = cluster.server_log_filename()
@@ -324,7 +338,7 @@ async def scylla_cluster(request: pytest.FixtureRequest,
     finally:
         if cluster is not None:
             cluster_logger.info("Test %s finished", testpy_uname)
-            await testpy_suite.clusters.put(cluster, is_dirty=True)
+            await testpy_suite_clusters.put(cluster, is_dirty=True)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
@@ -346,7 +360,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         return
 
     artifacts.init()
-    artifacts.add_exit_artifact(None, HostRegistry().cleanup)
+    artifacts.add_exit_artifact(HostRegistry().cleanup)
 
     # Check if this is an xdist worker
     is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
@@ -740,7 +754,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     async def make_async_finalize():
         finalize()
 
-    artifacts.add_exit_artifact(None, make_async_finalize)
+    artifacts.add_exit_artifact(make_async_finalize)
     ms = MinioServer(
         tempdir_base=str(tempdir_base),
         address=await hosts.lease_host(),
@@ -750,7 +764,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         ),
     )
     await ms.start()
-    artifacts.add_exit_artifact(None, ms.stop)
+    artifacts.add_exit_artifact(ms.stop)
 
     mock_s3_server = MockS3Server(
         host=await hosts.lease_host(),
@@ -761,7 +775,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         ),
     )
     await mock_s3_server.start()
-    artifacts.add_exit_artifact(None, mock_s3_server.stop)
+    artifacts.add_exit_artifact(mock_s3_server.stop)
 
     minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
     proxy_s3_server = S3ProxyServer(
@@ -776,7 +790,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         ),
     )
     await proxy_s3_server.start()
-    artifacts.add_exit_artifact(None, proxy_s3_server.stop)
+    artifacts.add_exit_artifact(proxy_s3_server.stop)
 
 
 def prepare_environment(tempdir_base: pathlib.Path,
@@ -786,3 +800,113 @@ def prepare_environment(tempdir_base: pathlib.Path,
                         toxiproxy_byte_limit: int) -> None:
     prepare_dirs(tempdir_base, modes, gather_metrics, save_log_on_success=save_log_on_success)
     start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
+
+
+def create_suite_pool(suite_config: TestSuiteConfig,
+                      options: argparse.Namespace,
+                      mode: str,
+                      log_dir: pathlib.Path,
+                      scylla_exe: str) -> Pool[ScyllaCluster]:
+    # environment variables that should be the base of all processes running in this suit
+    base_env = {}
+
+    if options.coverage and (mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
+        # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
+        # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
+        # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
+        # thousands of tests it can easily reach 10 of GBs)
+        # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
+        base_env["LLVM_PROFILE_FILE"] = str(log_dir / "coverage" / suite_config.name / "%m.profraw")
+
+    cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
+    env_pool_size = os.getenv("CLUSTER_POOL_SIZE")
+    if options.cluster_pool_size is not None:
+        pool_size = options.cluster_pool_size
+    elif env_pool_size is not None:
+        pool_size = int(env_pool_size)
+    else:
+        pool_size = suite_config.cfg.get("pool_size", 2)
+
+    def create_server(create_cfg: ScyllaCluster.CreateServerParams):
+        cmdline_options = suite_config.cfg.get("extra_scylla_cmdline_options", [])
+        if type(cmdline_options) == str:
+            cmdline_options = [cmdline_options]
+        cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
+        cmdline_options = merge_cmdline_options(cmdline_options, options.extra_scylla_cmdline_options.split())
+        # There are multiple sources of config options, with increasing priority
+        # (if two sources provide the same config option, the higher priority one wins):
+        # 1. the defaults
+        # 2. suite-specific config options (in "extra_scylla_config_options")
+        # 3. config options from tests (when servers are added during a test)
+        config_options = {
+            "authenticator": "PasswordAuthenticator",
+            "authorizer": "CassandraAuthorizer",
+            "tablets_initial_scale_factor": 4 if mode == "release" else 2,
+            **suite_config.cfg.get("extra_scylla_config_options", {}),
+            **create_cfg.config_from_test,
+        }
+        server = ScyllaServer(
+            mode=mode,
+            version=(create_cfg.version or get_current_version_description(scylla_exe)),
+            vardir=log_dir,
+            logger=create_cfg.logger,
+            cluster_name=create_cfg.cluster_name,
+            ip_addr=create_cfg.ip_addr,
+            seeds=create_cfg.seeds,
+            cmdline_options=cmdline_options,
+            config_options=config_options,
+            property_file=create_cfg.property_file,
+            append_env=base_env,
+            server_encryption=create_cfg.server_encryption)
+
+        return server
+
+    async def create_cluster(logger: logging.Logger | logging.LoggerAdapter) -> ScyllaCluster:
+        cluster = ScyllaCluster(logger, cluster_size, create_server)
+
+        async def stop() -> None:
+            await cluster.stop()
+
+        artifacts.add_exit_artifact(stop)
+
+        if not options.save_log_on_success:
+            # If a test fails, we might want to keep the data dirs.
+            async def uninstall() -> None:
+                await cluster.uninstall()
+
+            artifacts.add_exit_artifact(uninstall)
+
+        await cluster.install_and_start()
+        # If cluster failed to start, raise the exception immediately
+        # so the pool doesn't return a broken cluster to tests
+        if cluster.start_exception is not None:
+            # Clean up the broken cluster before raising
+            try:
+                await cluster.stop()
+                if cluster.api is not None:
+                    cluster.api.close()
+                    cluster.api = None
+                await cluster.release_ips()
+            except:
+                pass  # Ignore cleanup errors
+            raise cluster.start_exception
+        return cluster
+
+    async def recycle_cluster(cluster: ScyllaCluster) -> None:
+        """When a dirty cluster is returned to the cluster pool,
+           stop it and release the used IPs. We don't necessarily uninstall() it yet,
+           which would delete the log file and directory - we might want to preserve
+           these if it came from a failed test.
+        """
+        await cluster.stop()
+        for srv in cluster.servers.values():
+            if srv.log_file is not None:
+                srv.log_file.close()
+            srv.maintenance_socket_dir.cleanup()
+        # Close API client to release connector resources
+        if cluster.api is not None:
+            cluster.api.close()
+            cluster.api = None
+        await cluster.release_ips()
+
+    return Pool(pool_size, create_cluster, recycle_cluster)
