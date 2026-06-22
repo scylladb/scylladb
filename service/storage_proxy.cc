@@ -4332,31 +4332,23 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, tracin
     });
 }
 
-future<result<db::large_data_violation_type>>
+future<result<>>
 storage_proxy::mutate_with_triggers(utils::chunked_vector<mutation> mutations, db::consistency_level cl,
     clock_type::time_point timeout,
     bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, coordinator_mutate_options options) {
     warn(unimplemented::cause::TRIGGERS);
 
-    db::large_data_violation_type large_data_violations = db::large_data_violation_type::none;
     if (!options.bypass_large_data_guardrails) {
         for (const mutation& m : mutations) {
-            large_data_violations |= m.schema()->table().get_large_data_guardrail()->check_coordinator(*m.schema(), m.partition(), m.key());
+            m.schema()->table().get_large_data_guardrail()->check_coordinator(*m.schema(), m.partition(), m.key(), options.violations_out);
         }
     }
-
-    auto carry_violations = [large_data_violations] (result<> res) -> result<db::large_data_violation_type> {
-        if (!res) {
-            return std::move(res).as_failure();
-        }
-        return large_data_violations;
-    };
 
     if (should_mutate_atomically) {
         SCYLLA_ASSERT(!raw_counters);
-        return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), std::move(options)).then(carry_violations);
+        return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), std::move(options));
     }
-    return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters, std::move(options)).then(carry_violations);
+    return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters, std::move(options));
 }
 
 /**
@@ -7076,8 +7068,8 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
                 // since the value we are writing is dummy we may use minimal consistency level for learn
                 handler->set_cl_for_learn(db::consistency_level::ANY);
             } else {
-                large_data_violations |= ld_guardrail->check_coordinator(
-                        *schema, mutation->partition(), mutation->key());
+                ld_guardrail->check_coordinator(
+                        *schema, mutation->partition(), mutation->key(), &large_data_violations);
                 paxos::paxos_state::logger.debug("CAS[{}] precondition is met; proposing client-requested updates for {}",
                         handler->id(), ballot);
                 tracing::trace(handler->tr_state, "CAS precondition is met; proposing client-requested updates for {}", ballot);

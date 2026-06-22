@@ -758,7 +758,7 @@ public:
     future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                            clock_type::time_point timeout, service_permit permit);
 
-    future<result<db::large_data_violation_type>> mutate_with_triggers(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
+    future<result<>> mutate_with_triggers(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                           bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit,
                                           db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false,
                                           coordinator_mutate_options options = {});

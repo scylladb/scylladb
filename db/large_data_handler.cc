@@ -345,8 +345,8 @@ large_data_violation_type large_data_guardrail::check_collection_element_count(c
     return warned ? large_data_violation_type::collection : large_data_violation_type::none;
 }
 
-large_data_violation_type large_data_guardrail::check_coordinator(const schema& s, const mutation_partition& mp,
-        partition_key_view pk) const {
+void large_data_guardrail::check_coordinator(const schema& s, const mutation_partition& mp,
+        partition_key_view pk, db::large_data_violation_type* violations_out) const {
     const uint64_t cell_fail = uint64_t(_cfg.cell_size_fail_threshold_mb()) * MB;
     const uint64_t cell_warn = uint64_t(_cfg.cell_size_warn_threshold_mb()) * MB;
     const uint64_t row_fail = uint64_t(_cfg.row_size_fail_threshold_mb()) * MB;
@@ -412,7 +412,10 @@ large_data_violation_type large_data_guardrail::check_coordinator(const schema& 
             check_collection(cdef, cell);
         });
     }
-    return violations;
+
+    if (violations_out) {
+        *violations_out = violations;
+    }
 }
 
 void large_data_cache_tracker::on_row_merged(const schema& s, const rows_entry& row) noexcept {

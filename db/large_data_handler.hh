@@ -161,11 +161,9 @@ public:
             partition_key_view pk, db::large_data_violation_type* violations_out) const = 0;
     // Coordinator-side check: inspects the mutation content directly
     // (cell value sizes, row memory usage, collection element counts).
-    // Hard limit violations throw; soft limit violations are logged and, when
-    // CQL warnings are enabled, returned as the set of violated categories so
-    // the CQL layer can surface them to the client as a response warning.
-    virtual large_data_violation_type check_coordinator(const schema& s, const mutation_partition& mp,
-            partition_key_view pk) const = 0;
+    // Hard limit violations throw; soft limit violations are logged.
+    virtual void check_coordinator(const schema& s, const mutation_partition& mp,
+            partition_key_view pk, db::large_data_violation_type* violations_out) const = 0;
     // Returns a tracker to pass to partition_entry::apply(), or nullptr
     // when no memtable-level tracking is needed.  The returned pointer
     // remains valid until the next call to get_memtable_cache_tracker() or
@@ -188,8 +186,8 @@ public:
     }
     void check(const schema&, const mutation_partition&,
             partition_key_view, db::large_data_violation_type*) const override {}
-    large_data_violation_type check_coordinator(const schema&, const mutation_partition&,
-            partition_key_view) const override { return large_data_violation_type::none; }
+    void check_coordinator(const schema&, const mutation_partition&,
+            partition_key_view, db::large_data_violation_type*) const override {}
     large_data_cache_tracker* get_memtable_cache_tracker(const schema&,
             partition_key_view) override { return nullptr; }
     void on_flush() override {}
@@ -205,8 +203,8 @@ public:
 
     void check(const schema& s, const mutation_partition& mp,
             partition_key_view pk, db::large_data_violation_type* violations_out) const override;
-    large_data_violation_type check_coordinator(const schema& s, const mutation_partition& mp,
-            partition_key_view pk) const override;
+    void check_coordinator(const schema& s, const mutation_partition& mp,
+            partition_key_view pk, db::large_data_violation_type* violations_out) const override;
     large_data_cache_tracker* get_memtable_cache_tracker(const schema& s,
             partition_key_view pk) override;
     void on_flush() override;

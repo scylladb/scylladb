@@ -292,10 +292,12 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     _stats.statements_in_batches += _statements.size();
 
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
+    auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
+
     return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
-                                                                                                                               permit = query_state.get_permit()] (utils::chunked_vector<mutation> ms) mutable {
-        return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit));
-    }).then([guardrail_state, cl] (coordinator_result<db::large_data_violation_type> res) {
+                    permit = query_state.get_permit(), violations] (utils::chunked_vector<mutation> ms) mutable {
+        return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
+    }).then([guardrail_state, cl, violations] (coordinator_result<> res) {
         if (!res) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
@@ -305,20 +307,21 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
             result->add_warning(format("Using write consistency level {} listed on the "
                                        "write_consistency_levels_warned is not recommended.", cl));
         }
-        if (auto warning = db::large_data_soft_violation_warning(res.value()); !warning.empty()) {
+        if (auto warning = db::large_data_soft_violation_warning(*violations); !warning.empty()) [[unlikely]] {
             result->add_warning(std::move(warning));
         }
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(result));
     });
 }
 
-future<coordinator_result<db::large_data_violation_type>> batch_statement::execute_without_conditions(
+future<coordinator_result<>> batch_statement::execute_without_conditions(
         query_processor& qp,
         utils::chunked_vector<mutation> mutations,
         db::consistency_level cl,
         db::timeout_clock::time_point timeout,
         tracing::trace_state_ptr tr_state,
-        service_permit permit) const
+        service_permit permit,
+        db::large_data_violation_type* violations) const
 {
     // FIXME: do we need to do this?
 #if 0
@@ -345,7 +348,9 @@ future<coordinator_result<db::large_data_violation_type>> batch_statement::execu
             mutate_atomic = false;
         }
     }
-    return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit), db::allow_per_partition_rate_limit::yes);
+    return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit), db::allow_per_partition_rate_limit::yes, false, {
+        .violations_out = violations,
+    });
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
@@ -411,7 +416,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, cas_result.is_applied);
         // Surface any coordinator-side large data guardrail soft limit violations
         // detected during the LWT to the client as a CQL warning.
-        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) {
+        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
             result->add_warning(std::move(warning));
         }
         return result;
