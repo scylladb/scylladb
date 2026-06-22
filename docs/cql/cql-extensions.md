@@ -481,3 +481,63 @@ It's important to re-iterate that the per-cell TTL and per-row TTL features
 are separate and distinct, use a different CQL syntax, have a different
 implementation and provide different guarantees. It is possible to use
 both features in the same table, or even the same row.
+
+## Keyspace storage options
+
+The `STORAGE` option on `CREATE KEYSPACE` allows storing SSTable files on object
+storage (S3-compatible or Google Cloud Storage) instead of local disk.
+
+This feature is experimental and must be enabled in `scylla.yaml`:
+
+```yaml
+experimental_features:
+  - keyspace-storage-options
+```
+
+### Syntax
+
+```cql
+CREATE KEYSPACE ks
+  WITH REPLICATION = { ... }
+  AND STORAGE = {
+    'type'    : '<S3|GS>',
+    'endpoint': '<endpoint_name>',
+    'bucket'  : '<bucket_name>'
+    [, 'tiering' : '<tiering_mode>' ]
+  };
+```
+
+The endpoint must be configured in `scylla.yaml` under `object_storage_endpoints`.
+See the [object storage developer guide](../dev/object_storage.md) for endpoint
+configuration details.
+
+### Tiering option
+
+The optional `tiering` parameter controls how SSTable components are distributed
+between object storage and local disk.
+
+| Value | Description |
+|---|---|
+| *(absent)* | All SSTable components are stored on object storage. |
+| `data_page_cache` | Only the `Data` component is stored on object storage, served through an in-database page cache. All structural/index components (`Rows.db`, `Partitions.db`, `Summary.db`, etc.) are stored on local NVMe disk for low-latency access. |
+
+The `data_page_cache` tiering mode is designed for read-heavy workloads: the bulk of
+the data stays in cheap object storage, frequently-read data pages are cached in
+memory, and the index structures that are consulted on every read remain on fast
+local disk.
+
+Example:
+
+```cql
+CREATE KEYSPACE ks
+  WITH REPLICATION = {
+    'class' : 'NetworkTopologyStrategy',
+    'replication_factor' : 1
+  }
+  AND STORAGE = {
+    'type'    : 'S3',
+    'endpoint': 's3.us-east-2.amazonaws.com',
+    'bucket'  : 'my-bucket',
+    'tiering' : 'data_page_cache'
+  };
+```

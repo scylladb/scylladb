@@ -39,6 +39,7 @@ class config;
 }   // namespace db
 
 namespace s3 { class client; }
+namespace sstables { class page_cache; }
 
 namespace gms { class feature_service; }
 
@@ -174,6 +175,8 @@ private:
 
     const abort_source& _abort;
 
+    shared_ptr<sstables::page_cache> _page_cache;
+
     named_gate _signal_gate;
     signal_type _signal_source;
 
@@ -207,6 +210,13 @@ public:
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint) const {
         SCYLLA_ASSERT(_storage != nullptr);
         return _storage->get_endpoint_client(std::move(endpoint));
+    }
+
+    void set_page_cache(shared_ptr<sstables::page_cache> cache) noexcept {
+        _page_cache = std::move(cache);
+    }
+    shared_ptr<sstables::page_cache> get_page_cache() const noexcept {
+        return _page_cache;
     }
 
     bool is_known_endpoint(sstring endpoint) const {

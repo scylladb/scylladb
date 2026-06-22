@@ -29,11 +29,19 @@ struct storage_options {
         std::string_view name() const;
         bool operator==(const local&) const = default;
     };
+    // Tiering scheme for object-storage keyspaces.
+    // data_page_cache: Data component lives on object store with an in-DB page cache;
+    //   all other components (index structures) are stored on local NVMe disk.
+    enum class tiering_mode { none, data_page_cache };
+
     struct object_storage {
         std::string bucket;
         std::string endpoint;
         std::variant<sstring, table_id> location;
         seastar::abort_source* abort_source = nullptr;
+        tiering_mode tiering = tiering_mode::none;
+        // Non-persisted: when tiering != none, non-Data components are stored here locally.
+        sstring local_dir;
 
         std::string type;
 

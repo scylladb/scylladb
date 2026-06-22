@@ -116,6 +116,48 @@ CREATE KEYSPACE ks
 ```
 
 
+## Tiering option
+
+Both S3 and GS keyspaces support an optional `tiering` parameter in the `STORAGE` clause.
+Currently the only supported value is `data_page_cache`.
+
+### `tiering = 'data_page_cache'`
+
+When `tiering = 'data_page_cache'` is set, ScyllaDB uses a **hybrid storage** scheme for SSTables:
+
+- The **Data component** (`Data.db`) and the **TOC** (`TOC.txt`) are stored on object storage
+  (S3 or GS).  Reads of `Data.db` are served through an **in-database page cache** backed by the
+  `system.pagecache` and `system.pagecache_hits` system tables.  Once a page is fetched from object
+  storage it is stored in the cache, so subsequent reads of the same page require no
+  object-storage GET requests.  The TOC is kept in the bucket because it is needed for SSTable
+  lifecycle operations (cloning, deletion) that run without access to local disk state.
+- All other **non-Data components** (`Rows.db`, `Partitions.db`, `Index.db`, `Summary.db`, etc.)
+  are stored on local NVMe disk.  These components are accessed on every read and keeping them
+  local avoids the latency of object-storage round-trips on the read hot path.
+
+This combination is intended for workloads where reads are common and data is large: the bulk of the
+data stays in cheap object storage while the index structures that guide every read stay on fast
+local disk, and frequently-accessed data pages are cached in memory.
+
+Example (S3):
+
+```cql
+CREATE KEYSPACE ks
+  WITH REPLICATION = {
+   'class' : 'NetworkTopologyStrategy',
+   'replication_factor' : 1
+  }
+  AND STORAGE = {
+   'type' : 'S3',
+   'endpoint' : 's3.us-east-2.amazonaws.com',
+   'bucket' : 'bucket-for-testing',
+   'tiering' : 'data_page_cache'
+  };
+```
+
+The local index component files are stored under the first configured `data_file_directories` path
+(from `scylla.yaml`), in a subdirectory named `<keyspace>/<table>-<table_uuid_no_dashes>`.
+
 ## Creating keyspace with GS
 
 This mirrors AWS S3 config.
@@ -312,7 +354,7 @@ The optional `files` member may contain a list of non-SSTable files included in 
 
 When creating a keyspace with S3/GS storage, the data is stored under the bucket passed as argument to the `CREATE KEYSPACE` statement.  
 Once the statement is issued, Scylla will transparently use the S3/GS bucket as the location of the SSTables for that keyspace.  
-Like in the case above, there is no hierarchy for the data, *all SSTables components are stored flat within the bucket*.
+By default, *all SSTable components are stored flat within the bucket*:
 ```perl
 scylla-sstables-bucket/
 │
@@ -330,6 +372,10 @@ scylla-sstables-bucket/
 │
 └── ... (other SSTable folders)
 ```
+
+When the `tiering = 'data_page_cache'` option is used (see [Tiering option](#tiering-option)),
+only `Data.db` and `TOC.txt` are stored in the bucket.  All other non-Data components
+(`Rows.db`, `Partitions.db`, `Index.db`, `Summary.db`, etc.) are stored on local NVMe disk instead.
 
 ## Downloading, deleting, uploading SSTables
 

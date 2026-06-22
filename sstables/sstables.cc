@@ -43,6 +43,7 @@
 #include "utils/to_string.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
+#include "page_cache.hh"
 #include "writer.hh"
 #include "m_format_read_helpers.hh"
 #include "open_info.hh"
@@ -3076,19 +3077,19 @@ component_type sstable::component_from_sstring(version_types v, const sstring &s
 
 future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw,
-        integrity_check integrity, integrity_error_handler error_handler) {
+        integrity_check integrity, integrity_error_handler error_handler, bool bypass_cache) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
-    return data_stream(pos, len, permit, std::move(trace_state), history, std::move(options), raw, integrity, std::move(error_handler));
+    return data_stream(pos, len, permit, std::move(trace_state), history, std::move(options), raw, integrity, std::move(error_handler), bypass_cache);
 }
 
 future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
         file_input_stream_options options,
         raw_stream raw, integrity_check integrity,
-        integrity_error_handler error_handler) {
+        integrity_error_handler error_handler, bool bypass_cache) {
 
     file f = make_tracked_file(_data_file, permit);
     if (trace_state) {
@@ -3103,12 +3104,28 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
     };
     if (_components->compression && raw == raw_stream::no) {
+        // Build a per-chunk page cache accessor if the storage backend supports it.
+        // This ensures compressed chunks are cached at their exact file offsets
+        // rather than at buffer-aligned positions, making cache entries reusable
+        // across both sequential scans and random-access point reads.
+        auto [pcache, pcache_uuid] = _storage->data_page_cache_info(*this);
+        std::optional<sstables::chunk_page_cache> chunk_cache;
+        if (pcache && !bypass_cache) {
+            chunk_cache = sstables::chunk_page_cache{
+                .get = [pcache, pcache_uuid](uint64_t off) {
+                    return pcache->get_page(pcache_uuid, static_cast<int64_t>(off));
+                },
+                .put = [pcache, pcache_uuid](uint64_t off, temporary_buffer<char> data) {
+                    return pcache->put_page(pcache_uuid, static_cast<int64_t>(off), std::move(data));
+                }
+            };
+        }
         if (_version >= sstable_version_types::mc) {
             co_return make_compressed_file_m_format_input_stream(stream_creator, &_components->compression,
-               pos, len, std::move(options), permit, digest);
+               pos, len, std::move(options), permit, digest, std::move(chunk_cache));
         } else {
             co_return make_compressed_file_k_l_format_input_stream(stream_creator, &_components->compression,
-                pos, len, std::move(options), permit, digest);
+                pos, len, std::move(options), permit, digest, std::move(chunk_cache));
         }
     }
 

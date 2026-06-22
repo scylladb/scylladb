@@ -42,6 +42,10 @@ namespace sstables {
     enum class sstable_state;
 }
 
+namespace sstables {
+    class page_cache;
+}
+
 namespace service {
 
 class storage_service;
@@ -202,6 +206,8 @@ public:
     static constexpr auto TOPOLOGY = "topology";
     static constexpr auto TOPOLOGY_REQUESTS = "topology_requests";
     static constexpr auto SSTABLES_REGISTRY = "sstables";
+    static constexpr auto PAGECACHE = "pagecache";
+    static constexpr auto PAGECACHE_HITS = "pagecache_hits";
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
     static constexpr auto CDC_STREAMS_STATE = "cdc_streams_state";
     static constexpr auto CDC_STREAMS_HISTORY = "cdc_streams_history";
@@ -258,6 +264,8 @@ public:
     static schema_ptr topology();
     static schema_ptr topology_requests();
     static schema_ptr sstables_registry();
+    static schema_ptr pagecache();
+    static schema_ptr pagecache_hits();
     static schema_ptr cdc_generations_v3();
     static schema_ptr cdc_streams_state();
     static schema_ptr cdc_streams_history();
@@ -676,6 +684,12 @@ public:
     future<> sstables_registry_delete_entry(table_id tid, locator::host_id node_owner, sstables::generation_type gen);
     using sstable_registry_entry_consumer = sstables::sstables_registry::entry_consumer;
     future<> sstables_registry_list(table_id tid, locator::host_id node_owner, sstable_registry_entry_consumer consumer);
+
+    // Object-storage page cache operations (backed by system.pagecache and system.pagecache_hits)
+    future<std::optional<temporary_buffer<char>>> pagecache_get(utils::UUID sstable_gen, int64_t offset);
+    future<> pagecache_put(utils::UUID sstable_gen, int64_t offset, temporary_buffer<char> data);
+    future<> pagecache_evict_sstable(utils::UUID sstable_gen);
+    seastar::shared_ptr<sstables::page_cache> make_page_cache();
 
     future<std::optional<sstring>> load_group0_upgrade_state();
     future<> save_group0_upgrade_state(sstring);

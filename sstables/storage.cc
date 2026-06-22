@@ -35,6 +35,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/s3/client.hh"
+#include "sstables/page_cache.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
 #include "utils/checked-file-impl.hh"
@@ -634,7 +635,19 @@ protected:
     sstring _bucket;
     std::variant<sstring, table_id> _location;
     seastar::abort_source* _as;
+    shared_ptr<sstables::page_cache> _page_cache;
+    // When page_cache is enabled, non-Data components are stored locally here.
+    sstring _local_dir;
 
+public:
+    bool uses_page_cache() const noexcept override { return _page_cache != nullptr; }
+
+    std::pair<seastar::shared_ptr<sstables::page_cache>, utils::UUID>
+    data_page_cache_info(const sstable& sst) const override {
+        return {_page_cache, sst.generation().as_uuid()};
+    }
+
+protected:
     static constexpr auto status_creating = "creating";
     static constexpr auto status_sealed = "sealed";
     static constexpr auto status_removing = "removing";
@@ -652,12 +665,14 @@ protected:
         return _as;
     }
 public:
-    object_storage_base(sstring type, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
+    object_storage_base(sstring type, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as, shared_ptr<sstables::page_cache> page_cache = nullptr, sstring local_dir = {})
         : _type(type) 
         , _client(std::move(client))
         , _bucket(std::move(bucket))
         , _location(std::move(loc))
         , _as(as)
+        , _page_cache(std::move(page_cache))
+        , _local_dir(std::move(local_dir))
     {}
 
     future<> seal(const sstable& sst) override;
@@ -713,15 +728,7 @@ public:
     }
 };
 
-class s3_storage : public object_storage_base {
-public:
-    s3_storage(shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
-        : object_storage_base("S3", std::move(client), std::move(bucket), std::move(loc), as)
-    {}
 
-    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
-    future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
-};
 
 object_name object_storage_base::make_object_name(const sstable& sst, component_type type) const {
     auto comp = sstable_version_constants::get_component_map(sst.get_version()).at(type);
@@ -757,7 +764,17 @@ void object_storage_base::open(sstable& sst) {
 }
 
 future<file> object_storage_base::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
-    return maybe_wrap_file(sst, type, flags, make_readable_file(make_object_name(sst, type)));
+    // When page_cache is enabled, non-Data components (except TOC/TemporaryTOC) live on local disk.
+    // TOC and TemporaryTOC are always in object storage (written there by open() via put_object).
+    if (!_local_dir.empty() && type != component_type::Data
+            && type != component_type::TOC && type != component_type::TemporaryTOC) {
+        auto dir = sstring(make_path(_local_dir, sst._state).native());
+        auto name = std::filesystem::path(dir) / sst.component_basename(type);
+        auto f = open_sstable_component_file_non_checked(name.native(), flags, options, check_integrity);
+        return maybe_wrap_file(sst, type, flags, std::move(f));
+    }
+    auto f = make_readable_file(make_object_name(sst, type));
+    return maybe_wrap_file(sst, type, flags, std::move(f));
 }
 
 static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type, data_sink sink) {
@@ -801,37 +818,68 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
         || type == component_type::Index
         || type == component_type::Rows
         || type == component_type::Partitions);
+    if (!_local_dir.empty() && type != component_type::Data) {
+        // Non-Data components go to local disk when page cache is enabled.
+        // Mirror filesystem_storage::make_data_or_index_sink: move the file handle
+        // that create_data() stored in _index_file/_rows_file/_partitions_file into
+        // the data sink.  This leaves those fields null, so open_data() will
+        // re-open them as read-only.
+        file_output_stream_options fopts;
+        fopts.buffer_size = sst.sstable_buffer_size;
+        fopts.write_behind = 10;
+        file f;
+        switch (type) {
+        case component_type::Index:
+            f = std::move(sst._index_file);
+            break;
+        case component_type::Rows:
+            f = std::move(sst._rows_file);
+            break;
+        case component_type::Partitions:
+            f = std::move(sst._partitions_file);
+            break;
+        default:
+            // unreachable due to the assert at the top of the function.
+            abort();
+        }
+        return make_file_data_sink(std::move(f), fopts).then([&sst, type] (data_sink sink) {
+            return maybe_wrap_sink(sst, type, std::move(sink));
+        });
+    }
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
     return maybe_wrap_sink(sst, type, make_data_upload_sink(make_object_name(sst, type), std::nullopt));
 }
 
 future<data_source>
 object_storage_base::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
-    co_return co_await make_source(sst, type, f, offset, len, options);
-}
-
-future<data_source>
-object_storage_base::make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options) const {
-    co_return co_await maybe_wrap_source(sst, type, _client->make_download_source(make_object_name(sst, type), abort_source()), offset, len);
-}
-
-future<data_source>
-s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
+    // In tiering mode, non-Data components (e.g. Index.db for non-BTI format) live on
+    // local disk.  Use the passed-in file directly rather than routing through the S3
+    // download path, which make_source() would do at offset == 0.
+    if (!_local_dir.empty() && type != component_type::Data) {
+        co_return make_file_data_source(std::move(f), offset, len, std::move(options));
+    }
     co_return co_await make_source(sst, type, std::move(f), offset, len, std::move(options));
 }
 
 future<data_source>
-s3_storage::make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
+object_storage_base::make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
     if (offset == 0) {
-        co_return co_await object_storage_base::make_source(sst, type, std::move(f), offset, len, std::move(options));
+        co_return co_await maybe_wrap_source(sst, type, _client->make_download_source(make_object_name(sst, type), abort_source()), offset, len);
     }
-    // Reuse the file passed in by the caller.The file is already wrapped with
+    // Reuse the file passed in by the caller. The file is already wrapped with
     // the configured file_io_extensions (applied at open_component time), so
     // no further wrapping is needed.
     co_return make_file_data_source(std::move(f), offset, len, std::move(options));
 }
 
 future<data_sink> object_storage_base::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
+    // TOC is written to object storage directly by open(); never route it to local disk.
+    if (!_local_dir.empty() && type != component_type::Data
+            && type != component_type::TOC && type != component_type::TemporaryTOC) {
+        return sst.new_sstable_component_file(sst._write_error_handler, type, oflags).then([options = std::move(options)] (file f) mutable {
+            return make_file_data_sink(std::move(f), std::move(options));
+        });
+    }
     return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type)));
 }
 
@@ -862,10 +910,28 @@ future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_conte
     }
 
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
+        if (!_local_dir.empty() && type != component_type::Data
+                && type != component_type::TOC && type != component_type::TemporaryTOC) {
+            // Non-Data, non-TOC components are local; delete from local disk.
+            auto dir = sstring(make_path(_local_dir, sst._state).native());
+            auto name = (std::filesystem::path(dir) / sst.component_basename(type)).native();
+            try {
+                co_await remove_file(name);
+            } catch (...) {
+                if (!is_system_error_errno(ENOENT)) {
+                    throw;
+                }
+            }
+            co_return;
+        }
         co_await delete_object(make_object_name(sst, type));
     });
 
     co_await sstables_registry.delete_entry(owner(), node_owner, sst.generation());
+
+    if (_page_cache) {
+        co_await _page_cache->evict_sstable(sst.generation().as_uuid());
+    }
 }
 
 future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
@@ -887,19 +953,43 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
 
     try {
         auto f = make_readable_file(object_name(_bucket, desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
-        auto [components, digest] = co_await with_closeable(std::move(f), [] (file& f) {
+        auto [toc_components, digest] = co_await with_closeable(std::move(f), [] (file& f) {
             return sstable::read_and_parse_toc(f);
         });
+        components = std::move(toc_components);
     } catch (const storage_io_error& e) {
         if (e.code().value() != ENOENT) {
             throw;
         }
     }
 
-    co_await coroutine::parallel_for_each(components, [this, &desc] (sstring comp) -> future<> {
-        if (comp != sstable_version_constants::TOC_SUFFIX) {
-            co_await delete_object(object_name(_bucket, desc.generation, comp));
+    // In tiering mode only the Data component lives in object storage; all others
+    // are on local disk.  Delete them now using the generation, version, format,
+    // and state from the entry_descriptor.  For mc+ versions (the only ones used
+    // with object storage), the component basename is v-g-f-component and does
+    // not include ks/cf, so empty strings suffice.
+    const auto data_suffix = sstable_version_constants::get_component_map(desc.version).at(component_type::Data);
+
+    co_await coroutine::parallel_for_each(components, [this, &desc, &data_suffix] (sstring comp) -> future<> {
+        if (comp == sstable_version_constants::TOC_SUFFIX) {
+            co_return; // handled separately below
         }
+        if (!_local_dir.empty() && comp != data_suffix) {
+            // This component lives on local disk in tiering mode; delete it there.
+            auto state = desc.state.value_or(sstable_state::normal);
+            auto dir = make_path(_local_dir, state);
+            auto basename = sstable::component_basename("", "", desc.version, desc.generation, desc.format, comp);
+            auto name = (dir / basename).native();
+            try {
+                co_await remove_file(name);
+            } catch (...) {
+                if (!is_system_error_errno(ENOENT)) {
+                    sstlog.warn("Failed to delete local tiering component {}: {}. Ignoring.", name, std::current_exception());
+                }
+            }
+            co_return;
+        }
+        co_await delete_object(object_name(_bucket, desc.generation, comp));
     });
     co_await delete_object(object_name(_bucket, desc.generation, sstable_version_constants::TOC_SUFFIX));
 }
@@ -926,8 +1016,22 @@ future<> object_storage_base::clone(const sstable& sst, generation_type gen, boo
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
-    // Copy all component objects from the source to the destination generation.
+    // Copy all components: in tiering mode, non-Data components live on local disk
+    // and must be linked there rather than copied via object storage.
     co_await coroutine::parallel_for_each(sst.all_components(), [this, &sst, &gen] (const std::pair<component_type, sstring>& p) -> future<> {
+        if (!_local_dir.empty() && p.first != component_type::Data && p.first != component_type::TOC
+                && p.first != component_type::TemporaryTOC) {
+            auto state_dir = make_path(_local_dir, sst._state);
+            auto src = (state_dir / sst.component_basename(p.first)).native();
+            auto dst_basename = sstable::component_basename(
+                    sst.get_schema()->ks_name(), sst.get_schema()->cf_name(),
+                    sst.get_version(), gen, sst.get_format(), p.second);
+            auto dst = (state_dir / dst_basename).native();
+            // Use idempotent_link_file to match filesystem_storage::clone() behaviour:
+            // if the link already exists and points to the same inode (crash replay), succeed.
+            co_await idempotent_link_file(src, dst);
+            co_return;
+        }
         co_await copy_object(make_object_name(sst, p.second, sst.generation()), make_object_name(sst, p.second, gen));
     });
 
@@ -954,13 +1058,9 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
                     }, os.location)) {
                 on_internal_error(sstlog, fmt::format("{} storage options is missing 'location'", os.name()));
             }
-            if (s_opts.is_s3_type()) {
-                return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
-            }
-            if (s_opts.is_gs_type()) {
-                return std::make_unique<sstables::object_storage_base>("GS", manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
-            }
-            throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
+            auto page_cache = os.tiering != data_dictionary::storage_options::tiering_mode::none ? manager.get_page_cache() : nullptr;
+            auto type_name = s_opts.is_s3_type() ? "S3" : "GS";
+            return std::make_unique<sstables::object_storage_base>(type_name, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source, std::move(page_cache), os.local_dir);
         }
     }, s_opts.value);
 }
@@ -997,11 +1097,23 @@ std::vector<std::filesystem::path> get_local_directories(const std::vector<sstri
 }
 
 static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::object_storage& so) {
+    sstring local_dir;
+    if (so.tiering != data_dictionary::storage_options::tiering_mode::none && !mgr.get_config().data_file_directories.empty()) {
+        auto uuid_sstring = s.id().to_sstring();
+        boost::erase_all(uuid_sstring, "-");
+        local_dir = format("{}/{}/{}-{}", mgr.get_config().data_file_directories[0],
+            s.ks_name(), s.cf_name(), uuid_sstring);
+        // Ensure the local directories exist.
+        co_await io_check([&local_dir] { return recursive_touch_directory(local_dir); });
+        co_await io_check([&local_dir] { return touch_directory(local_dir + "/" + staging_dir); });
+    }
     data_dictionary::storage_options nopts;
     nopts.value = data_dictionary::storage_options::object_storage {
         .bucket = so.bucket,
         .endpoint = so.endpoint,
         .location = s.id(),
+        .tiering = so.tiering,
+        .local_dir = std::move(local_dir),
         .type = so.type
     };
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));

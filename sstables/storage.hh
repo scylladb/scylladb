@@ -39,6 +39,7 @@ class delayed_commit_changes;
 class sstable;
 class sstables_manager;
 class entry_descriptor;
+class page_cache;
 
 struct atomic_delete_context {
     sstring pending_delete_log;
@@ -127,6 +128,19 @@ public:
 
     virtual sstring prefix() const  = 0;
     virtual future<bool> exists(const sstable& sst, component_type type) const = 0;
+
+    // Returns true if this storage uses a page cache for Data reads.
+    // When true, the table must use compression: the cache keys are
+    // (sstable_generation, chunk_offset) and chunks are variable-size
+    // compressed blocks, so each offset uniquely identifies one chunk.
+    // Uncompressed SSTables have no chunk boundaries and variable read
+    // sizes, making offset alone an ambiguous cache key.
+    virtual bool uses_page_cache() const noexcept { return false; }
+
+    /// Returns the page cache and per-sstable cache key used for Data-component
+    /// chunk caching, or {nullptr, {}} if this storage does not cache Data reads.
+    virtual std::pair<seastar::shared_ptr<sstables::page_cache>, utils::UUID>
+    data_page_cache_info(const sstable&) const { return {nullptr, {}}; }
 };
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstable_state state);

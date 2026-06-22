@@ -13,7 +13,7 @@
 //
 // To allow reasonably-efficient seeking in the compressed file, the file
 // is not compressed as a whole, but rather divided into chunks of a known
-// size (by default, 64 KB), where each chunk is compressed individually.
+// size (by default, 4 KB), where each chunk is compressed individually.
 // The compressed size of each chunk is different, so for allowing seeking
 // to a particular position in the uncompressed data, we need to also know
 // the position of each chunk. This offset vector is supplied externally as
@@ -365,6 +365,19 @@ public:
 
 using stream_creator_fn = std::function<future<input_stream<char>>(uint64_t, uint64_t, file_input_stream_options)>;
 
+/// Per-chunk page cache for compressed SSTable Data reads.
+///
+/// When supplied to compressed_file_data_source_impl, each compressed chunk is
+/// looked up and stored in the cache at its exact compressed-file offset before
+/// and after reading from the underlying stream.  This ensures cache entries are
+/// keyed at chunk boundaries rather than at file_input_stream buffer-aligned
+/// positions, making them reusable across both sequential scans (offset=0) and
+/// random-access point reads (offset=chunk_k.start).
+struct chunk_page_cache {
+    std::function<future<std::optional<temporary_buffer<char>>>(uint64_t offset)> get;
+    std::function<future<>(uint64_t offset, temporary_buffer<char>)> put;
+};
+
 // Note: compression_metadata is passed by reference; The caller is
 // responsible for keeping the compression_metadata alive as long as there
 // are open streams on it. This should happen naturally on a higher level -
@@ -373,12 +386,14 @@ using stream_creator_fn = std::function<future<input_stream<char>>(uint64_t, uin
 input_stream<char> make_compressed_file_k_l_format_input_stream(stream_creator_fn stream_creator,
                 sstables::compression* cm, uint64_t offset, size_t len,
                 class file_input_stream_options options, reader_permit permit,
-                std::optional<uint32_t> digest);
+                std::optional<uint32_t> digest,
+                std::optional<chunk_page_cache> chunk_cache = std::nullopt);
 
 input_stream<char> make_compressed_file_m_format_input_stream(stream_creator_fn stream_creator,
                 sstables::compression* cm, uint64_t offset, size_t len,
                 class file_input_stream_options options, reader_permit permit,
-                std::optional<uint32_t> digest);
+                std::optional<uint32_t> digest,
+                std::optional<chunk_page_cache> chunk_cache = std::nullopt);
 
 // Raw compressed data stream function that return compressed chunks without decompression
 // while still calculating digests and verifying checksums. Compatible with SSTables version 3.x and later.
