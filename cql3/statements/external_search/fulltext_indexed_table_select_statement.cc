@@ -49,10 +49,10 @@ expr::expression extract_search_term_from_second_argument(const expr::function_c
 
 namespace {
 
-void validate_bm25_where_restriction(const expr::binary_operator& binop, const std::string& order_col) {
+void validate_bm25_where_restriction(const expr::binary_operator& binop, const bm25_ordering_info& ordering_info) {
     const auto& fc = expr::as<expr::function_call>(binop.lhs);
     const auto& col = extract_column_from_first_argument(fc);
-    if (col->name_as_text() != order_col) {
+    if (col->name_as_text() != ordering_info.index.target_column()) {
         throw exceptions::invalid_request_exception("Full-text search queries must reference the same column in both WHERE and ORDER BY clauses");
     }
 
@@ -63,6 +63,17 @@ void validate_bm25_where_restriction(const expr::binary_operator& binop, const s
     const auto* rhs_const = expr::as_if<expr::constant>(&binop.rhs);
     if (!rhs_const || rhs_const->is_null() || rhs_const->view().deserialize<float>(*float_type) != 0.0f) {
         throw exceptions::invalid_request_exception("BM25 function comparison value must be the literal 0");
+    }
+
+    const auto where_search_term = extract_search_term_from_second_argument(fc);
+
+    // If both query terms are literals, reject mismatches at prepare time.
+    // Bind-marker cases are caught at execute time.
+    const auto* where_const = expr::as_if<expr::constant>(&where_search_term);
+    const auto* order_const = expr::as_if<expr::constant>(&ordering_info.search_term);
+    if (where_const && order_const && *where_const != *order_const) {
+        throw exceptions::invalid_request_exception(
+                "Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
     }
 }
 
@@ -146,8 +157,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
     }
 
-    const auto& order_col = ordering_info->index.target_column();
-    validate_bm25_where_restriction(scoring_restrictions.front(), order_col);
+    validate_bm25_where_restriction(scoring_restrictions.front(), *ordering_info);
 
     // Reject any WHERE restrictions beyond the single BM25 clause.
     // BM25 restrictions are excluded from `restrictions`.
