@@ -371,11 +371,13 @@ public:
 
     future<> send_mutation_done(
             locator::host_id addr, tracing::trace_state_ptr tr_state,
-            unsigned shard, uint64_t response_id, db::view::update_backlog backlog) {
+            unsigned shard, uint64_t response_id, db::view::update_backlog backlog,
+            db::large_data_violation_type violations = db::large_data_violation_type::none) {
         tracing::trace(tr_state, "Sending mutation_done to /{}", addr);
         return ser::storage_proxy_rpc_verbs::send_mutation_done(
                 &_ms, std::move(addr),
-                shard, response_id, std::move(backlog));
+                shard, response_id, std::move(backlog),
+                static_cast<uint8_t>(violations));
     }
 
     future<> send_mutation_failed(
@@ -633,7 +635,7 @@ private:
                         const auto erm = s->table().get_effective_replication_map();
 
                         // Note: blocks due to execution_stage in replica::database::apply()
-                        co_await p->run_fenceable_write(erm->get_replication_strategy(),
+                        auto violations = co_await p->run_fenceable_write(erm->get_replication_strategy(),
                             fence, src_addr,
                             [&] { return apply_fn(p, trace_state_ptr, std::move(s), m, timeout); });
                         // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
@@ -642,7 +644,7 @@ private:
                         // Usually we will return immediately, since this work only involves appending data to the connection
                         // send buffer.
                         auto f = co_await coroutine::as_future(send_mutation_done(reply_to_host_id, trace_state_ptr,
-                                shard, response_id, p->get_view_update_backlog()));
+                                shard, response_id, p->get_view_update_backlog(), violations));
                         f.ignore_ready_future();
                     } catch (...) {
                         std::exception_ptr eptr = std::current_exception();
@@ -752,7 +754,9 @@ private:
                 fence.value_or(fencing_token{}),
                /* apply_fn */ [this] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
                        const paxos::proposal& decision, clock_type::time_point timeout) {
-                    return paxos::paxos_state::learn(*p, paxos_store(), std::move(s), decision, timeout, tr_state);
+                    return paxos::paxos_state::learn(*p, paxos_store(), std::move(s), decision, timeout, tr_state).then([] {
+                        return db::large_data_violation_type::none;
+                    });
               },
               /* forward_fn */ [this] (shared_ptr<storage_proxy>&, locator::host_id addr, clock_type::time_point timeout, const paxos::proposal& m,
                       gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
@@ -763,12 +767,14 @@ private:
 
     future<rpc::no_wait_type> handle_mutation_done(
             const rpc::client_info& cinfo,
-            unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
+            unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog,
+            rpc::optional<uint8_t> large_data_violations_opt) {
         auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto violations = static_cast<db::large_data_violation_type>(large_data_violations_opt.value_or(0));
         _sp.get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
-                [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
-            sp.got_response(response_id, from, std::move(backlog));
+                [from, response_id, backlog = std::move(backlog), violations] (storage_proxy& sp) mutable {
+            sp.got_response(response_id, from, std::move(backlog), violations);
             return netw::messaging_service::no_wait();
         });
     }
