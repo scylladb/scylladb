@@ -83,7 +83,6 @@ public:
 
     future<> flush_to_separator();
 
-    void set_trigger_separator_flush_hook(std::function<void(std::optional<segment_sequence>)> fn);
 };
 
 } // namespace logstor

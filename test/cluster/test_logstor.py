@@ -1009,3 +1009,96 @@ async def test_cache(manager: ManagerClient):
             for i in range(num_keys):
                 rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_no_cache WHERE pk = {i}")
                 assert rows[0].v == i * 10, f"unexpected value for pk={i}"
+
+async def test_separator_buffer_pressure(manager: ManagerClient):
+    """
+    Test that the separator buffer pool handles pressure gracefully when many tablets
+    compete for a very small pool.
+
+    With logstor_separator_max_memory_in_mb=1 (1 MB / 128 KB = 8 separator buffers)
+    and a table split across 32 tablets (4x the pool size), writes to 200 different
+    keys target all tablets simultaneously. As the separator fiber replays records
+    from the write log into per-tablet compaction groups, it repeatedly exhausts the
+    8-buffer pool: when the pool is empty, allocate_separator_buffer() triggers a flush
+    of an existing buffer (freeing it back to the pool) before the next allocation can
+    proceed. This cycle repeats ~24+ times across the 32 tablets.
+
+    Verification uses three independent signals:
+    1. No deadlock: logstor_flush completes, proving pool-exhaustion recovery worked.
+    2. Metrics: scylla_logstor_sm_separator_buffer_flushed increased, confirming that
+       actual disk writes occurred and each one succeeded (the counter only increments
+       after a successful write_full_segment call, never on failure).
+    3. Log scan: absence of "Writing to separator failed" warnings, confirming that
+       the separator fiber did not swallow any silent exceptions during replay.
+    """
+    # 1 MB / 128 KB per segment = 8 separator buffers; 32 tablets is 4x the pool size.
+    num_tablets = 32
+    num_keys = 200
+
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    cfg = {
+        'experimental_features': ['logstor'],
+        'logstor_separator_max_memory_in_mb': 1,
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+    cql = manager.get_cql()
+    server_log = await manager.server_open_log(server.server_id)
+
+    async with new_test_keyspace(manager, f"WITH tablets={{'initial': {num_tablets}}}") as ks:
+        await cql.run_async(
+            f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text)"
+            " WITH storage_engine = 'logstor'"
+        )
+
+        # 4 KB values: 200 keys × 4 KB ≈ 800 KB, filling ~6 segments (128 KB each).
+        # Records from each segment are spread across all 32 tablets by token, so the
+        # separator fiber needs up to 32 buffers while only 8 are available.
+        value = 'x' * 4096
+
+        # Snapshot log position and the separator flush counter before writes so we
+        # can measure the delta and scan only the relevant log window.
+        log_mark = await server_log.mark()
+        metrics_before = await manager.metrics.query(server.ip_addr)
+        sep_flushed_before = metrics_before.get("scylla_logstor_sm_separator_buffer_flushed") or 0
+
+        # Write all 200 keys in parallel; they land in the write log immediately
+        # while the separator fiber processes them asynchronously in the background.
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        await asyncio.gather(*[cql.run_async(insert, [i, value]) for i in range(num_keys)])
+
+        # Flush seals the write buffer and waits for await_pending_writes() to drain
+        # the separator task queue, so all records are fully processed by the time
+        # this call returns and any log warnings are already written.
+        await manager.api.logstor_flush(server.ip_addr)
+
+        # --- Verification 1: data integrity ---
+        # All written values must be readable with correct content.
+        for i in range(num_keys):
+            rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {i}")
+            assert len(rows) == 1, f"Key {i} missing after separator buffer pressure test"
+            assert rows[0].v == value, f"Wrong value for key {i} after separator buffer pressure test"
+
+        # --- Verification 2: separator buffer flushes occurred and succeeded ---
+        # The counter only increments inside flush_separator_buffer() after a successful
+        # write_full_segment() call; it never increments on failure.  An increase
+        # confirms both that pressure was real and that every triggered flush succeeded.
+        metrics_after = await manager.metrics.query(server.ip_addr)
+        sep_flushed_after = metrics_after.get("scylla_logstor_sm_separator_buffer_flushed") or 0
+        logger.info(f"separator_buffer_flushed: {sep_flushed_before} -> {sep_flushed_after}")
+        assert sep_flushed_after > sep_flushed_before, (
+            f"Expected separator buffer flushes to occur under pressure but "
+            f"scylla_logstor_sm_separator_buffer_flushed did not increase: "
+            f"{sep_flushed_before} -> {sep_flushed_after}"
+        )
+
+        # --- Verification 3: no silent separator write failures ---
+        # run_separator_fiber() catches exceptions and logs them as warnings rather
+        # than propagating them, so logstor_flush() would still complete even if
+        # writes to the separator failed.  Grep the log snapshot (non-blocking, reads
+        # only up to the file size at call time) to confirm no such warnings appeared.
+        failures = await server_log.grep("Writing to separator failed", from_mark=log_mark)
+        assert not failures, (
+            "Separator write failures detected in server log:\n"
+            + "\n".join(line.rstrip() for line, _ in failures)
+        )

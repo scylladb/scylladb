@@ -129,7 +129,6 @@ public:
 
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
-    void set_trigger_separator_flush_hook(std::function<void(std::optional<segment_sequence>)> fn);
 
     size_t get_segment_size() const noexcept;
 

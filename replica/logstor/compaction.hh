@@ -332,6 +332,8 @@ public:
 
     virtual future<> flush_separator_buffer(separator_buffer, logstor_group&) = 0;
 
+    virtual future<> flush_all_separator_buffers(std::optional<segment_sequence>) = 0;
+
     virtual void add(logstor_group&) = 0;
 
     virtual void schedule_auto_compaction() = 0;
