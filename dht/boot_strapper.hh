@@ -41,16 +41,21 @@ class boot_strapper {
     /* token of the node being bootstrapped. */
     std::unordered_set<token> _tokens;
     const locator::token_metadata_ptr _token_metadata_ptr;
+    bool _consistent_rangemovement;
+    double _stream_plan_ranges_fraction;
 public:
     boot_strapper(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, abort_source& abort_source,
-            locator::host_id addr, locator::endpoint_dc_rack dr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
+            locator::host_id addr, locator::endpoint_dc_rack dr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr,
+            bool consistent_rangemovement, double stream_plan_ranges_fraction)
         : _db(db)
         , _stream_manager(sm)
         , _abort_source(abort_source)
         , _address(addr)
         , _dr(std::move(dr))
         , _tokens(tokens)
-        , _token_metadata_ptr(std::move(tmptr)) {
+        , _token_metadata_ptr(std::move(tmptr))
+        , _consistent_rangemovement(consistent_rangemovement)
+        , _stream_plan_ranges_fraction(stream_plan_ranges_fraction) {
     }
 
     future<> bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard, locator::host_id replace_address = {});
