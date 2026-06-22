@@ -10,9 +10,10 @@
 #pragma once
 #include "gms/inet_address.hh"
 #include "locator/token_metadata.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "dht/token.hh"
 #include <unordered_set>
-#include "replica/database_fwd.hh"
+#include <unordered_map>
 #include "streaming/stream_reason.hh"
 #include "service/topology_guard.hh"
 #include <seastar/core/sharded.hh>
@@ -31,7 +32,6 @@ class boot_strapper {
     using token_metadata = locator::token_metadata;
     using token_metadata_ptr = locator::token_metadata_ptr;
     using token = dht::token;
-    sharded<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
     abort_source& _abort_source;
     /* endpoint that needs to be bootstrapped */
@@ -44,11 +44,10 @@ class boot_strapper {
     bool _consistent_rangemovement;
     double _stream_plan_ranges_fraction;
 public:
-    boot_strapper(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, abort_source& abort_source,
+    boot_strapper(sharded<streaming::stream_manager>& sm, abort_source& abort_source,
             locator::host_id addr, locator::endpoint_dc_rack dr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr,
             bool consistent_rangemovement, double stream_plan_ranges_fraction)
-        : _db(db)
-        , _stream_manager(sm)
+        : _stream_manager(sm)
         , _abort_source(abort_source)
         , _address(addr)
         , _dr(std::move(dr))
@@ -58,7 +57,9 @@ public:
         , _stream_plan_ranges_fraction(stream_plan_ranges_fraction) {
     }
 
-    future<> bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard, locator::host_id replace_address = {});
+    future<> bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard,
+                       std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms,
+                       locator::host_id replace_address = {});
 
     /**
      * if initialtoken was specified, use that (split on comma).

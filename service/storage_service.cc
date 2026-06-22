@@ -4750,10 +4750,11 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
 
                                         co_await _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), rs.ring.value().tokens, session);
                                     } else {
-                                        dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
+                                        dht::boot_strapper bs(_stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                             locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr(),
                                             _db.local().get_config().consistent_rangemovement(), _db.local().get_config().stream_plan_ranges_fraction());
-                                        co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, session);
+                                        co_await bs.bootstrap(streaming::stream_reason::bootstrap, _gossiper, session,
+                                            _db.local().get_non_local_strategy_keyspaces_erms());
                                     }
                                 });
                                 co_await task->done();
@@ -4777,10 +4778,11 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     auto replaced_node = locator::host_id(replaced_id.uuid());
                                     co_await _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), rs.ring.value().tokens, std::move(ignored_nodes), replaced_node, session);
                                 } else {
-                                    dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
+                                    dht::boot_strapper bs(_stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr(),
                                                           _db.local().get_config().consistent_rangemovement(), _db.local().get_config().stream_plan_ranges_fraction());
-                                    co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, session, locator::host_id{replaced_id.uuid()});
+                                    co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, session,
+                                        _db.local().get_non_local_strategy_keyspaces_erms(), locator::host_id{replaced_id.uuid()});
                                 }
                             });
                             co_await task->done();
