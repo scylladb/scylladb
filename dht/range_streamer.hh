@@ -21,10 +21,6 @@
 #include <unordered_map>
 #include <memory>
 
-namespace replica {
-class database;
-}
-
 namespace gms { class gossiper; }
 namespace locator { class topology; }
 
@@ -76,13 +72,12 @@ public:
         }
     };
 
-    range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
+    range_streamer(sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
             locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
             service::frozen_topology_guard topo_guard,
             bool consistent_rangemovement, double stream_plan_ranges_fraction,
             std::vector<sstring> tables = {})
-        : _db(db)
-        , _stream_manager(sm)
+        : _stream_manager(sm)
         , _token_metadata_ptr(std::move(tmptr))
         , _abort_source(abort_source)
         , _tokens(std::move(tokens))
@@ -96,15 +91,14 @@ public:
         , _stream_plan_ranges_fraction(stream_plan_ranges_fraction)
     {
         _abort_source.check();
-        (void)_db;
     }
 
-    range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
+    range_streamer(sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
             locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
             service::frozen_topology_guard topo_guard,
             bool consistent_rangemovement, double stream_plan_ranges_fraction,
             std::vector<sstring> tables = {})
-        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), consistent_rangemovement, stream_plan_ranges_fraction, std::move(tables)) {
+        : range_streamer(sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), consistent_rangemovement, stream_plan_ranges_fraction, std::move(tables)) {
     }
 
     void add_source_filter(std::unique_ptr<i_source_filter> filter) {
@@ -159,7 +153,6 @@ public:
     future<> stream_async();
     size_t nr_ranges_to_stream();
 private:
-    sharded<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
     token_metadata_ptr _token_metadata_ptr;
     abort_source& _abort_source;
