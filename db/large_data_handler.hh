@@ -158,7 +158,7 @@ public:
     // Replica-side check: looks up partition/row/collection in the SSTable
     // metadata index and rejects or warns based on recorded on-disk sizes.
     virtual void check(const schema& s, const mutation_partition& mp,
-            partition_key_view pk) const = 0;
+            partition_key_view pk, db::large_data_violation_type* violations_out) const = 0;
     // Coordinator-side check: inspects the mutation content directly
     // (cell value sizes, row memory usage, collection element counts).
     // Hard limit violations throw; soft limit violations are logged and, when
@@ -187,7 +187,7 @@ public:
         return inst;
     }
     void check(const schema&, const mutation_partition&,
-            partition_key_view) const override {}
+            partition_key_view, db::large_data_violation_type*) const override {}
     large_data_violation_type check_coordinator(const schema&, const mutation_partition&,
             partition_key_view) const override { return large_data_violation_type::none; }
     large_data_cache_tracker* get_memtable_cache_tracker(const schema&,
@@ -204,7 +204,7 @@ public:
         , _tracker(_cfg, _memtable_row_cache, _memtable_collection_cache) {}
 
     void check(const schema& s, const mutation_partition& mp,
-            partition_key_view pk) const override;
+            partition_key_view pk, db::large_data_violation_type* violations_out) const override;
     large_data_violation_type check_coordinator(const schema& s, const mutation_partition& mp,
             partition_key_view pk) const override;
     large_data_cache_tracker* get_memtable_cache_tracker(const schema& s,
@@ -214,11 +214,11 @@ public:
     void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) override;
 
 private:
-    void check_partition(const schema& s, bytes_view pk_bytes, partition_key_view pk) const;
-    void check_rows_and_collections(const schema& s, bytes_view pk_bytes, const mutation_partition& mp, partition_key_view pk) const;
-    void check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+    large_data_violation_type check_partition(const schema& s, bytes_view pk_bytes, partition_key_view pk) const;
+    large_data_violation_type check_rows_and_collections(const schema& s, bytes_view pk_bytes, const mutation_partition& mp, partition_key_view pk) const;
+    large_data_violation_type check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
             bytes_view ck_bytes, const clustering_key_prefix* ck) const;
-    void check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+    large_data_violation_type check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
             const column_definition& cdef, bytes_view ck_bytes,
             const clustering_key_prefix* ck) const;
 

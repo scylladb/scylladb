@@ -1032,14 +1032,14 @@ public:
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
-        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema, *_large_data_guardrail, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()));
+        do_apply(compaction_group_for_key(m.key(), m_schema), std::move(h), m, m_schema, *_large_data_guardrail, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()), nullptr);
     }
     void apply(const mutation& m, db::rp_handle&& h = {}) {
         do_apply(compaction_group_for_token(m.token()), std::move(h), m, _large_data_guardrail->get_memtable_cache_tracker(*m.schema(), m.key()));
     }
 
     future<> apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h,
-                   db::timeout_clock::time_point tmo, shared_ptr<db::large_data_guardrail_base> guardrails);
+                   db::timeout_clock::time_point tmo, shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* violations_out = nullptr);
     future<> apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point tmo);
 
     // Returns at most "cmd.limit" rows
@@ -1714,7 +1714,7 @@ private:
     seastar::shared_ptr<db::view::view_update_generator> _view_update_generator;
 
     inheriting_concrete_execution_stage<
-            future<>,
+            future<db::large_data_violation_type>,
             database*,
             schema_ptr,
             const frozen_mutation&,
@@ -1790,7 +1790,7 @@ public:
     const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&,
                                db::timeout_clock::time_point timeout,
-                                shared_ptr<db::large_data_guardrail_base> guardrails);
+                                shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* large_data_violation_out = nullptr);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
 
     drain_progress get_drain_progress() const noexcept {
@@ -1821,7 +1821,7 @@ private:
     auto sum_read_concurrency_sem_var(std::invocable<reader_concurrency_semaphore&> auto member);
     auto sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaphore::stats&> auto stats_member);
 
-    future<> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails);
+    future<db::large_data_violation_type> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails);
     future<> do_apply_many(const utils::chunked_vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
@@ -1999,7 +1999,7 @@ public:
                                                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, bool tombstone_gc_enabled = true);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
-    future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog_force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info = std::monostate{}, bool skip_large_data_guardrails = false);
+    future<db::large_data_violation_type> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog_force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info = std::monostate{}, bool skip_large_data_guardrails = false);
     // Apply mutations atomically.
     // On restart, either all mutations will be replayed or none of them.
     // All mutations must belong to the same commitlog domain.

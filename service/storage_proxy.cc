@@ -1393,7 +1393,7 @@ public:
     virtual ~mutation_holder() {}
     virtual bool store_hint(db::hints::manager& hm, locator::host_id ep, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) = 0;
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    virtual future<db::large_data_violation_type> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm, bool skip_large_data_guardrails) = 0;
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
@@ -1440,7 +1440,7 @@ public:
             return false;
         }
     }
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    virtual future<db::large_data_violation_type> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm, bool skip_large_data_guardrails) override {
         const auto my_id = sp.my_host_id(erm);
@@ -1449,7 +1449,7 @@ public:
             tracing::trace(tr_state, "Executing a mutation locally");
             return sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info, skip_large_data_guardrails);
         }
-        return make_ready_future<>();
+        return make_ready_future<db::large_data_violation_type>(db::large_data_violation_type::none);
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1496,7 +1496,7 @@ public:
             tracing::trace_state_ptr tr_state) override {
         return hm.store_hint(hid, _schema, _mutation, tr_state);
     }
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    virtual future<db::large_data_violation_type> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm, bool skip_large_data_guardrails) override {
         tracing::trace(tr_state, "Executing a mutation locally");
@@ -1527,7 +1527,7 @@ public:
             tracing::trace_state_ptr tr_state) override {
         throw std::runtime_error("Attempted to store a hint for a hint");
     }
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    virtual future<db::large_data_violation_type> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm, bool /*skip_large_data_guardrails*/) override {
         if (current_scheduling_group() != debug::streaming_scheduling_group) {
@@ -1535,7 +1535,9 @@ public:
         }
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
         // becomes unavailable - this might include the current node
-        return sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout);
+        return sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout).then([] {
+            return db::large_data_violation_type::none;
+        });
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1662,12 +1664,14 @@ public:
             tracing::trace_state_ptr tr_state) override {
         return false; // CAS does not save hints yet
     }
-    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+    virtual future<db::large_data_violation_type> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm, bool /*skip_large_data_guardrails*/) override {
         tracing::trace(tr_state, "Executing a learn locally");
         // TODO: Enforce per partition rate limiting in paxos
-        return paxos::paxos_state::learn(sp, sp.remote().paxos_store(), _schema, *_proposal, timeout, tr_state);
+        return paxos::paxos_state::learn(sp, sp.remote().paxos_store(), _schema, *_proposal, timeout, tr_state).then([] {
+            return db::large_data_violation_type::none;
+        });
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1729,6 +1733,9 @@ protected:
     service_permit _permit; // holds admission permit until operation completes
     db::per_partition_rate_limit::info _rate_limit_info;
     bool _skip_large_data_guardrails = false;
+    // When non-null, got_response() accumulates replica-side soft-limit
+    // violations into this shared location.
+    db::large_data_violation_type* violations_out = nullptr;
     db::view::update_backlog _view_backlog; // max view update backlog of all participating targets
     utils::small_vector<gate::holder, 2> _holders;
 
@@ -1816,6 +1823,10 @@ public:
         _skip_large_data_guardrails = skip;
     }
 
+    void set_violations_out(db::large_data_violation_type* p) {
+        violations_out = p;
+    }
+
     // While delayed, a request is not throttled.
     void unthrottle() {
         _stats.background_writes++;
@@ -1827,6 +1838,10 @@ public:
         _cl_acks += nr;
         if (!_cl_achieved && _cl_acks >= _total_block_for) {
              _cl_achieved = true;
+             // Nullify violations_out before resolving the promise.  Once the
+             // promise is fulfilled the caller may free the pointed-to memory,
+             // and straggler responses arriving later must not dereference it.
+             violations_out = nullptr;
             delay(get_trace_state(), [] (abstract_write_response_handler* self) {
                 if (self->_proxy->need_throttle_writes()) {
                     self->_throttled = true;
@@ -1984,7 +1999,7 @@ public:
             tracing::trace_state_ptr tr_state) {
         return _mutation_holder->store_hint(hm, ep, std::move(ermptr), tr_state);
     }
-    future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
+    future<db::large_data_violation_type> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
         auto& erm = *_effective_replication_map_ptr;
         return _proxy->run_fenceable_write(erm.get_replication_strategy(),
             storage_proxy::get_fence(erm),
@@ -2823,14 +2838,18 @@ void storage_proxy::remove_response_handler_entry(response_handlers_map::iterato
     _response_handlers.erase(std::move(entry));
 }
 
-void storage_proxy::got_response(storage_proxy::response_id_type id, locator::host_id from, std::optional<db::view::update_backlog> backlog) {
+void storage_proxy::got_response(storage_proxy::response_id_type id, locator::host_id from, std::optional<db::view::update_backlog> backlog, db::large_data_violation_type violations) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
-        tracing::trace(it->second->get_trace_state(), "Got a response from /{}", from);
-        if (it->second->response(from)) {
+        auto& handler = *it->second;
+        if (handler.violations_out) {
+            *handler.violations_out |= violations;
+        }
+        tracing::trace(handler.get_trace_state(), "Got a response from /{}", from);
+        if (handler.response(from)) {
             remove_response_handler_entry(std::move(it)); // last one, remove entry. Will cancel expiration timer too.
         } else {
-            it->second->check_for_early_completion();
+            handler.check_for_early_completion();
         }
     }
     maybe_update_view_backlog_of(std::move(from), std::move(backlog));
@@ -2892,7 +2911,7 @@ future<result<>> storage_proxy::response_wait(storage_proxy::response_id_type id
 result<storage_proxy::response_id_type> storage_proxy::make_write_response_handler(locator::effective_replication_map_ptr ermp,
                              db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
                              host_id_vector_replica_set targets, const host_id_vector_topology_change& pending_endpoints, host_id_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
-                             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable cancellable, bool skip_large_data_guardrails)
+                             storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable cancellable, bool skip_large_data_guardrails, db::large_data_violation_type* violations_out)
 {
     shared_ptr<abstract_write_response_handler> h;
     auto& rs = ermp->get_replication_strategy();
@@ -2905,6 +2924,7 @@ result<storage_proxy::response_id_type> storage_proxy::make_write_response_handl
         h = ::make_shared<write_response_handler>(shared_from_this(), std::move(ermp), cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state), stats, std::move(permit), rate_limit_info, cancellable);
     }
     h->set_skip_large_data_guardrails(skip_large_data_guardrails);
+    h->set_violations_out(std::move(violations_out));
     return bo::success(register_response_handler(std::move(h)));
 }
 
@@ -3449,6 +3469,21 @@ future<> apply_on_shards(const locator::effective_replication_map_ptr& erm, cons
     return seastar::parallel_for_each(shards, std::move(apply));
 }
 
+template <typename Applier>
+requires std::invocable<Applier, shard_id>
+future<db::large_data_violation_type> apply_on_shards_with_violations(const locator::effective_replication_map_ptr& erm, const schema& s, dht::token tok, Applier&& apply) {
+    auto shards = erm->get_sharder(s).shard_for_writes(tok);
+    if (shards.empty()) {
+        return make_exception_future<db::large_data_violation_type>(std::runtime_error(format("No local shards for token {} of {}.{}", tok, s.ks_name(), s.cf_name())));
+    }
+    if (shards.size() == 1) [[likely]] {
+        return apply(shards[0]);
+    }
+    return seastar::map_reduce(std::move(shards), std::forward<Applier>(apply),
+        db::large_data_violation_type::none,
+        [] (db::large_data_violation_type a, db::large_data_violation_type b) { return a | b; });
+}
+
 future<>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto erm = _db.local().find_column_family(m.schema()).get_effective_replication_map();
@@ -3466,13 +3501,13 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
                  timeout,
                  sync,
                  shard_rate_limit] (replica::database& db) mutable -> future<> {
-            return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit);
+            return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit).discard_result();
         });
     };
     return apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
 }
 
-future<>
+future<db::large_data_violation_type>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
         smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
@@ -3483,11 +3518,11 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
             shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
         }
         return _db.invoke_on(shard, {smp_grp, timeout},
-                [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, shard_rate_limit, skip_large_data_guardrails] (replica::database& db) mutable -> future<> {
+                [&m, erm, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync, shard_rate_limit, skip_large_data_guardrails] (replica::database& db) mutable -> future<db::large_data_violation_type> {
             return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit, skip_large_data_guardrails);
         });
     };
-    return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
+    return apply_on_shards_with_violations(erm, *s, m.token(*s), std::move(apply));
 }
 
 future<>
@@ -3505,7 +3540,7 @@ storage_proxy::mutate_locally(utils::chunked_vector<mutation> mutation, tracing:
 future<>
 storage_proxy::mutate_locally(utils::chunked_vector<frozen_mutation_and_schema> mutations, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     co_await coroutine::parallel_for_each(mutations, [&] (const frozen_mutation_and_schema& x) {
-        return mutate_locally(x.s, x.fm, tr_state, sync, timeout, rate_limit_info);
+        return mutate_locally(x.s, x.fm, tr_state, sync, timeout, rate_limit_info).discard_result();
     });
 }
 
@@ -3821,7 +3856,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     db::assure_sufficient_live_nodes(cl, *erm, live_endpoints, pending_endpoints);
 
     return make_write_response_handler(std::move(erm), cl, type, std::move(mh), std::move(live_endpoints), pending_endpoints,
-            std::move(dead_endpoints), std::move(tr_state), get_stats(), std::move(permit), rate_limit_info, cancellable, options.bypass_large_data_guardrails);
+            std::move(dead_endpoints), std::move(tr_state), get_stats(), std::move(permit), rate_limit_info, cancellable, options.bypass_large_data_guardrails, std::move(options.violations_out));
 }
 
 /**
@@ -4734,10 +4769,10 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     // lambda for applying mutation locally
     auto lmutate = [handler_ptr, response_id, this, my_address, timeout] () mutable {
         return handler_ptr->apply_locally(timeout, handler_ptr->get_trace_state())
-                .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] {
+                .then([response_id, this, my_address, h = std::move(handler_ptr), p = shared_from_this()] (db::large_data_violation_type violations) {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
-            got_response(response_id, my_address, get_view_update_backlog());
+            got_response(response_id, my_address, get_view_update_backlog(), violations);
         });
     };
 

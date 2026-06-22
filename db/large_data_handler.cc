@@ -239,50 +239,62 @@ void large_data_guardrail::rebuild(const std::unordered_set<sstables::shared_sst
 }
 
 void large_data_guardrail::check(const schema& s, const mutation_partition& mp,
-                                 partition_key_view pk) const {
+                                 partition_key_view pk, db::large_data_violation_type* violations_out) const {
     auto sst_key = sstables::key::from_partition_key(s, pk);
     auto pk_bytes = bytes_view(sst_key.get_bytes());
-    check_partition(s, pk_bytes, pk);
-    check_rows_and_collections(s, pk_bytes, mp, pk);
+    auto violations = check_partition(s, pk_bytes, pk);
+    violations |= check_rows_and_collections(s, pk_bytes, mp, pk);
+    if (violations_out) {
+        *violations_out = violations;
+    }
 }
 
-void large_data_guardrail::check_partition(const schema& s, bytes_view pk_bytes, partition_key_view pk) const {
+large_data_violation_type large_data_guardrail::check_partition(const schema& s, bytes_view pk_bytes, partition_key_view pk) const {
     auto entry = _index.lookup_partition(pk_bytes);
     if (!entry) [[likely]] {
-        return;
+        return large_data_violation_type::none;
     }
+    const bool track = _cfg.cql_warnings_enabled();
+    large_data_violation_type violations = large_data_violation_type::none;
     auto context = [&] { return seastar::format("partition_key={}", pk); };
-    enforce_threshold<guardrail_source::replica>(s, entry->partition_size,
+    if (enforce_threshold<guardrail_source::replica>(s, entry->partition_size,
         uint64_t(_cfg.partition_size_fail_threshold_mb()) * MB,
         uint64_t(_cfg.partition_size_warn_threshold_mb()) * MB,
-        "partition size", context);
-    enforce_threshold<guardrail_source::replica>(s, entry->rows,
+        "partition size", context) && track) {
+        violations |= large_data_violation_type::partition;
+    }
+    if (enforce_threshold<guardrail_source::replica>(s, entry->rows,
         uint64_t(_cfg.rows_count_fail_threshold()),
         uint64_t(_cfg.rows_count_warn_threshold()),
-        "partition row count", context);
+        "partition row count", context) && track) {
+        violations |= large_data_violation_type::partition;
+    }
+    return violations;
 }
 
-void large_data_guardrail::check_rows_and_collections(const schema& s, bytes_view pk_bytes,
+large_data_violation_type large_data_guardrail::check_rows_and_collections(const schema& s, bytes_view pk_bytes,
         const mutation_partition& mp, partition_key_view pk) const {
+    large_data_violation_type violations = large_data_violation_type::none;
 
     if (!mp.static_row().empty()) {
-        check_row_size(s, pk_bytes, pk, bytes_view(), nullptr);
+        violations |= check_row_size(s, pk_bytes, pk, bytes_view(), nullptr);
         mp.static_row().for_each_cell([&](column_id id, const atomic_cell_or_collection&) {
-            check_collection_element_count(s, pk_bytes, pk, s.static_column_at(id), bytes_view(), nullptr);
+            violations |= check_collection_element_count(s, pk_bytes, pk, s.static_column_at(id), bytes_view(), nullptr);
         });
     }
 
     for (const auto& cr : mp.non_dummy_rows()) {
         auto ck_bytes = cr.key().view().representation().linearize();
         auto ck_bv = bytes_view(ck_bytes);
-        check_row_size(s, pk_bytes, pk, ck_bv, &cr.key());
+        violations |= check_row_size(s, pk_bytes, pk, ck_bv, &cr.key());
         cr.row().cells().for_each_cell([&](column_id id, const atomic_cell_or_collection&) {
-            check_collection_element_count(s, pk_bytes, pk, s.regular_column_at(id), ck_bv, &cr.key());
+            violations |= check_collection_element_count(s, pk_bytes, pk, s.regular_column_at(id), ck_bv, &cr.key());
         });
     }
+    return violations;
 }
 
-void large_data_guardrail::check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+large_data_violation_type large_data_guardrail::check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
         bytes_view ck_bytes, const clustering_key_prefix* ck) const {
     const uint64_t fail = uint64_t(_cfg.row_size_fail_threshold_mb()) * MB;
     const uint64_t warn = uint64_t(_cfg.row_size_warn_threshold_mb()) * MB;
@@ -295,19 +307,20 @@ void large_data_guardrail::check_row_size(const schema& s, bytes_view pk_bytes, 
         }
     }
     if (row_size == 0) [[likely]] {
-        return;
+        return large_data_violation_type::none;
     }
-    enforce_threshold<guardrail_source::replica>(s, row_size,
+    bool warned = enforce_threshold<guardrail_source::replica>(s, row_size,
         fail, warn, "row size",
         [&] { return seastar::format("clustering_key={}",
             ck ? seastar::format("{}", ck->with_schema(s)) : sstring()); });
+    return (warned && _cfg.cql_warnings_enabled()) ? large_data_violation_type::row : large_data_violation_type::none;
 }
 
-void large_data_guardrail::check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+large_data_violation_type large_data_guardrail::check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
         const column_definition& cdef, bytes_view ck_bytes,
         const clustering_key_prefix* ck) const {
     if (cdef.is_atomic()) {
-        return;
+        return large_data_violation_type::none;
     }
     auto col_bytes = to_bytes(cdef.name_as_text());
     auto count_opt = _index.lookup_collection(pk_bytes, ck_bytes, bytes_view(col_bytes));
@@ -320,15 +333,16 @@ void large_data_guardrail::check_collection_element_count(const schema& s, bytes
         }
     }
     if (count == 0) [[likely]] {
-        return;
+        return large_data_violation_type::none;
     }
-    enforce_threshold<guardrail_source::replica>(s, count,
+    bool warned = enforce_threshold<guardrail_source::replica>(s, count,
         uint64_t(_cfg.collection_elements_fail_threshold()),
         uint64_t(_cfg.collection_elements_warn_threshold()),
         "collection element count",
         [&] { return seastar::format("column={}, clustering_key={}",
             cdef.name_as_text(),
-            ck ? seastar::format("{}", ck->with_schema(s)) : sstring()); });
+            ck ? seastar::format("{}", ck->with_schema(s)) : sstring()); }) && _cfg.cql_warnings_enabled();
+    return warned ? large_data_violation_type::collection : large_data_violation_type::none;
 }
 
 large_data_violation_type large_data_guardrail::check_coordinator(const schema& s, const mutation_partition& mp,

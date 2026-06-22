@@ -5049,7 +5049,7 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
 template void table::do_apply(compaction_group& cg, db::rp_handle&&, const mutation&, db::large_data_cache_tracker*&&);
 
 future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h,
-                      db::timeout_clock::time_point timeout, shared_ptr<db::large_data_guardrail_base> guardrails) {
+                      db::timeout_clock::time_point timeout, shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* violations_out) {
     if (_virtual_writer) [[unlikely]] {
         return (*_virtual_writer)(m);
     }
@@ -5062,12 +5062,12 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
         return _logstor->write(m.unfreeze(m_schema), cg, std::move(ss_holder));
     }
 
-    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), guardrails = std::move(guardrails)]() mutable {
-        do_apply(cg, std::move(h), m, m_schema, *guardrails, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()));
+    return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), guardrails = std::move(guardrails), violations_out]() mutable {
+        return do_apply(cg, std::move(h), m, m_schema, *guardrails, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()), std::move(violations_out));
     }, timeout);
 }
 
-template void table::do_apply(compaction_group& cg, db::rp_handle&&, const frozen_mutation&, const schema_ptr&, const db::large_data_guardrail_base&, db::large_data_cache_tracker*&&);
+template void table::do_apply(compaction_group& cg, db::rp_handle&&, const frozen_mutation&, const schema_ptr&, const db::large_data_guardrail_base&, db::large_data_cache_tracker*&&, db::large_data_violation_type*&&);
 
 future<>
 write_memtable_to_sstable(mutation_reader reader,

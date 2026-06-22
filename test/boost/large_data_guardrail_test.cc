@@ -548,7 +548,7 @@ SEASTAR_THREAD_TEST_CASE(test_coordinator_noop_allows_everything) {
     auto s = make_simple_schema();
     auto m = make_mutation_with_cell(s, 2 * MB);
     BOOST_REQUIRE_NO_THROW(
-        db::noop_large_data_guardrail::instance()->check(*m.schema(), m.partition(), m.key()));
+        db::noop_large_data_guardrail::instance()->check(*m.schema(), m.partition(), m.key(), nullptr));
 }
 
 BOOST_AUTO_TEST_CASE(test_per_table_guardrails_enabled_by_extension) {
