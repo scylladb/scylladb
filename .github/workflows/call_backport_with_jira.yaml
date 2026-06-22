@@ -25,6 +25,9 @@ jobs:
     secrets:
       gh_token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
       jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+      copilot_token: ${{ secrets.COPILOT_TOKEN }}
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
 
   backport-on-label:
     if: github.event_name == 'pull_request_target' && github.event.action == 'labeled'
@@ -39,6 +42,9 @@ jobs:
     secrets:
       gh_token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
       jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+      copilot_token: ${{ secrets.COPILOT_TOKEN }}
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
 
   backport-chain:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed' && github.event.pull_request.merged == true
@@ -51,3 +57,6 @@ jobs:
     secrets:
       gh_token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
       jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+      copilot_token: ${{ secrets.COPILOT_TOKEN }}
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
