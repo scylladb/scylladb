@@ -52,27 +52,23 @@ static vint_size_type count_extra_bytes(int8_t first_byte) {
 }
 
 static void encode(uint64_t value, vint_size_type size, bytes::iterator out) {
-    std::array<int8_t, 9> buffer({});
-
     // `size` is always in the range [1, 9].
     const auto extra_bytes_size = size - 1;
+    __builtin_assume(extra_bytes_size <= 8);
+    auto value_mask = first_byte_value_mask(extra_bytes_size);
 
+// Prevent unrolling of clang goes crazy trying to vectorize
+#pragma GCC unroll 1
     for (vint_size_type i = 0; i <= extra_bytes_size; ++i) {
-        buffer[extra_bytes_size - i] = static_cast<int8_t>(value & 0xff);
-        value >>= 8;
+        auto msb_shift = (8 * (extra_bytes_size - i)) & 63; // prevent undefined behavior on 64-bit shift
+        *out++ = ((value >> msb_shift) & value_mask) | ~value_mask;
+        value_mask = 0xff;
     }
 
-    buffer[0] |= ~first_byte_value_mask(extra_bytes_size);
-    std::copy_n(buffer.cbegin(), size, out);
 }
 
 vint_size_type unsigned_vint::serialize(uint64_t value, bytes::iterator out) {
     const auto size = serialized_size(value);
-
-    if (size == 1) {
-        *out = static_cast<int8_t>(value & 0xff);
-        return 1;
-    }
 
     encode(value, size, out);
     return size;
