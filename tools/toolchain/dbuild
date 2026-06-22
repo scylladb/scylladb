@@ -179,7 +179,7 @@ volume_path = "$HOME/.local/share/containers/storage/libpod"
 [containers]
 # netns = private, the default, doesn't work in nested containers,
 # but we need to use port forwarded networking for our mocks etc.
-netns = "slirp4netns"
+netns = "pasta"
 
 EOF
 

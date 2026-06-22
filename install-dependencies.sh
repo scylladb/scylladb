@@ -153,7 +153,7 @@ fedora_packages=(
 
     podman
     buildah
-    slirp4netns
+    passt
 
     # for cassandra-stress
     java-openjdk-headless
