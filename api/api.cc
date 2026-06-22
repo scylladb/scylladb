@@ -97,7 +97,7 @@ future<> unset_server_config(http_context& ctx) {
 
 static future<> register_api(http_context& ctx, const sstring& api_name,
         const sstring api_desc,
-        std::function<void(http_context& ctx, routes& r)> f) {
+        utils::wrapped_function<void(http_context& ctx, routes& r)> f) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
     return ctx.http_server.set_routes([rb, &ctx, api_name, api_desc, f](routes& r) {
