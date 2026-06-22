@@ -125,7 +125,7 @@ async def test_row_ttl_scheduling_group(manager: ManagerClient):
             # and get the CPU metrics again.
             timeout = time.time() + 60
             while time.time() < timeout:
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
                 ms_streaming_after, ms_statement_after, items_deleted = await get_cpu_metrics(manager)
                 if items_deleted - items_deleted_before == N:
                     break
@@ -202,7 +202,7 @@ async def test_row_ttl_multinode_expiration(manager: ManagerClient, with_down_no
             while time.time() < timeout:
                 if 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM)))):
                     break
-                time.sleep(0.1)
+                await asyncio.sleep(0.1)
             assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM))))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -271,7 +271,7 @@ async def test_row_ttl_upgrade(manager: ManagerClient):
             # Maybe servers[2] didn't notice yet that servers[0] has been
             # upgraded. Try again.
             assert 'not yet supported by this cluster' in str(e)
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
     assert success
 
     # At this point, the TTL feature should work fully - if we write expired
@@ -285,7 +285,7 @@ async def test_row_ttl_upgrade(manager: ManagerClient):
     while time.time() < timeout:
         if 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM ks.tbl2', consistency_level=ConsistencyLevel.QUORUM)))):
             break
-        time.sleep(0.1)
+        await asyncio.sleep(0.1)
     assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM ks.tbl2', consistency_level=ConsistencyLevel.QUORUM))))
 
 
@@ -346,6 +346,101 @@ async def test_row_ttl_multi_dc(manager: ManagerClient):
                         success = False
                         break
                 if not success:
-                    time.sleep(0.1)
+                    await asyncio.sleep(0.1)
             for dc in range(2):
                 assert 0 == len(list(await cql_dc[dc].run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.LOCAL_QUORUM))))
+
+
+async def test_row_ttl_multi_dc_with_down_dc(manager: ManagerClient):
+    """Check that TTL expiration partially works in a multi-DC cluster when
+       one entire DC goes down.
+       Scylla's TTL scanner uses the global primary replica to decide which
+       node scans which token range, so each range is scanned by exactly one
+       node across the entire cluster. When DC2 is down, items whose global
+       primary is in DC1 continue to expire normally. Items whose global
+       primary and secondary are both in DC2 will not expire until DC2
+       comes back up - this is a known limitation described in issue #28614.
+       This test verifies that:
+       1. Some items DO expire while DC2 is down (those owned by DC1 primaries).
+       2. After DC2 restarts, all remaining items eventually expire too.
+
+       Note that this test does not enshrine the fact that some items do not
+       expire while DC2 is down. It allows for this possibility, but if one
+       day we'll decide to change the implementation to expire all items
+       even while one DC is down, this test will not fail. The important
+       thing that this test verifies some expiration work takes place even
+       while one DC is down, and when it comes back up, all items do expire.
+    """
+    config = {
+        'alternator_ttl_period_in_seconds': '0.5',
+    }
+    # Set up a cluster with 6 nodes - three nodes in three racks in each
+    # of two data centers.
+    futures = []
+    for dc in range(2):
+        for rack in range(3):
+            futures.append(manager.servers_add(1, config=config, property_file={'dc': f'dc{dc+1}', 'rack': f'rack{rack+1}'}))
+    servers = [x[0] for x in await asyncio.gather(*futures)]
+    # servers[0..2] are in dc1, servers[3..5] are in dc2
+    dc1_servers = servers[:3]
+    dc2_servers = servers[3:]
+    cql = manager.get_cql()
+    ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 }"
+    async with new_test_keyspace(manager, ksdef) as keyspace:
+        async with new_test_table(manager, keyspace, 'p int primary key, e bigint') as table:
+            # Insert 50 rows with expiration time 10 seconds in the past.
+            # Use CL=ALL to ensure data is present on all nodes before we
+            # stop DC2.
+            e = int(time.time()) - 10
+            stmt = cql.prepare(f'INSERT INTO {table} (p, e) VALUES (?, ?)')
+            stmt.consistency_level = ConsistencyLevel.ALL
+            await asyncio.gather(*[cql.run_async(stmt, [p, e]) for p in range(50)])
+
+            # We haven't yet enabled TTL, so all items should be present, in both DCs:
+            for dc in [await manager.get_cql_exclusive(dc1_servers[0]),
+                       await manager.get_cql_exclusive(dc2_servers[0])]:
+                assert 50 == len(list(await dc.run_async(
+                    SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.LOCAL_QUORUM))))
+
+            # Stop all three nodes of DC2.
+            for server in dc2_servers:
+                await manager.server_stop_gracefully(server.server_id)
+
+            # Enable TTL on column "e", while DC2 is down. This should cause
+            # the nodes in DC1 to start expiring items, but the nodes in DC2
+            # won't be able to do their usual expiration work until DC2 comes
+            # back up.
+            await cql.run_async(f'ALTER TABLE {table} TTL e')
+
+            # Connect exclusively to DC1, so we can read with LOCAL_QUORUM
+            # even while DC2 is down.
+            cql_dc1 = await manager.get_cql_exclusive(dc1_servers[0])
+
+            # With DC2 down, items whose global primary replica is in DC1
+            # should expire promptly. Wait to see at least some expire:
+            # With 50 partitions spread across all token ranges, approximately
+            # half of them are in primary ranges owned by DC1 so it is almost
+            # certain that some items will expire while DC2 is down.
+            timeout = time.time() + 120
+            while time.time() < timeout:
+                remaining = len(list(await cql_dc1.run_async(
+                    SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.LOCAL_QUORUM))))
+                if remaining < 50:
+                    break
+                await asyncio.sleep(0.1)
+            remaining_with_dc2_down = len(list(await cql_dc1.run_async(
+                SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.LOCAL_QUORUM))))
+            assert remaining_with_dc2_down < 50, "Expected some items to expire with DC2 down"
+
+            # Bring DC2 back up. Now all nodes can participate in TTL scanning
+            # again, so the remaining items (those whose global primary was in
+            # DC2) should also expire.
+            for server in dc2_servers:
+                await manager.server_start(server.server_id)
+
+            timeout = time.time() + 120
+            while time.time() < timeout:
+                if 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM)))):
+                    break
+                await asyncio.sleep(0.1)
+            assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM))))
