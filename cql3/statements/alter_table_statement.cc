@@ -458,6 +458,11 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                 throw exceptions::configuration_exception(
                     "Per-row TTL is not compatible with TimeWindowCompactionStrategy");
             }
+            if (strategy == compaction::compaction_strategy_type::time_window
+                    && keyspace().starts_with("alternator_")) {
+                throw exceptions::configuration_exception(
+                    "TimeWindowCompactionStrategy is not supported for Alternator tables");
+            }
 
             _properties->apply_to_builder(cfm, std::move(schema_extensions), db, keyspace(), !is_cdc_log_table);
         }
