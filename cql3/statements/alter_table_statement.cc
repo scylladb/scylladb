@@ -462,6 +462,14 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                 throw exceptions::configuration_exception(
                     "Per-row TTL is not compatible with TimeWindowCompactionStrategy");
             }
+            // For CDC tables TWCS is both correct and the default.
+            if (strategy == compaction::compaction_strategy_type::time_window
+                    && !is_cdc_log_table
+                    && !was_cdc_log_table
+                    && keyspace().starts_with("alternator_")) {
+                throw exceptions::configuration_exception(
+                    "TimeWindowCompactionStrategy is not supported for Alternator tables");
+            }
 
             _properties->apply_to_builder(cfm, std::move(schema_extensions), db, keyspace(), !is_cdc_log_table);
         }
