@@ -28,8 +28,6 @@ Prerequisites
 
      sudo yum remove -y abrt
 
-.. The last requirement may need to be removed. See https://github.com/scylladb/scylladb/issues/14488.
-
 Install ScyllaDB
 --------------------
 
