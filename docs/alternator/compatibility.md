@@ -384,10 +384,8 @@ they should be easy to detect. Here is a list of these unimplemented features:
   another cache in front of the it. We wrote more about this here:
   <https://www.scylladb.com/2017/07/31/database-caches-not-good/>
 
-* The DescribeTable is missing some information about size estimates
-  (IndexSizeBytes and ItemCount - TableSizeBytes is available), and also
-  part of the information about indexes enabled on the table.
-  <https://github.com/scylladb/scylla/issues/5320>
+* The DescribeTable response is missing some information about size estimates
+  (IndexSizeBytes and ItemCount - TableSizeBytes is available).
   <https://github.com/scylladb/scylla/issues/7550>
 
 * The PartiQL syntax (SQL-like SELECT/UPDATE/INSERT/DELETE expressions)
