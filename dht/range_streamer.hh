@@ -79,6 +79,7 @@ public:
     range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
             locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
             service::frozen_topology_guard topo_guard,
+            bool consistent_rangemovement, double stream_plan_ranges_fraction,
             std::vector<sstring> tables = {})
         : _db(db)
         , _stream_manager(sm)
@@ -91,13 +92,19 @@ public:
         , _reason(reason)
         , _tables(std::move(tables))
         , _topo_guard(topo_guard)
+        , _consistent_rangemovement(consistent_rangemovement)
+        , _stream_plan_ranges_fraction(stream_plan_ranges_fraction)
     {
         _abort_source.check();
+        (void)_db;
     }
 
     range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
-            locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, service::frozen_topology_guard topo_guard, std::vector<sstring> tables = {})
-        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), std::move(tables)) {
+            locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
+            service::frozen_topology_guard topo_guard,
+            bool consistent_rangemovement, double stream_plan_ranges_fraction,
+            std::vector<sstring> tables = {})
+        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), consistent_rangemovement, stream_plan_ranges_fraction, std::move(tables)) {
     }
 
     void add_source_filter(std::unique_ptr<i_source_filter> filter) {
@@ -163,6 +170,8 @@ private:
     streaming::stream_reason _reason;
     std::vector<sstring> _tables;
     service::frozen_topology_guard _topo_guard;
+    bool _consistent_rangemovement;
+    double _stream_plan_ranges_fraction;
     std::unordered_multimap<sstring, std::unordered_map<locator::host_id, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
     // Number of tx and rx ranges added

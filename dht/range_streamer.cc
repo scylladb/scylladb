@@ -188,7 +188,7 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name,
     auto nr_nodes_in_ring = get_token_metadata().get_normal_token_owners().size();
     bool everywhere_topology = erm.get_replication_strategy().get_type() == locator::replication_strategy_type::everywhere_topology;
     // Use strict when number of nodes in the ring is equal or more than RF
-    auto strict = _db.local().get_config().consistent_rangemovement()
+    auto strict = _consistent_rangemovement
            && !_tokens.empty()
            && !everywhere_topology
            && nr_nodes_in_ring >= rf;
@@ -295,7 +295,7 @@ future<> range_streamer::stream_async() {
                     for (auto it = range_vec.begin(); it < range_vec.end();) {
                         ranges_to_stream.push_back(*it);
                         ++it;
-                        auto fraction = _db.local().get_config().stream_plan_ranges_fraction();
+                        auto fraction = _stream_plan_ranges_fraction;
                         size_t nr_ranges_per_stream_plan = nr_ranges_total * fraction;
                         if (ranges_to_stream.size() < nr_ranges_per_stream_plan) {
                             continue;

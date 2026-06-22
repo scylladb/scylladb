@@ -3783,7 +3783,8 @@ future<> storage_service::removenode_with_stream(locator::host_id leaving_node,
                 as.request_abort();
             }
         });
-        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, tmptr->get_my_id(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode, topo_guard);
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, tmptr->get_my_id(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode, topo_guard,
+                _db.local().get_config().consistent_rangemovement(), _db.local().get_config().stream_plan_ranges_fraction());
         removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
@@ -3796,7 +3797,8 @@ future<> storage_service::removenode_with_stream(locator::host_id leaving_node,
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, locator::host_id>> ranges_to_stream_by_keyspace) {
-    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), "Unbootstrap", streaming::stream_reason::decommission, null_topology_guard);
+    auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), "Unbootstrap", streaming::stream_reason::decommission, null_topology_guard,
+            _db.local().get_config().consistent_rangemovement(), _db.local().get_config().stream_plan_ranges_fraction());
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -4853,7 +4855,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 co_await _repair.local().rebuild_with_repair(std::move(ks_erms), tmptr, std::move(sdc_param), session);
                             } else {
                                 auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
-                                        tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, session);
+                                        tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, session,
+                                        _db.local().get_config().consistent_rangemovement(), _db.local().get_config().stream_plan_ranges_fraction());
                                 streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
                                 if (source_dc != "") {
                                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
@@ -5269,6 +5272,8 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                                                                 format("Tablet {}", trinfo->transition),
                                                                 reason,
                                                                 topo_guard,
+                                                                _db.local().get_config().consistent_rangemovement(),
+                                                                _db.local().get_config().stream_plan_ranges_fraction(),
                                                                 std::move(tables));
             tm = nullptr;
             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(

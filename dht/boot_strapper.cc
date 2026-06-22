@@ -41,7 +41,8 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
         throw std::runtime_error("Wrong stream_reason provided: it can only be replace or bootstrap");
     }
     try {
-        auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason, topo_guard);
+        auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason, topo_guard,
+                _db.local().get_config().consistent_rangemovement(), _db.local().get_config().stream_plan_ranges_fraction());
         auto nodes_to_filter = gossiper.get_unreachable_members();
         if (reason == streaming::stream_reason::replace) {
             nodes_to_filter.insert(std::move(replace_address));
