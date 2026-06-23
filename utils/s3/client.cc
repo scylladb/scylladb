@@ -839,6 +839,12 @@ protected:
     named_gate _bg_flushes;
     std::optional<tag> _tag;
     seastar::abort_source* _as;
+    // Per-sink cap on the number of parts uploaded concurrently. Layered on top
+    // of the group's shared write_slots so that a single sink can't grab the
+    // whole per-scheduling-group connection budget and starve other sinks
+    // (flushes / compactions) in the same group. Also bounds this sink's
+    // in-flight producer buffers to _max_multipart_concurrency * part_size.
+    seastar::semaphore _inflight_parts{_max_multipart_concurrency};
 
     future<> start_upload();
     future<> finalize_upload();
@@ -1075,18 +1081,25 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         co_await start_upload();
     }
 
-    // Reserve a slot in the group's write budget *before* launching the
-    // background request, held until the whole request completes (a connection
-    // is busy until the response arrives -- see the finally() at the end). The
-    // budget's count equals the number of HTTP connections configured for the
-    // scheduling group, so the total upload parts in flight across all sinks --
-    // and therefore the aggregate producer-owned buffers we hold -- is bounded
-    // by the connection budget. Because this coroutine is co_await-ed by the
-    // sink's put()/maybe_flush(), the producer (memtable flush or compaction)
-    // blocks here once all connections are busy, applying backpressure instead
-    // of accumulating buffers. Note this no longer draws from the shared client
-    // memory pool, so uploads can't deadlock against concurrent downloads that
-    // hold it.
+    // Reserve two slots *before* launching the background request, both held
+    // until the whole request completes (a connection is busy until the
+    // response arrives -- see the finally() at the end):
+    //
+    //  - _inflight_parts: a per-sink cap, so this single sink can never hold
+    //    more than _max_multipart_concurrency parts in flight and thus can't
+    //    monopolize the group's connection budget and starve other sinks
+    //    (flushes / compactions) sharing the same scheduling group.
+    //  - gc.write_slots: the shared per-scheduling-group budget (see the group
+    //    write-budget commit) whose count equals the configured connection
+    //    count, bounding the aggregate in-flight parts across all sinks.
+    //
+    // The per-sink slot is taken first (cheap, low-contention) so we don't hold
+    // a scarce group slot while waiting on it. Because this coroutine is
+    // co_await-ed by the sink's put()/maybe_flush(), the producer blocks here
+    // once either limit is hit, applying backpressure instead of accumulating
+    // buffers.
+    auto sink_slot = _as ? co_await get_units(_inflight_parts, 1, *_as)
+                         : co_await get_units(_inflight_parts, 1);
     auto& gc = co_await _client->find_or_create_client();
     auto slot = _as ? co_await get_units(gc.write_slots, 1, *_as)
                     : co_await get_units(gc.write_slots, 1);
@@ -1139,7 +1152,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-    }).finally([gh = std::move(gh), slot = std::move(slot)] {});
+    }).finally([gh = std::move(gh), slot = std::move(slot), sink_slot = std::move(sink_slot)] {});
 }
 
 future<> client::multipart_upload::abort_upload() {
