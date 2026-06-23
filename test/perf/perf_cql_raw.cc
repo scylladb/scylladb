@@ -195,14 +195,22 @@ public:
 
     future<> stop() {
         _reader_stopped = true;
+        // Abort the socket's input so the reader fiber's in-flight read returns
+        // promptly, then join the reader before closing the streams (closing
+        // while a read is outstanding closes the fd from under it).
         try {
-            co_await _in.close();
-            co_await _out.close();
+            _cs.shutdown_input();
         } catch (...) {
             // ignore
         }
         try {
             co_await std::move(_reader_done);
+        } catch (...) {
+            // ignore
+        }
+        try {
+            co_await _in.close();
+            co_await _out.close();
         } catch (...) {
             // ignore
         }
