@@ -1,4 +1,4 @@
-
+﻿
 ==============================================
 Apache Cassandra to ScyllaDB Migration Process
 ==============================================
@@ -218,132 +218,9 @@ If the node that failed was a node you were loading sstables to, then the sstabl
 Notes, Limitations and Known Issues
 -----------------------------------
 
-#. The ``Duration`` data type is only supported in ScyllaDB 2.1 and later (`issue-2240 <https://github.com/scylladb/scylla/issues/2240>`_). This is relevant only when migrating from Apache Cassandra 3.X.
-
-#. Changes in table schema from Apache Cassandra 3.0 that requires adjustments for ScyllaDB 2.x, 1.x table schema:
-
-   - Changes in create table (`issue-8384 <https://issues.apache.org/jira/browse/CASSANDRA-8384>`_)
-   - ``crc_check_chance`` out of compression options (`issue-9839 <https://issues.apache.org/jira/browse/CASSANDRA-9839>`_)
-
-#. ScyllaDB 2.x CQL client ``cqlsh`` does not display the millisecond values of a ``timestamp`` data type. (`scylla-tools-java/issues #36 <https://github.com/scylladb/scylla-tools-java/issues/36>`_)
-
-#. ``Nodetool tablestats`` partition keys (estimated) number in ScyllaDB, post migration from Apache Cassandra, differs by 20% less up to 120% more than the original amount in Cassandra (`issue-2545 <https://github.com/scylladb/scylla/issues/2545>`_)
-
-#. ScyllaDB 2.x is using Apache Cassandra 2.x file format. This means that migrating from Apache Cassandra 3.x to ScyllaDB 2.x will result in a different storage space of the same data on the ScyllaDB cluster. ScyllaDB 3.x uses the same format as Cassandra 3.x
-
-Counters
-^^^^^^^^
-In version 2.1, Apache Cassandra changed how the counters work. The previous design had some hard to fix issues, which meant that there is no safe and general way of converting counter data from the old format to the new one. As a result, counter cells created before version 2.1 may contain old-format information even **after** migration to the latest Cassandra version. As ScyllaDB implements only the new counter design, this imposes restrictions on how counters can be migrated from Cassandra.
-
-Copying counter SSTables over to ScyllaDB is unsafe and, by default, disallowed. Even if you use sstableloader, which is a safe way to copy the tables, it will refuse to load data in the legacy format.
-
-**Schema differences between Apache Cassandra 4.x and ScyllaDB 4.x**
-
-The following table illustrates the default schema differences between Apache Cassandra 4.x and ScyllaDB 3.x
-
-Notable differences:
-
-- Since CDC is implemented differently in Cassandra, 'cdc=false' in the Cassandra schema, should be changed to cdc = {'enabled': 'false'}
-
-- additional_write_policy = '99p' is **NOT** supported in ScyllaDB; make sure you remove it from the schema.
-
-- extensions = {} is **NOT** supported in ScyllaDB; make sure you remove it from the schema.
-
-- read_repair = 'BLOCKING' is **NOT** supported in ScyllaDB; make sure you remove it from the schema.
-
-- In the expression compression = {'chunk_length_in_kb': '16', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}', replace 'compression" 'class': 'org.apache.cassandra.io.compress.LZ4Compressor' with 'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor' 
-
-- Replace speculative_retry = '99p' with speculative_retry = '99.0PERCENTILE';
-
-    
-.. note::
-
-   If you used the same Counter SSTables with Apache Cassandra from before version 2.1, the migration to ScyllaDB would not work
-   
-
-**Schema differences between Apache Cassandra 3.x and ScyllaDB 2.x and 1.x**
-
-The following table illustrates the default schema differences between Apache Cassandra 3.x and ScyllaDB 2.x, 1.x
-
-Notable differences:
-
-- 'caching' section is supported in ScyllaDB, yet requires adjustments to the schema (see below).
-
-- 'crc_check_chance' (marked in **bold**) is **NOT** supported in ScyllaDB; make sure you remove it from the schema.
-
-
-+---------------------------------------------------------------+---------------------------------------------------------------+
-|Apache Cassandra 3.10 (uses 3.x Schema)                        |ScyllaDB 2.x 1.x (uses Apache Cassandra 2.1 Schema)            |
-+===============================================================+===============================================================+
-|.. code-block:: cql                                            |.. code-block:: cql                                            |
-|                                                               |                                                               |
-| CREATE KEYSPACE mykeyspace WITH replication =                 | CREATE KEYSPACE mykeyspace WITH replication =                 |
-| {'class': 'SimpleStrategy', 'replication_factor': '1'}        | {'class': 'SimpleStrategy', 'replication_factor': '1'}        |
-| AND durable_writes = true;                                    | AND durable_writes = true;                                    |
-|                                                               |                                                               |
-| CREATE TYPE mykeyspace.udt_info (                             | CREATE TYPE mykeyspace.udt_info (                             |
-| birthday date,                                                | birthday date,                                                |
-| nationality text,                                             | nationality text,                                             |
-| height int);                                                  | height int);                                                  |
-|                                                               |                                                               |
-| CREATE TABLE                                                  | CREATE TABLE                                                  |
-| mykeyspace.all_types_no_counter_no_duration (                 | mykeyspace.all_types_no_counter_no_duration (                 |
-| aascii ascii,                                                 | aascii ascii,                                                 |
-| abigint bigint,                                               | abigint bigint,                                               |
-| ablob blob,                                                   | ablob blob,                                                   |
-| aboolean boolean,                                             | aboolean boolean,                                             |
-| adate date,                                                   | adate date,                                                   |
-| adecimal decimal,                                             | adecimal decimal,                                             |
-| adouble double,                                               | adouble double,                                               |
-| afloat float,                                                 | afloat float,                                                 |
-| afrozen_udt frozen<udt_info>,                                 | afrozen_udt frozen<udt_info>,                                 |
-| ainet inet,                                                   | ainet inet,                                                   |
-| aint int,                                                     | aint int,                                                     |
-| alist list<int>,                                              | alist list<int>,                                              |
-| amap map<int, int>,                                           | amap map<int, int>,                                           |
-| aset set<int>,                                                | aset set<int>,                                                |
-| asmallint smallint,                                           | asmallint smallint,                                           |
-| atext text,                                                   | atext text,                                                   |
-| atime time,                                                   | atime time,                                                   |
-| atimestamp timestamp,                                         | atimestamp timestamp,                                         |
-| atimeuuid timeuuid,                                           | atimeuuid timeuuid,                                           |
-| atinyint tinyint,                                             | atinyint tinyint,                                             |
-| atuple frozen<tuple<int, text>>,                              | atuple frozen<tuple<int, text>>,                              |
-| auuid uuid,                                                   | auuid uuid,                                                   |
-| avarchar text,                                                | avarchar text,                                                |
-| avarint varint,                                               | avarint varint,                                               |
-| PRIMARY KEY (aascii, abigint))                                | PRIMARY KEY (aascii, abigint))                                |
-| WITH CLUSTERING ORDER BY (abigint ASC)                        | WITH CLUSTERING ORDER BY (abigint ASC)                        |
-| AND bloom_filter_fp_chance = 0.01                             | AND bloom_filter_fp_chance = 0.01                             |
-| AND comment = ''                                              | AND comment = ''                                              |
-+---------------------------------------------------------------+---------------------------------------------------------------+
-|.. code-block:: cql                                            |(Adjust for Apache Cassandra 2.1 schema)                       |
-|                                                               |                                                               |
-|  AND caching = {'keys': 'ALL','rows_per_partition': 'NONE'}   |.. code-block:: cql                                            |
-|  AND compaction = {'class': 'org.apache.cassandra.db.         |                                                               |
-|  compaction.SizeTieredCompactionStrategy',                    | AND caching = '{"keys":"ALL","rows_per_partition":"ALL"}'     |
-|  'max_threshold': '32', 'min_threshold': '4'}                 | AND compaction = {'class': 'SizeTieredCompactionStrategy'}    |
-|  AND compression = {'chunk_length_in_kb': '64','class':       | AND compression = {'sstable_compression':                     |
-|  'org.apache.cassandra.io.compress.LZ4Compressor'}            | 'org.apache.cassandra.io.compress.LZ4Compressor'}             |
-|  AND speculative_retry = '99PERCENTILE'                       | AND speculative_retry = '99.0PERCENTILE'                      |
-+---------------------------------------------------------------+---------------------------------------------------------------+
-|**AND crc_check_chance = 1.0**                                 |(Remove from Apache Cassandra 2.1 schema)                      |
-+---------------------------------------------------------------+---------------------------------------------------------------+
-|.. code-block:: cql                                            |.. code-block:: cql                                            |
-|                                                               |                                                               |
-| AND dclocal_read_repair_chance = 0.1                          | AND dclocal_read_repair_chance = 0.1                          |
-| AND default_time_to_live = 0                                  | AND default_time_to_live = 0                                  |
-| AND gc_grace_seconds = 864000                                 | AND gc_grace_seconds = 864000                                 |
-| AND max_index_interval = 2048                                 | AND max_index_interval = 2048                                 |
-| AND memtable_flush_period_in_ms = 0                           | AND memtable_flush_perios_in_ms = 0                           |
-| AND min_index_interval = 128                                  | AND min_index_interval = 128                                  |
-| AND read_repair_chance = 0.0;                                 | AND read_repair_chance = 0.0;                                 |
-+---------------------------------------------------------------+---------------------------------------------------------------+
+In older ScyllaDB releases, the estimated partition count reported by ``nodetool tablestats`` could differ significantly from Apache Cassandra because the value is derived from estimation algorithms rather than exact counts. This discrepancy did not indicate data loss. (`issue-2545 <https://github.com/scylladb/scylla/issues/2545>`_)
 
 More on :doc:`ScyllaDB and Apache Cassandra Compatibility </using-scylla/cassandra-compatibility/>`
 
 Also see the `Migrating to ScyllaDB lesson <https://university.scylladb.com/courses/scylla-operations/lessons/migrating-to-scylla/>`_ on ScyllaDB University.
 
-.. include:: /rst_include/apache-copyrights-index.rst
-
-.. include:: /rst_include/apache-copyrights-index-all-attributes.rst
