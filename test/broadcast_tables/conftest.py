@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.pylib.suite.python import add_host_option, add_cql_connection_options
+from test.pylib.connect_options import add_host_option, add_cql_connection_options
 
 # Add required fixtures:
 from test.cqlpy.conftest import host, cql

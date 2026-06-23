@@ -19,7 +19,7 @@ from test.conftest import dynamic_scope
 from test.cqlpy.conftest import host  # add required fixtures
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.skip_types import skip_env
-from test.pylib.suite.python import add_host_option
+from test.pylib.connect_options import add_host_option
 from urllib.parse import urlparse
 from functools import cache
 
