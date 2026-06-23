@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 segment_size = 128 * 1024
 
+LOGSTOR_PARTITIONER = "com.scylladb.dht.LogstorHashPrefixPartitioner"
+
 async def count_logstor_data_files(manager: ManagerClient, server_id: int, shard: int) -> int:
     workdir = await manager.server_get_workdir(server_id)
     return len(list((Path(workdir) / "logstor").glob(f"ls_{shard}-*-Data.db")))
@@ -37,6 +39,11 @@ async def test_property(manager: ManagerClient):
         desc = await cql.run_async(f"DESCRIBE TABLE {ks}.t_enabled")
         logger.info(f"Table t_enabled description:\n{desc}")
         assert "storage_engine = 'logstor'" in desc[0].create_statement
+
+        row = (await cql.run_async(
+            f"SELECT partitioner FROM system_schema.scylla_tables WHERE keyspace_name='{ks}' AND table_name='t_enabled'"
+        ))[0]
+        assert row.partitioner == LOGSTOR_PARTITIONER
 
         desc = await cql.run_async(f"DESCRIBE TABLE {ks}.t_disabled")
         logger.info(f"Table t_disabled description:\n{desc}")

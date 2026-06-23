@@ -13,13 +13,12 @@
 #include "readers/from_mutations.hh"
 #include "readers/empty.hh"
 #include "keys/keys.hh"
-#include "replica/logstor/key_utils.hh"
 #include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/key_utils.hh"
 #include "replica/logstor/types.hh"
 #include <seastar/core/when_all.hh>
 #include "utils/managed_bytes.hh"
 #include <seastar/util/defer.hh>
-#include <openssl/evp.h>
 #include <algorithm>
 #include <queue>
 #include <vector>
@@ -29,7 +28,10 @@ namespace replica::logstor {
 seastar::logger logstor_logger("logstor");
 
 primary_index_key::primary_index_key(const schema& s, const dht::decorated_key& dk)
-    : primary_index_key(dk.token(), compute_key_hash(s, dk.key().view())) {
+        : primary_index_key(compute_key_hash(s, dk.key().view())) {
+    if (token() != dk.token()) {
+        on_internal_error(logstor_logger, format("Token mismatch constructing primary_index_key: dk {} computed {}", dk.token(), token()));
+    }
 }
 
 static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {

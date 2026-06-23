@@ -8,6 +8,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include "replica/logstor/types.hh"
+#include "dht/logstor_partitioner.hh"
 #include <seastar/testing/thread_test_case.hh>
 
 #include "replica/logstor/index.hh"
@@ -31,6 +32,7 @@ struct shared_logstor_cache {
 
 schema_ptr make_logstor_schema() {
     return schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_partitioner(dht::logstor_partitioner::classname)
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("v", utf8_type)
             .build();
@@ -45,7 +47,7 @@ primary_index_key make_primary_index_key(const schema& schema, sstring pk) {
 primary_index_key make_fixed_token_key(const schema& schema, int64_t token, sstring pk) {
     auto pkey = partition_key::from_single_value(schema, serialized(pk));
     auto dk = dht::decorated_key(dht::token::from_int64(token), std::move(pkey));
-    return primary_index_key{schema, dk};
+    return primary_index_key::with_forced_token(schema, dk);
 }
 
 index_entry make_index_entry(uint32_t segment, uint32_t offset, uint32_t size, api::timestamp_type timestamp) {

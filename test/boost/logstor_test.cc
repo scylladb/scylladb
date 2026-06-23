@@ -14,11 +14,12 @@
 #include <seastar/util/defer.hh>
 
 #include "replica/logstor/ondisk.hh"
+#include "replica/logstor/key_utils.hh"
 #include "replica/logstor/write_buffer.hh"
 #include <seastar/testing/thread_test_case.hh>
 
 #include "replica/logstor/segment_io.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/logstor_partitioner.hh"
 #include "schema/schema_builder.hh"
 #include <seastar/core/simple-stream.hh>
 #include "sstables/key.hh"
@@ -32,6 +33,7 @@ namespace {
 
 schema_ptr make_kv_schema() {
     return schema_builder(1, "ks", "cf")
+            .with_partitioner(dht::logstor_partitioner::classname)
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("v", utf8_type)
             .build();
@@ -48,11 +50,48 @@ mutation make_kv_mutation(schema_ptr schema, sstring pk, sstring value, api::tim
     return m;
 }
 
+SEASTAR_THREAD_TEST_CASE(test_logstor_partitioner_uses_hash_prefix_token) {
+    auto schema = schema_builder(1, "ks", "cf")
+            .with_partitioner(dht::logstor_partitioner::classname)
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v", utf8_type)
+            .build();
+
+    auto pk = partition_key::from_single_value(*schema, serialized("abc"));
+    auto expected_token = token_from_key_hash(compute_key_hash(*schema, pk.view()));
+
+    BOOST_REQUIRE_EQUAL(dht::get_token(*schema, pk.view()), expected_token);
+
+    auto sstable_key = sstables::key::from_partition_key(*schema, pk.view());
+    BOOST_REQUIRE_EQUAL(schema->get_partitioner().get_token(sstable_key), expected_token);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_compute_key_hash_matches_sstable_key_hashing) {
+    auto check_key = [] (const schema& schema, partition_key_view pk) {
+        auto sstable_key = sstables::key::from_partition_key(schema, pk);
+        BOOST_REQUIRE(compute_key_hash(schema, pk) == compute_key_hash(sstable_key));
+    };
+
+    auto simple_schema = make_kv_schema();
+    check_key(*simple_schema, partition_key::from_single_value(*simple_schema, serialized("abc")).view());
+
+    auto compound_schema = schema_builder(1, "ks", "compound_cf")
+                .with_partitioner(dht::logstor_partitioner::classname)
+                .with_column("pk1", utf8_type, column_kind::partition_key)
+                .with_column("pk2", bytes_type, column_kind::partition_key)
+                .with_column("v", utf8_type)
+                .build();
+
+    check_key(*compound_schema, partition_key::from_exploded(*compound_schema, {serialized("left"), bytes()}).view());
+    check_key(*compound_schema, partition_key::from_exploded(*compound_schema, {serialized(""), bytes{int8_t(0x00), int8_t(0x10), int8_t(0xff)}}).view());
+    check_key(*compound_schema, partition_key::from_exploded(*compound_schema, {serialized("component-with-more-bytes"), bytes{int8_t('b'), int8_t('i'), int8_t('n'), int8_t('a'), int8_t('r'), int8_t('y'), int8_t(0x00), int8_t('t'), int8_t('a'), int8_t('i'), int8_t('l')}}).view());
+}
+
 log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::timestamp_type ts = api::min_timestamp) {
     auto m = make_kv_mutation(schema, std::move(pk), std::move(value), ts);
     return log_record {
         .header = {
-            .key = primary_index_key{*m.schema(), m.decorated_key()},
+            .key = primary_index_key{*schema, m.decorated_key()},
             .timestamp = ts,
             .table = schema->id(),
         },

@@ -12,9 +12,11 @@
 #include <array>
 #include <cstring>
 
-#include <seastar/net/byteorder.hh>
+#include <seastar/core/byteorder.hh>
 
+#include "dht/token.hh"
 #include "keys/keys.hh"
+#include "sstables/key.hh"
 #include "utils/hashers.hh"
 
 namespace replica::logstor {
@@ -57,6 +59,18 @@ inline key_hash compute_key_hash(const schema& s, partition_key_view key) {
     key_hash h;
     std::copy_n(digest.begin(), h.size(), h.begin());
     return h;
+}
+
+// sstables::key_view already stores bytes in the external key encoding, so hashing
+// the raw bytes is correct even for multi-component keys.
+inline key_hash compute_key_hash(const sstables::key_view& key) {
+    return key.with_linearized([] (bytes_view v) {
+        return compute_key_hash(managed_bytes_view(v));
+    });
+}
+
+inline dht::token token_from_key_hash(const key_hash& hash) {
+    return dht::token(read_be<int64_t>(reinterpret_cast<const char*>(hash.data())));
 }
 
 }

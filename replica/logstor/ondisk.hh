@@ -23,7 +23,7 @@ static constexpr size_t record_alignment = 8;
 static constexpr uint8_t current_version = 1;
 static constexpr uint32_t buffer_header_magic = 0x4c475342;
 
-static constexpr size_t serialized_primary_index_key_size = sizeof(int64_t) + key_hash_size;
+static constexpr size_t serialized_primary_index_key_size = key_hash_size;
 static constexpr size_t serialized_log_record_header_size = serialized_primary_index_key_size + sizeof(api::timestamp_type) + utils::UUID::serialized_size();
 
 struct buffer_header {
@@ -77,19 +77,17 @@ template <>
 struct serializer<replica::logstor::primary_index_key> {
     template <typename Output>
     static void write(Output& out, const replica::logstor::primary_index_key& key) {
-        serializer<int64_t>::write(out, key._token.raw());
-        out.write(reinterpret_cast<const char*>(key._hash.data()), key._hash.size());
+        auto h = key.hash();
+        out.write(reinterpret_cast<const char*>(h.data()), h.size());
     }
     template <typename Input>
     static replica::logstor::primary_index_key read(Input& in) {
-        replica::logstor::primary_index_key key;
-        key._token = dht::token::from_int64(serializer<int64_t>::read(in));
-        in.read(reinterpret_cast<char*>(key._hash.data()), key._hash.size());
-        return key;
+        replica::logstor::key_hash hash;
+        in.read(reinterpret_cast<char*>(hash.data()), hash.size());
+        return replica::logstor::primary_index_key(hash);
     }
     template <typename Input>
     static void skip(Input& in) {
-        serializer<int64_t>::skip(in);
         in.skip(replica::logstor::key_hash_size);
     }
 };
