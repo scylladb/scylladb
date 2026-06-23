@@ -2431,3 +2431,92 @@ async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, ma
         for t in replicas:
             assert len(t.replicas) == 1
             assert t.replicas[0][0] == dc1_host_id
+
+@pytest.mark.asyncio
+async def test_rf_reduction_preserves_quorum_writes(manager: ManagerClient) -> None:
+    """RF reduction must preserve QUORUM-acknowledged writes even when surviving replicas missed them.
+
+    With RF=5 on 5 nodes (5 racks), write pk=2 at QUORUM while r1/r2 are down, so only r3/r4/r5
+    have it. After restart, reduce RF to 2 keeping only r1/r2. The RF reduction must stream/repair
+    data from removed replicas to surviving ones so that pk=2 remains readable.
+    """
+    # Disable hinted handoff so hints don't replay the writes to r1/r2 after restart,
+    # which would mask the bug by delivering the data before ALTER KEYSPACE runs.
+    cfg = {'hinted_handoff_enabled': False}
+    servers = await manager.servers_add(5, config=cfg, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+        {"dc": "dc1", "rack": "r4"},
+        {"dc": "dc1", "rack": "r5"},
+    ])
+
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r3', 'r4', 'r5']} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+
+        # Verify all 5 nodes are replicas for the single tablet.
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, 't')
+        assert len(replicas) == 1, f"Expected 1 tablet, got {len(replicas)}"
+        assert len(replicas[0].replicas) == 5, f"Expected 5 replicas, got {len(replicas[0].replicas)}"
+
+        # Insert baseline row visible to all nodes.
+        logger.info("Inserting pk=1 at CL=ALL")
+        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk, v) VALUES (1, 100)", consistency_level=ConsistencyLevel.ALL))
+        rows = await cql.run_async(SimpleStatement(f"SELECT v FROM {ks}.t WHERE pk = 1", consistency_level=ConsistencyLevel.ALL))
+        assert len(rows) == 1 and rows[0].v == 100
+
+        # Stop r1 and r2 so they miss the next write.
+        logger.info("Stopping r1 and r2")
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_stop_gracefully(servers[1].server_id)
+
+        # Write pk=2 at QUORUM. With 3 live nodes, all 3 (r3/r4/r5) respond. r1/r2 never see it.
+        logger.info("Inserting pk=2 at CL=QUORUM (only r3, r4, r5 have it)")
+        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk, v) VALUES (2, 200)", consistency_level=ConsistencyLevel.QUORUM))
+        rows = await cql.run_async(SimpleStatement(f"SELECT v FROM {ks}.t WHERE pk = 2", consistency_level=ConsistencyLevel.QUORUM))
+        assert len(rows) == 1 and rows[0].v == 200
+
+        # Restart the stopped nodes.
+        logger.info("Restarting r1 and r2")
+        await manager.server_start(servers[0].server_id)
+        await manager.server_start(servers[1].server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        # Reduce RF from 5 to 2, each step removing one rack that had pk=2.
+        logger.info("Reducing RF: 5 -> 4 -> 3 -> 2, keeping only r1 and r2")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r4', 'r5']}}")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r5']}}")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2']}}")
+
+        for s in servers:
+            await read_barrier(manager.api, s.ip_addr)
+
+        # Verify only r1 and r2 remain as replicas.
+        replicas_after = await get_all_tablet_replicas(manager, servers[0], ks, 't')
+        assert len(replicas_after) == 1
+        assert len(replicas_after[0].replicas) == 2, f"Expected 2 replicas after RF reduction, got {len(replicas_after[0].replicas)}"
+
+        remaining_host_ids = {host_id for host_id, _ in replicas_after[0].replicas}
+        r1_host_id = await manager.get_host_id(servers[0].server_id)
+        r2_host_id = await manager.get_host_id(servers[1].server_id)
+        assert remaining_host_ids == {r1_host_id, r2_host_id}, f"Expected replicas on r1 and r2, got {remaining_host_ids}"
+
+        # Read directly from r1 and r2 to avoid driver routing to former replicas.
+        logger.info("Verifying data on surviving replicas r1 and r2")
+        cql_r1 = await manager.get_cql_exclusive(servers[0])
+        cql_r2 = await manager.get_cql_exclusive(servers[1])
+
+        for label, excl_cql in [("r1", cql_r1), ("r2", cql_r2)]:
+            # pk=1 (written at ALL) should still be present.
+            rows = await excl_cql.run_async(SimpleStatement(f"SELECT v FROM {ks}.t WHERE pk = 1", consistency_level=ConsistencyLevel.ONE))
+            assert len(rows) == 1 and rows[0].v == 100, f"pk=1 should be present on {label}, got {rows}"
+
+            # pk=2 (written at QUORUM while r1/r2 were down) must still be present.
+            # RF reduction should stream data from removed replicas to surviving ones.
+            rows = await excl_cql.run_async(SimpleStatement(f"SELECT v FROM {ks}.t WHERE pk = 2", consistency_level=ConsistencyLevel.ONE))
+            assert len(rows) == 1 and rows[0].v == 200, f"pk=2 should be present on {label}, got {rows}"
+            logger.info(f"Confirmed: pk=2 is present on {label}")
