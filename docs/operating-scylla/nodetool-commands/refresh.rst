@@ -44,10 +44,10 @@ Load and Stream make restores and migrations much easier:
 * You can place sstable from every node to every node
 * No need to run nodetool cleanup to remove unused data
 
-With --primary-replica-only (or -pro) option, only the primary replica of each partition in an sstable will be used as the target. 
---primary-replica-only must be applied together with --load-and-stream.
---primary-replica-only cannot be used with --scope, they are mutually exclusive.
---primary-replica-only requires repair to be run after the load and stream operation is completed. 
+With ``--primary-replica-only`` (or ``-pro``) option, only the primary replica of each partition in an sstable will be used as the target. 
+``--primary-replica-only`` must be applied together with ``--load-and-stream``.
+``--primary-replica-only`` cannot be used with ``--scope``, they are mutually exclusive.
+``--primary-replica-only`` requires repair to be run after the load and stream operation is completed. 
 
 
 Scope
@@ -75,7 +75,7 @@ Skip cleanup
 
    nodetool refresh <my_keyspace> <my_table> [--skip-cleanup]
 
-When loading an SSTable, Scylla will cleanup it from keys that the node is not responsible for. To skip this step, use the `--skip-cleanup` option.
+When loading an SSTable, Scylla will cleanup it from keys that the node is not responsible for. To skip this step, use the ``--skip-cleanup`` option.
 See :ref:`nodetool cleanup <nodetool-cleanup-cmd>`.
 
 
@@ -86,6 +86,6 @@ Skip reshape
 
    nodetool refresh <my_keyspace> <my_table> [--skip-reshape]
 
-When refreshing, the SSTables to load might be out of shape, Scylla will attempt to reshape them if that's the case. To skip this step, use the `--skip-reshape` option.
+When refreshing, the SSTables to load might be out of shape, Scylla will attempt to reshape them if that's the case. To skip this step, use the ``--skip-reshape`` option.
 
 .. include:: nodetool-index.rst

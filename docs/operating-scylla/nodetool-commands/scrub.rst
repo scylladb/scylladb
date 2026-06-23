@@ -32,16 +32,16 @@ OPTIONS
 ====================================================================  ==================================================================================================================
 Parameter                                                             Description
 ====================================================================  ==================================================================================================================
--ns / --no-snapshot                                                   Do not take a snapshot of all scrubbed tables before starting scrub (default false).
+``-ns`` / ``--no-snapshot``                                           Do not take a snapshot of all scrubbed tables before starting scrub (default false).
 --------------------------------------------------------------------  ------------------------------------------------------------------------------------------------------------------
--s / --skip-corrupted                                                 Skip corrupted rows or partitions even when scrubbing counter tables.
-                                                                      (Deprecated, use '--mode' instead. default false)
+``-s`` / ``--skip-corrupted``                                         Skip corrupted rows or partitions even when scrubbing counter tables.
+                                                                      (Deprecated, use ``--mode`` instead. default false)
 --------------------------------------------------------------------  ------------------------------------------------------------------------------------------------------------------
--m <scrub_mode> / --mode <scrub_mode>                                 How to handle corrupt data (one of: ABORT|SKIP|SEGREGATE|VALIDATE, default ABORT; overrides '--skip-corrupted')
+``-m <scrub_mode>`` / ``--mode <scrub_mode>``                         How to handle corrupt data (one of: ABORT|SKIP|SEGREGATE|VALIDATE, default ABORT; overrides ``--skip-corrupted``)
 --------------------------------------------------------------------  ------------------------------------------------------------------------------------------------------------------
--q <quarantine_mode> / --quarantine-mode <quarantine_mode>            How to handle quarantined SSTables (one of: INCLUDE|EXCLUDE|ONLY, default INCLUDE)
+``-q <quarantine_mode>`` / ``--quarantine-mode <quarantine_mode>``    How to handle quarantined SSTables (one of: INCLUDE|EXCLUDE|ONLY, default INCLUDE)
 --------------------------------------------------------------------  ------------------------------------------------------------------------------------------------------------------
---drop-unfixable-sstables                                             Drop unfixable SSTables instead of aborting the entire scrub (only valid with --mode=SEGREGATE)
+``--drop-unfixable-sstables``                                         Drop unfixable SSTables instead of aborting the entire scrub (only valid with ``--mode=SEGREGATE``)
 ====================================================================  ==================================================================================================================
 
 ``--`` This option can be used to separate command-line options from the list of argument, (useful when arguments might be mistaken for command-line options.

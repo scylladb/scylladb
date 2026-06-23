@@ -63,7 +63,7 @@ The `scope` parameter describes the subset of cluster nodes where you want to lo
 * `dc` - In the datacenter (DC) where the local node lives.
 * `all` (default) - Everywhere across the cluster.
 
-`--sstables-file-list <file>` and `<sstable>` can be combined together, `nodetool restore` will attempt to restore the combined list. duplicates are _not_ removed
+``--sstables-file-list <file>`` and ``<sstable>`` can be combined together, ``nodetool restore`` will attempt to restore the combined list. duplicates are _not_ removed
 
 To fully restore a cluster, you should combine the ``scope`` parameter with the correct list of
 SStables to restore to each node.
