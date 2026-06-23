@@ -10,15 +10,20 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_assertions.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/util/defer.hh>
 
+#include "clocks-impl.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 
+#include "db/system_keyspace.hh"
 #include "schema/schema_builder.hh"
+#include "tasks/task_manager.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
 #include "transport/messages/result_message.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group0_client.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/metrics_api.hh>
 
@@ -367,6 +372,199 @@ SEASTAR_TEST_CASE(test_group0_tables_use_schema_commitlog) {
         BOOST_REQUIRE(!test_group0_tables_use_schema_commitlog2->static_props().use_schema_commitlog);
 
         return make_ready_future();
+    });
+}
+
+// Row present => success, regardless of elapsed time or gc_duration.
+// See: https://github.com/scylladb/scylladb/issues/28082
+SEASTAR_TEST_CASE(test_group0_hard_timeout_history_present_is_always_success) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        auto& rclient = e.get_raft_group0_client();
+        abort_source as;
+
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.cf_name() == "test_group0_hard_timeout") {
+                builder.set_is_group0_table();
+            }
+        });
+
+        co_await e.execute_cql("CREATE TABLE test_group0_hard_timeout (key int PRIMARY KEY)");
+
+        auto insert_mut = [&] (int key) -> future<mutation> {
+            auto muts = co_await e.get_modification_mutations(format("INSERT INTO test_group0_hard_timeout (key) VALUES ({})", key));
+            co_return muts[0];
+        };
+
+        auto commit_mutation = [&] (int key) -> future<> {
+            auto guard = co_await rclient.start_operation(as);
+            service::group0_batch mc(std::move(guard));
+            mc.add_mutation(co_await insert_mut(key));
+            co_await std::move(mc).commit(rclient, as, ::service::raft_timeout{});
+        };
+
+        co_await commit_mutation(1);
+
+        {
+            auto guard = co_await rclient.start_operation(as);
+            service::group0_batch mc(std::move(guard));
+            mc.add_mutation(co_await insert_mut(2));
+            // Jump past the GC window so the row for key=2 would be GC-eligible
+            // by time — but it is present in the history table, so commit must
+            // succeed regardless.
+            auto gc_dur = rclient.get_history_gc_duration();
+            forward_jump_clocks(gc_dur + std::chrono::seconds{1});
+            auto restore_clocks = defer([gc_dur] { forward_jump_clocks(-(gc_dur + std::chrono::seconds{1})); });
+            // Row present => success, must not throw.
+            co_await std::move(mc).commit(rclient, as, ::service::raft_timeout{});
+        }
+
+        auto row = co_await e.execute_cql("SELECT key FROM test_group0_hard_timeout WHERE key = 2");
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(row);
+        BOOST_REQUIRE(rows);
+        BOOST_REQUIRE_EQUAL(rows->rs().result_set().rows().size(), 1);
+    });
+}
+
+// Row absent, inside GC window => never applied (prev_state_id mismatch) =>
+// group0_concurrent_modification (retryable), not group0_hard_timeout.
+SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_not_gc_eligible_is_concurrent_modification) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        auto& rclient = e.get_raft_group0_client();
+        abort_source as;
+
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.cf_name() == "test_group0_hard_timeout") {
+                builder.set_is_group0_table();
+            }
+        });
+
+        co_await e.execute_cql("CREATE TABLE test_group0_hard_timeout (key int PRIMARY KEY)");
+        rclient.set_history_gc_duration(std::chrono::hours{1});
+
+        // Extra unit so two start_operation()s can be held concurrently (mirrors
+        // test_concurrent_group0_modifications).
+        rclient.operation_mutex().signal(1);
+        rclient.read_apply_mutex().signal(1);
+
+        auto insert_mut = [&] (int key) -> future<mutation> {
+            auto muts = co_await e.get_modification_mutations(format("INSERT INTO test_group0_hard_timeout (key) VALUES ({})", key));
+            co_return muts[0];
+        };
+
+        // A observes state before B's change lands; committing B first makes A's
+        // prev_state_id stale => apply() skips it => row genuinely never written.
+        auto guard_a = co_await rclient.start_operation(as);
+        auto guard_b = co_await rclient.start_operation(as);
+
+        service::group0_batch mc_b(std::move(guard_b));
+        mc_b.add_mutation(co_await insert_mut(1));
+        co_await std::move(mc_b).commit(rclient, as, ::service::raft_timeout{});
+
+        service::group0_batch mc_a(std::move(guard_a));
+        mc_a.add_mutation(co_await insert_mut(2));
+        // gc_duration=1h, no time passed => not GC-eligible => absence means
+        // "never written".
+        BOOST_CHECK_EXCEPTION(co_await std::move(mc_a).commit(rclient, as, ::service::raft_timeout{}),
+                service::group0_concurrent_modification, [] (const service::group0_concurrent_modification&) { return true; });
+    });
+}
+
+// Row absent, past GC window => ambiguous (applied-then-GC'd vs never-applied)
+// => group0_hard_timeout, never a silent success or an unsafe retry.
+SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_gc_eligible_is_hard_timeout) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        auto& rclient = e.get_raft_group0_client();
+        abort_source as;
+
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.cf_name() == "test_group0_hard_timeout") {
+                builder.set_is_group0_table();
+            }
+        });
+
+        co_await e.execute_cql("CREATE TABLE test_group0_hard_timeout (key int PRIMARY KEY)");
+
+        // Extra unit so two start_operation()s can be held concurrently (mirrors
+        // test_concurrent_group0_modifications). Both mutexes are acquired by
+        // start_operation(), so both need the extra unit.
+        rclient.operation_mutex().signal(1);
+        rclient.read_apply_mutex().signal(1);
+
+        auto insert_mut = [&] (int key) -> future<mutation> {
+            auto muts = co_await e.get_modification_mutations(format("INSERT INTO test_group0_hard_timeout (key) VALUES ({})", key));
+            co_return muts[0];
+        };
+
+        auto guard_a = co_await rclient.start_operation(as);
+        auto guard_b = co_await rclient.start_operation(as);
+
+        service::group0_batch mc_b(std::move(guard_b));
+        mc_b.add_mutation(co_await insert_mut(1));
+        co_await std::move(mc_b).commit(rclient, as, ::service::raft_timeout{});
+
+        service::group0_batch mc_a(std::move(guard_a));
+        mc_a.add_mutation(co_await insert_mut(2));
+        // Jump past the GC window: A's prev_state_id entry is absent (never
+        // applied due to prev_state_id mismatch) and now GC-eligible by time =>
+        // ambiguous => must throw group0_hard_timeout.
+        auto gc_dur = rclient.get_history_gc_duration();
+        forward_jump_clocks(gc_dur + std::chrono::seconds{1});
+        auto restore_clocks = defer([gc_dur] { forward_jump_clocks(-(gc_dur + std::chrono::seconds{1})); });
+        BOOST_CHECK_EXCEPTION(co_await std::move(mc_a).commit(rclient, as, ::service::raft_timeout{}),
+                service::group0_hard_timeout, [] (const service::group0_hard_timeout&) { return true; });
+    });
+}
+
+// Row absent after real physical GC (flush + compaction purges tombstones) =>
+// still group0_hard_timeout, not silent success.
+SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_after_real_gc_is_hard_timeout) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        auto& rclient = e.get_raft_group0_client();
+        abort_source as;
+
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.cf_name() == "test_group0_hard_timeout") {
+                builder.set_is_group0_table();
+            }
+        });
+
+        co_await e.execute_cql("CREATE TABLE test_group0_hard_timeout (key int PRIMARY KEY)");
+
+        // Extra unit so two start_operation()s can be held concurrently.
+        rclient.operation_mutex().signal(1);
+        rclient.read_apply_mutex().signal(1);
+
+        auto insert_mut = [&] (int key) -> future<mutation> {
+            auto muts = co_await e.get_modification_mutations(format("INSERT INTO test_group0_hard_timeout (key) VALUES ({})", key));
+            co_return muts[0];
+        };
+
+        // gc_duration=0: each commit emits a range tombstone covering all prior
+        // state IDs, so B's commit immediately makes A's state_id GC-eligible.
+        rclient.set_history_gc_duration(gc_clock::duration{0});
+
+        auto guard_a = co_await rclient.start_operation(as);
+        auto guard_b = co_await rclient.start_operation(as);
+
+        service::group0_batch mc_b(std::move(guard_b));
+        mc_b.add_mutation(co_await insert_mut(1));
+        co_await std::move(mc_b).commit(rclient, as, ::service::raft_timeout{});
+
+        // Flush and compact group0_history so tombstones are physically purged.
+        // gc_clock::now() includes clocks_offset, so gc_grace_seconds=0 makes
+        // tombstones immediately eligible once gc_clock advances.
+        forward_jump_clocks(std::chrono::seconds{1});
+        auto restore_clocks = defer([] { forward_jump_clocks(-std::chrono::seconds{1}); });
+        auto& history_cf = e.local_db().find_column_family("system", db::system_keyspace::GROUP0_HISTORY);
+        co_await history_cf.flush();
+        co_await history_cf.compact_all_sstables(tasks::task_info{});
+
+        // After real GC, A's prev_state_id row is physically absent (not just
+        // covered by a tombstone). Still ambiguous => must throw group0_hard_timeout.
+        service::group0_batch mc_a(std::move(guard_a));
+        mc_a.add_mutation(co_await insert_mut(2));
+        BOOST_CHECK_EXCEPTION(co_await std::move(mc_a).commit(rclient, as, ::service::raft_timeout{}),
+                service::group0_hard_timeout, [] (const service::group0_hard_timeout&) { return true; });
     });
 }
 
