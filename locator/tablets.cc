@@ -136,13 +136,13 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
                                                tablet_replica_set next,
                                                std::optional<tablet_replica> pending_replica,
                                                service::session_id session_id,
-                                               std::optional<locator::restore_config> restore_cfg)
+                                               sstring snapshot_name)
     : stage(stage)
     , transition(transition)
     , next(std::move(next))
     , pending_replica(std::move(pending_replica))
     , session_id(session_id)
-    , restore_cfg(std::move(restore_cfg))
+    , snapshot_name(std::move(snapshot_name))
     , writes(get_selector_for_writes(stage))
     , reads(get_selector_for_reads(stage))
 { }

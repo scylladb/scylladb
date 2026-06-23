@@ -40,9 +40,6 @@ static thread_local auto tablet_task_info_type = user_type_impl::get_instance(
 static thread_local auto replica_type = tuple_type_impl::get_instance({uuid_type, int32_type});
 static thread_local auto replica_set_type = list_type_impl::get_instance(replica_type, false);
 static thread_local auto tablet_info_type = tuple_type_impl::get_instance({long_type, long_type, replica_set_type});
-static thread_local auto restore_config_type = user_type_impl::get_instance(
-        "system", "restore_config", {"snapshot_name", "endpoint", "bucket"},
-        {utf8_type, utf8_type, utf8_type}, false);
 
 data_type get_replica_set_type() {
     return replica_set_type;
@@ -55,7 +52,6 @@ data_type get_tablet_info_type() {
 void tablet_add_repair_scheduler_user_types(const sstring& ks, replica::database& db) {
     db.find_keyspace(ks).add_user_type(repair_scheduler_config_type);
     db.find_keyspace(ks).add_user_type(tablet_task_info_type);
-    db.find_keyspace(ks).add_user_type(restore_config_type);
 }
 
 static bool strongly_consistent_tables_enabled = false;
@@ -92,7 +88,7 @@ schema_ptr make_tablets_schema() {
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_column("base_table", uuid_type, column_kind::static_column)
-            .with_column("restore_config", restore_config_type);
+            .with_column("snapshot_name", utf8_type);
 
     if (strongly_consistent_tables_enabled) {
         builder
@@ -222,15 +218,6 @@ data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info)
         data_value(info.sched_time),
         data_value(locator::tablet_task_info::serialize_repair_hosts_filter(info.repair_hosts_filter)),
         data_value(locator::tablet_task_info::serialize_repair_dcs_filter(info.repair_dcs_filter)),
-    });
-    return result;
-};
-
-data_value restore_config_to_data_value(const locator::restore_config& cfg) {
-    data_value result = make_user_value(restore_config_type, {
-        data_value(cfg.snapshot_name),
-        data_value(cfg.endpoint),
-        data_value(cfg.bucket),
     });
     return result;
 };
@@ -459,8 +446,8 @@ tablet_mutation_builder::set_repair_task_info(dht::token last_token, locator::ta
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::set_restore_config(dht::token last_token, locator::restore_config rcfg) {
-    _m.set_clustered_cell(get_ck(last_token), "restore_config", restore_config_to_data_value(rcfg), _ts);
+tablet_mutation_builder::set_snapshot_name(dht::token last_token, sstring snapshot_name) {
+    _m.set_clustered_cell(get_ck(last_token), "snapshot_name", data_value(std::move(snapshot_name)), _ts);
     return *this;
 }
 
@@ -476,8 +463,8 @@ tablet_mutation_builder::del_repair_task_info(dht::token last_token, const gms::
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::del_restore_config(dht::token last_token) {
-    auto col = _s->get_column_definition("restore_config");
+tablet_mutation_builder::del_snapshot_name(dht::token last_token) {
+    auto col = _s->get_column_definition("snapshot_name");
     _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
     return *this;
 }
@@ -570,22 +557,6 @@ static
 locator::tablet_task_info deserialize_tablet_task_info(cql3::untyped_result_set_row::view_type raw_value) {
     return tablet_task_info_from_cell(
             tablet_task_info_type->deserialize_value(raw_value));
-}
-
-locator::restore_config restore_config_from_cell(const data_value& v) {
-    std::vector<data_value> dv = value_cast<user_type_impl::native_type>(v);
-    auto result = locator::restore_config{
-        value_cast<sstring>(dv[0]),
-        value_cast<sstring>(dv[1]),
-        value_cast<sstring>(dv[2]),
-    };
-    return result;
-}
-
-static
-locator::restore_config deserialize_restore_config(cql3::untyped_result_set_row::view_type raw_value) {
-    return restore_config_from_cell(
-            restore_config_type->deserialize_value(raw_value));
 }
 
 locator::repair_scheduler_config repair_scheduler_config_from_cell(const data_value& v) {
@@ -800,9 +771,9 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         }
     }
 
-    std::optional<locator::restore_config> restore_cfg;
-    if (row.has("restore_config")) {
-        restore_cfg = deserialize_restore_config(row.get_view("restore_config"));
+    sstring snapshot_name;
+    if (row.has("snapshot_name")) {
+        snapshot_name = row.get_as<sstring>("snapshot_name");
     }
 
     locator::tablet_task_info migration_task_info;
@@ -828,7 +799,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
             session_id = service::session_id(row.get_as<utils::UUID>("session"));
         }
         map.set_tablet_transition_info(tid, tablet_transition_info{stage, transition,
-                std::move(new_tablet_replicas), pending_replica, session_id, std::move(restore_cfg)});
+                std::move(new_tablet_replicas), pending_replica, session_id, std::move(snapshot_name)});
     }
 
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);

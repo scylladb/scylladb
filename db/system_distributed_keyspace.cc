@@ -128,6 +128,22 @@ schema_ptr snapshot_sstables() {
     return schema;
 }
 
+schema_ptr snapshot_remote_locations() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS, std::make_optional(id))
+                .with_column("snapshot_name", utf8_type, column_kind::partition_key)
+                .with_column("datacenter", utf8_type, column_kind::clustering_key)
+                .with_column("endpoint", utf8_type)
+                .with_column("bucket", utf8_type)
+                .with_column("prefix", utf8_type)
+                .with_column("state", int32_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 // This is the set of tables which this node ensures to exist in the cluster.
 // It does that by announcing the creation of these schemas on initialization
 // of the `system_distributed_keyspace` service (see `start()`), unless it first
@@ -144,11 +160,12 @@ static std::vector<schema_ptr> ensured_tables() {
         cdc_desc(),
         cdc_timestamps(),
         snapshot_sstables(),
+        snapshot_remote_locations(),
     };
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
-    return {view_build_status(), cdc_desc(), cdc_timestamps(), snapshot_sstables()};
+    return {view_build_status(), cdc_desc(), cdc_timestamps(), snapshot_sstables(), snapshot_remote_locations()};
 }
 
 system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& qp, service::migration_manager& mm, service::storage_proxy& sp)
@@ -510,6 +527,25 @@ future<> system_distributed_keyspace::update_sstable_download_status(sstring sna
                                   internal_distributed_query_state(),
                                   {downloaded == is_downloaded::yes ? true : false, snapshot_name, ks, table, dc, rack, dht::token::to_int64(start_token), sstable_id.uuid()},
                                   cql3::query_processor::cache_internal::no);
+}
+
+future<> system_distributed_keyspace::insert_snapshot_remote_location(sstring snapshot_name, sstring datacenter, sstring endpoint, sstring bucket, sstring prefix, db::consistency_level cl) {
+    static const sstring query = format("INSERT INTO {}.{} (snapshot_name, datacenter, endpoint, bucket, prefix, state) VALUES (?, ?, ?, ?, ?, ?) USING TTL {}",
+                                        NAME, SNAPSHOT_REMOTE_LOCATIONS, SNAPSHOT_SSTABLES_TTL_SECONDS);
+    // State 4 = snapshot_state::remote (data exists only in object storage)
+    co_await _qp.execute_internal(query, cl, internal_distributed_query_state(),
+                                  {std::move(snapshot_name), std::move(datacenter), std::move(endpoint), std::move(bucket), std::move(prefix), int32_t(4)},
+                                  cql3::query_processor::cache_internal::yes);
+}
+
+future<system_distributed_keyspace::snapshot_remote_location_entry> system_distributed_keyspace::get_snapshot_remote_location(sstring snapshot_name, sstring datacenter, db::consistency_level cl) const {
+    static const sstring query = format("SELECT endpoint, bucket, prefix FROM {}.{} WHERE snapshot_name = ? AND datacenter = ?", NAME, SNAPSHOT_REMOTE_LOCATIONS);
+    auto rs = co_await _qp.execute_internal(query, cl, internal_distributed_query_state(), {snapshot_name, datacenter}, cql3::query_processor::cache_internal::yes);
+    if (rs->empty()) {
+        throw std::runtime_error(format("No snapshot remote location found for snapshot '{}' in datacenter '{}'", snapshot_name, datacenter));
+    }
+    auto& row = rs->one();
+    co_return snapshot_remote_location_entry{row.get_as<sstring>("endpoint"), row.get_as<sstring>("bucket"), row.get_as<sstring>("prefix")};
 }
 
 } // namespace db

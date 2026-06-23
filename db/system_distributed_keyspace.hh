@@ -71,6 +71,10 @@ public:
      * The data the coordinator node puts in this table comes from the snapshot manifests. */
     static constexpr auto SNAPSHOT_SSTABLES = "snapshot_sstables";
 
+    /* This table is used by the backup and restore code to store snapshot
+     * remote location metadata per datacenter. */
+    static constexpr auto SNAPSHOT_REMOTE_LOCATIONS = "snapshot_remote_locations";
+
     static constexpr uint64_t SNAPSHOT_SSTABLES_TTL_SECONDS = std::chrono::seconds(std::chrono::days(3)).count();
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
@@ -130,6 +134,15 @@ public:
                                             sstables::sstable_id sstable_id,
                                             dht::token start_token,
                                             is_downloaded downloaded) const;
+
+    struct snapshot_remote_location_entry {
+        sstring endpoint;
+        sstring bucket;
+        sstring prefix;
+    };
+
+    future<> insert_snapshot_remote_location(sstring snapshot_name, sstring datacenter, sstring endpoint, sstring bucket, sstring prefix, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<snapshot_remote_location_entry> get_snapshot_remote_location(sstring snapshot_name, sstring datacenter, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM) const;
 
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
