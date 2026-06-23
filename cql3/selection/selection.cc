@@ -207,6 +207,9 @@ private:
     std::vector<expr::expression> _outer_loop;
     std::vector<raw_value> _initial_values_for_temporaries;
 public:
+    const std::vector<raw_value>& get_initial_temporaries() const {
+        return _initial_values_for_temporaries;
+    }
     selection_with_processing(schema_ptr schema, std::vector<const column_definition*> columns,
             std::vector<lw_shared_ptr<column_specification>> metadata,
             std::vector<expr::expression> selectors)
@@ -216,10 +219,29 @@ public:
             contains_collection_mutation_attribute(expr::tuple_constructor{selectors}))
         , _selectors(std::move(selectors))
     {
-        auto agg_split = expr::split_aggregation(_selectors);
+        // Find the maximum temporary index used in selectors (for non-aggregation temporaries)
+        size_t max_non_agg_temp_index = 0;
+        for (const auto& expr : _selectors) {
+            expr::for_each_expression<expr::temporary>(expr, [&] (const expr::temporary& t) {
+                max_non_agg_temp_index = std::max(max_non_agg_temp_index, t.index + 1);
+            });
+        }
+
+        // Split aggregation, passing the starting index for aggregation temporaries
+        auto agg_split = expr::split_aggregation(_selectors, max_non_agg_temp_index);
         _outer_loop = std::move(agg_split.outer_loop);
         _inner_loop = std::move(agg_split.inner_loop);
-        _initial_values_for_temporaries = std::move(agg_split.initial_values_for_temporaries);
+
+        // Initialize temporaries: NULLs for non-aggregation temporaries, then aggregation initial values
+        _initial_values_for_temporaries.reserve(max_non_agg_temp_index + agg_split.initial_values_for_temporaries.size());
+        for (size_t i = 0; i < max_non_agg_temp_index; ++i) {
+            _initial_values_for_temporaries.push_back(cql3::raw_value::make_null());
+        }
+        _initial_values_for_temporaries.insert(
+            _initial_values_for_temporaries.end(),
+            std::make_move_iterator(agg_split.initial_values_for_temporaries.begin()),
+            std::make_move_iterator(agg_split.initial_values_for_temporaries.end())
+        );
     }
 
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
@@ -404,7 +426,7 @@ protected:
                     .options = rs._options,
                     .static_and_regular_timestamps = rs._timestamps,
                     .static_and_regular_ttls = rs._ttls,
-                    .temporaries = {},
+                    .temporaries = rs.current_temporaries,
                     .collection_element_metadata = rs._collection_element_metadata,
             };
             for (auto&& e : _sel._selectors) {
@@ -571,6 +593,10 @@ result_set_builder::result_set_builder(const selection& s, gc_clock::time_point 
     }
     if (s._collect_collection_timestamps) {
         _collection_element_metadata.resize(s._columns.size());
+    }
+    // Initialize temporaries vector sized for all temporary slots (non-aggregation + aggregation)
+    if (auto* sel_with_processing = dynamic_cast<const selection_with_processing*>(&s)) {
+        current_temporaries = sel_with_processing->get_initial_temporaries();
     }
 }
 

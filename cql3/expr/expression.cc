@@ -2588,8 +2588,8 @@ levellize_aggregation_depth(const cql3::expr::expression& e, unsigned desired_de
 }
 
 aggregation_split_result
-split_aggregation(std::span<const expression> aggregation) {
-    size_t nr_temporaries = 0;
+split_aggregation(std::span<const expression> aggregation, size_t starting_temp_index) {
+    size_t nr_temporaries = starting_temp_index;
     auto allocate_temporary = [&] () -> size_t {
         return nr_temporaries++;
     };

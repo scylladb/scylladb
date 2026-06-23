@@ -11,6 +11,7 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/vector_similarity_fcts.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/util.hh"
@@ -24,6 +25,8 @@
 #include "types/vector.hh"
 #include "utils/result_loop.hh"
 
+#include <algorithm>
+#include <cmath>
 #include <seastar/core/future.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/exception.hh>
@@ -39,6 +42,86 @@ namespace statements {
 static logging::logger logger("vector_indexed_table_select_statement");
 
 namespace {
+
+/// Re-computes similarity scores live from the fetched embedding column.
+/// Used in rescoring mode: no reliance on VS-provided distances.
+class rescoring_similarity_provider : public cql3::selection::result_set_builder::temporaries_provider {
+    const seastar::shared_ptr<cql3::functions::vector_similarity_fct> _similarity_fct;
+    const bytes_opt _query_vec_bytes;
+    /// Storage class of the indexed column.
+    const column_kind _col_kind;
+    /// Unified index into the relevant data source:
+    ///  - partition_key / clustering_key: component offset in the exploded key span.
+    ///  - static_column / regular_column: cell-stream offset (only same-kind columns counted).
+    const size_t _index;
+    /// True if the indexed column is a multi-cell (collection) type.
+    const bool _is_multi_cell;
+    const size_t _temporary_index;
+public:
+    rescoring_similarity_provider(
+            seastar::shared_ptr<cql3::functions::vector_similarity_fct> similarity_fct,
+            bytes_opt query_vec_bytes,
+            column_kind col_kind,
+            size_t index,
+            bool is_multi_cell,
+            size_t temporary_index)
+        : _similarity_fct(std::move(similarity_fct))
+        , _query_vec_bytes(std::move(query_vec_bytes))
+        , _col_kind(col_kind)
+        , _index(index)
+        , _is_multi_cell(is_multi_cell)
+        , _temporary_index(temporary_index) {}
+
+    bool try_fill(
+            std::vector<cql3::raw_value>& temporaries,
+            std::span<const bytes> partition_key,
+            std::span<const bytes> clustering_key,
+            const query::result_row_view& static_row,
+            const query::result_row_view* row) const override {
+        bytes_opt row_vec_bytes;
+        switch (_col_kind) {
+        case column_kind::partition_key:
+            row_vec_bytes = partition_key[_index];
+            break;
+        case column_kind::clustering_key:
+            row_vec_bytes = clustering_key[_index];
+            break;
+        case column_kind::static_column:
+        case column_kind::regular_column: {
+            if (_col_kind == column_kind::regular_column && !row) {
+                return false;
+            }
+            auto iter = (_col_kind == column_kind::static_column) ? static_row.iterator()
+                                                                   : row->iterator();
+            for (size_t i = 0; i < _index; ++i) {
+                iter.next_atomic_cell();
+            }
+            if (_is_multi_cell) {
+                auto cell = iter.next_collection_cell();
+                if (cell) {
+                    row_vec_bytes = linearized(*cell);
+                }
+            } else {
+                auto cell = iter.next_atomic_cell();
+                if (cell) {
+                    row_vec_bytes = linearized(cell->value());
+                }
+            }
+            break;
+        }
+        }
+        auto result_bytes = _similarity_fct->execute(std::array<bytes_opt, 2>{_query_vec_bytes, row_vec_bytes});
+        if (!result_bytes) {
+            return false;
+        }
+        float similarity_value = value_cast<float>(float_type->deserialize(*result_bytes));
+        if (!std::isfinite(similarity_value)) {
+            return false;
+        }
+        temporaries[_temporary_index] = cql3::raw_value::make_value(std::move(*result_bytes));
+        return true;
+    }
+};
 
 template <typename Func>
 auto measure_index_latency(const schema& schema, const secondary_index::index& index, Func&& func) -> std::invoke_result_t<Func> {
@@ -97,6 +180,54 @@ std::vector<float> get_ann_ordering_vector(const select_statement::prepared_ann_
 
 } // anonymous namespace
 
+vector_indexed_table_select_statement::rescoring_config
+vector_indexed_table_select_statement::rescoring_config::make(
+        const secondary_index::index& index,
+        const column_definition* column,
+        const cql3::selection::selection& sel) {
+    rescoring_config cfg;
+    const auto& index_options = index.metadata().options();
+
+    if (secondary_index::vector_index::is_rescoring_enabled(index_options)) {
+        const auto sim_fn_name = secondary_index::vector_index::get_cql_similarity_function_name(index_options);
+        cfg.function = seastar::make_shared<cql3::functions::vector_similarity_fct>(
+            sstring(sim_fn_name), std::vector<data_type>{column->type, column->type});
+
+        cfg.indexed_col_kind = column->kind;
+        cfg.indexed_col_is_multi_cell = column->type->is_multi_cell();
+
+        if (column->is_primary_key()) {
+            cfg.index = column->component_index();
+        } else {
+            size_t stream_pos = 0;
+            for (const column_definition* def : sel.get_columns()) {
+                if (def == column) {
+                    break;
+                }
+                if (column->is_static() ? def->is_static() : def->is_regular()) {
+                    ++stream_pos;
+                }
+            }
+            cfg.index = stream_pos;
+        }
+    }
+    return cfg;
+}
+
+std::unique_ptr<cql3::selection::result_set_builder::temporaries_provider>
+vector_indexed_table_select_statement::rescoring_config::make_similarity_provider(
+        const cql3::query_options& options,
+        const cql3::expr::expression& ann_vector_expr,
+        size_t similarity_temporary_index) const {
+    if (!is_enabled()) {
+        return nullptr;
+    }
+    auto query_vec_bytes = cql3::expr::evaluate(ann_vector_expr, options).to_bytes();
+    return std::make_unique<rescoring_similarity_provider>(
+        function, std::move(query_vec_bytes),
+        indexed_col_kind, index, indexed_col_is_multi_cell, similarity_temporary_index);
+}
+
 std::optional<ann_ordering_info> get_ann_ordering_info(
         data_dictionary::database db,
         schema_ptr schema,
@@ -148,36 +279,21 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
     };
 }
 
-uint32_t add_similarity_function_to_selectors(
+// Appends a temporary expression for the similarity score to prepared_selectors.
+// Returns the index of the appended selector within prepared_selectors.
+uint32_t append_similarity_temporary_selector(
         std::vector<selection::prepared_selector>& prepared_selectors,
-        const ann_ordering_info& ann_ordering_info,
-        data_dictionary::database db,
-        schema_ptr schema) {
-    auto similarity_function_name = secondary_index::vector_index::get_cql_similarity_function_name(ann_ordering_info._index.metadata().options());
-    // Create the function name
-    auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
-
-    // Create the function arguments
-    std::vector<expr::expression> args;
-    args.push_back(expr::column_value(ann_ordering_info._prepared_ann_ordering.first));
-    args.push_back(ann_ordering_info._prepared_ann_ordering.second);
-
-    // Get the function object
-    std::vector<shared_ptr<assignment_testable>> provided_args;
-    provided_args.push_back(expr::as_assignment_testable(args[0], expr::type_of(args[0])));
-    provided_args.push_back(expr::as_assignment_testable(args[1], expr::type_of(args[1])));
-
-    auto func = cql3::functions::instance().get(db, schema->ks_name(), func_name, provided_args, schema->ks_name(), schema->cf_name(), nullptr);
-
-    // Create the function call expression
-    expr::function_call similarity_func_call{
-        .func = func,
-        .args = std::move(args),
+        size_t temp_index) {
+    // Create a temporary expression instead of a function call.
+    // The value will be injected during result processing by rescoring_similarity_provider.
+    expr::temporary similarity_temp{
+        .index = temp_index,
+        .type = float_type,
     };
 
-    // Add the similarity function as a prepared selector (last)
+    // Add the temporary as a prepared selector (last)
     prepared_selectors.push_back(selection::prepared_selector{
-        .expr = std::move(similarity_func_call),
+        .expr = expr::expression(similarity_temp),
         .alias = nullptr,
     });
     return prepared_selectors.size() - 1;
@@ -236,6 +352,9 @@ vector_indexed_table_select_statement::vector_indexed_table_select_statement(sch
     if (selection->is_aggregate()) {
         throw exceptions::invalid_request_exception("Vector ANN queries cannot be run with aggregation");
     }
+
+    // Compute rescoring decision once at prepare time.
+    _rescoring = rescoring_config::make(_index, _prepared_ann_ordering.first, *_selection);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::do_execute(
@@ -267,7 +386,7 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
                     exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
         }
 
-        if (pkeys->size() > limit && !secondary_index::vector_index::is_rescoring_enabled(_index.metadata().options())) {
+        if (pkeys->size() > limit && !_rescoring.is_enabled()) {
             pkeys->erase(pkeys->begin() + limit, pkeys->end());
         }
 
@@ -305,8 +424,12 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
 
     command->set_row_limit(get_limit(options, _limit));
 
-    co_return co_await wrap_result_to_error_message([this, command = std::move(command), &options](auto query_result) {
-        return process_results(std::move(query_result), command, options, _query_start_time_point);
+    // Build a provider to inject similarity scores as temporaries during result processing.
+    auto provider = _rescoring.make_similarity_provider(
+        options, _prepared_ann_ordering.second, similarity_temporary_index);
+
+    co_return co_await wrap_result_to_error_message([this, command = std::move(command), &options, &provider](auto query_result) {
+        return process_results(std::move(query_result), command, options, _query_start_time_point, provider.get());
     })(std::move(result));
 }
 
