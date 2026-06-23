@@ -157,6 +157,10 @@ semaphore& raft_group0_client::operation_mutex() {
     return _operation_mutex;
 }
 
+semaphore& raft_group0_client::read_apply_mutex() {
+    return _read_apply_mutex;
+}
+
 future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source& as,
         std::optional<raft_timeout> timeout)
 {

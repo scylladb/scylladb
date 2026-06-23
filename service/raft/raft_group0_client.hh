@@ -181,6 +181,7 @@ public:
     // for test only
     void set_history_gc_duration(gc_clock::duration d);
     semaphore& operation_mutex();
+    semaphore& read_apply_mutex();
 
     bool maintenance_mode() const;
 
