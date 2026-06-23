@@ -2501,7 +2501,7 @@ select_statement::ordering_comparator_type select_statement::get_ordering_compar
     // even if we don't
     // ultimately ship them to the client (CASSANDRA-4911).
     for (auto&& [column_def, is_descending] : orderings) {
-        auto index = selection.add_column_for_post_processing(*column_def);
+        auto index = selection.add_column_for_ordering(*column_def);
         sorters.emplace_back(index, column_def->type);
     }
 
@@ -2692,11 +2692,7 @@ std::vector<size_t> select_statement::prepare_group_by(const schema& schema, sel
             throw make_order_exception(*col);
         }
         ++expected_index;
-        auto index = selection.index_of(*def);
-        if (index == -1) {
-            selection.add_column_for_post_processing(*def);
-            index = selection.index_of(*def);
-        }
+        auto index = selection.add_column_for_post_processing(*def);
         indices.push_back(index);
     }
 

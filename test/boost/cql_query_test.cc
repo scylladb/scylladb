@@ -5633,9 +5633,8 @@ SEASTAR_TEST_CASE(test_single_partition_aggregation_is_not_parallelized) {
         // and we doesn't parallelize queries which need filtering.
         // See issue #19369.
         const auto result_pk1 = e.execute_cql("SELECT COUNT(*) FROM tbl2 WHERE pk1 = 1 ALLOW FILTERING;").get();
-        // This query contains also column for pk1
         assert_that(result_pk1).is_rows().with_rows({
-            {long_type->decompose(int64_t(value_count * 2)), int32_type->decompose(int32_t(1))}
+            {long_type->decompose(int64_t(value_count * 2))}
         });
         BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
     });
