@@ -21,6 +21,30 @@ clause:
     ALLOW FILTERING          -- optional
     BYPASS CACHE
 
+## BYPASS LARGE_DATA_GUARDRAILS clause
+
+The `BYPASS LARGE_DATA_GUARDRAILS` clause on standalone `DELETE` statements
+skips large data guardrail checks for that delete. This is useful when a table
+has large data guardrails enabled and an oversized partition, row, or collection
+must be deleted, but ordinary writes to the same data are rejected by the hard
+limit.
+
+The clause is placed after the optional `IF` condition:
+
+```cql
+DELETE FROM ks.tbl
+WHERE pk = 1 AND ck = 10
+BYPASS LARGE_DATA_GUARDRAILS;
+
+DELETE FROM ks.tbl
+WHERE pk = 1 AND ck = 10
+IF EXISTS
+BYPASS LARGE_DATA_GUARDRAILS;
+```
+
+The clause is supported only for standalone `DELETE` statements. It is not
+supported for `INSERT`, `UPDATE`, or `BATCH` statements.
+
 ## "Paxos grace seconds" per-table option
 
 The `paxos_grace_seconds` option is used to set the amount of seconds which

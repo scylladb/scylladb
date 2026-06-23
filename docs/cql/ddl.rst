@@ -906,6 +906,10 @@ A table supports the following options:
      - map
      - see below
      - :ref:`Per-table tablet options <cql-per-table-tablet-options>`
+   * - ``large_data_guardrails_enabled``
+     - simple
+     - ``false``
+     - Enables :ref:`large data guardrails <guardrails-large-data>` for this table.
 
 
 .. _speculative-retry-options:
