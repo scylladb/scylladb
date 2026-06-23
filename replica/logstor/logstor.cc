@@ -14,11 +14,11 @@
 #include "readers/empty.hh"
 #include "keys/keys.hh"
 #include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/key_utils.hh"
 #include "replica/logstor/types.hh"
 #include <seastar/core/when_all.hh>
 #include "utils/managed_bytes.hh"
 #include <seastar/util/defer.hh>
-#include <openssl/evp.h>
 #include <algorithm>
 #include <queue>
 #include <vector>
@@ -28,50 +28,6 @@ namespace replica::logstor {
 seastar::logger logstor_logger("logstor");
 
 namespace {
-
-class key_hasher {
-    EVP_MD_CTX* _mdctx;
-
-public:
-    key_hasher()
-        : _mdctx(EVP_MD_CTX_new()) {
-        if (!_mdctx) {
-            throw std::runtime_error("Failed to allocate OpenSSL digest context for logstor key hash (SHA-256)");
-        }
-    }
-
-    ~key_hasher() {
-        EVP_MD_CTX_free(_mdctx);
-    }
-
-    key_hash compute(partition_key_view key) {
-        if (1 != EVP_DigestInit_ex(_mdctx, EVP_sha256(), nullptr)) {
-            throw std::runtime_error("Failed to initialize SHA-256 digest for logstor key");
-        }
-
-        for (bytes_view frag : fragment_range(key.representation())) {
-            if (1 != EVP_DigestUpdate(_mdctx, frag.data(), frag.size())) {
-                throw std::runtime_error("Failed to update SHA-256 digest for logstor key");
-            }
-        }
-
-        std::array<uint8_t, EVP_MAX_MD_SIZE> full_digest;
-        unsigned int digest_size = 0;
-        if (1 != EVP_DigestFinal_ex(_mdctx, full_digest.data(), &digest_size)) {
-            throw std::runtime_error("Failed to finalize SHA-256 digest for logstor key");
-        }
-
-        key_hash h;
-        std::copy_n(full_digest.begin(), h.size(), h.begin());
-        return h;
-    }
-};
-
-key_hash compute_key_hash(partition_key_view key) {
-    static thread_local key_hasher hasher;
-    return hasher.compute(key);
-}
-
 dht::token_range partition_range_to_token_range(const dht::partition_range& pr) {
     using token_range_bound = dht::token_range::bound;
 
@@ -95,9 +51,8 @@ dht::token_range partition_range_to_token_range(const dht::partition_range& pr) 
 
 } // anonymous namespace
 
-primary_index_key::primary_index_key(const dht::decorated_key& dk)
-    : _token(dk.token())
-    , _hash(compute_key_hash(dk.key().view())) {
+primary_index_key::primary_index_key(const schema& s, const dht::decorated_key& dk)
+    : primary_index_key(compute_key_hash(s, dk.key().view())) {
 }
 
 static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
@@ -173,7 +128,7 @@ const compaction_manager& logstor::get_compaction_manager() const noexcept {
 
 future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout) {
     auto& cg = *target.cg;
-    primary_index_key key(m.decorated_key());
+    primary_index_key key(*m.schema(), m.decorated_key());
     table_id table = m.schema()->id();
     auto& index = cg.logstor_index();
 
@@ -213,7 +168,7 @@ future<> logstor::write(const mutation& m, write_target target, db::timeout_cloc
 future<std::optional<mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
     auto op = index.start_read();
 
-    primary_index_key pk(dk);
+    primary_index_key pk(s, dk);
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     auto* cache = bypass_cache ? nullptr : index.cache_tracker();

@@ -29,11 +29,11 @@ struct primary_index_key_cmp {
     }
 
     std::strong_ordering operator()(int64_t lhs, const primary_index_key& rhs) const noexcept {
-        return dht::tri_compare_raw(lhs, rhs.token().raw());
+        return dht::tri_compare_raw(lhs, rhs.token_raw());
     }
 
     std::strong_ordering operator()(const primary_index_key& lhs, int64_t rhs) const noexcept {
-        return dht::tri_compare_raw(lhs.token().raw(), rhs);
+        return dht::tri_compare_raw(lhs.token_raw(), rhs);
     }
 
     std::strong_ordering operator()(const primary_index_entry& lhs, const primary_index_entry& rhs) const noexcept;
@@ -41,6 +41,32 @@ struct primary_index_key_cmp {
     std::strong_ordering operator()(const primary_index_key& lhs, const primary_index_entry& rhs) const noexcept;
     std::strong_ordering operator()(const primary_index_entry& lhs, int64_t rhs) const noexcept;
     std::strong_ordering operator()(int64_t lhs, const primary_index_entry& rhs) const noexcept;
+};
+
+struct primary_index_token_less_comparator {
+    bool operator()(int64_t lhs, int64_t rhs) const noexcept {
+        return dht::tri_compare_raw(lhs, rhs) < 0;
+    }
+
+    bool operator()(const primary_index_key& lhs, int64_t rhs) const noexcept {
+        return dht::tri_compare_raw(lhs.token_raw(), rhs) < 0;
+    }
+
+    bool operator()(int64_t lhs, const primary_index_key& rhs) const noexcept {
+        return dht::tri_compare_raw(lhs, rhs.token_raw()) < 0;
+    }
+
+    int64_t simplify_key(const primary_index_key& key) const noexcept {
+        return key.token_raw();
+    }
+
+    int64_t simplify_key(int64_t key) const noexcept {
+        return key;
+    }
+
+    bool operator()(const primary_index_entry& lhs, int64_t rhs) const noexcept;
+    bool operator()(int64_t lhs, const primary_index_entry& rhs) const noexcept;
+    int64_t simplify_key(const primary_index_entry& entry) const noexcept;
 };
 
 // One entry in the primary index B+tree.
@@ -133,10 +159,22 @@ inline std::strong_ordering primary_index_key_cmp::operator()(int64_t lhs, const
     return (*this)(lhs, rhs.key());
 }
 
+inline bool primary_index_token_less_comparator::operator()(const primary_index_entry& lhs, int64_t rhs) const noexcept {
+    return (*this)(lhs.key(), rhs);
+}
+
+inline bool primary_index_token_less_comparator::operator()(int64_t lhs, const primary_index_entry& rhs) const noexcept {
+    return (*this)(lhs, rhs.key());
+}
+
+inline int64_t primary_index_token_less_comparator::simplify_key(const primary_index_entry& entry) const noexcept {
+    return simplify_key(entry.key());
+}
+
 class primary_index final {
 public:
     using partitions_type = double_decker<int64_t, primary_index_entry,
-                            dht::raw_token_less_comparator, primary_index_key_cmp,
+                            primary_index_token_less_comparator, primary_index_key_cmp,
                             16, bplus::key_search::linear>;
 
     using iterator = typename partitions_type::iterator;
@@ -281,7 +319,7 @@ private:
 
 public:
     explicit primary_index(schema_ptr schema)
-        : _partitions(dht::raw_token_less_comparator{})
+        : _partitions(primary_index_token_less_comparator{})
         {}
 
     void set_schema(schema_ptr s) {
@@ -385,7 +423,7 @@ public:
                 return {false, std::make_optional(i->_e)};
             }
         } else {
-            auto it = _partitions.emplace_before(i, key.token().raw(), hint, key, std::move(new_entry));
+            auto it = _partitions.emplace_before(i, key.token_raw(), hint, key, std::move(new_entry));
             on_entry_added(*it);
             return {true, std::nullopt};
         }
@@ -394,7 +432,7 @@ public:
     bool erase(const primary_index_key& key, log_location loc) {
         auto it = find_key(key);
         if (it != _partitions.end() && it->_e.location == loc) {
-            it.erase_and_dispose(dht::raw_token_less_comparator{}, make_entry_disposer());
+            it.erase_and_dispose(primary_index_token_less_comparator{}, make_entry_disposer());
             return true;
         }
         return false;
