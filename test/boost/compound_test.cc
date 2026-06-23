@@ -201,7 +201,7 @@ SEASTAR_THREAD_TEST_CASE(test_conversion_to_legacy_form_same_token_singular) {
     auto key1 = partition_key::from_single_value(*s1, b);
     auto dk1 = partitioner.decorate_key(*s1, key1);
 
-    BOOST_REQUIRE_EQUAL(dk._token, dk1._token);
+    BOOST_REQUIRE_EQUAL(dk.token(), dk1.token());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_conversion_to_legacy_form_same_token_two_components) {
@@ -223,7 +223,7 @@ SEASTAR_THREAD_TEST_CASE(test_conversion_to_legacy_form_same_token_two_component
     auto key1 = partition_key::from_single_value(*s1, b);
     auto dk1 = partitioner.decorate_key(*s1, key1);
 
-    BOOST_REQUIRE_EQUAL(dk._token, dk1._token);
+    BOOST_REQUIRE_EQUAL(dk.token(), dk1.token());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_legacy_ordering_of_singular) {
