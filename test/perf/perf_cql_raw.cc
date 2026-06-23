@@ -615,8 +615,19 @@ static future<> prepare_thread_connections(const raw_cql_test_config& cfg) {
             throw std::runtime_error("Failed to connect to native transport port");
         }
         auto c = make_connection(std::move(cs), cfg);
-        co_await c->startup();
-        co_await c->prepare_statements(cfg.tables);
+        std::exception_ptr ep;
+        try {
+            co_await c->startup();
+            co_await c->prepare_statements(cfg.tables);
+        } catch (...) {
+            ep = std::current_exception();
+        }
+        if (ep) {
+            // Drain the reader fiber before c is destroyed; otherwise the
+            // in-flight socket read is torn down under the closing fd.
+            co_await c->stop();
+            std::rethrow_exception(ep);
+        }
         tl_conns.push_back(std::move(c));
     }
 }
