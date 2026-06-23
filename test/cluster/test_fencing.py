@@ -379,11 +379,16 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
         update_stmt = cql.prepare(f"UPDATE {ks}.test SET c = ? WHERE pk = 1 IF c = ?")
         stop = False
         cond = asyncio.Condition()
+        # Pause the LWT workload while a node is restarted and until gossip converges.
+        # Otherwise, a read can choose a replica just before it is marked down and fail
+        # instead of using another live replica. See SCYLLADB-2824.
+        lwt_lock = asyncio.Lock()
         lwt_counter = 1
         async def lwt_workload():
             nonlocal lwt_counter
             while not stop:
-                result = await cql.run_async(update_stmt, [lwt_counter + 1, lwt_counter])
+                async with lwt_lock:
+                    result = await cql.run_async(update_stmt, [lwt_counter + 1, lwt_counter])
 
                 # The driver may retry the statement, so 'applied' can be false here.
                 # applied == true  -> 'c' holds the previous value  -> lwt_counter
@@ -404,16 +409,21 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
                 start = lwt_counter
                 await cond.wait_for(lambda: lwt_counter - start >= 10)
 
+        async def change_version_and_wait(s: ServerInfo, scylla_path: str):
+            async with lwt_lock:
+                await manager.server_change_version(s.server_id, scylla_path)
+                await manager.server_sees_others(s.server_id, 2, interval=60.0)
+
         logger.info("LWT workoad started")
         lwt_workload_task = asyncio.create_task(lwt_workload())
         await wait_for_some_lwts()
 
         logger.info(f"Upgrading {servers[0].server_id}")
-        await manager.server_change_version(servers[0].server_id, scylla_binary)
+        await change_version_and_wait(servers[0], str(scylla_binary))
         await wait_for_some_lwts()
 
         logger.info(f"Downgrading {servers[0].server_id}")
-        await manager.server_change_version(servers[0].server_id, scylla_2025_1.path)
+        await change_version_and_wait(servers[0], scylla_2025_1.path)
         await wait_for_some_lwts()
 
         for s in servers:
@@ -423,8 +433,7 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
                 logger.info("Wait all nodes are up")
                 await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
             logger.info(f"Upgrading {s.server_id}")
-            await manager.server_change_version(s.server_id, scylla_binary)
-            await manager.server_sees_others(s.server_id, 2, interval=60.0)
+            await change_version_and_wait(s, str(scylla_binary))
 
         logger.info("Done upgrading servers")
 
