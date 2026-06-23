@@ -132,6 +132,17 @@ class client : public enable_shared_from_this<client> {
     };
     struct group_client {
         seastar::http::client http;
+        // Bounds the number of background upload requests in flight for this
+        // scheduling group to the number of HTTP connections configured for it.
+        // Buffer-bearing uploads (memtable flush / compaction via upload_sink)
+        // acquire a slot before launching the background PUT, so the producer is
+        // throttled -- and the buffers it owns are kept bounded -- instead of
+        // piling up requests once all connections are busy. The connection pool
+        // is the shared arbiter across all sinks in the group, analogous to the
+        // per-class IO scheduler used for local (NVMe) flushes. Kept in sync with
+        // the http client's connection limit via set_max_connections().
+        seastar::semaphore write_slots;
+        unsigned max_connections;
         io_stats read_stats;
         io_stats write_stats;
         uint64_t prefetch_bytes = 0;
@@ -139,6 +150,8 @@ class client : public enable_shared_from_this<client> {
         seastar::metrics::metric_groups metrics;
         group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn);
         void register_metrics(std::string class_name, std::string host);
+        // Set the connection limit, keeping write_slots in sync with it.
+        seastar::future<> set_max_connections(unsigned nr);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
     semaphore _rebalance_sem{1};
