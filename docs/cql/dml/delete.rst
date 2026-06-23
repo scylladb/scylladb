@@ -14,6 +14,7 @@ Deleting rows or parts of rows uses the ``DELETE`` statement:
                    : [ USING `update_parameter` ( AND `update_parameter` )* ]
                    : WHERE `where_clause`
                    : [ IF ( EXISTS | `condition` ( AND `condition` )* ) ]
+                   : [ BYPASS LARGE_DATA_GUARDRAILS ]
 
 For instance:
 
@@ -45,6 +46,12 @@ A ``DELETE`` operation can be conditional through the use of an ``IF`` clause, s
 statements. Each such ``DELETE`` gets a globally unique timestamp.
 However, as with ``INSERT`` and ``UPDATE`` statements, this will incur a non-negligible performance cost
 (internally, Paxos will be used) and so should be used sparingly.
+
+The ``BYPASS LARGE_DATA_GUARDRAILS`` clause is a ScyllaDB CQL extension for
+deleting data from tables with :ref:`large data guardrails <guardrails-large-data>`
+enabled. It skips large data guardrail checks for this standalone ``DELETE`` so
+that oversized data can be removed even when writes to the same partition, row,
+or collection would otherwise be rejected.
 
 Please refer to the :ref:`update parameters <update-parameters>` section for more information on the :token:`update_parameter`.
 
