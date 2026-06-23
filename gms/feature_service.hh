@@ -185,6 +185,7 @@ public:
     gms::feature large_data_guardrails { *this, "LARGE_DATA_GUARDRAILS"sv };
     gms::feature keyspace_multi_rf_change { *this, "KEYSPACE_MULTI_RF_CHANGE"sv };
     gms::feature view_building_tasks_min_task_id { *this, "VIEW_BUILDING_TASKS_MIN_TASK_ID"sv };
+    gms::feature table_activity_tablet_allocation { *this, "TABLE_ACTIVITY_TABLET_ALLOCATION"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

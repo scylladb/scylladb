@@ -42,11 +42,17 @@ struct tablet_load_stats final {
     std::unordered_map<::table_id, std::unordered_map<dht::token_range, uint64_t>> tablet_sizes;
 };
 
+struct table_activity_stats final {
+    double read_rate;
+    double write_rate;
+};
+
 struct load_stats {
     std::unordered_map<::table_id, locator::table_load_stats> tables;
     std::unordered_map<locator::host_id, uint64_t> capacity;
     std::unordered_map<locator::host_id, bool> critical_disk_utilization [[version 2025.3]];
     std::unordered_map<locator::host_id, locator::tablet_load_stats> tablet_stats [[version 2026.1]];
+    std::unordered_map<::table_id, locator::table_activity_stats> table_activity [[version 2026.3]];
 };
 
 }
