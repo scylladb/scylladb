@@ -697,8 +697,12 @@ static void wait_for_cql(const raw_cql_test_config& cfg, abort_source& as) {
         try {
             auto cs = connect(socket_address{net::inet_address{cfg.remote_host}, cfg.port}).get();
             auto conn = make_connection(std::move(cs), cfg);
+            // Always stop the connection (joining its reader fiber) before it is
+            // destroyed, even if startup() throws: destroying the connection
+            // while the reader still has a socket read in flight closes the fd
+            // from under that read, which aborts (EBADF) or corrupts the reactor.
+            auto stop_conn = defer([&] () noexcept { conn->stop().get(); });
             conn->startup().get();
-            conn->stop().get();
             return;
         } catch (...) {
         }
