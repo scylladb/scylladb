@@ -438,7 +438,26 @@ future<bool> requires_rack_list_colocation(
         db::system_keyspace* sys_ks,
         utils::UUID request_id) {
     auto res = co_await find_required_rack_list_colocations(db, tmptr, sys_ks, {request_id}, {});
-    co_return res.request_to_resume != request_id;
+    if (res.request_to_resume == request_id) {
+        co_return false;
+    }
+    // Colocation is still needed. Check that every target rack has at least one
+    // available node, otherwise the request can never complete and would livelock
+    // bouncing between paused and resumed states.
+    const auto& topo = tmptr->get_topology();
+    for (const auto& [dc_rack, _] : res.dst_dc_rack_to_tablets) {
+        bool has_node = false;
+        topo.for_each_node([&] (const locator::node& node) {
+            if (!has_node && node.dc_rack() == dc_rack && node.get_state() == locator::node::state::normal && !node.is_excluded()) {
+                has_node = true;
+            }
+        });
+        if (!has_node) {
+            throw std::runtime_error(format("No available nodes in dc={}, rack={} for rack_list colocation", dc_rack.dc, dc_rack.rack));
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return true;
 }
 
 }
