@@ -93,6 +93,8 @@ rjson::value lhs_to_json(const expr::tuple_constructor& lhs_tuple) {
     for (const auto& elem : lhs_tuple.elements) {
         if (auto* cv = expr::as_if<expr::column_value>(&elem)) {
             rjson::push_back(arr, rjson::from_string(cv->col->name_as_text()));
+        } else {
+            throw exceptions::invalid_request_exception(sstring("Unsupported restriction: non-column element in tuple: ") + to_string(elem));
         }
     }
     return arr;
@@ -139,6 +141,8 @@ void binary_operator_to_prepared(const expr::binary_operator& binop, std::vector
         multi_column_restriction_to_prepared(binop, *tuple, restrictions);
         return;
     }
+
+    throw exceptions::invalid_request_exception(sstring("Unsupported restriction: ") + to_string(binop));
 }
 
 void expression_to_prepared(const expr::expression& expr, std::vector<prepared_restriction>& restrictions) {

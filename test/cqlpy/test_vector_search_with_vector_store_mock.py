@@ -300,3 +300,23 @@ def test_vector_search_ann_with_restricted_key_column_not_selected(cql, test_key
                     f"SELECT category FROM {table} WHERE {where_clause} ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2")
 
                 assert list(result) == [(8,), (7,)]
+
+
+# Regression test: a map subscript restriction in a vector ANN query
+# (e.g. WHERE metadata_s['source'] = 'docs') was silently dropped by
+# binary_operator_to_prepared instead of raising an error, causing the
+# vector store to receive a request with no filter and return results
+# that violated the predicate.
+def test_vector_search_map_subscript_restriction_raises_error(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    schema = "pk text, metadata_s map<text, text>, embedding vector<float, 3>, PRIMARY KEY (pk)"
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index'")
+
+        with pytest.raises(InvalidRequest, match="Unsupported restriction"):
+            cql.execute(
+                f"SELECT pk FROM {table}"
+                " WHERE metadata_s['source'] = 'docs'"
+                " ORDER BY embedding ANN OF [1.0, 0.0, 0.0]"
+                " LIMIT 10 ALLOW FILTERING"
+            )
