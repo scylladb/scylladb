@@ -407,7 +407,15 @@ void sstables_manager::maybe_done() {
     }
 }
 
-future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
+future<std::unique_ptr<atomic_delete_context>> sstables_manager::prepare_delete_atomically(const std::vector<shared_sstable>& ssts) {
+    if (ssts.empty()) {
+        on_internal_error(smlogger, "prepare_delete_atomically() called with empty sstable list");
+    }
+    auto& storage = ssts.front()->get_storage();
+    co_return co_await storage.atomic_delete_prepare(ssts);
+}
+
+future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts, std::unique_ptr<atomic_delete_context> ctx) {
     if (ssts.empty()) {
         co_return;
     }
@@ -417,17 +425,19 @@ future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
     // front element. The deleter implementation is welcome to check
     // that sstables from the vector really live in it.
     auto& storage = ssts.front()->get_storage();
-    if (utils::get_local_injector().enter("delete_atomically_before_prepare")) {
-        throw std::runtime_error("delete_atomically_before_prepare");
+    if (!ctx) {
+        if (utils::get_local_injector().enter("delete_atomically_before_prepare")) {
+            throw std::runtime_error("delete_atomically_before_prepare");
+        }
+        ctx = co_await prepare_delete_atomically(ssts);
     }
-    auto ctx = co_await storage.atomic_delete_prepare(ssts);
 
     try {
         utils::get_local_injector().inject("delete_atomically_after_prepare",
                 [] { throw std::runtime_error("delete_atomically_after_prepare"); });
 
         co_await coroutine::parallel_for_each(ssts, [&ctx] (shared_sstable sst) {
-            return sst->unlink(&ctx);
+            return sst->unlink(ctx.get());
         });
 
         utils::get_local_injector().inject("delete_atomically_after_unlink",

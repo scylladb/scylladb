@@ -265,7 +265,12 @@ public:
         return *_sstables_registry;
     }
 
-    future<> delete_atomically(std::vector<shared_sstable> ssts);
+    // Precondition: ssts is not empty.
+    future<std::unique_ptr<atomic_delete_context>> prepare_delete_atomically(const std::vector<shared_sstable>& ssts);
+    // When ctx is provided, the function never fails.
+    // The pending-delete state on stable storage is cleared if and only if
+    // the deletion of all sstables completed successfully.
+    future<> delete_atomically(std::vector<shared_sstable> ssts, std::unique_ptr<atomic_delete_context> ctx = nullptr);
     future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring jsondir);
     future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const schema& s, const data_dictionary::storage_options& so);
     future<> destroy_table_storage(const data_dictionary::storage_options& so);

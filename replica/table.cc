@@ -2316,9 +2316,10 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
 }
 
 future<>
-table::delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove) {
+table::delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove,
+                                   std::unique_ptr<sstables::atomic_delete_context> ctx) {
     auto gh = _sstable_deletion_gate.hold();
-    co_await get_sstables_manager().delete_atomically(std::move(sstables_to_remove));
+    co_await get_sstables_manager().delete_atomically(std::move(sstables_to_remove), std::move(ctx));
 }
 
 future<>
@@ -2857,6 +2858,7 @@ future<> table::drop_quarantined_sstables() {
     class quarantine_removal_updater : public row_cache::external_updater_impl {
         table& _t;
         std::vector<sstables::shared_sstable>& _removed;
+        std::unique_ptr<sstables::atomic_delete_context>& _ctx;
         struct compaction_group_update {
             lw_shared_ptr<sstables::sstable_set> new_main_sstables;
             lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables;
@@ -2865,8 +2867,9 @@ future<> table::drop_quarantined_sstables() {
         std::unordered_map<compaction_group*, compaction_group_update> _cg_updates;
 
     public:
-        explicit quarantine_removal_updater(table& t, std::vector<sstables::shared_sstable>& removed)
-            : _t(t), _removed(removed) {}
+        explicit quarantine_removal_updater(table& t, std::vector<sstables::shared_sstable>& removed,
+                                            std::unique_ptr<sstables::atomic_delete_context>& ctx)
+            : _t(t), _removed(removed), _ctx(ctx) {}
 
         virtual future<> prepare() override {
             _t.for_each_compaction_group([&] (compaction_group& cg) {
@@ -2899,7 +2902,9 @@ future<> table::drop_quarantined_sstables() {
                     .removed_main_sstables = std::move(removed_main)
                 };
             });
-            co_return;
+            if (!_removed.empty()) {
+                _ctx = co_await _t.get_sstables_manager().prepare_delete_atomically(_removed);
+            }
         }
 
         virtual void execute() override {
@@ -2913,8 +2918,9 @@ future<> table::drop_quarantined_sstables() {
             }
         }
 
-        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, std::vector<sstables::shared_sstable>& removed) {
-            return std::make_unique<quarantine_removal_updater>(t, removed);
+        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, std::vector<sstables::shared_sstable>& removed,
+                                                                       std::unique_ptr<sstables::atomic_delete_context>& ctx) {
+            return std::make_unique<quarantine_removal_updater>(t, removed, ctx);
         }
     };
 
@@ -2927,18 +2933,17 @@ future<> table::drop_quarantined_sstables() {
     auto permit = co_await get_sstable_list_permit();
 
     std::vector<sstables::shared_sstable> removed;
-    auto updater = row_cache::external_updater(quarantine_removal_updater::make(*this, removed));
+    std::unique_ptr<sstables::atomic_delete_context> ctx;
+    auto updater = row_cache::external_updater(quarantine_removal_updater::make(*this, removed, ctx));
     co_await _cache.invalidate(std::move(updater));
 
     _cache.refresh_snapshot();
     rebuild_statistics();
 
-    try {
-        co_await delete_sstables_atomically(permit, std::move(removed));
-    } catch (...) {
-        // If atomic_delete_prepare succeeded, sstables will eventually be deleted on restart.
-        // Otherwise no sstables were affected. Either way it's safe to continue.
-        tlogger.warn("SSTables deletion failed: {}. Ignored.", std::current_exception());
+    if (!removed.empty()) {
+        // ctx was prepared in quarantine_removal_updater::prepare(), so
+        // sstables will eventually be deleted even if the unlink phase fails.
+        co_await delete_sstables_atomically(permit, std::move(removed), std::move(ctx));
     }
 }
 

@@ -122,8 +122,8 @@ public:
     // even after a crash.
     // On failure, either all or none of the sstables will be deleted,
     // but never only some of them.
-    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const = 0;
-    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const = 0;
+    virtual future<std::unique_ptr<atomic_delete_context>> atomic_delete_prepare(const std::vector<shared_sstable>&) const = 0;
+    virtual future<> atomic_delete_complete(std::unique_ptr<atomic_delete_context> ctx) const = 0;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) = 0;
     // Free space available in the underlying storage.
     virtual future<uint64_t> free_space() const = 0;
