@@ -365,7 +365,7 @@ jobs:
             -w "\n%{http_code}")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Failed to trigger Jenkins job (HTTP $HTTP_CODE)"
             echo "$RESPONSE"
             exit 1
