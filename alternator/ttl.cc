@@ -175,7 +175,16 @@ expiration_service::expiration_service(data_dictionary::database db, service::st
         : _db(db)
         , _proxy(proxy)
         , _gossiper(g)
+        , _ttl_period_observer(_db.get_config().alternator_ttl_period_in_seconds.observe([this] (const double&) {
+            abort_ttl_period_sleep();
+        }))
 {
+}
+
+void expiration_service::abort_ttl_period_sleep() {
+    if (_period_sleep_abort_source && !_period_sleep_abort_source->abort_requested()) {
+        _period_sleep_abort_source->request_abort();
+    }
 }
 
 // Convert the big_decimal used to represent expiration time to an integer.
@@ -885,15 +894,30 @@ future<> expiration_service::run() {
         // in the next iteration by reducing the scanner's scheduling-group
         // share (if using a separate scheduling group), or introduce
         // finer-grain sleeps into the scanning code.
-        std::chrono::milliseconds scan_duration(std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - start));
-        std::chrono::milliseconds period(long(_db.get_config().alternator_ttl_period_in_seconds() * 1000));
-        if (scan_duration < period) {
+        bool rescheduling_sleep = false;
+        for (;;) {
+            std::chrono::milliseconds period(long(_db.get_config().alternator_ttl_period_in_seconds() * 1000));
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - start);
+            if (elapsed >= period) {
+                if (!rescheduling_sleep) {
+                    tlogger.warn("scan took {} seconds, longer than period - not sleeping", elapsed.count()/1000.0);
+                }
+                break;
+            }
             try {
-                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count()/1000.0);
-                co_await seastar::sleep_abortable(period - scan_duration, _abort_source);
-            } catch(seastar::sleep_aborted&) {}
-        } else {
-                tlogger.warn("scan took {} seconds, longer than period - not sleeping", scan_duration.count()/1000.0);
+                _period_sleep_abort_source.emplace();
+                tlogger.info("sleeping {} seconds until next period", (period - elapsed).count()/1000.0);
+                co_await seastar::sleep_abortable(period - elapsed, *_period_sleep_abort_source);
+                _period_sleep_abort_source.reset();
+                break;
+            } catch(seastar::sleep_aborted&) {
+                _period_sleep_abort_source.reset();
+                if (shutting_down()) {
+                    co_return;
+                }
+                rescheduling_sleep = true;
+                tlogger.info("alternator_ttl_period_in_seconds changed, rescheduling sleep until next period");
+            }
         }
     }
 }
@@ -914,6 +938,7 @@ future<> expiration_service::stop() {
         throw std::logic_error("expiration_service::stop() called a second time");
     }
     _abort_source.request_abort();
+    abort_ttl_period_sleep();
     if (!_end) {
         // if _end is was not set, start() was never called
         return make_ready_future<>();
