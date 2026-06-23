@@ -593,6 +593,7 @@ scylla_tests = set([
     'test/boost/intrusive_array_test',
     'test/boost/json_test',
     'test/boost/keys_test',
+    'test/boost/leveled_managed_vector_test',
     'test/boost/like_matcher_test',
     'test/boost/limiting_data_source_test',
     'test/boost/linearizing_input_stream_test',

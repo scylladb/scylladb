@@ -146,6 +146,8 @@ add_scylla_test(json_test
 add_scylla_test(keys_test
   KIND BOOST
   LIBRARIES idl schema)
+add_scylla_test(leveled_managed_vector_test
+  KIND SEASTAR)
 add_scylla_test(like_matcher_test
   KIND BOOST
   LIBRARIES utils)
