@@ -385,12 +385,8 @@ future<compaction_result> compaction_task_executor::compact_sstables_and_update_
         co_return compaction_result{};
     }
 
-    bool should_update_history = this->should_update_history(descriptor.options.type());
     compaction_result res = co_await compact_sstables(std::move(descriptor), cdata, on_replace, std::move(can_purge));
-
-    if (should_update_history) {
-        co_await update_history(*_compacting_table, compaction_result(res), cdata);
-    }
+    co_await update_history(*_compacting_table, compaction_result(res), cdata);
 
     co_return res;
 }
@@ -461,11 +457,11 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
 
     co_return co_await ::compaction::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
 }
-future<> compaction_task_executor::update_history(compaction_group_view& t, compaction_result&& res, const ::compaction::compaction_data& cdata) {
+future<> compaction_manager::update_history(compaction_group_view& t, compaction_result&& res, const ::compaction::compaction_data& cdata) {
     auto started_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.started_at.time_since_epoch());
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
 
-    if (auto sys_ks = _cm._sys_ks.get_permit()) {
+    if (auto sys_ks = _sys_ks.get_permit()) {
         co_await utils::get_local_injector().inject("update_history_wait", utils::wait_for_message(120s));
         std::unordered_map<int32_t, int64_t> rows_merged;
         for (size_t id=0; id<res.stats.reader_statistics.rows_merged_histogram.size(); ++id) {
@@ -1454,27 +1450,24 @@ protected:
             std::exception_ptr ex;
 
             try {
-                bool should_update_history = this->should_update_history(descriptor.options.type());
                 compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace);
                 cmlog.debug("Finished minor compaction old_sstables={} new_sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
                         old_sstables, res.new_sstables, compacting_table()->get_sstables_repaired_at(), compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
                 finish_compaction();
-                if (should_update_history) {
-                    // update_history can take a long time compared to
-                    // compaction, as a call issued on shard S1 can be
-                    // handled on shard S2. If the other shard is under
-                    // heavy load, we may unnecessarily block kicking off a
-                    // new compaction. Normally it isn't a problem, but there were
-                    // edge cases where the described behaviour caused
-                    // compaction to fail to keep up with excessive
-                    // flushing, leading to too many sstables on disk and
-                    // OOM during a read.  There is no need to wait with
-                    // next compaction until history is updated, so release
-                    // the weight earlier to remove unnecessary
-                    // serialization.
-                    weight_r.deregister();
-                    co_await update_history(*_compacting_table, std::move(res), _compaction_data);
-                }
+                // update_history can take a long time compared to
+                // compaction, as a call issued on shard S1 can be
+                // handled on shard S2. If the other shard is under
+                // heavy load, we may unnecessarily block kicking off a
+                // new compaction. Normally it isn't a problem, but there were
+                // edge cases where the described behaviour caused
+                // compaction to fail to keep up with excessive
+                // flushing, leading to too many sstables on disk and
+                // OOM during a read.  There is no need to wait with
+                // next compaction until history is updated, so release
+                // the weight earlier to remove unnecessary
+                // serialization.
+                weight_r.deregister();
+                co_await update_history(*_compacting_table, std::move(res), _compaction_data);
                 _cm.reevaluate_postponed_compactions();
                 continue;
             } catch (...) {
@@ -1618,9 +1611,10 @@ private:
             auto on_replace = compacting.update_on_sstable_replacement();
 
             try {
-                compaction_result _ = co_await compact_sstables(std::move(*desc), _compaction_data, on_replace,
+                compaction_result res = co_await compact_sstables(std::move(*desc), _compaction_data, on_replace,
                                                                           compaction_manager::can_purge_tombstones::no,
                                                                           sstables::offstrategy::yes);
+                co_await update_history(*_compacting_table, std::move(res), _compaction_data);
             } catch (compaction_stopped_exception&) {
                 // If off-strategy compaction stopped on user request, let's not discard the partial work.
                 // Therefore, both un-reshaped and reshaped data will be integrated into main set, allowing
@@ -1997,7 +1991,9 @@ private:
                     compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
                     compaction_type_options::make_scrub(compaction_type_options::scrub::mode::validate, _quarantine_sstables));
-            co_return co_await ::compaction::compact_sstables(std::move(desc), _compaction_data, *_compacting_table, _progress_monitor);
+            auto res = co_await ::compaction::compact_sstables(std::move(desc), _compaction_data, *_compacting_table, _progress_monitor);
+            co_await update_history(*_compacting_table, compaction_result(res), _compaction_data);
+            co_return res;
         } catch (compaction_stopped_exception&) {
             // ignore, will be handled by can_proceed()
         } catch (storage_io_error& e) {
@@ -2387,7 +2383,8 @@ compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compac
         std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
     };
 
-    co_await compact_sstables(std::move(desc), info, t, monitor);
+    auto res = co_await compact_sstables(std::move(desc), info, t, monitor);
+    co_await update_history(t, std::move(res), info);
     co_await sst->unlink();
 
     co_return ret;
