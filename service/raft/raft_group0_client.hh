@@ -225,6 +225,7 @@ public:
     // for test only
     void set_history_gc_duration(gc_clock::duration d);
     semaphore& operation_mutex();
+    semaphore& read_apply_mutex();
 
     query_result_guard create_result_guard(utils::UUID query_id);
     void set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr);
