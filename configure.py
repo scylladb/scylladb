@@ -532,6 +532,8 @@ scylla_tests = set([
     'test/boost/advanced_rpc_compressor_test',
     'test/boost/allocation_strategy_test',
     'test/boost/alternator_unit_test',
+    'test/boost/alternator_export_test',
+    'test/boost/alternator_table_scan_test',
     'test/boost/anchorless_list_test',
     'test/boost/auth_passwords_test',
     'test/boost/audit_rule_test',
@@ -1473,7 +1475,9 @@ alternator = [
        'alternator/auth.cc',
        'alternator/streams.cc',
        'alternator/ttl.cc',
-       'alternator/http_compression.cc'
+       'alternator/http_compression.cc',
+       'alternator/export.cc',
+       'alternator/system_distributed_helper.cc'
 ]
 
 idls = ['idl/gossip_digest.idl.hh',

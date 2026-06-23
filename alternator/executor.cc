@@ -7,6 +7,7 @@
  */
 
 #include <fmt/ranges.h>
+#include <chrono>
 #include <seastar/core/on_internal_error.hh>
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
@@ -277,6 +278,7 @@ public:
 };
 
 executor::executor(gms::gossiper& gossiper,
+         cql3::query_processor& qp,
          service::storage_proxy& proxy,
          service::storage_service& ss,
          service::migration_manager& mm,
@@ -287,6 +289,7 @@ executor::executor(gms::gossiper& gossiper,
          smp_service_group ssg,
          utils::updateable_value<uint32_t> default_timeout_in_ms)
     : _gossiper(gossiper),
+      _qp(qp),
       _ss(ss),
       _proxy(proxy),
       _mm(mm),
@@ -4640,6 +4643,11 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     return props.as_ks_metadata(sstring(keyspace_name), *sp.get_token_metadata_ptr(), feat, sp.local_db().get_config());
 }
 
+seastar::shared_ptr<s3::client> executor::get_s3_client(sstring bucket_name) {
+    // TODO: wire up to actual S3 client configuration.
+    throw std::runtime_error(fmt::format("S3 client not configured for bucket '{}'", bucket_name));
+}
+
 future<> executor::start() {
     // Currently, nothing to do on initialization. We delay the keyspace
     // creation (create_keyspace()) until a table is actually created.
@@ -4647,6 +4655,7 @@ future<> executor::start() {
 }
 
 future<> executor::stop() {
+    co_await _export_gate.close();
     co_await _describe_table_info_manager->stop();
     // disconnect from the value source, but keep the value unchanged.
     s_default_timeout_in_ms = utils::updateable_value<uint32_t>{s_default_timeout_in_ms()};

@@ -10,10 +10,13 @@
 
 #include <seastar/core/future.hh>
 #include "audit/audit.hh"
+#include "locator/host_id.hh"
 #include "seastarx.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <vector>
 
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
@@ -25,6 +28,8 @@
 #include "alternator/attribute_path.hh"
 #include "alternator/stats.hh"
 #include "alternator/executor_util.hh"
+
+#include "locator/host_id.hh"
 
 #include "utils/rjson.hh"
 #include "utils/updateable_value.hh"
@@ -38,6 +43,14 @@ namespace db {
     class system_keyspace;
 }
 
+namespace s3 {
+class client;
+}
+
+namespace sstables {
+class storage_manager;
+}
+
 namespace audit {
 class audit_info_alternator;
 }
@@ -45,6 +58,10 @@ class audit_info_alternator;
 namespace query {
 class partition_slice;
 class result;
+}
+
+namespace cql3 {
+    class query_processor;
 }
 
 namespace cql3::selection {
@@ -83,9 +100,11 @@ class put_or_delete_item;
 namespace parsed {
 class expression_cache;
 }
+class export_row;
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
+    cql3::query_processor& _qp;
     service::storage_service& _ss;
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
@@ -104,6 +123,25 @@ class executor : public peering_sharded_service<executor> {
 
     struct describe_table_info_manager;
     std::unique_ptr<describe_table_info_manager> _describe_table_info_manager;
+
+    // Gate protecting background export fibers; closed in stop() to ensure
+    // all in-flight exports complete before the executor is destroyed.
+    seastar::gate _export_gate;
+
+    bool _garbage_collection_thread_for_s3_export_running = false;
+
+    // Does garbage collection for S3 exports and exits.
+    future<> garbage_collect_s3_exports();
+
+    // Periodically tries to run garbage_collect_s3_exports(), does nothing else.
+    future<> garbage_collector_for_s3_exports();
+
+    // Returns list of alive nodes in the cluster, based on gossip information.
+    future<std::vector<locator::host_id>> get_live_nodes();
+
+    // Returns this node's ID in the format "{host_id}:{gossip_generation}".
+    // The value is unique. The value will change after reboot (gossip_generation will increase).
+    sstring get_self_node_id();
 
     future<> cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);
@@ -130,6 +168,7 @@ public:
     static constexpr std::string_view INTERNAL_TABLE_PREFIX = ".scylla.alternator.";
 
     executor(gms::gossiper& gossiper,
+             cql3::query_processor& qp,
              service::storage_proxy& proxy,
              service::storage_service& ss,
              service::migration_manager& mm,
@@ -165,6 +204,14 @@ public:
     future<request_return_type> get_shard_iterator(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> get_records(client_state& client_state, tracing::trace_state_ptr, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> describe_continuous_backups(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> describe_export(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> list_exports(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+
+    // Obtain an S3 client for the given bucket. Declared here, defined externally.
+    seastar::shared_ptr<s3::client> get_s3_client(sstring bucket_name);
+
+    seastar::gate& export_gate() { return _export_gate; }
 
     future<> start();
     future<> stop();
@@ -189,6 +236,22 @@ private:
     future<rjson::value> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
     future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization,
             bool warn_authorization, const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+
+    // Background fiber that performs the actual export: scans the table,
+    // writes data to S3, generates manifests, and updates the export status.
+    future<> run_export(
+        seastar::gate::holder gate_holder,
+        schema_ptr schema,
+        export_row row,
+        std::string table_arn,
+        std::string s3_bucket,
+        std::string s3_key_prefix,
+        std::string export_id_token);
+
+    // Helper to update export status to FAILED after catching an exception.
+    future<> update_export_status_to_failed(
+        const sstring& export_arn, const sstring& node_id,
+        int64_t item_count, const sstring& failure_message);
 
     future<> do_batch_write(
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,

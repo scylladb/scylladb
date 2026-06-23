@@ -128,6 +128,47 @@ schema_ptr snapshot_sstables() {
     return schema;
 }
 
+schema_ptr alternator_export_to_s3_exports() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_EXPORTS, std::make_optional(id))
+                .with_column("export_arn", utf8_type, column_kind::partition_key)
+                .with_column("client_token", utf8_type)
+                .with_column("request", utf8_type)
+                .with_column("export_manifest", utf8_type)
+                .with_column("export_status", utf8_type)
+                .with_column("failure_code", utf8_type)
+                .with_column("failure_message", utf8_type)
+                .with_column("item_count", long_type)
+                .with_column("export_id_token", utf8_type)
+                .with_column("snapshot_tag", utf8_type)
+                .with_column("accepted_at", timestamp_type)
+                .with_column("completed_at", timestamp_type)
+                .with_column("node_id", utf8_type)
+                .with_column("metadata_expires_at", timestamp_type)
+                .set_comment("Alternator export to S3 export metadata")
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr alternator_export_to_s3_client_tokens() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS, std::make_optional(id))
+                .with_column("client_token", utf8_type, column_kind::partition_key)
+                .with_column("export_arn", utf8_type)
+                .with_column("request", utf8_type)
+                .with_column("node_id", utf8_type)
+                .set_comment("Alternator export to S3 client token idempotency")
+                .set_default_time_to_live(std::chrono::hours(8))
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 // This is the set of tables which this node ensures to exist in the cluster.
 // It does that by announcing the creation of these schemas on initialization
 // of the `system_distributed_keyspace` service (see `start()`), unless it first
@@ -144,11 +185,20 @@ static std::vector<schema_ptr> ensured_tables() {
         cdc_desc(),
         cdc_timestamps(),
         snapshot_sstables(),
+        alternator_export_to_s3_exports(),
+        alternator_export_to_s3_client_tokens(),
     };
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
-    return {view_build_status(), cdc_desc(), cdc_timestamps(), snapshot_sstables()};
+    return {
+        view_build_status(),
+        cdc_desc(),
+        cdc_timestamps(),
+        snapshot_sstables(),
+        alternator_export_to_s3_exports(),
+        alternator_export_to_s3_client_tokens(),
+    };
 }
 
 system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& qp, service::migration_manager& mm, service::storage_proxy& sp)

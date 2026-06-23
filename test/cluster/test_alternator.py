@@ -23,6 +23,8 @@ from botocore.exceptions import ClientError
 import requests
 import json
 from cassandra.auth import PlainTextAuthProvider
+from cassandra.query import SimpleStatement
+from cassandra import ConsistencyLevel
 import threading
 import random
 import re
@@ -1513,3 +1515,56 @@ async def test_deferred_stream_enablement_on_tablets(manager: ManagerClient):
     finally:
         table.delete()
         table.meta.client.get_waiter('table_not_exists').wait(TableName=table.name)
+
+# The Alternator S3 export feature stores its metadata in tables under the
+# replicated system_distributed keyspace, created automatically when Alternator
+# starts. Verify that these tables are created on every node of a multi-node
+# cluster and that a plain "SELECT *" succeeds against each node - i.e. the
+# tables are properly replicated and readable cluster-wide, not just on the
+# node that created them.
+#
+# Additionally, write one row per node into each table and verify that a
+# SELECT from every node sees all the rows written by all nodes - i.e. the
+# data is replicated and consistently readable cluster-wide. Writes and reads
+# use QUORUM so that, on the RF=3 system_distributed keyspace, every read is
+# guaranteed to observe every write.
+async def test_export_to_s3_system_tables_readable_on_all_nodes(manager: ManagerClient):
+    # Each entry maps a table name to a function building an INSERT for that
+    # table given a unique per-node id, plus the number of rows we expect to
+    # see once every node has inserted its row.
+
+    export_tables = [
+        ('alternator_export_to_s3_exports', 'export_arn', 'export-%s'),
+        ('alternator_export_to_s3_client_tokens', 'client_token', 'token-%s'),
+    ]
+
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    for host in hosts:
+        for table, _, _ in export_tables:
+            # A successful SELECT * (no exception) confirms the table exists and
+            # is readable on this node.
+            await cql.run_async(f"SELECT * FROM system_distributed.{table}", host=host)
+
+    # Each node inserts one distinct row into each table.
+    for i, host in enumerate(hosts):
+        for table, key, key_value_pattern in export_tables:
+            await cql.run_async(SimpleStatement(f"INSERT INTO system_distributed.{table} ({key}) VALUES ('{key_value_pattern % i}')",
+                                                consistency_level=ConsistencyLevel.QUORUM),
+                                host=host)
+
+    # Every node must now see all the rows written by all nodes.
+    expected_count = len(hosts)
+    for host in hosts:
+        for table, key, key_value_pattern in export_tables:
+            keys = set()
+            expected_keys = {key_value_pattern % i for i in range(expected_count)}
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT {key} FROM system_distributed.{table}",
+                                consistency_level=ConsistencyLevel.QUORUM),
+                host=host)
+            for row in rows:
+                keys.add(row[0])
+            assert keys & expected_keys == expected_keys, \
+                f"node {host} sees {keys} in {table}, expected {expected_keys}"

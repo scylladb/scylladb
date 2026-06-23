@@ -30,6 +30,10 @@ namespace cdc {
 class generation_service;
 }
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace gms {
 
 class gossiper;
@@ -64,6 +68,7 @@ class server;
 
 class controller : public protocol_server {
     sharded<gms::gossiper>& _gossiper;
+    sharded<cql3::query_processor>& _qp;
     sharded<service::storage_proxy>& _proxy;
     sharded<service::storage_service>& _ss;
     sharded<service::migration_manager>& _mm;
@@ -85,6 +90,7 @@ class controller : public protocol_server {
 public:
     controller(
         sharded<gms::gossiper>& gossiper,
+        sharded<cql3::query_processor>& qp,
         sharded<service::storage_proxy>& proxy,
         sharded<service::storage_service>& ss,
         sharded<service::migration_manager>& mm,

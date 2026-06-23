@@ -42,6 +42,9 @@ namespace service { class storage_proxy; class client_state; }
 
 namespace alternator {
 
+/// Returns string representation of a JSON type, for error messages.
+std::string_view rjson_type_to_string(rjson::type t);
+
 /// The body_writer is used for streaming responses - where the response body
 /// is written in chunks to the output_stream. This allows for efficient
 /// handling of large responses without needing to allocate a large buffer in
@@ -53,10 +56,15 @@ using body_writer = noncopyable_function<future<>(output_stream<char>&&)>;
 /// api_error is thrown.
 std::optional<int> get_int_attribute(const rjson::value& value, std::string_view attribute_name);
 
-/// Get the value of a string attribute, or a default value if it is missing.
-/// If the attribute exists, but is not a string, a descriptive api_error is
-/// thrown.
-std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, const char* default_return);
+/// Get the value of a string attribute.
+/// If the value exists and is a string - it's returned.
+/// If the value is missing and `default_return` is supplied, the `default_return` value is returned.
+/// Otherwise a descriptive api_error is thrown.
+std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, std::optional<std::string_view> default_return = std::nullopt);
+
+/// Get the value of a string attribute. If `default_return` is supplied that value is optional and if not found -
+/// `default_return` will be returned. Otherwise it must be present and non-empty, if not - a descriptive api_error will be thrown.
+std::string get_non_empty_string_attribute(const rjson::value& value, std::string_view attribute_name, std::optional<std::string_view> default_return = std::nullopt);
 
 /// Get the value of a boolean attribute, or a default value if it is missing.
 /// If the attribute exists, but is not a bool, a descriptive api_error is
@@ -251,3 +259,17 @@ std::optional<rjson::value> describe_single_item(schema_ptr,
 body_writer make_streamed(rjson::value&&);
 
 } // namespace alternator
+
+namespace fmt {
+template<>
+struct formatter<rjson::type> {
+    // format specifier not supported
+    template <typename ParseContext>
+    constexpr auto parse(ParseContext &ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const rjson::type& t, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", alternator::rjson_type_to_string(t));
+    }
+};
+}

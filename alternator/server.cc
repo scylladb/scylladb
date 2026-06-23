@@ -927,6 +927,15 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         {"DescribeContinuousBackups", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.describe_continuous_backups(client_state, std::move(permit), std::move(json_request), audit_info);
         }},
+        {"ExportTableToPointInTime", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            return e.export_table_to_point_in_time(client_state, std::move(permit), std::move(json_request), audit_info);
+        }},
+        {"DescribeExport", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            return e.describe_export(client_state, std::move(permit), std::move(json_request), audit_info);
+        }},
+        {"ListExports", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            return e.list_exports(client_state, std::move(permit), std::move(json_request), audit_info);
+        }},
     } {
 }
 
