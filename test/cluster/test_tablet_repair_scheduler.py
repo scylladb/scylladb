@@ -555,7 +555,7 @@ async def test_tablet_auto_repair_cfg_enable(manager: ManagerClient):
     # Check repair is executed
     await check_has_repair_time(cql, hosts[0:1], table_id)
 
-@pytest.mark.skip_not_implemented(reason="no per tablet support yet")
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-134", reason="no per tablet support yet")
 async def test_tablet_auto_repair_cfg_disable_per_table_enable(manager: ManagerClient):
     cmdline = ["--auto-repair-enabled-default", "0",  "--auto-repair-threshold-default-in-seconds", "1"]
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
