@@ -1160,6 +1160,75 @@ SEASTAR_TEST_CASE(test_consistency_preserved_on_alter_keyspace) {
     }, cfg);
 }
 
+SEASTAR_TEST_CASE(test_create_keyspace_with_dedicated_rack) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.db_config->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        topo.start_new_dc({"dc1", "rack1"});
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack("rack2");
+        topo.add_node(service::node_state::normal, shard_count);
+
+        // Basic creation with dedicated_rack works
+        e.execute_cql("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                      "'dc1': ['rack1', 'rack2']} AND consistency = {'type': 'global', "
+                      "'dedicated_rack': {'dc1': 'rack1'}}").get();
+
+        auto ksm = e.local_db().find_keyspace("ks1").metadata();
+        auto consistency = ksm->consistency_option();
+        BOOST_REQUIRE(consistency.has_value());
+        BOOST_REQUIRE(consistency->type == data_dictionary::consistency_config_option::global);
+        BOOST_REQUIRE(consistency->has_dedicated_rack());
+        BOOST_REQUIRE_EQUAL(consistency->dedicated_rack.at("dc1"), sstring("rack1"));
+
+        // DESCRIBE round-trips correctly
+        auto desc = describe(e, "ks1");
+        BOOST_REQUIRE(desc.contains("'type': 'global'"));
+        BOOST_REQUIRE(desc.contains("'dedicated_rack': {'dc1': 'rack1'}"));
+
+        // Legacy string format still works
+        e.execute_cql("CREATE KEYSPACE ks_legacy WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                      "'dc1': ['rack1', 'rack2']} AND consistency = 'global'").get();
+        auto legacy = e.local_db().find_keyspace("ks_legacy").metadata()->consistency_option();
+        BOOST_REQUIRE(legacy.has_value());
+        BOOST_REQUIRE(legacy->type == data_dictionary::consistency_config_option::global);
+        BOOST_REQUIRE(!legacy->has_dedicated_rack());
+
+        // Error: dedicated_rack DC not in replication options
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+            "'dc1': ['rack1', 'rack2']} AND consistency = {'type': 'global', "
+            "'dedicated_rack': {'dc99': 'rack1'}}").get(),
+            exceptions::configuration_exception);
+
+        // Error: dedicated_rack requires rack-based replication
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+            "'dc1': 2} AND consistency = {'type': 'global', "
+            "'dedicated_rack': {'dc1': 'rack1'}}").get(),
+            exceptions::configuration_exception);
+
+        // Error: dedicated rack not in rack list
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail3 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+            "'dc1': ['rack1', 'rack2']} AND consistency = {'type': 'global', "
+            "'dedicated_rack': {'dc1': 'rack99'}}").get(),
+            exceptions::configuration_exception);
+
+        // Error: eventual + dedicated_rack
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail4 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+            "'dc1': ['rack1', 'rack2']} AND consistency = {'type': 'eventual', "
+            "'dedicated_rack': {'dc1': 'rack1'}}").get(),
+            exceptions::configuration_exception);
+    }, cfg);
+}
+
 } // namespace network_topology_strategy_test
 
 namespace locator {
