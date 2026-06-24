@@ -90,12 +90,6 @@ public:
     // Makes sure that this node knows about all schema changes known by "nodes" that were made prior to this call.
     future<> sync_schema(const replica::database& db, const std::vector<locator::host_id>& nodes);
 
-    // Merge mutations received from src.
-    // Keep mutations alive around whole async operation.
-    future<> merge_schema_from(locator::host_id src, const utils::chunked_vector<canonical_mutation>& mutations);
-    // Incremented each time the function above is called. Needed by tests.
-    size_t canonical_mutation_merge_count = 0;
-
     // Two-phase schema change API, used by the group0 state machine to
     // ensure topology is up-to-date before ERMs are computed.
     //
