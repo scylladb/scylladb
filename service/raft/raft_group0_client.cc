@@ -256,9 +256,28 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
 
     std::pair<rwlock::holder, group0_upgrade_state> upgrade_lock_and_state = co_await get_group0_upgrade_state();
     auto [upgrade_lock_holder, upgrade_state] = std::move(upgrade_lock_and_state);
+    auto make_legacy_guard = [&] {
+        return group0_guard {
+            std::make_unique<group0_guard::impl>(
+                semaphore_units<>{},
+                semaphore_units<>{},
+                utils::UUID{},
+                generate_group0_state_id(utils::UUID{}),
+                std::move(upgrade_lock_holder),
+                false
+            )
+        };
+    };
     switch (upgrade_state) {
+        case group0_upgrade_state::use_pre_raft_procedures:
+            if (!_raft_gr.started_group0()) {
+                co_return make_legacy_guard();
+            }
+            [[fallthrough]];
         case group0_upgrade_state::synchronize:
-            logger.info("start_operation: waiting until local node leaves synchronize state to start a group 0 operation");
+            logger.info("start_operation: waiting until local node in state {} completes upgrade to group 0",
+                    upgrade_state == group0_upgrade_state::use_pre_raft_procedures
+                    ? "use_pre_raft_procedures" : "synchronize");
             upgrade_lock_holder.return_all();
             co_await when_any(wait_until_group0_upgraded(as), sleep_abortable(std::chrono::seconds{10}, as));
             // Checks whether above wait returned due to sleep timeout, which confirms the upgrade procedure stuck case.
@@ -300,18 +319,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
 
         case group0_upgrade_state::recovery:
             logger.warn("starting operation in RECOVERY mode (using old procedures)");
-            [[fallthrough]];
-        case group0_upgrade_state::use_pre_raft_procedures:
-            co_return group0_guard {
-                std::make_unique<group0_guard::impl>(
-                    semaphore_units<>{},
-                    semaphore_units<>{},
-                    utils::UUID{},
-                    generate_group0_state_id(utils::UUID{}),
-                    std::move(upgrade_lock_holder),
-                    false
-                )
-            };
+            co_return make_legacy_guard();
     }
 }
 
