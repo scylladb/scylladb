@@ -2,155 +2,54 @@ name: Scylla CI Route
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review, unlabeled]
-  issue_comment:
-    types: [created]
-
-permissions:
-  contents: read
-  statuses: write
+    types: [opened, reopened, synchronize, ready_for_review]
 
 jobs:
   route-ci:
-    # Run on:
-    # 1. PR events (opened/reopened/synchronize/ready_for_review) for non-draft PRs
-    # 2. PR unlabeled event when 'conflicts' label is removed
-    # 3. issue_comment event when a non-bot org member comments '@scylladbbot trigger-ci'
-    if: |
-      (github.event_name == 'pull_request_target' && github.event.action != 'unlabeled' && !github.event.pull_request.draft) ||
-      (github.event_name == 'pull_request_target' && github.event.action == 'unlabeled' && github.event.label.name == 'conflicts') ||
-      (github.event_name == 'issue_comment' && github.event.comment.user.login != 'scylladbbot')
+    # Skip draft PRs
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
     env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_REPO: ${{ github.repository }}
+      BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+      PR_USER: ${{ github.event.pull_request.user.login }}
+      PR_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
       JENKINS_URL: "https://jenkins.scylladb.com"
 
     steps:
-      - name: Set up gh api retry helper
+      - name: Check for code changes on synchronize
+        if: github.event.action == 'synchronize'
+        id: code-changes
         run: |
-          # Write a reusable retry wrapper for gh api calls into BASH_ENV
-          # so it is automatically available in every subsequent step.
-          cat >> "$BASH_ENV" << 'RETRY_EOF'
-          gh_api_retry() {
-            local max_attempts=4 attempt=1 delay=1 output rc
-            while [ $attempt -le $max_attempts ]; do
-              if output=$(gh api "$@" 2>&1); then
-                echo "$output"
-                return 0
-              fi
-              rc=$?
-              if [ $attempt -eq $max_attempts ]; then
-                echo "$output" >&2
-                return $rc
-              fi
-              echo "gh api attempt $attempt failed, retrying in ${delay}s..." >&2
-              sleep $delay
-              delay=$((delay * 2))
-              attempt=$((attempt + 1))
-            done
-          }
-          RETRY_EOF
-
-      - name: Validate comment trigger
-        if: github.event_name == 'issue_comment'
-        id: comment-check
-        env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
-        shell: bash
-        run: |
-          # Check org membership
-          if [[ "$COMMENT_ASSOCIATION" != "MEMBER" && "$COMMENT_ASSOCIATION" != "OWNER" ]]; then
-            echo "::warning::Comment author is not an org member (association: $COMMENT_ASSOCIATION); skipping CI trigger."
-            echo "valid=false" >> "$GITHUB_OUTPUT"
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.event.after }}"
+          if [ -z "$BEFORE" ] || [ -z "$AFTER" ]; then
+            echo "has_code_changes=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Strip quoted lines and check for trigger keywords
-          CLEAN_BODY=$(echo "$COMMENT_BODY" | grep -v '^[[:space:]]*>')
+          # Use the GitHub API to compare trees
+          BEFORE_TREE=$(gh api "repos/$PR_REPO/git/commits/$BEFORE" --jq '.tree.sha' 2>/dev/null || true)
+          AFTER_TREE=$(gh api "repos/$PR_REPO/git/commits/$AFTER" --jq '.tree.sha' 2>/dev/null || true)
 
-          if echo "$CLEAN_BODY" | grep -qi '@scylladbbot' && echo "$CLEAN_BODY" | grep -qi 'trigger-ci'; then
-            echo "valid=true" >> "$GITHUB_OUTPUT"
+          if [ -n "$BEFORE_TREE" ] && [ -n "$AFTER_TREE" ] && [ "$BEFORE_TREE" = "$AFTER_TREE" ]; then
+            echo "No code changes detected (commit message edit only), skipping CI"
+            echo "has_code_changes=false" >> "$GITHUB_OUTPUT"
           else
-            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "Code changes detected"
+            echo "has_code_changes=true" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Resolve PR context
-        if: github.event_name != 'issue_comment' || steps.comment-check.outputs.valid == 'true'
-        id: resolve-pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          # PR event context
-          PR_NUMBER_FROM_EVENT: ${{ github.event.pull_request.number }}
-          PR_REPO_FROM_EVENT: ${{ github.repository }}
-          PR_SHA_FROM_EVENT: ${{ github.event.pull_request.head.sha }}
-          PR_USER_FROM_EVENT: ${{ github.event.pull_request.user.login }}
-          PR_DRAFT_FROM_EVENT: ${{ github.event.pull_request.draft }}
-          PR_BASE_FROM_EVENT: ${{ github.event.pull_request.base.ref }}
-          PR_URL_FROM_EVENT: ${{ github.event.pull_request.html_url }}
-          BEFORE_SHA: ${{ github.event.before }}
-          AFTER_SHA: ${{ github.event.after }}
-          # Comment event context
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        shell: bash
-        run: |
-          PR_REPO="$PR_REPO_FROM_EVENT"
-
-          if [ "$EVENT_NAME" = "issue_comment" ]; then
-            # For comment events, fetch PR details from the API
-            PR_NUMBER="$ISSUE_NUMBER"
-            PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
-            PR_SHA=$(echo "$PR_JSON" | jq -r '.head.sha')
-            PR_USER=$(echo "$PR_JSON" | jq -r '.user.login')
-            PR_DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
-            BASE_BRANCH=$(echo "$PR_JSON" | jq -r '.base.ref')
-            PR_URL=$(echo "$PR_JSON" | jq -r '.html_url')
-          else
-            PR_NUMBER="$PR_NUMBER_FROM_EVENT"
-            PR_SHA="$PR_SHA_FROM_EVENT"
-            PR_USER="$PR_USER_FROM_EVENT"
-            PR_DRAFT="$PR_DRAFT_FROM_EVENT"
-            BASE_BRANCH="$PR_BASE_FROM_EVENT"
-            PR_URL="$PR_URL_FROM_EVENT"
-          fi
-
-          # Skip draft PRs
-          if [ "$PR_DRAFT" = "true" ]; then
-            echo "::warning::PR #$PR_NUMBER is a draft, skipping CI trigger"
-            echo "should_continue=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Check for code changes on synchronize (skip commit-message-only pushes)
-          if [ "$EVENT_ACTION" = "synchronize" ]; then
-            if [ -n "$BEFORE_SHA" ] && [ -n "$AFTER_SHA" ]; then
-              BEFORE_TREE=$(gh_api_retry "repos/$PR_REPO/git/commits/$BEFORE_SHA" --jq '.tree.sha' 2>/dev/null || true)
-              AFTER_TREE=$(gh_api_retry "repos/$PR_REPO/git/commits/$AFTER_SHA" --jq '.tree.sha' 2>/dev/null || true)
-              if [ -n "$BEFORE_TREE" ] && [ -n "$AFTER_TREE" ] && [ "$BEFORE_TREE" = "$AFTER_TREE" ]; then
-                echo "No code changes detected (commit message edit only), skipping CI"
-                echo "should_continue=false" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            fi
-          fi
-
-          echo "should_continue=true" >> "$GITHUB_OUTPUT"
-          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "pr_repo=$PR_REPO" >> "$GITHUB_OUTPUT"
-          echo "pr_sha=$PR_SHA" >> "$GITHUB_OUTPUT"
-          echo "pr_user=$PR_USER" >> "$GITHUB_OUTPUT"
-          echo "base_branch=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
-          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
 
       - name: Check if docs-only PR
-        if: steps.resolve-pr.outputs.should_continue == 'true'
+        if: steps.code-changes.outputs.has_code_changes != 'false'
         id: docs-check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
-          PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
         run: |
           echo "Fetching PR #$PR_NUMBER files from $PR_REPO..."
           ALL_DOCS=true
@@ -160,7 +59,7 @@ jobs:
           # Fetch all pages of PR files
           PAGE=1
           while true; do
-            FILES=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
+            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
             if [ -z "$FILES" ]; then
               break
             fi
@@ -191,12 +90,10 @@ jobs:
           echo "trigger_docs_ci=$TRIGGER_DOCS_CI" >> "$GITHUB_OUTPUT"
 
       - name: Trigger docs-CI
-        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.trigger_docs_ci == 'true'
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.trigger_docs_ci == 'true'
         env:
           JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
-          PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
-          PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
         run: |
           DOCS_CI_JOB="releng/job/scylladb-docs-CI"
           JOB_URL="$JENKINS_URL/job/$DOCS_CI_JOB/api/json"
@@ -214,16 +111,13 @@ jobs:
           fi
 
       - name: Get PR details
-        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true'
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.is_docs_only != 'true'
         id: pr-details
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
-          PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
-          PR_URL: ${{ steps.resolve-pr.outputs.pr_url }}
         run: |
           echo "Fetching PR #$PR_NUMBER details..."
-          PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
+          PR_JSON=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER")
 
           MERGEABLE_STATE=$(echo "$PR_JSON" | jq -r '.mergeable_state')
           LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
@@ -268,10 +162,8 @@ jobs:
           echo "pytest_extra_options=$PYTEST_EXTRA_OPTIONS" >> "$GITHUB_OUTPUT"
 
       - name: Determine target folder
-        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true'
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.is_docs_only != 'true'
         id: target-folder
-        env:
-          BASE_BRANCH: ${{ steps.resolve-pr.outputs.base_branch }}
         run: |
           FOLDER=""
           if [ "$BASE_BRANCH" = "master" ] || [ "$BASE_BRANCH" = "next" ]; then
@@ -296,18 +188,16 @@ jobs:
           echo "Target folder: $FOLDER"
 
       - name: Check required CI types
-        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true'
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.is_docs_only != 'true'
         id: required-checks
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
-          PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
         run: |
           # Fetch all PR files for pattern matching
           ALL_FILES=""
           PAGE=1
           while true; do
-            FILES=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
+            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
             if [ -z "$FILES" ]; then
               break
             fi
@@ -322,7 +212,6 @@ jobs:
           # build: required if any file does NOT match scripts/pull_github_pr.sh
           BUILD_REQUIRED=false
           while IFS= read -r FILE; do
-            [ -z "$FILE" ] && continue
             if [ "$FILE" != "scripts/pull_github_pr.sh" ]; then
               BUILD_REQUIRED=true
               break
@@ -332,7 +221,6 @@ jobs:
           # dtest: required if any file does NOT match test*, dist/docker/*, dist/common/scripts/*
           DTEST_REQUIRED=false
           while IFS= read -r FILE; do
-            [ -z "$FILE" ] && continue
             if ! echo "$FILE" | grep -qE '^(test(\.py|/)|dist/docker/|dist/common/scripts/)'; then
               DTEST_REQUIRED=true
               break
@@ -342,7 +230,6 @@ jobs:
           # unittest: required if any file does NOT match dist/docker/*, dist/common/scripts*
           UNITTEST_REQUIRED=false
           while IFS= read -r FILE; do
-            [ -z "$FILE" ] && continue
             if ! echo "$FILE" | grep -qE '^(dist/docker/|dist/common/scripts)'; then
               UNITTEST_REQUIRED=true
               break
@@ -352,7 +239,6 @@ jobs:
           # artifacts: required if any file matches dist/* or tools/toolchain*
           ARTIFACTS_REQUIRED=false
           while IFS= read -r FILE; do
-            [ -z "$FILE" ] && continue
             if echo "$FILE" | grep -qE '^(dist|tools/toolchain)'; then
               ARTIFACTS_REQUIRED=true
               break
@@ -401,23 +287,20 @@ jobs:
           echo "Required checks: build=$BUILD_REQUIRED dtest=$DTEST_REQUIRED unittest=$UNITTEST_REQUIRED artifacts=$ARTIFACTS_REQUIRED gdb=$GDB_REQUIRED"
 
       - name: Check trusted contributor
-        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true' && github.event_name != 'issue_comment'
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.is_docs_only != 'true'
         id: trust-check
         env:
           GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
-          PR_USER: ${{ steps.resolve-pr.outputs.pr_user }}
-          PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
-          PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
         run: |
           TRUSTED=false
 
           # Check if user is a ScyllaDB org member
-          HTTP_CODE=$(gh_api_retry "orgs/scylladb/members/$PR_USER" --silent 2>/dev/null && echo "204" || echo "other")
+          HTTP_CODE=$(gh api "orgs/scylladb/members/$PR_USER" --silent 2>/dev/null && echo "204" || echo "other")
           if [ "$HTTP_CODE" = "204" ]; then
             TRUSTED=true
           else
             # Check if user is in the external-contributors team
-            TEAM_STATE=$(gh_api_retry "orgs/scylladb/teams/external-contributors/memberships/$PR_USER" --jq '.state' 2>/dev/null || echo "none")
+            TEAM_STATE=$(gh api "orgs/scylladb/teams/external-contributors/memberships/$PR_USER" --jq '.state' 2>/dev/null || echo "none")
             if [ "$TEAM_STATE" = "active" ]; then
               TRUSTED=true
             fi
@@ -426,7 +309,7 @@ jobs:
           if [ "$TRUSTED" = "false" ]; then
             echo "::warning::PR submitted by external contributor ($PR_USER), CI will not trigger automatically"
             TARGET_FOLDER="${{ steps.target-folder.outputs.folder }}"
-            gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
+            gh api "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
               -f body="@scylladb/scylla-maint please review and trigger CI for this pull request
           **CI Build:** https://jenkins.scylladb.com/job/${TARGET_FOLDER}/job/scylla-ci/parambuild/?PR_NUMBER=${PR_NUMBER}"
           fi
@@ -435,9 +318,9 @@ jobs:
 
       - name: Trigger scylla-ci
         if: |
-          steps.resolve-pr.outputs.should_continue == 'true' &&
+          steps.code-changes.outputs.has_code_changes != 'false' &&
           steps.docs-check.outputs.is_docs_only != 'true' &&
-          (steps.trust-check.outputs.trusted == 'true' || github.event_name == 'issue_comment') &&
+          steps.trust-check.outputs.trusted == 'true' &&
           steps.pr-details.outputs.has_conflicts != 'true' &&
           steps.required-checks.outputs.build_required == 'true' &&
           steps.target-folder.outputs.folder != ''
@@ -445,9 +328,6 @@ jobs:
           JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
-          PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
-          PR_SHA: ${{ steps.resolve-pr.outputs.pr_sha }}
         run: |
           TARGET_FOLDER="${{ steps.target-folder.outputs.folder }}"
           RUN_DTEST="${{ steps.required-checks.outputs.dtest_required }}"
@@ -515,7 +395,7 @@ jobs:
           fi
 
           # Set pending commit status
-          gh_api_retry "repos/$PR_REPO/statuses/$PR_SHA" \
+          gh api "repos/$PR_REPO/statuses/$PR_SHA" \
             -f state="pending" \
             -f context="Checkout" \
             -f description="Waiting for CI to start" \
@@ -525,8 +405,6 @@ jobs:
         if: failure()
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number || github.event.pull_request.number || github.event.issue.number }}
-          PR_URL: ${{ steps.resolve-pr.outputs.pr_url || github.event.pull_request.html_url || '' }}
         run: |
           # Send Slack notification
           curl -X POST -H 'Content-type: application/json' \
