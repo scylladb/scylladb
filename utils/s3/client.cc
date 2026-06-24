@@ -84,7 +84,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<http::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<http::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -108,7 +108,6 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
             }();
         })
         , _gf(std::move(gf))
-        , _memory(mem)
         , _retry_strategy(std::move(rs)) {
     _creds_provider_chain
         .add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
@@ -164,15 +163,15 @@ void client::update_connections_per_shard(unsigned connections_per_shard) {
     });
 }
 
-shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{});
 }
 
-shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, std::unique_ptr<http::retry_strategy> rs, global_factory gf) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{}, std::move(rs));
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<http::retry_strategy> rs, global_factory gf) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{}, std::move(rs));
 }
 
-shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf, unsigned connections_per_shard) {
+shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, global_factory gf, unsigned connections_per_shard) {
     auto url = utils::http::parse_simple_url(ep);
     endpoint_config cfg = {
         .port = url.port,
@@ -181,7 +180,7 @@ shared_ptr<client> client::make(std::string ep, std::string region, std::string 
         .role_arn = std::move(iam_role_arn),
         .connections_per_shard = connections_per_shard,
     };
-    return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), memory, gf);
+    return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), gf);
 }
 
 future<> client::update_credentials_and_rearm() {
@@ -242,13 +241,6 @@ future<> client::authorize(http::request& req) {
     req._headers["Authorization"] = seastar::format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _credentials.access_key_id, time_point_st, _cfg->region, signed_headers_list, sig);
 }
 
-future<semaphore_units<>> client::claim_memory(size_t size, abort_source* as) {
-    if (as) {
-        return get_units(_memory, size, *as);
-    }
-    return get_units(_memory, size);
-}
-
 static future<semaphore_units<>> claim_unit(semaphore& sem, seastar::abort_source* as) {
     return as ? get_units(sem, 1, *as) : get_units(sem, 1);
 }
@@ -287,10 +279,6 @@ void client::group_client::register_metrics(std::string class_name, std::string 
             sm::description("Total time spend writing data to objects"), {ep_label, sg_label}));
     defs.emplace_back(sm::make_counter("total_read_prefetch_bytes", [this] { return prefetch_bytes; },
             sm::description("Total number of bytes requested from object"), {ep_label, sg_label}));
-    defs.emplace_back(sm::make_counter("downloads_blocked_on_memory",
-                      [this] { return downloads_blocked_on_memory; },
-                      sm::description("Counts the number of times S3 client downloads were delayed due to insufficient memory availability"),
-                      {ep_label, sg_label}));
     defs.emplace_back(sm::make_counter("integrated_request_queue_length",
                           [this] { return http.integrated_requests_queued().integral(); },
                           sm::description("The number of queued HTTP requests integrated over time (measured in request-seconds)"),
