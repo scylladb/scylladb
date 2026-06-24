@@ -369,6 +369,16 @@ else:
     cmd = run_cassandra_cmd
     check_cql = run.check_cql
 
+# When we run Cassandra using Docker (--docker), nodetool is also available
+# there. Set the NODETOOL environment variable that nodetool.py uses to find
+# the nodetool tool - so the user does not need to supply one. We run nodetool
+# via a short-lived container from the same image, connecting to Cassandra
+# over the host network. This is a slow way to run nodetool, but it is good
+# enough for running tests that only make a handful of nodetool calls, if any.
+if args.docker:
+    docker = shutil.which('docker')
+    os.environ['NODETOOL'] = f'{docker} run --rm --network host cassandra:{args.docker} nodetool'
+
 pid = run.run_with_temporary_dir(cmd)
 ip = run.pid_to_ip(pid)
 
