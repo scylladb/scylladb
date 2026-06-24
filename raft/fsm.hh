@@ -59,6 +59,9 @@ struct fsm_config {
     size_t max_log_size;
     // If set to true will enable prevoting stage during election
     bool enable_prevoting;
+    // Higher priority gives this replica a shorter election timeout range,
+    // making it more likely to become leader.
+    election_priority election_priority = regular_election_priority;
 };
 
 class fsm;

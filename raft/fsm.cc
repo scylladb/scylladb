@@ -149,12 +149,13 @@ void fsm::update_current_term(term_t current_term)
 
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<> dist;
-    // Timeout within range of [1, conf size]
+    static thread_local std::uniform_int_distribution<logical_clock::rep> dist;
+
+    const auto conf_size = static_cast<logical_clock::rep>(_log.get_configuration().current.size());
+    const auto priority_timeout_range = std::max(ELECTION_TIMEOUT.count(), conf_size);
+    const auto upper_bound = election_timeout_max_random_offset(priority_timeout_range, _config.election_priority);
     _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re,
-            std::uniform_int_distribution<int>::param_type{1,
-                    std::max((size_t) ELECTION_TIMEOUT.count(),
-                            _log.get_configuration().current.size())})};
+            std::uniform_int_distribution<logical_clock::rep>::param_type{1, upper_bound})};
 }
 
 void fsm::become_leader() {

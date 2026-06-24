@@ -63,6 +63,9 @@ public:
         // A callback to invoke if one of internal server
         // background activities has stopped because of an error.
         std::function<void(std::exception_ptr e)> on_background_error;
+        // Higher priority gives this replica a shorter election timeout range,
+        // making it more likely to become leader.
+        election_priority election_priority = regular_election_priority;
     };
 
     virtual ~server() {}

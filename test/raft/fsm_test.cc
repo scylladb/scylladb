@@ -2398,3 +2398,49 @@ BOOST_AUTO_TEST_CASE(test_state_change_notifications) {
     BOOST_CHECK(output.state_changed);
     BOOST_CHECK(fsm.is_leader());
 }
+
+BOOST_AUTO_TEST_CASE(test_election_priority_timeout) {
+    const auto timeout_range = raft::ELECTION_TIMEOUT.count();
+    BOOST_CHECK_EQUAL(raft::election_timeout_max_random_offset(timeout_range, raft::high_election_priority), (timeout_range + 4) / 5);
+    BOOST_CHECK_EQUAL(raft::election_timeout_max_random_offset(timeout_range, raft::regular_election_priority), timeout_range);
+    BOOST_CHECK_EQUAL(raft::election_timeout_max_random_offset(timeout_range, raft::low_election_priority), (9 * timeout_range + 4) / 5);
+
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    auto A = create_follower(A_id, raft::log(log), raft::high_election_priority, fd);
+    auto B = create_follower(B_id, raft::log(log), raft::regular_election_priority, fd);
+    auto C = create_follower(C_id, raft::log(log), raft::low_election_priority, fd);
+
+    // After ELECTION_TIMEOUT ticks, nobody should be a candidate yet:
+    // the minimum possible timeout for any node is ELECTION_TIMEOUT + 1.
+    for (int i = 0; i < raft::ELECTION_TIMEOUT.count(); i++) {
+        A.tick();
+        B.tick();
+        C.tick();
+    }
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK(B.is_follower());
+    BOOST_CHECK(C.is_follower());
+
+    // Timeout ranges overlap, so priority is a bias rather than strict ordering.
+    // Check that every node times out by its priority-specific upper bound.
+    for (int i = 0; i < raft::election_timeout_max_random_offset(timeout_range, raft::high_election_priority); i++) {
+        A.tick();
+    }
+    BOOST_CHECK(A.is_candidate());
+
+    for (int i = 0; i < raft::election_timeout_max_random_offset(timeout_range, raft::regular_election_priority); i++) {
+        B.tick();
+    }
+    BOOST_CHECK(B.is_candidate());
+
+    for (int i = 0; i < raft::election_timeout_max_random_offset(timeout_range, raft::low_election_priority); i++) {
+        C.tick();
+    }
+    BOOST_CHECK(C.is_candidate());
+
+}
