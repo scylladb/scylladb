@@ -27,6 +27,7 @@
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include <bit>
 #include <iterator>
 #include <ranges>
 #include <utility>
@@ -2199,15 +2200,34 @@ public:
         bool pow2_count; // Whether tablet count for the table should be a power of two.
         bool tablet_merges_allowed; // Whether merges are allowed for the table.
 
+        // Tablet count used only when accounting for the _tablets_per_shard_goal.
+        // For converging tables this is the steady-state target the table is heading
+        // to, not its current (pre-split) count nor the active merge round target.
+        // For all other tables it equals target_tablet_count.
+        size_t target_tablet_count_for_scaling;
+
         // Final tablet count.
         // It's target_tablet_count aligned to power of 2 if pow2_count == true.
         size_t target_tablet_count_aligned;
 
         resize_decision::way_type resize_decision; // Decision which should be emitted to achieve target_tablet_count_aligned.
+
+        bool converging_to_pow2() const {
+            auto* m = std::get_if<locator::resize_decision::merge>(&resize_decision);
+            return m && !m->selected_left_tablets.empty();
+        }
     };
 
     struct sizing_plan {
         std::unordered_map<table_id, table_sizing> tables;
+    };
+
+    struct new_table_info {
+        schema_ptr schema;
+        const tablet_aware_replication_strategy* rs;
+        // Externally-known data size, if available.
+        // When set, used instead of load_stats_for_table().
+        std::optional<uint64_t> size_in_bytes;
     };
 
     struct tablet_count_and_reason {
@@ -2332,7 +2352,7 @@ public:
         };
     }
 
-    future<sizing_plan> make_sizing_plan(schema_ptr new_table = nullptr, const tablet_aware_replication_strategy* new_rs = nullptr) {
+    future<sizing_plan> make_sizing_plan(std::vector<new_table_info> new_tables = {}) {
         std::unordered_map<table_id, const tablet_aware_replication_strategy*> rs_by_table;
         sizing_plan plan;
 
@@ -2347,25 +2367,36 @@ public:
             }
         });
 
-        auto process_table = [&] (table_id table, const locator::table_group_set& tables, schema_ptr s, db::tablet_options tablet_options, const tablet_aware_replication_strategy* rs, size_t tablet_count) {
-            table_sizing& table_plan = plan.tables[table];
-            table_plan.current_tablet_count = tablet_count;
-            table_plan.pow2_count = tablet_options.pow2_count.value_or(
-                    _db.features().arbitrary_tablet_boundaries ? db::tablet_options::default_pow2_count : true);
-            table_plan.tablet_merges_allowed = !s->tablet_merges_forbidden();
-            if (!table_plan.tablet_merges_allowed) {
-                // Block merge decisions for Alternator tablet tables whose
-                // stream configuration forbids merges. Tablet merges produce
-                // 2 parents per child which is incompatible with the DynamoDB
-                // Streams API. If a merge is already in progress on the tmap,
-                // suppressing new_resize_decision here causes the existing
-                // revocation logic in tables_being_resized to cancel the merge.
-                lblogger.debug("Table {} ({}.{}): suppressing new merge decision because tablet merges are forbidden",
-                            table, s->ks_name(), s->cf_name());
+        auto get_total_size = [&] (const locator::table_group_set& tables) -> std::optional<size_t> {
+            size_t total_size = 0;
+            for (auto t : tables) {
+                const auto* table_stats = load_stats_for_table(t);
+                if (!table_stats) {
+                    return std::nullopt;
+                }
+                total_size += table_stats->size_in_bytes;
             }
+            return total_size;
+        };
 
-            rs_by_table[table] = rs;
+        struct sizing_result {
+            tablet_count_and_reason target;
+            std::optional<uint64_t> avg_tablet_size;
+        };
 
+        // Computes the target tablet count for a table from its sizing inputs.
+        //
+        // This is the core sizing logic shared by process_table() and the
+        // _tablets_per_shard_goal accounting for converging tables. It is a pure
+        // computation: it does not write into the plan and does not read the
+        // table's live resize_decision from the tmap. Instead, current_tablet_count
+        // and cur_decision are passed in explicitly, so callers can ask "what would
+        // the target be for this count and decision", e.g. a converging table's
+        // steady-state target (target_pow2 with a none decision).
+        auto compute_target_tablet_count = [&] (table_id table, const locator::table_group_set& tables, const schema_ptr& s,
+                const db::tablet_options& tablet_options, const tablet_aware_replication_strategy* rs,
+                size_t tablet_count, const locator::resize_decision& cur_decision,
+                std::optional<uint64_t> expected_size_opt) -> sizing_result {
             // for a group of co-located tablets of size g with average tablet size t, the migration unit
             // size is g*t. in order to keep the migration unit size reasonable, we set a lower target tablet size
             // as the group size increases.
@@ -2399,24 +2430,18 @@ public:
                 maybe_apply(tablet_count_from_min_per_shard_tablet_count(*s, shards_per_dc, shards_per_rack, *rs, min_per_shard_tablet_count));
             }
 
-            auto total_size_opt = std::invoke([&] -> std::optional<size_t> {
-                size_t total_size = 0;
-                for (auto table : tables) {
-                    const auto* table_stats = load_stats_for_table(table);
-                    if (!table_stats) {
-                        return std::nullopt;
-                    }
-                    total_size += table_stats->size_in_bytes;
-                }
-                return total_size;
-            });
+            auto total_size_opt = get_total_size(tables);
+            sizing_result result;
 
-            if (total_size_opt) {
+            if (expected_size_opt) {
+                auto total_size = *expected_size_opt;
+                auto tablet_count_from_size = total_size / target_tablet_size;
+                maybe_apply({tablet_count_from_size, format("new table with size={}", total_size)});
+            } else if (total_size_opt) {
                 auto total_size = *total_size_opt;
 
-                auto cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
-                auto avg_tablet_size = total_size / std::max<size_t>(table_plan.current_tablet_count * tables.size(), 1);
-                auto tablet_count_from_size = table_plan.current_tablet_count;
+                auto avg_tablet_size = total_size / std::max<size_t>(tablet_count * tables.size(), 1);
+                auto tablet_count_from_size = tablet_count;
 
                 // Split based on avg_tablet_size, or if the current resize_decision is split, apply hysteresis,
                 // so it would get cancelled only when crossing back the half-way point.
@@ -2433,14 +2458,14 @@ public:
                     }
                 }
 
-                table_plan.avg_tablet_size = avg_tablet_size;
+                result.avg_tablet_size = avg_tablet_size;
                 maybe_apply({tablet_count_from_size, format("avg_tablet_size={}", avg_tablet_size)});
             } else {
                 // When we don't have tablet size info, allow tablet count to increase but not to decrease.
                 // Increasing will always bring us closer to the true target count, since tablet_count_from_size
                 // can only increase the count above it, but decreasing may go against the true target count
                 // if tablet_count_from_size would demand more tablets.
-                maybe_apply({table_plan.current_tablet_count, "current count"});
+                maybe_apply({tablet_count, "current count"});
             }
 
             // Apply max_tablet_count cap after all other factors have been considered.
@@ -2457,11 +2482,101 @@ public:
                 target_tablet_count = {size, "force_tablet_count_decrease"};
             }
 
-            table_plan.target_tablet_count = target_tablet_count.tablet_count;
-            table_plan.target_tablet_count_reason = target_tablet_count.reason;
+            result.target = target_tablet_count;
+            return result;
+        };
+
+        auto process_table = [&] (table_id table, const locator::table_group_set& tables, schema_ptr s, db::tablet_options tablet_options, const tablet_aware_replication_strategy* rs, size_t tablet_count, std::optional<uint64_t> expected_size_opt = std::nullopt) {
+            table_sizing& table_plan = plan.tables[table];
+            table_plan.current_tablet_count = tablet_count;
+            table_plan.pow2_count = tablet_options.pow2_count.value_or(
+                    _db.features().arbitrary_tablet_boundaries ? db::tablet_options::default_pow2_count : true);
+            table_plan.tablet_merges_allowed = !s->tablet_merges_forbidden();
+            if (!table_plan.tablet_merges_allowed) {
+                // Block merge decisions for Alternator tablet tables whose
+                // stream configuration forbids merges. Tablet merges produce
+                // 2 parents per child which is incompatible with the DynamoDB
+                // Streams API. If a merge is already in progress on the tmap,
+                // suppressing new_resize_decision here causes the existing
+                // revocation logic in tables_being_resized to cancel the merge.
+                lblogger.debug("Table {} ({}.{}): suppressing new merge decision because tablet merges are forbidden",
+                            table, s->ks_name(), s->cf_name());
+            }
+
+            rs_by_table[table] = rs;
+
+            locator::resize_decision cur_decision;
+            if (_tm->tablets().has_tablet_map(table)) {
+                cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
+            }
+
+            auto [target_tablet_count_and_reason, avg_tablet_size] = compute_target_tablet_count(
+                    table, tables, s, tablet_options, rs, tablet_count, cur_decision, expected_size_opt);
+
+            table_plan.target_tablet_count = target_tablet_count_and_reason.tablet_count;
+            table_plan.target_tablet_count_reason = target_tablet_count_and_reason.reason;
+            table_plan.target_tablet_count_for_scaling = target_tablet_count_and_reason.tablet_count;
+            if (avg_tablet_size) {
+                table_plan.avg_tablet_size = avg_tablet_size;
+            }
 
             lblogger.debug("Table {} ({}.{}) target_tablet_count: {} ({}), pow2_count: {}, opt: {}", table, s->ks_name(), s->cf_name(),
                     table_plan.target_tablet_count, table_plan.target_tablet_count_reason, table_plan.pow2_count, tablet_options.to_map());
+        };
+
+        // Produce a sizing plan for tables converging to pow2 layout.
+        // Unlike process_table(), the merge decision is a selective merge based on token boundaries, not a full merge based on average tablet size.
+        // avg_tablet_size is computed only for urgency ordering in make_resize_plan().
+        auto process_converging_table = [&] (table_id table, const locator::table_group_set& tables, schema_ptr s, db::tablet_options tablet_options, const tablet_aware_replication_strategy* rs, const tablet_map& tmap) {
+            size_t target_pow2 = tmap.target_pow2_tablet_count();
+            if (!std::has_single_bit(target_pow2)) {
+                lblogger.error("Table {} ({}.{}) has target_pow2_tablet_count={} which is not a power of two; skipping pow2 convergence",
+                        table, s->ks_name(), s->cf_name(), target_pow2);
+                return;
+            }
+            if (target_pow2 >= tmap.tablet_count()) {
+                lblogger.error("Table {} ({}.{}) has target_pow2_tablet_count={} which is not less than the current tablet count={}; skipping pow2 convergence",
+                        table, s->ks_name(), s->cf_name(), target_pow2, tmap.tablet_count());
+                return;
+            }
+            if (s->tablet_merges_forbidden()) {
+                lblogger.debug("Table {} ({}.{}): suppressing pow2 convergence merge decision because tablet merges are forbidden",
+                        table, s->ks_name(), s->cf_name());
+                return;
+            }
+
+            table_sizing& table_plan = plan.tables[table];
+            table_plan.current_tablet_count = tmap.tablet_count();
+            table_plan.pow2_count = true;
+
+            rs_by_table[table] = rs;
+
+            auto total_size_opt = get_total_size(tables);
+            if (total_size_opt) {
+                table_plan.avg_tablet_size = *total_size_opt / std::max<size_t>(tmap.tablet_count() * tables.size(), 1);
+            }
+
+            auto selected = select_tablets_for_pow2_merge(tmap);
+            table_plan.target_tablet_count = tmap.tablet_count() - selected.size();
+            table_plan.target_tablet_count_reason = "pow2_convergence";
+            table_plan.target_tablet_count_aligned = table_plan.target_tablet_count;
+            if (!selected.empty()) {
+                table_plan.resize_decision = resize_decision::merge{.selected_left_tablets = std::move(selected)};
+            }
+
+            // For the _tablets_per_shard_goal accounting, count the converging table
+            // with the steady-state pow2 target it is heading to, not its inflated
+            // current tablet count nor the active merge round target.
+            auto result = compute_target_tablet_count(
+                    table, tables, s, tablet_options, rs, target_pow2, locator::resize_decision{}, std::nullopt);
+            table_plan.target_tablet_count_for_scaling = result.target.tablet_count;
+
+            lblogger.debug("Table {} ({}.{}) current_tablet_count: {}, target_tablet_count: {} ({}), target_tablet_count_for_scaling: {}",
+                    table, s->ks_name(), s->cf_name(),
+                    table_plan.current_tablet_count,
+                    table_plan.target_tablet_count,
+                    table_plan.target_tablet_count_reason,
+                    table_plan.target_tablet_count_for_scaling);
         };
 
         for (const auto& [table, tables] : _tm->tablets().all_table_groups()) {
@@ -2473,18 +2588,23 @@ public:
             if (s == nullptr || rs == nullptr) {
                 continue;
             }
+
             auto tablet_options = combine_tablet_options(
                     tables | std::views::transform([&] (table_id table) { return _db.get_tables_metadata().get_table_if_exists(table); })
                            | std::views::filter([] (auto t) { return t != nullptr; })
                            | std::views::transform([] (auto t) { return t->schema()->tablet_options(); })
             );
 
-            process_table(table, tables, s, tablet_options, rs, tmap.tablet_count());
+            if (tmap.is_converging_to_pow2()) {
+                process_converging_table(table, tables, s, tablet_options, rs, tmap);
+            } else {
+                process_table(table, tables, s, tablet_options, rs, tmap.tablet_count());
+            }
             co_await coroutine::maybe_yield();
         }
 
-        if (new_table) {
-            process_table(new_table->id(), {new_table->id()}, new_table, new_table->tablet_options(), new_rs, 0);
+        for (const auto& nt : new_tables) {
+            process_table(nt.schema->id(), {nt.schema->id()}, nt.schema, nt.schema->tablet_options(), nt.rs, 0, nt.size_in_bytes);
         }
 
         // Below section ensures we respect the _tablets_per_shard_goal.
@@ -2543,7 +2663,7 @@ public:
                 cur_avg_tablets_per_shard += cur_tablets_per_shard;
                 lblogger.debug("cur_avg_tablets_per_shard [dc={}, rack={}, table={}]: {:.3f}", rack.dc, rack.rack, table, cur_tablets_per_shard);
 
-                auto new_tablets_per_shard = get_avg_tablets_per_shard(table_plan.target_tablet_count);
+                auto new_tablets_per_shard = get_avg_tablets_per_shard(table_plan.target_tablet_count_for_scaling);
                 new_avg_tablets_per_shard += new_tablets_per_shard;
                 lblogger.debug("new_avg_tablets_per_shard [dc={}, rack={}, table={}]: {:.3f}", rack.dc, rack.rack, table, new_tablets_per_shard);
             }
@@ -2562,6 +2682,11 @@ public:
                 auto scale = scale_info{_tablets_per_shard_goal / new_avg_tablets_per_shard, rack};
 
                 for (auto&& [table, table_plan]: plan.tables) {
+                    // Tables converging to powers of two have a fixed merge trajectory;
+                    // scaling them would interfere with it.
+                    if (table_plan.converging_to_pow2()) {
+                        continue;
+                    }
                     auto* rs = rs_by_table[table];
                     auto rf = rs->get_replication_factor_data(rack.dc);
 
@@ -2594,6 +2719,12 @@ public:
         //   table_plan.resize_decision
 
         for (auto&& [table, table_plan] : plan.tables) {
+            // Converging tables already have their resize decision and aligned
+            // tablet count set by process_converging_table().
+            if (table_plan.converging_to_pow2()) {
+                continue;
+            }
+
             if (!table_plan.pow2_count) {
                 table_plan.target_tablet_count_aligned = table_plan.target_tablet_count;
             } else {
@@ -2626,6 +2757,36 @@ public:
         }
 
         co_return std::move(plan);
+    }
+
+    // Selects pairs of adjacent tablets that can be merged without crossing
+    // a target pow2 boundary. Returns a vector of left tablet IDs.
+    static std::vector<tablet_id> select_tablets_for_pow2_merge(const tablet_map& tmap) {
+        size_t tablet_count = tmap.tablet_count();
+        size_t target_tablet_count = tmap.target_pow2_tablet_count();
+        std::vector<tablet_id> selected;
+
+        if (target_tablet_count == 1) {
+            for (size_t i = 0; i + 1 < tablet_count; i += 2) {
+                selected.push_back(tablet_id(i));
+            }
+            return selected;
+        }
+
+        // Number of bits to shift an unbiased token to get its pow2 segment index.
+        // target_tablet_count is a power of two, so each segment spans 2^shift tokens.
+        unsigned shift = 64 - log2ceil(target_tablet_count);
+
+        for (size_t i = 0; i + 1 < tablet_count; ++i) {
+            uint64_t left_start = tmap.get_first_token(tablet_id(i)).unbias();
+            uint64_t right_end = tmap.get_last_token(tablet_id(i + 1)).unbias();
+            // Same segment if they don't cross a pow2 boundary
+            if ((left_start >> shift) == (right_end >> shift)) {
+                selected.push_back(tablet_id(i));
+                ++i; // skip right tablet (non-overlapping pairs)
+            }
+        }
+        return selected;
     }
 
     future<table_resize_plan> make_resize_plan(const migration_plan& plan) {
@@ -4561,11 +4722,44 @@ public:
     tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
         auto tm = _db.get_shared_token_metadata().get();
         auto lb = make_load_balancer(tm, nullptr, nullptr, nullptr, {});
-        auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
+        auto plan = lb.make_sizing_plan({{s.shared_from_this(), tablet_rs}}).get();
         auto& table_plan = plan.tables[s.id()];
         auto tablet_count = table_plan.target_tablet_count_aligned;
         auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
         return map;
+    }
+
+    // Computes per-table target pow2 counts for tables being migrated from
+    // vnodes to tablets.
+    future<target_pow2_per_table_map> compute_migration_target_pow2s(
+            const tablet_aware_replication_strategy* rs,
+            const size_per_table_map& size_per_table) {
+        target_pow2_per_table_map target_pow2s;
+        auto tm_ptr = _db.get_shared_token_metadata().get();
+        auto lb = make_load_balancer(tm_ptr, nullptr, nullptr, nullptr, {});
+
+        std::vector<load_balancer::new_table_info> new_tables;
+        for (const auto& [tid, size] : size_per_table) {
+            auto s = _db.find_column_family(tid).schema();
+            new_tables.push_back({s, rs, size});
+        }
+
+        auto plan = co_await lb.make_sizing_plan(std::move(new_tables));
+
+        auto is_pow2 = [] (size_t n) { return n > 0 && std::has_single_bit(n); };
+
+        for (const auto& [tid, size] : size_per_table) {
+            auto it = plan.tables.find(tid);
+            if (it != plan.tables.end()) {
+                auto target = it->second.target_tablet_count_aligned;
+                if (!is_pow2(target)) {
+                    throw std::runtime_error(format("Invalid target tablet count {} for table {}; must be a power of two", target, tid));
+                }
+                target_pow2s[tid] = target;
+            }
+        }
+
+        co_return target_pow2s;
     }
 
     // Allocate tablets for multiple new tables, which may be co-located with each other, or co-located with an existing base table.
@@ -4705,7 +4899,12 @@ private:
     future<tablet_map> merge_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(div_ceil(tablets.tablet_count(), 2), tablets.has_raft_info(), tablet_map::initialized_later());
+        auto& merge_plan = std::get<resize_decision::merge>(tablets.resize_decision().way);
+        size_t new_count = merge_plan.selected_left_tablets.empty()
+            ? div_ceil(tablets.tablet_count(), 2)
+            : tablets.tablet_count() - merge_plan.selected_left_tablets.size();
+
+        tablet_map new_tablets(new_count, tablets.has_raft_info(), tablet_map::initialized_later());
 
         std::optional<tablet_id> new_tid = new_tablets.first_tablet();
         co_await tablets.for_each_sibling_tablets([&] (tablet_desc left, std::optional<tablet_desc> right) {
@@ -4753,6 +4952,16 @@ private:
 
         lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",
                       table, tablets.tablet_count(), new_tablets.tablet_count());
+
+        if (tablets.is_converging_to_pow2()) {
+            auto target_pow2 = tablets.target_pow2_tablet_count();
+            new_tablets.set_target_pow2_tablet_count(target_pow2);
+            if (new_tablets.tablet_count() == target_pow2 && new_tablets.get_layout() == locator::tablet_layout::pow_of_2) {
+                lblogger.info("Table {} reached pow2 layout with {} tablets, clearing pow2 target", table, new_tablets.tablet_count());
+                new_tablets.set_target_pow2_tablet_count(0);
+            }
+        }
+
         co_return std::move(new_tablets);
     }
 public:
@@ -4808,6 +5017,12 @@ void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balan
 
 future<locator::tablet_map> tablet_allocator::resize_tablets(locator::token_metadata_ptr tm, table_id table) {
     return impl().resize_tablets(std::move(tm), table);
+}
+
+future<target_pow2_per_table_map> tablet_allocator::compute_migration_target_pow2s(
+        const locator::tablet_aware_replication_strategy* rs,
+        const size_per_table_map& size_per_table) {
+    return impl().compute_migration_target_pow2s(rs, size_per_table);
 }
 
 tablet_allocator_impl& tablet_allocator::impl() {

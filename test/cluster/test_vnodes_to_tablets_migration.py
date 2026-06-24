@@ -6,6 +6,7 @@
 import os
 import glob
 import json
+import time
 import pytest
 import asyncio
 import logging
@@ -62,18 +63,18 @@ def get_sstable_token_ranges(scylla_path: str, scylla_yaml: str, sstable_data_fi
     return ranges
 
 
-def sstable_range_within_vnode(first_token: int, last_token: int, vnode_boundaries: list[int]) -> bool:
-    """Check whether an SSTable's token range falls entirely within a single vnode range.
+def sstable_within_single_range(first_token: int, last_token: int, boundaries: list[int]) -> bool:
+    """Check whether an SSTable's token range falls entirely within a single range.
 
     Args:
         first_token: The first token in the SSTable.
         last_token: The last token in the SSTable.
-        vnode_boundaries: Sorted list of vnode token boundaries.
+        boundaries: Sorted list of token boundaries (e.g., vnode or tablet boundaries).
 
     Returns:
-        True if both first_token and last_token fall within the same vnode range.
+        True if both first_token and last_token fall within the same range.
     """
-    for token in vnode_boundaries:
+    for token in boundaries:
         if first_token < token <= last_token:
             return False
     return True
@@ -106,6 +107,93 @@ async def verify_data_integrity(cql, ks, table, num_keys, cl=ConsistencyLevel.QU
         assert False, f"Data mismatch: missing keys {missing}, extra keys {extra}, wrong values {wrong}"
 
 
+def compute_pow2_boundaries(target_pow2: int) -> list[int]:
+    """Compute pow2 tablet boundaries.
+
+    Mirrors the C++ dht::get_uniform_tokens() function:
+        for i in [1, count]: n = i * UINT64_MAX / count; bias(n)
+    where bias(n) converts from unsigned to signed by subtracting 2^63.
+    """
+    UINT64_MAX = (1 << 64) - 1
+    INT64_MIN = -(1 << 63)
+    return [(i * UINT64_MAX) // target_pow2 + INT64_MIN for i in range(1, target_pow2 + 1)]
+
+
+async def get_target_pow2_tablet_count(manager: ManagerClient, server: ServerInfo, ks: str, table_name: str) -> int:
+    """Read target_pow2_tablet_count from system.tablets for a given table."""
+    host = manager.get_cql().cluster.metadata.get_host(server.ip_addr)
+    await read_barrier(manager.api, server.ip_addr)
+    table_id = await manager.get_table_or_view_id(ks, table_name)
+    rows = await manager.get_cql().run_async(
+        f"SELECT DISTINCT target_pow2_tablet_count FROM system.tablets WHERE table_id = {table_id}",
+        host=host)
+    assert len(rows) > 0, f"No rows found in system.tablets for table {ks}.{table_name}"
+    return rows[0].target_pow2_tablet_count
+
+
+async def verify_tablet_map_boundaries(manager: ManagerClient, server: ServerInfo,
+                                       ks: str, table_name: str,
+                                       vnode_boundaries: list[int]) -> list:
+    """Verify the initial tablet map contains exactly the union of vnode boundaries, max token, and pow2 boundaries.
+
+    Returns the tablet_replicas list for further checks by the caller.
+    """
+    tablet_replicas = await get_all_tablet_replicas(manager, server, ks, table_name)
+    tablet_tokens = set(tr.last_token for tr in tablet_replicas)
+
+    vnode_set = set(vnode_boundaries)
+    missing_vnodes = vnode_set - tablet_tokens
+    assert not missing_vnodes, f"Vnode boundaries missing from tablet map: {sorted(missing_vnodes)}"
+
+    assert MAX_TOKEN in tablet_tokens, "MAX_TOKEN missing from tablet map"
+
+    target_pow2 = await get_target_pow2_tablet_count(manager, server, ks, table_name)
+    assert target_pow2 and target_pow2 & (target_pow2 - 1) == 0, \
+        f"target_pow2_tablet_count {target_pow2} is not a power of two"
+
+    pow2_set = set(compute_pow2_boundaries(target_pow2))
+    missing_pow2 = pow2_set - tablet_tokens
+    assert not missing_pow2, f"Pow2 boundaries missing from tablet map: {sorted(missing_pow2)}"
+
+    expected_all = vnode_set | pow2_set | {MAX_TOKEN}
+    extra = tablet_tokens - expected_all
+    assert not extra, f"Unexpected boundaries in tablet map: {sorted(extra)}"
+
+    return tablet_replicas
+
+
+async def verify_pow2_layout(manager: ManagerClient, server: ServerInfo,
+                             ks: str, table_name: str):
+    """Verify that the tablet map has an exact uniform pow2 layout."""
+    tablet_replicas = await get_all_tablet_replicas(manager, server, ks, table_name)
+    tablet_count = len(tablet_replicas)
+    assert tablet_count > 0 and tablet_count & (tablet_count - 1) == 0, \
+        f"Tablet count {tablet_count} is not a power of two"
+
+    tablet_tokens = sorted(tr.last_token for tr in tablet_replicas)
+    expected_tokens = compute_pow2_boundaries(tablet_count)
+
+    assert tablet_tokens == expected_tokens
+
+
+async def wait_for_pow2_convergence(manager: ManagerClient, server: ServerInfo,
+                                    ks: str, table_name: str, timeout: float = 120):
+    """Wait until pow2 convergence completes and verify the result.
+
+    Polls target_pow2_tablet_count in system.tablets until it is cleared,
+    indicating that the tablet map has converged to a power-of-two layout.
+    Once cleared, verifies that the resulting tablet map has a pow2 layout.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        target = await get_target_pow2_tablet_count(manager, server, ks, table_name)
+        if target is None or target == 0:
+            await verify_pow2_layout(manager, server, ks, table_name)
+            return
+        await asyncio.sleep(1)
+    assert False, f"Pow2 convergence for {ks}.{table_name} did not complete within {timeout}s"
+
+
 async def verify_migration_status(manager: ManagerClient, server: ServerInfo,
                                   ks: str, expected_status: str,
                                   expected_node_statuses: dict[str, tuple[str, str]],
@@ -120,7 +208,7 @@ async def verify_migration_status(manager: ManagerClient, server: ServerInfo,
         # Verify migration status via the tasks API
         tm = TaskManagerClient(manager.api)
         tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        ks_tasks = [t for t in tasks if t.keyspace == ks]
+        ks_tasks = [t for t in tasks if t.keyspace == ks and t.type == "vnodes_to_tablets_migration"]
 
         if expected_status == "migrating_to_tablets":
             assert len(ks_tasks) == 1, f"Expected 1 virtual task for keyspace '{ks}', got {len(ks_tasks)}"
@@ -201,7 +289,7 @@ async def test_migration(manager: ManagerClient):
         assert len(pre_migration_sstables) == num_shards * num_flushes
         pre_migration_ranges = get_sstable_token_ranges(scylla_path, scylla_yaml, pre_migration_sstables)
         cross_vnode_count = sum(1 for first, last in pre_migration_ranges
-                                if not sstable_range_within_vnode(first, last, vnode_boundaries))
+                                if not sstable_within_single_range(first, last, vnode_boundaries))
         logger.info(f"Pre-migration: {cross_vnode_count}/{len(pre_migration_ranges)} SSTables span multiple vnodes")
 
         logger.info("Verifying migration status before starting migration")
@@ -216,20 +304,8 @@ async def test_migration(manager: ManagerClient):
             expected_node_statuses={host_id: ('vnodes', 'vnodes')})
 
         logger.info("Verifying that the tablet map was created")
-        expected_tablet_tokens = vnode_boundaries if vnode_boundaries[-1] == MAX_TOKEN else vnode_boundaries + [MAX_TOKEN]
-        expected_tablet_count = len(expected_tablet_tokens)
-        tablet_count = await get_tablet_count(manager, server, ks, 'test')
-        assert tablet_count == expected_tablet_count, \
-            f"Expected {expected_tablet_count} tablet(s), got {tablet_count}"
-
-        tablet_replicas = await get_all_tablet_replicas(manager, server, ks, 'test')
-        assert len(tablet_replicas) == expected_tablet_count, \
-            f"Expected {expected_tablet_count} tablet replica entries, got {len(tablet_replicas)}"
-
-        logger.info("Verifying that tablet tokens match vnode tokens plus max token")
-        tablet_tokens = sorted([tr.last_token for tr in tablet_replicas])
-        assert tablet_tokens == expected_tablet_tokens, \
-            f"Tablet tokens {tablet_tokens} do not match expected {expected_tablet_tokens}"
+        tablet_replicas = await verify_tablet_map_boundaries(manager, server, ks, 'test', vnode_boundaries)
+        tablet_boundaries = sorted([tr.last_token for tr in tablet_replicas])
 
         logger.info("Verifying data integrity after building tablet map and before resharding")
         await verify_data_integrity(cql, ks, "test", num_keys)
@@ -257,14 +333,14 @@ async def test_migration(manager: ManagerClient):
         post_restart_ranges = get_sstable_token_ranges(scylla_path, scylla_yaml, post_restart_sstables)
         logger.info(f"Post-restart SSTable token ranges:")
         for i, (first, last) in enumerate(post_restart_ranges):
-            within = sstable_range_within_vnode(first, last, vnode_boundaries)
-            logger.info(f"  SSTable {i}: tokens [{first}, {last}], within single vnode: {within}")
+            within = sstable_within_single_range(first, last, tablet_boundaries)
+            logger.info(f"  SSTable {i}: tokens [{first}, {last}], within single tablet: {within}")
 
-        logger.info("Verifying that every post-restart SSTable falls within a single vnode range")
+        logger.info("Verifying that every post-restart SSTable falls within a single tablet range")
         for i, (first, last) in enumerate(post_restart_ranges):
-            assert sstable_range_within_vnode(first, last, vnode_boundaries), \
+            assert sstable_within_single_range(first, last, tablet_boundaries), \
                 f"Post-restart SSTable {i} with token range [{first}, {last}] " \
-                f"spans multiple vnode ranges (boundaries: {vnode_boundaries})"
+                f"spans multiple tablet ranges (boundaries: {tablet_boundaries})"
 
         logger.info("Verifying data integrity after restart")
         await verify_data_integrity(cql, ks, "test", num_keys)
@@ -283,6 +359,9 @@ async def test_migration(manager: ManagerClient):
 
         logger.info("Verifying migration status after finalization")
         await verify_migration_status(manager, server, ks, expected_status='tablets', expected_node_statuses={})
+
+        logger.info("Waiting for pow2 convergence to complete")
+        await wait_for_pow2_convergence(manager, server, ks, 'test')
 
 
 async def test_migration_rollback(manager: ManagerClient):
@@ -338,10 +417,7 @@ async def test_migration_rollback(manager: ManagerClient):
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
 
         logger.info("Verifying that the tablet map was created")
-        expected_tablet_count = len(vnode_boundaries) if vnode_boundaries[-1] == MAX_TOKEN else len(vnode_boundaries) + 1
-        tablet_count = await get_tablet_count(manager, server, ks, 'test')
-        assert tablet_count == expected_tablet_count, \
-            f"Expected {expected_tablet_count} tablet(s), got {tablet_count}"
+        await verify_tablet_map_boundaries(manager, server, ks, 'test', vnode_boundaries)
 
         logger.info("Marking node for tablets migration")
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
@@ -420,7 +496,7 @@ async def test_migration_multinode(manager: ManagerClient):
     """
     num_nodes = 2
     num_shards = 3
-    tokens_per_node = 64
+    tokens_per_node = 16
     num_keys = 1000
 
     logger.info(f"Starting {num_nodes} nodes with {num_shards} shards each, {tokens_per_node} random tokens per node")
@@ -461,15 +537,7 @@ async def test_migration_multinode(manager: ManagerClient):
             expected_node_statuses={host_id: ('vnodes', 'vnodes') for host_id in host_ids})
 
         logger.info("Verifying tablet map")
-        expected_tablet_tokens = all_vnode_tokens if all_vnode_tokens[-1] == MAX_TOKEN else all_vnode_tokens + [MAX_TOKEN]
-        expected_tablet_count = len(expected_tablet_tokens)
-        tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
-        assert len(tablet_replicas) == expected_tablet_count, \
-            f"Expected {expected_tablet_count} tablets, got {len(tablet_replicas)}"
-
-        tablet_tokens = sorted([tr.last_token for tr in tablet_replicas])
-        assert tablet_tokens == expected_tablet_tokens, \
-            f"Tablet tokens do not match expected tokens"
+        tablet_replicas = await verify_tablet_map_boundaries(manager, servers[0], ks, 'test', all_vnode_tokens)
 
         for tr in tablet_replicas:
             replica_hosts = set(r[0] for r in tr.replicas)
@@ -559,6 +627,9 @@ async def test_migration_multinode(manager: ManagerClient):
 
         logger.info("Final data integrity check")
         await verify_data_integrity(cql, ks, "test", expected_keys)
+
+        logger.info("Waiting for pow2 convergence to complete")
+        await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
 
 
 async def setup_single_node(manager: ManagerClient):
@@ -665,7 +736,7 @@ async def test_migration_task_not_abortable(manager: ManagerClient):
 
         tm = TaskManagerClient(manager.api)
         tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        ks_tasks = [t for t in tasks if t.keyspace == ks]
+        ks_tasks = [t for t in tasks if t.keyspace == ks and t.type == "vnodes_to_tablets_migration"]
         assert len(ks_tasks) == 1, f"Expected 1 migration task for keyspace '{ks}', got {len(ks_tasks)}"
 
         task = ks_tasks[0]
@@ -700,9 +771,10 @@ async def test_migration_wait_task(manager: ManagerClient):
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
 
         tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        assert len(tasks) == 1
-        assert tasks[0].keyspace == ks
-        task_id = tasks[0].task_id
+        migration_tasks = [t for t in tasks if t.type == "vnodes_to_tablets_migration"]
+        assert len(migration_tasks) == 1
+        assert migration_tasks[0].keyspace == ks
+        task_id = migration_tasks[0].task_id
 
         log = await manager.server_open_log(server.server_id)
         mark = await log.mark()
@@ -726,9 +798,10 @@ async def test_migration_wait_task(manager: ManagerClient):
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
 
         tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        assert len(tasks) == 1
-        assert tasks[0].keyspace == ks
-        task_id = tasks[0].task_id
+        migration_tasks = [t for t in tasks if t.type == "vnodes_to_tablets_migration"]
+        assert len(migration_tasks) == 1
+        assert migration_tasks[0].keyspace == ks
+        task_id = migration_tasks[0].task_id
 
         logger.info("Marking the node for tablets migration and restarting")
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
@@ -820,3 +893,313 @@ async def test_migration_multiple_keyspaces(manager: ManagerClient):
             for row in rows:
                 assert row.intended_storage_mode is None, \
                     f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
+
+
+@pytest.mark.asyncio
+async def test_migration_multiple_tables(manager: ManagerClient):
+    """Verify vnodes-to-tablets migration on keyspace with multiple tables.
+
+    The test verifies that all tables get correct tablet maps, that resharding
+    and finalization work for all tables, and that pow2 convergence completes
+    for every table.
+    """
+    num_shards = 3
+    tokens_per_node = 16
+
+    logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
+    cfg = {'num_tokens': tokens_per_node}
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+    logger.info(f"Vnode boundaries ({len(vnode_boundaries)} tokens): {vnode_boundaries}")
+
+    logger.info("Creating keyspace with two vnode tables")
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying tablet map boundaries for both tables")
+        await verify_tablet_map_boundaries(manager, server, ks, 't1', vnode_boundaries)
+        await verify_tablet_map_boundaries(manager, server, ks, 't2', vnode_boundaries)
+
+        logger.info("Marking node for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        logger.info("Restarting the node to trigger resharding")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Finalizing tablets migration")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying that the keyspace schema has tablets enabled")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "keyspace is still using vnodes after migration finalization"
+
+        logger.info("Waiting for pow2 convergence on both tables")
+        await wait_for_pow2_convergence(manager, server, ks, 't1')
+        await wait_for_pow2_convergence(manager, server, ks, 't2')
+
+
+@pytest.mark.asyncio
+async def test_tablet_status_in_migration_api(manager: ManagerClient):
+    """"Verify the ?include=tablet_status query parameter in the migration API.
+
+    When set, the migration API response is extended with a 'tablets' field that
+    contains per-table pow2 convergence status. Intended for use after migration
+    finalization to track convergence progress via the same API.
+
+    Steps:
+    1. Before migration: no-op; no 'tablets' field in response.
+    2. During migration: no-op; no 'tablets' field in response.
+    3. After finalization: 'tablets' field is present and its fields have correct values.
+    4. Without query param: no 'tablets' field in response.
+    5. After pow2 convergence: convergence is reported as completed for all tables.
+    """
+    num_shards = 3
+    tokens_per_node = 16
+
+    logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
+    cfg = {'num_tokens': tokens_per_node}
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    logger.info("Creating keyspace with two empty vnode-based tables")
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, c int)")
+
+        logger.info("Before migration - verify no tablet status in response")
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
+        assert status['status'] == 'vnodes'
+        assert 'tablets' not in status, "tablets field should not be present before migration"
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Marking node for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        logger.info("Restarting node to trigger resharding")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("During migration - verify no tablet status in response")
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
+        assert status['status'] == 'migrating_to_tablets'
+        assert 'tablets' not in status, "tablets field should not be present during migration"
+
+        # Disable tablet balancing to prevent pow2 convergence from running
+        # before we can check the post-finalization status.
+        await manager.api.disable_tablet_balancing(server.ip_addr)
+
+        logger.info("Finalizing migration")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("After finalization - verify tablet status is present with in_progress convergence")
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
+        assert status['status'] == 'tablets'
+        assert 'tablets' in status, "tablets field should be present after finalization"
+
+        pow2 = status['tablets']['pow2_convergence']
+        assert pow2['status'] == 'in_progress'
+        assert pow2['tables_total'] == 2
+        assert pow2['tables_converging'] == 2
+        assert len(pow2['tables']) == 2
+
+        table_names = {t['table'] for t in pow2['tables']}
+        assert table_names == {'t1', 't2'}, f"Expected tables t1 and t2, got {table_names}"
+
+        for t in pow2['tables']:
+            assert 'converging' in t
+            assert 'current_tablet_count' in t
+            assert 'target_pow2_tablet_count' in t
+            assert t['converging'] is True
+
+            # Verify current/target tablet counts match system.tablets
+            table_name = t['table']
+            expected_count = await get_tablet_count(manager, server, ks, table_name)
+            expected_target = await get_target_pow2_tablet_count(manager, server, ks, table_name)
+            assert t['current_tablet_count'] == expected_count, \
+                f"Table {table_name}: API reports {t['current_tablet_count']} tablets, system.tablets has {expected_count}"
+            assert t['target_pow2_tablet_count'] == expected_target, \
+                f"Table {table_name}: API reports target {t['target_pow2_tablet_count']}, system.tablets has {expected_target}"
+
+        logger.info("Without query param - verify no tablet status")
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=False)
+        assert 'tablets' not in status, "tablets field should not be present without query param"
+
+        # Re-enable tablet balancing to allow pow2 convergence to proceed.
+        await manager.api.enable_tablet_balancing(server.ip_addr)
+
+        logger.info("After pow2 convergence - verify all tables have converged")
+        await wait_for_pow2_convergence(manager, server, ks, 't1')
+        await wait_for_pow2_convergence(manager, server, ks, 't2')
+
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
+        pow2 = status['tablets']['pow2_convergence']
+        assert pow2['status'] == 'complete'
+        assert pow2['tables_converging'] == 0
+        assert pow2['tables_total'] == 2
+
+        for t in pow2['tables']:
+            assert t['converging'] is False
+            assert t['target_pow2_tablet_count'] == 0
+            tablet_count = t['current_tablet_count']
+            assert tablet_count > 0 and (tablet_count & (tablet_count - 1)) == 0, \
+                f"Tablet count {tablet_count} for table {t['table']} is not a power of two"
+
+
+@pytest.mark.asyncio
+async def test_pow2_convergence_virtual_task(manager: ManagerClient):
+    """Verify that pow2 convergence is tracked via a virtual task.
+
+    Coverage:
+    - Task visibility: keyspace-level and table-level tasks appear during convergence.
+    - Progress: keyspace task reports tables converged/total; table tasks report percent complete.
+    - Parent-child: table tasks reference keyspace task as parent; keyspace task lists
+      table tasks as children.
+    - Not abortable: abort attempt is rejected.
+    - Wait API: wait on keyspace-level task returns "done" when convergence finishes.
+    - Lifetime: tasks disappear after convergence completes.
+
+    Edge cases not covered (but could be added in the future):
+    - Drop converging keyspace during task wait.
+    - Drop converging table during task wait.
+    - Drop all converging tables during task wait.
+    """
+    num_shards = 3
+    tokens_per_node = 16
+
+    logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
+    cfg = {'num_tokens': tokens_per_node}
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    server = servers[0]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    logger.info("Creating keyspace with two empty vnode-based tables")
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, c int)")
+
+        # Disable tablet balancing so convergence doesn't start after finalization.
+        await manager.api.disable_tablet_balancing(server.ip_addr)
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Marking node for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        logger.info("Restarting node to trigger resharding")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Finalizing migration")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        # At this point: migration is done, tables have target_pow2 != 0,
+        # but load balancing is disabled so no merges will run.
+
+        tm = TaskManagerClient(manager.api)
+
+        logger.info("Verifying pow2 convergence tasks appear in task manager")
+        tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
+
+        # Filter pow2_convergence tasks.
+        convergence_tasks = [t for t in tasks if t.type == "pow2_convergence"]
+        ks_tasks = [t for t in convergence_tasks if t.scope == "keyspace" and t.keyspace == ks]
+        table_tasks = [t for t in convergence_tasks if t.scope == "table" and t.keyspace == ks]
+
+        assert len(ks_tasks) == 1, f"Expected 1 keyspace-level convergence task, got {len(ks_tasks)}"
+        assert len(table_tasks) == 2, f"Expected 2 table-level convergence tasks, got {len(table_tasks)}"
+
+        ks_task = ks_tasks[0]
+        assert ks_task.kind == "cluster"
+        assert ks_task.state == "running"
+
+        table_names = {t.table for t in table_tasks}
+        assert table_names == {'t1', 't2'}, f"Expected tables t1 and t2, got {table_names}"
+        for t in table_tasks:
+            assert t.kind == "cluster"
+            assert t.state == "running"
+
+        logger.info("Verifying keyspace-level task status (progress and children)")
+        ks_status = await tm.get_task_status(server.ip_addr, ks_task.task_id)
+        assert ks_status.kind == "cluster"
+        assert ks_status.state == "running"
+        assert ks_status.is_abortable is False
+        assert ks_status.progress_units == "tables"
+        assert ks_status.progress_total == 2, f"Expected total=2, got {ks_status.progress_total}"
+        assert ks_status.progress_completed == 0, f"Expected completed=0, got {ks_status.progress_completed}"
+
+        # Children should be the two table-level task IDs.
+        children_task_ids = {c['task_id'] for c in ks_status.children_ids}
+        expected_children = {t.task_id for t in table_tasks}
+        assert children_task_ids == expected_children, \
+            f"Keyspace task children mismatch: got {children_task_ids}, expected {expected_children}"
+
+        logger.info("Verifying table-level task status (progress, entity, parent)")
+        for t_task in table_tasks:
+            t_status = await tm.get_task_status(server.ip_addr, t_task.task_id)
+            assert t_status.kind == "cluster"
+            assert t_status.state == "running"
+            assert t_status.is_abortable is False
+            assert t_status.progress_units == "percent"
+            assert t_status.progress_total == 100
+            # Validate progress against the authoritative values in system.tablets.
+            current_tablet_count = await get_tablet_count(manager, server, ks, t_task.table)
+            target_pow2_tablet_count = await get_target_pow2_tablet_count(manager, server, ks, t_task.table)
+            assert current_tablet_count > 0, f"Table {t_task.table}: expected current_tablet_count > 0, got {current_tablet_count}"
+            expected_progress = int((target_pow2_tablet_count * 100.0 / current_tablet_count) + 0.5)
+            assert t_status.progress_completed == expected_progress, \
+                f"Table {t_task.table}: expected progress {expected_progress} (target={target_pow2_tablet_count}, current={current_tablet_count}), got {t_status.progress_completed}"
+            expected_entity = f"{current_tablet_count} tablets (target: {target_pow2_tablet_count})"
+            assert t_status.entity == expected_entity, \
+                f"Table {t_task.table}: expected entity '{expected_entity}', got '{t_status.entity}'"
+            # Parent should be the keyspace-level task.
+            assert t_status.parent_id == ks_task.task_id, \
+                f"Table {t_task.table}: expected parent_id={ks_task.task_id}, got {t_status.parent_id}"
+
+        logger.info("Verifying convergence tasks are not abortable")
+        with pytest.raises(HTTPError):
+            await tm.abort_task(server.ip_addr, ks_task.task_id)
+
+        with pytest.raises(HTTPError):
+            await tm.abort_task(server.ip_addr, table_tasks[0].task_id)
+
+        logger.info("Starting wait on keyspace-level convergence task")
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        wait_task = asyncio.create_task(tm.wait_for_task(server.ip_addr, ks_task.task_id))
+
+        await log.wait_for('pow2_convergence_virtual_task: waiting for pow2 convergence to finish', from_mark=mark)
+
+        logger.info("Enabling tablet load balancing to let convergence proceed")
+        await manager.api.enable_tablet_balancing(server.ip_addr)
+
+        logger.info("Waiting for convergence to complete via task manager")
+        wait_status = await asyncio.wait_for(wait_task, timeout=120)
+        assert wait_status.state == "done", f"Expected 'done' state, got '{wait_status.state}'"
+        assert wait_status.progress_completed == wait_status.progress_total, \
+            f"Expected progress_completed == progress_total, got {wait_status.progress_completed}/{wait_status.progress_total}"
+
+        logger.info("Verifying convergence tasks have disappeared")
+        tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
+        convergence_tasks = [t for t in tasks if t.type == "pow2_convergence"]
+        assert len(convergence_tasks) == 0, \
+            f"Expected no convergence tasks after completion, got {len(convergence_tasks)}"

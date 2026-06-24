@@ -451,6 +451,12 @@ struct resize_decision {
         // In case the current tablet count is odd, this is the id of the tablet
         // which will not be merged.
         std::optional<tablet_id> isolated_tablet;
+        // When non-empty, only these specific adjacent pairs are merged:
+        // each entry is the left tablet of a pair (left, left + 1).
+        // Must be sorted and must not contain overlapping pairs
+        // (e.g., [1, 2] is invalid because pairs (1,2) and (2,3) share tablet 2).
+        // Cannot be used together with isolated_tablet.
+        std::vector<tablet_id> selected_left_tablets;
         auto operator<=>(const merge&) const = default;
     };
     using way_type = std::variant<none, split, merge>;
@@ -703,6 +709,7 @@ private:
     tablet_task_info _resize_task_info;
     std::optional<repair_scheduler_config> _repair_scheduler_config;
     raft_info_container _raft_info;
+    size_t _target_pow2_tablet_count = 0; // 0 means no convergence in progress
 
     // Internal constructor, used by clone() and clone_gently().
     tablet_map(tablet_id_map ids,
@@ -711,7 +718,8 @@ private:
                resize_decision resize_decision,
                tablet_task_info resize_task_info,
                std::optional<repair_scheduler_config> repair_scheduler_config,
-               raft_info_container raft_info)
+               raft_info_container raft_info,
+               size_t target_pow2_tablet_count)
         : _tablet_ids(std::move(ids))
         , _tablets(std::move(tablets))
         , _transitions(std::move(transitions))
@@ -719,6 +727,7 @@ private:
         , _resize_task_info(std::move(resize_task_info))
         , _repair_scheduler_config(std::move(repair_scheduler_config))
         , _raft_info(std::move(raft_info))
+        , _target_pow2_tablet_count(target_pow2_tablet_count)
     {}
 public:
     /// Constructs a tablet map.
@@ -831,8 +840,9 @@ public:
     }
 
     // Returns the pair of sibling tablets for a given tablet id.
-    // If the tablet count is odd, the last tablet does not have a sibling and
-    // the second element of the pair will be disengaged.
+    // The second element will be disengaged if the tablet does not have a
+    // sibling: either it was picked as the isolated tablet for merge, or the
+    // merge is a selective merge and the given tablet does not participate in it.
     std::pair<tablet_id, std::optional<tablet_id>> sibling_tablets(tablet_id t) const;
 
     /// Returns true iff tablet has a given replica.
@@ -894,6 +904,10 @@ public:
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
     const std::optional<locator::repair_scheduler_config> get_repair_scheduler_config() const;
+
+    size_t target_pow2_tablet_count() const { return _target_pow2_tablet_count; }
+    void set_target_pow2_tablet_count(size_t count) { _target_pow2_tablet_count = count; }
+    bool is_converging_to_pow2() const { return _target_pow2_tablet_count != 0; }
 public:
     /// Use only on tablet_map constructed with initialized_later tag to populate its contents.
     /// Must be called for consecutive tablet ids and with increasing last_token.

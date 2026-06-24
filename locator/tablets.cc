@@ -44,6 +44,23 @@ std::pair<tablet_id, std::optional<tablet_id>> tablet_map::sibling_tablets(table
 
     auto& merge_plan = std::get<resize_decision::merge>(_resize_decision.way);
 
+    if (!merge_plan.selected_left_tablets.empty()) {
+        // Check if t is the left sibling of a selected pair.
+        if (std::ranges::binary_search(merge_plan.selected_left_tablets, t)) {
+            auto right = next_tablet(t);
+            return std::make_pair(t, right);
+        }
+        // Check if t is the right sibling of a selected pair.
+        if (t != first_tablet()) {
+            auto left = tablet_id(t.value() - 1);
+            if (std::ranges::binary_search(merge_plan.selected_left_tablets, left)) {
+                return std::make_pair(left, t);
+            }
+        }
+        // Not part of any selected pair
+        return std::make_pair(t, std::nullopt);
+    }
+
     if (!merge_plan.isolated_tablet || t < *merge_plan.isolated_tablet) {
         auto first_sibling = tablet_id(t.value() & ~0x1);
         auto second_sibling = next_tablet(first_sibling);
@@ -587,7 +604,7 @@ tablet_layout tablet_map::get_layout() const {
 
 tablet_map tablet_map::clone() const {
     return tablet_map(_tablet_ids, _tablets, _transitions, _resize_decision, _resize_task_info,
-                      _repair_scheduler_config, _raft_info);
+                      _repair_scheduler_config, _raft_info, _target_pow2_tablet_count);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
@@ -615,7 +632,8 @@ future<tablet_map> tablet_map::clone_gently() const {
     }
 
     co_return tablet_map(std::move(ids), std::move(tablets), std::move(transitions),
-                         _resize_decision, _resize_task_info, _repair_scheduler_config, std::move(raft_info));
+                         _resize_decision, _resize_task_info, _repair_scheduler_config, std::move(raft_info),
+                         _target_pow2_tablet_count);
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
@@ -812,6 +830,29 @@ future<> tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<futu
     }
 
     auto& merge_plan = std::get<resize_decision::merge>(_resize_decision.way);
+
+    if (!merge_plan.selected_left_tablets.empty()) {
+        // Selective merge: only selected pairs are siblings, everything else is a singleton.
+        size_t sel_idx = 0;
+        std::optional<tablet_id> tid = first_tablet();
+        while (tid) {
+            auto cur = *tid;
+            tid = next_tablet(cur);
+            if (sel_idx < merge_plan.selected_left_tablets.size() && cur == merge_plan.selected_left_tablets[sel_idx]) {
+                // This is a selected left tablet; pair it with the next one.
+                if (!tid) {
+                    on_internal_error(tablet_logger, format("Selected left tablet {} has no right sibling", cur));
+                }
+                auto right = *tid;
+                tid = next_tablet(right);
+                ++sel_idx;
+                co_await func(make_desc(cur), make_desc(right));
+            } else {
+                co_await func(make_desc(cur), std::nullopt);
+            }
+        }
+        co_return;
+    }
 
     std::optional<tablet_id> tid = first_tablet();
     while (tid) {
@@ -1993,7 +2034,11 @@ auto fmt::formatter<locator::resize_decision_way>::format(const locator::resize_
             fmt::format_to(ctx.out(), "split");
         },
         [&] (const locator::resize_decision::merge& merge) {
-            fmt::format_to(ctx.out(), "merge(isolated={})", merge.isolated_tablet);
+            if (!merge.selected_left_tablets.empty()) {
+                fmt::format_to(ctx.out(), "merge(selected={})", merge.selected_left_tablets);
+            } else {
+                fmt::format_to(ctx.out(), "merge(isolated={})", merge.isolated_tablet);
+            }
         }), way);
     return ctx.out();
 }

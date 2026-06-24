@@ -186,6 +186,7 @@ public:
     gms::feature keyspace_multi_rf_change { *this, "KEYSPACE_MULTI_RF_CHANGE"sv };
     gms::feature view_building_tasks_min_task_id { *this, "VIEW_BUILDING_TASKS_MIN_TASK_ID"sv };
     gms::feature quiesce_topology_enhanced { *this, "QUIESCE_TOPOLOGY_ENHANCED"sv };
+    gms::feature tablet_pow2_convergence { *this, "TABLET_POW2_CONVERGENCE"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

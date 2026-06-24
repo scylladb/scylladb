@@ -1795,6 +1795,8 @@ rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_serv
         throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
     }
     auto keyspace = validate_keyspace(ctx, req);
+    auto include = req->get_query_param("include");
+    auto with_tablet_status = include == "tablet_status";
     auto status = co_await ss.local().run_with_no_api_lock([keyspace] (service::storage_service& ss) {
         return ss.get_tablets_migration_status_with_node_details(keyspace);
     });
@@ -1810,6 +1812,29 @@ rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_serv
         n.intended_mode = node.intended_mode;
         result.nodes.push(n);
     }
+
+    if (with_tablet_status && status.status == service::storage_service::migration_status::tablets) {
+        auto pow2_status = ss.local().get_tablets_pow2_convergence_status(keyspace);
+
+        ss::tablets_pow2_convergence_status pow2_result;
+        pow2_result.status = pow2_status.tables_converging == 0 ? "complete" : "in_progress";
+        pow2_result.tables_converging = pow2_status.tables_converging;
+        pow2_result.tables_total = pow2_status.tables_total;
+        pow2_result.tables._set = true;
+        for (const auto& t : pow2_status.tables) {
+            ss::table_pow2_convergence_info info;
+            info.table = t.table_name;
+            info.converging = t.converging;
+            info.current_tablet_count = t.current_tablet_count;
+            info.target_pow2_tablet_count = t.target_pow2_tablet_count;
+            pow2_result.tables.push(info);
+        }
+
+        ss::tablet_status tablets;
+        tablets.pow2_convergence = pow2_result;
+        result.tablets = tablets;
+    }
+
     co_return result;
 }
 

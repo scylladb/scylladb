@@ -325,6 +325,19 @@ public:
     future<> set_node_intended_storage_mode(intended_storage_mode mode);
     future<> finalize_tablets_migration(const sstring& ks_name);
 
+    struct table_pow2_convergence_info {
+        sstring table_name;
+        bool converging;
+        size_t current_tablet_count;
+        size_t target_pow2_tablet_count; // 0 means not set
+    };
+    struct tablets_pow2_convergence_status {
+        size_t tables_converging;
+        size_t tables_total;
+        std::vector<table_pow2_convergence_info> tables;
+    };
+    tablets_pow2_convergence_status get_tablets_pow2_convergence_status(const sstring& ks_name) const;
+
     void start_tablet_split_monitor();
 private:
     using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;
@@ -365,6 +378,14 @@ private:
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> snitch_reconfigured();
+
+    locator::tablet_map build_tablet_map_for_migration(const locator::token_metadata& tm,
+            const locator::static_effective_replication_map_ptr& erm,
+            size_t target_pow2 = 0) const;
+    future<std::unordered_map<table_id, uint64_t>> collect_table_sizes_for_migration(
+        const locator::token_metadata& tm,
+        const locator::tablet_aware_replication_strategy* trs,
+        const std::vector<std::pair<table_id, sstring>>& tables_to_estimate);
 
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
         return _shared_token_metadata.get()->clone_async().then([this] (token_metadata tm) {
@@ -1093,6 +1114,7 @@ public:
     friend class tablet_virtual_task;
     friend class topo::global_topology_request_virtual_task;
     friend class vnodes_to_tablets::migration_virtual_task;
+    friend class vnodes_to_tablets::pow2_convergence_virtual_task;
 };
 
 }

@@ -680,6 +680,51 @@ SEASTAR_THREAD_TEST_CASE(test_siblings) {
             { tablet_id(4), std::nullopt }
         }));
     }
+
+    // Selective merge (first tablet is singleton, last tablet is a pair, has singletons and pairs in between)
+    {
+        tablet_map tmap(9);
+        tmap.set_resize_decision(locator::resize_decision{
+            locator::resize_decision::merge{ .selected_left_tablets = {tablet_id(1), tablet_id(5), tablet_id(7)} },
+            1
+        });
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(1), tablet_id(2)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(2)) == std::make_pair(tablet_id(1), tablet_id(2)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(3)) == std::make_pair(tablet_id(3), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(4)) == std::make_pair(tablet_id(4), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(5)) == std::make_pair(tablet_id(5), tablet_id(6)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(6)) == std::make_pair(tablet_id(5), tablet_id(6)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(7)) == std::make_pair(tablet_id(7), tablet_id(8)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(8)) == std::make_pair(tablet_id(7), tablet_id(8)));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), std::nullopt },
+            { tablet_id(1), tablet_id(2) },
+            { tablet_id(3), std::nullopt },
+            { tablet_id(4), std::nullopt },
+            { tablet_id(5), tablet_id(6) },
+            { tablet_id(7), tablet_id(8) }
+        }));
+    }
+
+    // Selective merge (first tablet is a pair, last tablet is a singleton)
+    {
+        tablet_map tmap(5);
+        tmap.set_resize_decision(locator::resize_decision{
+            locator::resize_decision::merge{ .selected_left_tablets = {tablet_id(0), tablet_id(2)} },
+            1
+        });
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(2)) == std::make_pair(tablet_id(2), tablet_id(3)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(3)) == std::make_pair(tablet_id(2), tablet_id(3)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(4)) == std::make_pair(tablet_id(4), std::nullopt));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), tablet_id(1) },
+            { tablet_id(2), tablet_id(3) },
+            { tablet_id(4), std::nullopt }
+        }));
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_invalid_colocated_tables) {
@@ -7252,6 +7297,454 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_dropped_table) {
             BOOST_REQUIRE_NE(mig.tablet.table, table1);
         }
     }).get();
+}
+
+// Tests convergence of a tablet map with arbitrary boundaries to a uniform
+// pow2 layout. This applies to tables produced by vnodes-to-tablets migration,
+// where tablet boundaries inherit the random vnode token distribution.
+//
+// The test constructs a tablet map with 8 pow2 token ranges and then injects
+// a deterministic number of extra tokens into those ranges to cover various
+// merge conditions:
+// - Token range with 0 extra tokens: no merges needed
+// - Token range with 1 extra token:  1 merge round (1 merged tablet pair)
+// - Token range with 2 extra tokens: 2 merge rounds (1 merged tablet pair in first round, 1 merged tablet pair in second round)
+// - Token range with 3 extra tokens: 2 merge rounds (2 merged tablet pairs in first round, 1 merged tablet pair in second round)
+// - Token range with 4 extra tokens: 3 merge rounds (2 merged tablet pairs in first round, 1 merged tablet pair in second round, 1 merged tablet pair in third round)
+//
+// Tablets within each pow2 token range are assigned different replica sets to
+// exercise the merge colocation path.
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_pow2_convergence) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 3;
+        const int n_racks = 3;
+        const int nodes_per_rack = 2;
+        const unsigned shard_count = 2;
+
+        // Build the topology.
+
+        topology_builder topo(e);
+
+        std::vector<host_id> hosts;
+        for (int r = 0; r < n_racks; ++r) {
+            if (r > 0) {
+                topo.start_new_rack();
+            }
+            for (int n = 0; n < nodes_per_rack; ++n) {
+                hosts.push_back(topo.add_node(node_state::normal, shard_count));
+            }
+        }
+
+        // Compute tablet boundaries by starting with pow2 boundaries and
+        // injecting extra tokens within each pow2 token range.
+
+        const size_t target_pow2 = 8;
+        const int n_extra_tokens_per_range[target_pow2] = {0, 1, 2, 3, 4, 0, 0, 0};
+        const size_t initial_tablet_count = target_pow2 + std::accumulate(std::begin(n_extra_tokens_per_range), std::end(n_extra_tokens_per_range), 0);
+
+        utils::chunked_vector<dht::raw_token> pow2_boundaries = dht::get_uniform_tokens(target_pow2);
+        utils::chunked_vector<dht::raw_token> all_boundaries;
+
+        for (size_t seg = 0; seg < target_pow2; ++seg) {
+            uint64_t seg_start = (seg == 0) ? dht::first_token().unbias() : dht::token(pow2_boundaries[seg - 1]).unbias() + 1;
+            uint64_t seg_end = dht::token(pow2_boundaries[seg]).unbias();
+            int n_extra = n_extra_tokens_per_range[seg];
+            for (int j = 0; j < n_extra; ++j) {
+                // Place extra tokens within the segment.
+                size_t even_spacing = (seg_end - seg_start) / (n_extra + 1);
+                uint64_t even_pos = seg_start + even_spacing * (j + 1);
+                uint64_t skew = even_spacing / 10;
+                uint64_t pos = (j % 2 == 0) ? even_pos - skew : even_pos + skew; // skew tokens slightly to break evenness
+                all_boundaries.push_back(dht::raw_token(dht::token::bias(pos)));
+            }
+            // Add the pow2 boundary itself.
+            all_boundaries.push_back(pow2_boundaries[seg]);
+        }
+
+        // Create the table.
+        auto ks_name = add_keyspace(e, {{topo.dc(), rf}});
+        auto table1 = add_table(e, ks_name).get();
+        auto& stm = e.shared_token_metadata().local();
+
+        // Introduce a tablet map with arbitrary boundaries.
+        mutate_tablets(e, [&](tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(std::move(all_boundaries));
+
+            // Assign replicas: cycle through different (host, shard) combinations
+            // so that adjacent tablets within a segment have different replica sets.
+            size_t host_offset = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tablet_replica_set replicas;
+                replicas.reserve(rf);
+                for (int r = 0; r < rf; ++r) {
+                    auto h = hosts[(host_offset + r * nodes_per_rack) % hosts.size()];
+                    auto s = shard_id((host_offset + r) % shard_count);
+                    replicas.push_back(tablet_replica{h, s});
+                }
+                tmap.set_tablet(tid, tablet_info{std::move(replicas)});
+                ++host_offset;
+            }
+
+            // Set the pow2 target.
+            tmap.set_target_pow2_tablet_count(target_pow2);
+
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Verify initial state.
+        {
+            auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+            BOOST_REQUIRE_EQUAL(tmap.tablet_count(), initial_tablet_count);
+            BOOST_REQUIRE(tmap.is_converging_to_pow2());
+            BOOST_REQUIRE(tmap.get_layout() == tablet_layout::arbitrary);
+            check_tablet_invariants(stm.get()->tablets());
+        }
+
+        // Lower "initial" tablets option so it doesn't force splits after
+        // convergence reduces the tablet count below the initial value.
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_name)).get();
+
+        // Set tablet sizes so the load balancer has stats for the table.
+        // Use the default target size so normal resize logic doesn't
+        // interfere (it would only merge if tablets are small).
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_default_tablet_sizes(stm.get());
+        load_stats.set_size(table1, service::default_target_tablet_size * target_pow2);
+
+        // Run the load balancer until convergence.
+        rebalance_tablets(e, &load_stats);
+
+        // Verify final state.
+        {
+            auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+            BOOST_REQUIRE_EQUAL(tmap.tablet_count(), target_pow2);
+            BOOST_REQUIRE(!tmap.is_converging_to_pow2());
+            BOOST_REQUIRE(tmap.get_layout() == tablet_layout::pow_of_2);
+            check_tablet_invariants(stm.get()->tablets());
+        }
+
+        e.execute_cql(fmt::format("drop keyspace {}", ks_name)).get();
+    }, std::move(cfg)).get();
+}
+
+// Verify that compute_migration_target_pow2s() returns a pow2 target that
+// matches the tablet count of a fresh empty tablet-based table under the same
+// topology and replication strategy.
+SEASTAR_THREAD_TEST_CASE(test_migration_target_pow2_from_scale) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 1;
+        const unsigned shard_count = 1;
+        const int n_nodes = 3;
+
+        // Build topology.
+        topology_builder topo(e);
+        for (int i = 0; i < n_nodes; ++i) {
+            topo.add_node(node_state::normal, shard_count);
+        }
+
+        auto& stm = e.shared_token_metadata().local();
+
+        // Create a tablets-based table (reference).
+        // Read its tablet count, then drop it to avoid noise when computing
+        // the migration target.
+        auto ks_ref = add_keyspace(e, {{topo.dc(), rf}});
+        auto t_ref = add_table(e, ks_ref).get();
+        auto fresh_tablet_count = stm.get()->tablets().get_tablet_map(t_ref).tablet_count();
+        e.execute_cql(fmt::format("drop keyspace {}", ks_ref)).get();
+
+        // Create a vnode-based table with the same RS.
+        // This is the table we will compute the migration target for.
+        auto ks_vnode = "vnode_ks";
+        e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy', '{}': {}}}"
+                                  " and tablets = {{'enabled': false}}",
+                                  ks_vnode, topo.dc(), rf)).get();
+        e.execute_cql(fmt::format("create table {}.t (pk int primary key)", ks_vnode)).get();
+        auto t_cmp = e.local_db().find_schema(ks_vnode, "t")->id();
+
+        auto& ks = e.local_db().find_keyspace(ks_vnode);
+        auto* trs = dynamic_cast<const tablet_aware_replication_strategy*>(&ks.get_replication_strategy());
+        BOOST_REQUIRE(trs);
+
+        // Compute migration target for the vnode-based table with size = 0 (empty).
+        service::size_per_table_map sizes = {{t_cmp, 0}};
+        auto target_pow2s = e.get_tablet_allocator().local().compute_migration_target_pow2s(trs, sizes).get();
+
+        auto it = target_pow2s.find(t_cmp);
+        BOOST_REQUIRE(it != target_pow2s.end());
+        auto target_pow2 = it->second;
+
+        BOOST_REQUIRE_MESSAGE(std::has_single_bit(target_pow2),
+            fmt::format("Target pow2 {} is not a power of two", target_pow2));
+        BOOST_REQUIRE_MESSAGE(target_pow2 == fresh_tablet_count,
+            fmt::format("Migration target pow2 ({}) does not match fresh-table tablet count ({})",
+                        target_pow2, fresh_tablet_count));
+
+        e.execute_cql(fmt::format("drop keyspace {}", ks_vnode)).get();
+    }, std::move(cfg)).get();
+}
+
+// Verify that compute_migration_target_pow2s() returns a pow2 target that
+// matches the tablet count of a fresh empty table even under per-shard-goal
+// pressure. The pow2 target is expected to be scaled down based on the
+// per-shard-goal budget.
+SEASTAR_THREAD_TEST_CASE(test_migration_target_pow2_near_goal) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    cfg.db_config->tablets_per_shard_goal.set(10);
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 1;
+        const unsigned shard_count = 1;
+        const int n_nodes = 3;
+
+        // Build topology.
+        topology_builder topo(e);
+        for (int i = 0; i < n_nodes; ++i) {
+            topo.add_node(node_state::normal, shard_count);
+        }
+
+        auto& stm = e.shared_token_metadata().local();
+
+        // Create a pressure table that occupies most of the goal budget.
+        // With goal=10, RF=1, 1 shard/node: budget is 10 tablets/shard.
+        // Create the table with 8 tablets to leave very little room.
+        auto ks_pressure = add_keyspace(e, {{topo.dc(), rf}}, 8);
+        auto t_pressure = add_table(e, ks_pressure).get();
+
+        // Create a reference table in a separate keyspace under the same
+        // pressure conditions. Read its tablet count, then drop it to avoid
+        // noise when computing the migration target.
+        auto ks_ref = add_keyspace(e, {{topo.dc(), rf}});
+        auto t_ref = add_table(e, ks_ref).get();
+        auto fresh_tablet_count = stm.get()->tablets().get_tablet_map(t_ref).tablet_count();
+        e.execute_cql(fmt::format("drop keyspace {}", ks_ref)).get();
+
+        // Create a vnode-based table with the same RS.
+        auto ks_vnode = "vnode_ks";
+        e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy', '{}': {}}}"
+                                  " and tablets = {{'enabled': false}}",
+                                  ks_vnode, topo.dc(), rf)).get();
+        e.execute_cql(fmt::format("create table {}.t (pk int primary key)", ks_vnode)).get();
+        auto t_cmp = e.local_db().find_schema(ks_vnode, "t")->id();
+
+        auto& ks = e.local_db().find_keyspace(ks_vnode);
+        auto* trs = dynamic_cast<const tablet_aware_replication_strategy*>(&ks.get_replication_strategy());
+        BOOST_REQUIRE(trs);
+
+        // Compute migration target with size = 0 (empty).
+        service::size_per_table_map sizes = {{t_cmp, 0}};
+        auto target_pow2s = e.get_tablet_allocator().local().compute_migration_target_pow2s(trs, sizes).get();
+
+        auto it = target_pow2s.find(t_cmp);
+        BOOST_REQUIRE(it != target_pow2s.end());
+        auto target_pow2 = it->second;
+
+        BOOST_REQUIRE_MESSAGE(std::has_single_bit(target_pow2),
+            fmt::format("Target pow2 {} is not a power of two", target_pow2));
+        BOOST_REQUIRE_MESSAGE(target_pow2 == fresh_tablet_count,
+            fmt::format("Migration target pow2 ({}) does not match fresh-table tablet count ({}) under near-goal pressure",
+                        target_pow2, fresh_tablet_count));
+
+        e.execute_cql(fmt::format("drop keyspace {}", ks_pressure)).get();
+        e.execute_cql(fmt::format("drop keyspace {}", ks_vnode)).get();
+    }, std::move(cfg)).get();
+}
+
+// Verify that compute_migration_target_pow2s() with a non-zero size produces
+// a pow2 target that falls within the load balancer's split/merge thresholds.
+// This exercises the size_per_table argument.
+SEASTAR_THREAD_TEST_CASE(test_migration_target_pow2_from_size) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    cfg.db_config->tablets_initial_scale_factor(1); // lower initial tablets so it doesn't interfere with size-driven scaling
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 1;
+        const unsigned shard_count = 1;
+        const int n_nodes = 1;
+
+        // Build topology.
+        topology_builder topo(e);
+        for (int i = 0; i < n_nodes; ++i) {
+            topo.add_node(node_state::normal, shard_count);
+        }
+
+        const std::vector<uint64_t> test_sizes = {
+            10ULL * 1024 * 1024 * 1024,   // 10 GiB
+            32ULL * 1024 * 1024 * 1024,   // 32 GiB
+        };
+
+        auto& stm = e.shared_token_metadata().local();
+
+        for (auto S : test_sizes) {
+            testlog.info("Testing size_per_table parity with size = {} bytes", S);
+
+            auto ks_vnode = "vnode_ks";
+            e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy', '{}': {}}}"
+                                      " and tablets = {{'enabled': false}}",
+                                      ks_vnode, topo.dc(), rf)).get();
+            e.execute_cql(fmt::format("create table {}.t (pk int primary key)", ks_vnode)).get();
+            auto t_cmp = e.local_db().find_schema(ks_vnode, "t")->id();
+
+            auto& ks = e.local_db().find_keyspace(ks_vnode);
+            auto* trs = dynamic_cast<const tablet_aware_replication_strategy*>(&ks.get_replication_strategy());
+            BOOST_REQUIRE(trs);
+
+            // Compute migration target for a given size.
+            service::size_per_table_map sizes = {{t_cmp, S}};
+            auto target_pow2s = e.get_tablet_allocator().local().compute_migration_target_pow2s(trs, sizes).get();
+
+            auto it = target_pow2s.find(t_cmp);
+            BOOST_REQUIRE(it != target_pow2s.end());
+            auto target_pow2 = it->second;
+
+            BOOST_REQUIRE_MESSAGE(std::has_single_bit(target_pow2),
+                fmt::format("Target pow2 {} is not a power of two (size={})", target_pow2, S));
+
+            auto avg_tablet_size = S / target_pow2;
+            BOOST_REQUIRE_MESSAGE(avg_tablet_size <= service::default_target_tablet_size * 2,
+                fmt::format("Average tablet size {} exceeds split threshold ({}), expected a larger pow2 target (size={})",
+                            avg_tablet_size, service::default_target_tablet_size, S));
+            BOOST_REQUIRE_MESSAGE(avg_tablet_size >= service::default_target_tablet_size / 2,
+                fmt::format("Average tablet size {} is below the merge threshold ({}), expected a smaller pow2 target (size={})",
+                            avg_tablet_size, service::default_target_tablet_size, S));
+
+            e.execute_cql(fmt::format("drop keyspace {}", ks_vnode)).get();
+        }
+    }, std::move(cfg)).get();
+}
+
+// Verify that a converging table does not cause unrelated tables to be
+// scaled down via the per-shard-goal mechanism.
+//
+// During pow2 convergence a table temporarily carries an inflated tablet
+// count (vnode boundaries + pow2 boundaries). If the per-shard-goal
+// accounting naively uses this inflated count, it will incorrectly conclude
+// the cluster is overloaded and scale down other tables.
+//
+// The fix accounts converging tables at their steady-state pow2 target
+// (via target_tablet_count_for_scaling). This test verifies that a
+// non-converging table in a separate keyspace is not resized during the
+// entire convergence of a second table.
+SEASTAR_THREAD_TEST_CASE(test_pow2_convergence_does_not_trigger_scale_down) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    cfg.db_config->tablets_per_shard_goal.set(10);
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 1;
+        const unsigned shard_count = 1;
+
+        // Build the topology: 1 node, 1 shard.
+        topology_builder topo(e);
+        auto host = topo.add_node(node_state::normal, shard_count);
+
+        // Create two keyspaces with one table each.
+        // Table A: non-converging, stable at 4 tablets.
+        // Table B: converging, starts at 32 tablets with target_pow2 = 4.
+        auto ks_a = add_keyspace(e, {{topo.dc(), rf}});
+        auto table_a = add_table(e, ks_a).get();
+
+        auto ks_b = add_keyspace(e, {{topo.dc(), rf}});
+        auto table_b = add_table(e, ks_b).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        const size_t table_a_tablet_count = 4;
+        const size_t table_b_tablet_count = 32;
+        const size_t target_pow2_b = 4;
+
+        // Set up Table A with a stable 4-tablet pow2 map.
+        mutate_tablets(e, [&](tablet_metadata& tmeta) -> future<> {
+            auto boundaries = dht::get_uniform_tokens(table_a_tablet_count);
+            tablet_map tmap(std::move(boundaries));
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info{tablet_replica_set{{tablet_replica{host, shard_id(tid.value() % shard_count)}}}});
+            }
+            tmeta.set_tablet_map(table_a, std::move(tmap));
+            co_return;
+        });
+
+        mutate_tablets(e, [&](tablet_metadata& tmeta) -> future<> {
+            auto boundaries = dht::get_uniform_tokens(table_b_tablet_count);
+            tablet_map tmap(std::move(boundaries));
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info{tablet_replica_set{{tablet_replica{host, shard_id(0)}}}});
+            }
+            tmap.set_target_pow2_tablet_count(target_pow2_b);
+            tmeta.set_tablet_map(table_b, std::move(tmap));
+            co_return;
+        });
+
+        // Verify initial state.
+        {
+            auto& tmap_a = stm.get()->tablets().get_tablet_map(table_a);
+            BOOST_REQUIRE_EQUAL(tmap_a.tablet_count(), table_a_tablet_count);
+            auto& tmap_b = stm.get()->tablets().get_tablet_map(table_b);
+            BOOST_REQUIRE_EQUAL(tmap_b.tablet_count(), table_b_tablet_count);
+            BOOST_REQUIRE(tmap_b.is_converging_to_pow2());
+        }
+
+        // Lower "initial" tablets so it doesn't force splits after convergence.
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_a)).get();
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_b)).get();
+
+        // Set load stats so both tables are at ideal avg tablet size (no
+        // size-based resize pressure). Use target_pow2 as the effective
+        // number of tablets for sizing Table B's total size.
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_default_tablet_sizes(stm.get());
+        load_stats.set_size(table_a, service::default_target_tablet_size * table_a_tablet_count);
+        load_stats.set_size(table_b, service::default_target_tablet_size * target_pow2_b);
+
+        // Per-shard-goal math (tablets_per_shard_goal = 10, shards = 1):
+        //
+        // Buggy (naive current count):
+        //   (4 + 32) * RF / shards = 36 / 1 = 36 > 10 -> scale-down triggered
+        //
+        // Fixed (converging table counted at steady-state target):
+        //   (4 + ~4) * RF / shards = 8 / 1 = 8 < 10 -> no scale-down
+
+        // Run the load balancer to convergence, checking at every iteration
+        // that Table A is never resized.
+        rebalance_tablets(e, &load_stats, {}, [&] (const migration_plan& plan) {
+            auto& tmap_b = stm.get()->tablets().get_tablet_map(table_b);
+            if (!tmap_b.is_converging_to_pow2()) {
+                return true;
+            }
+            auto it = plan.resize_plan().resize.find(table_a);
+            if (it != plan.resize_plan().resize.end()) {
+                BOOST_FAIL(fmt::format(
+                        "Table A got a {} decision during Table B convergence: current tablet count = {}",
+                        it->second.way, stm.get()->tablets().get_tablet_map(table_a).tablet_count()));
+            }
+            return false;
+        });
+
+        // Verify final state.
+        {
+            auto& tmap_a = stm.get()->tablets().get_tablet_map(table_a);
+            BOOST_REQUIRE_EQUAL(tmap_a.tablet_count(), table_a_tablet_count);
+
+            auto& tmap_b = stm.get()->tablets().get_tablet_map(table_b);
+            BOOST_REQUIRE_EQUAL(tmap_b.tablet_count(), target_pow2_b);
+            BOOST_REQUIRE(!tmap_b.is_converging_to_pow2());
+            BOOST_REQUIRE(tmap_b.get_layout() == tablet_layout::pow_of_2);
+        }
+
+        // Verify stability: no further action after convergence.
+        {
+            auto& talloc = e.get_tablet_allocator().local();
+            auto& sys_ks = e.get_system_keyspace().local();
+            auto& topology = e.get_topology_state_machine().local()._topology;
+            auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks, load_stats.get()).get();
+            BOOST_REQUIRE(plan.empty());
+        }
+
+        e.execute_cql(fmt::format("drop keyspace {}", ks_a)).get();
+        e.execute_cql(fmt::format("drop keyspace {}", ks_b)).get();
+    }, std::move(cfg)).get();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

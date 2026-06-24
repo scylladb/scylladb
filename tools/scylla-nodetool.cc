@@ -2474,7 +2474,13 @@ void migrate_to_tablets_status_operation(scylla_rest_client& client, const bpo::
         throw std::invalid_argument("keyspace is required");
     }
     auto keyspace = vm["keyspace"].as<sstring>();
-    auto res = client.get(fmt::format("/storage_service/vnode_tablet_migrations/keyspaces/{}", keyspace));
+    const bool with_tablet_status = vm.contains("with-tablet-status");
+
+    auto url = fmt::format("/storage_service/vnode_tablet_migrations/keyspaces/{}", keyspace);
+    if (with_tablet_status) {
+        url += "?include=tablet_status";
+    }
+    auto res = client.get(url);
 
     auto node_status = [] (std::string_view current_mode, std::string_view intended_mode) -> std::string_view {
         if (intended_mode == "vnodes" && current_mode == "vnodes") {
@@ -2502,6 +2508,44 @@ void migrate_to_tablets_status_operation(scylla_rest_client& client, const bpo::
             table.add(
                 std::string(rjson::to_string_view(node["host_id"])),
                 std::string(node_status(current, intended)));
+        }
+        table.print();
+    }
+
+    if (!with_tablet_status) {
+        return;
+    }
+
+    fmt::print(std::cout, "\nTablet info:\n");
+
+    auto status = rjson::to_string_view(res["status"]);
+    if (status != "tablets") {
+        fmt::print(std::cout, "  Pow2 tablet layout convergence: not applicable (keyspace uses vnodes)\n");
+        return;
+    }
+
+    const auto& tablets = res["tablets"];
+    const auto& pow2 = tablets["pow2_convergence"];
+    auto convergence_status = rjson::to_string_view(pow2["status"]);
+    auto tables_converging = pow2["tables_converging"].GetUint64();
+    auto tables_total = pow2["tables_total"].GetUint64();
+
+    fmt::print(std::cout, "  Pow2 tablet layout convergence: {}\n", convergence_status);
+    fmt::print(std::cout, "  Tables converging: {}/{}\n", tables_converging, tables_total);
+
+    const auto& tables = pow2["tables"].GetArray();
+    if (!tables.Empty()) {
+        fmt::print(std::cout, "\n");
+        Tabulate table;
+        table.add("Table", "Status", "Tablets", "Target");
+        for (const auto& t : tables) {
+            auto converging = t["converging"].GetBool();
+            auto target = t["target_pow2_tablet_count"].GetUint64();
+            table.add(
+                std::string(rjson::to_string_view(t["table"])),
+                std::string(converging ? "converging" : "converged"),
+                fmt::to_string(t["current_tablet_count"].GetUint64()),
+                converging ? fmt::to_string(target) : std::string("-"));
         }
         table.print();
     }
@@ -4466,7 +4510,9 @@ Subcommands:
                         "status",
                         "Show migration status for a keyspace",
                         "",
-                        { },
+                        {
+                            typed_option<>("with-tablet-status", "Include per-table tablet layout convergence to pow2 status (only relevant after migration finalization)"),
+                        },
                         {
                             typed_option<sstring>("keyspace", "The keyspace to check status for", 1),
                         },

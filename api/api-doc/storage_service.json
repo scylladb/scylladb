@@ -3250,6 +3250,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                 },
+                 {
+                     "name":"include",
+                     "description":"Optional status details to include in the response. Supported values: 'tablet_status' (include per-table pow2 convergence information when migration status is 'tablets')",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                  }
              ]
          }]
@@ -3948,6 +3956,67 @@
                   "$ref":"vnode_tablet_migration_node_status"
                },
                "description":"Per-node storage mode information. Empty if the keyspace is not being migrated."
+            },
+            "tablets":{
+               "type":"tablet_status",
+               "description":"Tablet status. Only present when ?include=tablet_status and migration status is 'tablets'."
+            }
+         }
+      },
+      "tablet_status":{
+         "id":"tablet_status",
+         "description":"Tablet status for a keyspace",
+         "properties":{
+            "pow2_convergence":{
+               "type":"tablets_pow2_convergence_status",
+               "description":"Pow2 convergence status"
+            }
+         }
+      },
+      "tablets_pow2_convergence_status":{
+         "id":"tablets_pow2_convergence_status",
+         "description":"Pow2 convergence status for all tables in a keyspace",
+         "properties":{
+            "status":{
+               "type":"string",
+               "description":"Overall convergence status: `in_progress` or `complete`"
+            },
+            "tables_converging":{
+               "type":"long",
+               "description":"Number of tables still converging to pow2 tablet layout"
+            },
+            "tables_total":{
+               "type":"long",
+               "description":"Total number of tables in the keyspace"
+            },
+            "tables":{
+               "type":"array",
+               "items":{
+                  "$ref":"table_pow2_convergence_info"
+               },
+               "description":"Per-table convergence information"
+            }
+         }
+      },
+      "table_pow2_convergence_info":{
+         "id":"table_pow2_convergence_info",
+         "description":"Pow2 convergence info for a single table",
+         "properties":{
+            "table":{
+               "type":"string",
+               "description":"The table name"
+            },
+            "converging":{
+               "type":"boolean",
+               "description":"Whether the table is currently converging to a pow2 tablet layout"
+            },
+            "current_tablet_count":{
+               "type":"long",
+               "description":"The current number of tablets"
+            },
+            "target_pow2_tablet_count":{
+               "type":"long",
+               "description":"The target pow2 tablet count (0 if not converging)"
             }
          }
       },
