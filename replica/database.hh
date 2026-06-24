@@ -67,6 +67,7 @@
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/storage.hh"
 #include "db/rate_limiter.hh"
 #include "db/operation_type.hh"
 #include "locator/tablets.hh"
@@ -692,7 +693,11 @@ public:
     };
     // NOTE: Always use this interface for deleting SSTables in the table, since it guarantees
     // synchronization with concurrent iterations.
-    future<> delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove);
+    // When ctx is provided, the function never fails.
+    // The pending-delete state on stable storage is cleared if and only if
+    // the deletion of all sstables completed successfully.
+    future<> delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove,
+                                        std::unique_ptr<sstables::atomic_delete_context> ctx = nullptr);
 
     // Precondition: table needs tablet splitting.
     // Returns true if all storage of table is ready for splitting.

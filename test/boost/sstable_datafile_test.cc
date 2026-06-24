@@ -7,6 +7,7 @@
  */
 
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include <fmt/ranges.h>
 
 #include <seastar/core/sstring.hh>
@@ -1828,6 +1829,46 @@ SEASTAR_TEST_CASE(test_unknown_component) {
         env.manager().delete_atomically({sstp}).get();
         // assure unknown component is deleted
         BOOST_REQUIRE(!file_exists(env.tempdir().path().string() + "/la-1-big-UNKNOWN.txt").get());
+    });
+}
+
+// Verifies that delete_atomically throws on failure before or during
+// atomic_delete_prepare (leaving the caller's vector unaffected since
+// it's passed by value) and completes successfully otherwise.
+// Note: failures after atomic_delete_prepare are caught internally
+// since prepare guarantees eventual deletion.
+// Related to https://github.com/scylladb/scylladb/pull/30266
+SEASTAR_TEST_CASE(test_delete_atomically_does_not_clear_input_on_failure) {
+    return test_env::do_with_async([] (test_env& env) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
+            .with_column("p1", utf8_type, column_kind::partition_key)
+            .with_column("c1", utf8_type, column_kind::clustering_key)
+            .with_column("r1", int32_type)
+            .build();
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
+        const column_definition& r1_col = *s->get_column_definition("r1");
+
+        mutation m(s, key);
+        m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(m)}).get();
+
+        // Test failure path: inject error before atomic_delete_prepare.
+        // delete_atomically should throw, and the caller's vector is unaffected
+        // since it's passed by value.
+        std::vector<shared_sstable> ssts = {sst};
+        utils::get_local_injector().enable("delete_atomically_before_prepare", true);
+        BOOST_REQUIRE_THROW(env.manager().delete_atomically(ssts).get(), std::runtime_error);
+        BOOST_REQUIRE(!ssts.empty());
+
+        // Test success path: delete_atomically should complete without throwing.
+        BOOST_REQUIRE_NO_THROW(env.manager().delete_atomically(ssts).get());
     });
 }
 

@@ -100,8 +100,8 @@ public:
     future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
-    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
-    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
+    virtual future<std::unique_ptr<atomic_delete_context>> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
+    virtual future<> atomic_delete_complete(std::unique_ptr<atomic_delete_context> ctx) const override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
     virtual future<uint64_t> free_space() const override {
         return seastar::fs_avail(prefix());
@@ -579,27 +579,27 @@ future<> filesystem_storage::wipe(const sstable& sst, const atomic_delete_contex
     }
 }
 
-future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
-    atomic_delete_context res;
+future<std::unique_ptr<atomic_delete_context>> filesystem_storage::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
+    auto res = std::make_unique<atomic_delete_context>();
 
     for (const auto& sst : ssts) {
         auto prefix = sst->_storage->prefix();
-        res.prefixes.insert(prefix);
+        res->prefixes.insert(prefix);
     }
 
-    res.pending_delete_log = co_await sstable_directory::create_pending_deletion_log(_base_dir, ssts);
+    res->pending_delete_log = co_await sstable_directory::create_pending_deletion_log(_base_dir, ssts);
     co_return std::move(res);
 }
 
-future<> filesystem_storage::atomic_delete_complete(atomic_delete_context ctx) const {
-    co_await coroutine::parallel_for_each(ctx.prefixes, [] (const auto& dir) -> future<> {
+future<> filesystem_storage::atomic_delete_complete(std::unique_ptr<atomic_delete_context> ctx) const {
+    co_await coroutine::parallel_for_each(ctx->prefixes, [] (const auto& dir) -> future<> {
         co_await sync_directory(dir);
     });
 
         // Once all sstables are deleted, the log file can be removed.
         // Note: the log file will be removed also if unlink failed to remove
         // any sstable and ignored the error.
-        const auto& log = ctx.pending_delete_log;
+        const auto& log = ctx->pending_delete_log;
         try {
             co_await remove_file(log);
             sstlog.debug("{} removed.", log);
@@ -676,8 +676,8 @@ public:
     future<> destroy(const sstable& sst) override {
         return make_ready_future<>();
     }
-    future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
-    future<> atomic_delete_complete(atomic_delete_context ctx) const override;
+    future<std::unique_ptr<atomic_delete_context>> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
+    future<> atomic_delete_complete(std::unique_ptr<atomic_delete_context> ctx) const override;
     future<> remove_by_registry_entry(entry_descriptor desc) override;
     future<uint64_t> free_space() const override {
         // assumes infinite space on s3/gs (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
@@ -868,17 +868,17 @@ future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_conte
     co_await sstables_registry.delete_entry(owner(), node_owner, sst.generation());
 }
 
-future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
+future<std::unique_ptr<atomic_delete_context>> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
     std::vector<generation_type> gens;
     gens.reserve(ssts.size());
     for (auto& sst : ssts) {
         gens.push_back(sst->generation());
     }
     co_await ssts.front()->manager().sstables_registry().batch_update_entry_status(owner(), ssts.front()->manager().get_local_host_id(), gens, status_removing);
-    co_return atomic_delete_context{};
+    co_return std::make_unique<atomic_delete_context>();
 }
 
-future<> object_storage_base::atomic_delete_complete(atomic_delete_context ctx) const {
+future<> object_storage_base::atomic_delete_complete(std::unique_ptr<atomic_delete_context> ctx) const {
     co_return;
 }
 

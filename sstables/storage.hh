@@ -118,8 +118,12 @@ public:
     virtual future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
     virtual future<> destroy(const sstable& sst) = 0;
-    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const = 0;
-    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const = 0;
+    // On success, ensures that all sstables will eventually be deleted,
+    // even after a crash.
+    // On failure, either all or none of the sstables will be deleted,
+    // but never only some of them.
+    virtual future<std::unique_ptr<atomic_delete_context>> atomic_delete_prepare(const std::vector<shared_sstable>&) const = 0;
+    virtual future<> atomic_delete_complete(std::unique_ptr<atomic_delete_context> ctx) const = 0;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) = 0;
     // Free space available in the underlying storage.
     virtual future<uint64_t> free_space() const = 0;
