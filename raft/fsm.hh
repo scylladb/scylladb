@@ -70,6 +70,15 @@ struct fsm_config {
     // selects the smallest-id voter. When unset (the default), fast bootstrap is
     // disabled and a bare fsm starts as a follower; raft::server sets it.
     std::optional<uint64_t> fast_bootstrap_seed;
+    // Servers to prefer as leader, in priority order: element 0 is the strongest
+    // candidate, element k the (k+1)-th. Each listed server gets a unique,
+    // deterministic election-timeout slot ahead of every other server, so while a
+    // listed server is alive it wins leadership. Servers not listed randomize
+    // within the remaining slots and can never undercut a listed one. Listed servers
+    // which cannot vote are skipped, they cannot win an election anyway. The callback
+    // is invoked only when (re)arming the election timer, so it always reflects the
+    // current topology. Empty vector / unset => ordinary Raft.
+    std::function<std::vector<server_id>()> get_priority_members;
 };
 
 class fsm;

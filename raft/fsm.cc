@@ -189,12 +189,32 @@ void fsm::update_current_term(term_t current_term)
 
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<> dist;
-    // Timeout within range of [1, conf size]
-    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re,
-            std::uniform_int_distribution<int>::param_type{1,
-                    std::max((size_t) ELECTION_TIMEOUT.count(),
-                            _log.get_configuration().current.size())})};
+    static thread_local std::uniform_int_distribution<logical_clock::rep> dist;
+
+    const configuration& cfg = _log.get_configuration();
+    const auto num_slots = std::max(ELECTION_TIMEOUT.count(),
+            static_cast<logical_clock::rep>(configuration::voter_count(cfg.current)));
+
+    // The position in the slot list is the slot, so slots are unique by construction.
+    std::vector<server_id> slots;
+    if (_config.get_priority_members) {
+        slots = reserved_election_slots(cfg, _config.get_priority_members());
+    }
+
+    logical_clock::rep offset;
+    const auto me = std::ranges::find(slots, _my_id);
+    if (me != slots.end()) {
+        // Our own reserved slot: deterministic, no randomness.
+        // First in the list -> ELECTION_TIMEOUT + 1, second -> +2, ...
+        offset = (me - slots.begin()) + 1;
+    } else {
+        // Ordinary member: randomize strictly after every reserved slot, so we
+        // can neither precede nor tie a priority member.
+        const auto first_free = static_cast<logical_clock::rep>(slots.size()) + 1;
+        const auto last_free = std::max(first_free, num_slots);
+        offset = dist(re, std::uniform_int_distribution<logical_clock::rep>::param_type{first_free, last_free});
+    }
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{offset};
 }
 
 void fsm::become_leader() {

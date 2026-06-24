@@ -232,6 +232,13 @@ struct configuration {
     }
 };
 
+// The servers which reserve an election timeout slot, in the order of their slots: the
+// preferred servers, in the order they were given in, minus the ones which cannot vote in
+// this configuration and so cannot win an election anyway. The holder of the first slot
+// times out first and should end up the leader; see fsm_config::get_priority_members.
+std::vector<server_id> reserved_election_slots(const configuration& cfg,
+        const std::vector<server_id>& preferred);
+
 struct log_entry {
     // Dummy entry is used when a leader needs to commit an entry
     // (after leadership change for instance) but there is nothing
