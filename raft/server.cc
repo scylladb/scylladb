@@ -9,6 +9,7 @@
 
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/copy.hpp>
@@ -1607,7 +1608,11 @@ void server_impl::check_not_aborted() {
 
 void server_impl::handle_background_error(const char* fiber_name) {
     _is_alive = false;
-    const auto e = std::current_exception();
+    auto e = std::current_exception();
+    if (_aborted && try_catch<const seastar::gate_closed_exception>(e)) {
+        logger.debug("[{}] {} fiber stopped while aborting raft server: {}", _id, fiber_name, e);
+        return;
+    }
     logger.error("[{}] {} fiber stopped because of the error: {}", _id, fiber_name, e);
     if (_config.on_background_error) {
         _config.on_background_error(e);
