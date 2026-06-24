@@ -2034,6 +2034,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
                 groups_manager.stop().get();
             });
+            // On every shard: each shard's database gets that shard's manager
+            // instance, so the flush hook works wherever a tablet lives.
+            // Registered after the stop deferral so a failure here still stops
+            // the manager.
+            db.invoke_on_all([&groups_manager] (replica::database& local_db) {
+                local_db.set_strong_consistency_groups_manager(groups_manager.local());
+            }).get();
 
             checkpoint(stop_signal, "initializing strongly consistent coordinator");
             sharded<service::strong_consistency::coordinator> sc_coordinator;
