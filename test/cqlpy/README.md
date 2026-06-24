@@ -273,17 +273,9 @@ test/cqlpy/run-cassandra --docker=4.1.11   # specific patch release
 test/cqlpy/run-cassandra --docker=3.11
 ```
 
-A small number of tests invoke `nodetool` (set via the `NODETOOL` environment
-variable). When using `--docker` there is no local `nodetool` binary, so you
-need to supply one - we haven't yet implemented the ability to use the one in
-Docker. For now, you'll need to point `NODETOOL` at the `nodetool` script from
-a downloaded Cassandra tarball (see _Precompiled Cassandra_ below) - you do
-not need to run that Cassandra, you only need the script:
-
-```
-export NODETOOL=/tmp/apache-cassandra-5.0.3/bin/nodetool
-test/cqlpy/run-cassandra --docker test_file.py
-```
+A small number of tests invoke `nodetool`. When using `--docker`, `nodetool`
+is also taken from the Docker image automatically - no local installation
+or explicit override of `NODETOOL` is needed.
 
 **`--java-docker[=JAVA_VERSION]`**: a lighter alternative for when you have a
 local Cassandra installation but lack a suitable Java version on the host.
