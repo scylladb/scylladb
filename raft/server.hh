@@ -95,6 +95,11 @@ public:
             std::reference_wrapper<bounded_clock> clock;
         };
         std::optional<leaseguard_configuration> leaseguard;
+        // Servers to prefer as leader, best first. The first one which can vote
+        // campaigns before everybody else and normally wins; a bias, not a guarantee.
+        // Invoked whenever the election timer is armed; must neither block nor throw.
+        // Empty / unset => ordinary Raft.
+        std::function<std::vector<server_id>()> get_priority_members;
     };
 
     virtual ~server() {}
