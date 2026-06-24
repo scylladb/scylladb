@@ -85,16 +85,9 @@ parse(const sstring& json_string, const std::vector<column_definition>& expected
 
 namespace statements {
 
-update_statement::update_statement(
-        audit::audit_info_ptr&& audit_info,
-        statement_type type,
-        uint32_t bound_terms,
-        schema_ptr s,
-        std::unique_ptr<attributes> attrs,
-        cql_stats& stats)
-    : modification_statement{type, bound_terms, std::move(s), std::move(attrs), stats}
+update_statement_impl::update_statement_impl(const statement_type type, schema_ptr schema)
+    : modification_statement_impl(type, std::move(schema))
 {
-    set_audit_info(std::move(audit_info));
 }
 
 bool update_statement::require_full_clustering_key() const {
@@ -333,39 +326,6 @@ std::optional<expr::expression> get_value_condition(const expr::expression& the_
     return binop->rhs;
 }
 
-::shared_ptr<broadcast_modification_statement>
-update_statement::prepare_for_broadcast_tables() const {
-    if (attrs) {
-        if (attrs->is_time_to_live_set()) {
-            throw service::broadcast_tables::unsupported_operation_error{"USING TTL"};
-        }
-
-        if (attrs->is_timestamp_set()) {
-            throw service::broadcast_tables::unsupported_operation_error{"USING TIMESTAMP"};
-        }
-
-        if (attrs->is_timeout_set()) {
-            throw service::broadcast_tables::unsupported_operation_error{"USING TIMEOUT"};
-        }
-    }
-
-    if (has_static_column_conditions()) {
-        throw service::broadcast_tables::unsupported_operation_error{"static column conditions"};
-    }
-
-    broadcast_tables::prepared_update query = {
-        .key = get_key(restrictions().get_partition_key_restrictions()),
-        .new_value = prepare_new_value(_column_operations),
-        .value_condition = get_value_condition(_condition),
-    };
-
-    return ::make_shared<broadcast_modification_statement>(
-        get_bound_terms(),
-        s,
-        query
-    );
-}
-
 namespace raw {
 
 insert_statement::insert_statement(cf_name name,
@@ -378,14 +338,14 @@ insert_statement::insert_statement(cf_name name,
     , _column_values{std::move(column_values)}
 { }
 
-::shared_ptr<cql3::statements::modification_statement>
+::shared_ptr<cql3::statements::modification_statement_impl>
 insert_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
-    prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
+    prepare_context& ctx, std::unique_ptr<attributes> attrs) const
 {
-    auto stmt = ::make_shared<cql3::statements::update_statement>(audit_info(), statement_type::INSERT, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = ::make_shared<cql3::statements::update_statement_impl>(cql3::statements::statement_type::INSERT, schema);
 
     // Created from an INSERT
-    if (stmt->is_counter()) {
+    if (schema->is_counter()) {
         throw exceptions::invalid_request_exception("INSERT statement are not allowed on counter tables, use UPDATE instead");
     }
 

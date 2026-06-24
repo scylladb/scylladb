@@ -56,12 +56,218 @@ db::timeout_clock::duration modification_statement::get_timeout(const service::c
     return attrs->is_timeout_set() ? attrs->get_timeout(options) : state.get_timeout_config().*get_timeout_config_selector();
 }
 
+modification_statement_impl::modification_statement_impl(const statement_type type, statement_type_desc desc, schema_ptr schema)
+    : type(type)
+    , _desc(desc)
+    , _schema(std::move(schema))
+    , _columns_of_cas_result_set(_schema->all_columns_count())
+{}
+
+void modification_statement_impl::add_operation(::shared_ptr<operation> op) {
+    if (op->column.is_static()) {
+        _sets_static_columns = true;
+    } else {
+        _sets_regular_columns = true;
+        _selects_a_collection |= op->column.type->is_collection();
+    }
+    if (op->requires_read()) {
+        _requires_read = true;
+        _columns_to_read.set(op->column.ordinal_id);
+        if (op->column.type->is_collection() ) {
+            auto ctype = static_pointer_cast<const collection_type_impl>(op->column.type);
+            if (!ctype->is_multi_cell()) {
+                throw std::logic_error(format("cannot prefetch frozen collection: {}", op->column.name_as_text()));
+            }
+        }
+    }
+
+    if (op->requires_lwt()) {
+        _requires_lwt = true;
+    }
+
+    if (op->column.is_counter()) {
+        auto is_raw_counter_shard_write = op->is_raw_counter_shard_write();
+        if (_is_raw_counter_shard_write && _is_raw_counter_shard_write != is_raw_counter_shard_write) {
+            throw exceptions::invalid_request_exception("Cannot mix regular and raw counter updates");
+        }
+        _is_raw_counter_shard_write = is_raw_counter_shard_write;
+    }
+
+    _column_operations.push_back(std::move(op));
+}
+
+void modification_statement_impl::set_if_not_exist_condition() {
+    // We don't know yet if we need to select only static columns to check this
+    // condition or we need regular columns as well. So we postpone setting
+    // _has_regular_column_conditions/_has_static_column_conditions flag until
+    // we process WHERE clause, see process_where_clause().
+    _if_not_exists = true;
+}
+
+void modification_statement_impl::set_if_exist_condition() {
+    // See a comment in set_if_not_exist_condition().
+    _if_exists = true;
+}
+
+void modification_statement_impl::analyze_condition(expr::expression cond) {
+  expr::for_each_expression<expr::column_value>(cond, [&] (const expr::column_value& col) {
+    if (col.col->is_static()) {
+        _has_static_column_conditions = true;
+    } else {
+        _has_regular_column_conditions = true;
+        _selects_a_collection |=  col.col->type->is_collection();
+    }
+  });
+}
+
+void modification_statement_impl::build_cas_result_set_metadata() {
+    std::vector<lw_shared_ptr<column_specification>> columns;
+    // Add the mandatory [applied] column to result set metadata
+    auto applied = make_lw_shared<cql3::column_specification>(_schema->ks_name(), _schema->cf_name(),
+            make_shared<cql3::column_identifier>("[applied]", false), boolean_type);
+
+    columns.push_back(applied);
+
+    const auto& all_columns = _schema->all_columns();
+    if (_if_exists || _if_not_exists) {
+        // If all our conditions are columns conditions (IF x = ?), then it's enough to query
+        // the columns from the conditions. If we have a IF EXISTS or IF NOT EXISTS however,
+        // we need to query all columns for the row since if the condition fails, we want to
+        // return everything to the user.
+        // XXX Static columns make this a bit more complex, in that if an insert only static
+        // columns, then the existence condition applies only to the static columns themselves, and
+        // so we don't want to include regular columns in that case.
+        for (const auto& def : all_columns) {
+            _columns_of_cas_result_set.set(def.ordinal_id);
+        }
+    } else {
+        expr::for_each_expression<expr::column_value>(_condition, [&] (const expr::column_value& col) {
+            _columns_of_cas_result_set.set(col.col->ordinal_id);
+        });
+    }
+    columns.reserve(columns.size() + all_columns.size());
+    // We must filter conditions using the _columns_of_cas_result_set, since
+    // the same column can be used twice in the condition list:
+    // if a > 0 and a < 3.
+    for (const auto& def : all_columns) {
+        if (_columns_of_cas_result_set.test(def.ordinal_id)) {
+            columns.emplace_back(def.column_specification);
+        }
+    }
+    // Ensure we prefetch all of the columns of the result set. This is also
+    // necessary to check conditions.
+    _columns_to_read.union_with(_columns_of_cas_result_set);
+    _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
+}
+
+void modification_statement_impl::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
+    _restrictions = restrictions::analyze_statement_restrictions(db, _schema, _type, where_clause, ctx,
+            applies_only_to_static_columns(), _selects_a_collection, false /* allow_filtering */, restrictions::check_indexes::no);
+    /*
+     * If there's no clustering columns restriction, we may assume that EXISTS
+     * check only selects static columns and hence we can use any row from the
+     * partition to check conditions.
+     */
+    if (_if_exists || _if_not_exists) {
+        throwing_assert(!_has_static_column_conditions && !_has_regular_column_conditions);
+        if (_schema->has_static_columns() && !_restrictions->has_clustering_columns_restriction()) {
+            _has_static_column_conditions = true;
+        } else {
+            _has_regular_column_conditions = true;
+        }
+    }
+    if (_restrictions->has_token_restrictions()) {
+        throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
+                to_string(_restrictions->get_partition_key_restrictions())));
+    }
+    if (!_restrictions->get_non_pk_restriction().empty()) {
+        throw exceptions::invalid_request_exception(seastar::format("Invalid where clause contains non PRIMARY KEY columns: {}",
+                                                                    fmt::join(_restrictions->get_non_pk_restriction()
+                                         | std::views::keys
+                                         | std::views::transform([](const column_definition* c) {
+                                             return c->name_as_text();
+                                         }), ", ")));
+    }
+    const expr::expression& ck_restrictions = _restrictions->get_clustering_columns_restrictions();
+    if (has_slice(ck_restrictions) && !_desc.allow_clustering_key_slices) {
+        throw exceptions::invalid_request_exception(
+                format("Invalid operator in where clause {}", to_string(ck_restrictions)));
+    }
+    if (_restrictions->has_unrestricted_clustering_columns() && !applies_only_to_static_columns() && !_schema->is_dense()) {
+        // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
+        // Comparator is a thrift concept, not CQL concept, and we want to avoid
+        // using thrift concepts here. I think it's safe to drop this here because the only
+        // case in which we would get a non-composite comparator here would be if the cell
+        // name type is SimpleSparse, which means:
+        //   (a) CQL compact table without clustering columns
+        //   (b) thrift static CF with non-composite comparator
+        // Those tables don't have clustering columns so we wouldn't reach this code, thus
+        // the check seems redundant.
+        if (_desc.require_full_clustering_key) {
+            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
+                _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text()));
+        }
+        // In general, we can't modify specific columns if not all clustering columns have been specified.
+        // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
+        if (!has_slice(ck_restrictions)) {
+            for (auto&& op : _column_operations) {
+                if (!op->column.is_static()) {
+                    throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
+                        _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text(), op->column.name_as_text()));
+                }
+            }
+        }
+    }
+    if (_restrictions->has_partition_key_unrestricted_components()) {
+        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
+            _restrictions->unrestricted_column(column_kind::partition_key).name_as_text()));
+    }
+    if (has_conditions()) {
+        validate_where_clause_for_conditions();
+    }
+}
+
+void modification_statement_impl::validate_where_clause_for_conditions() const {
+    // We don't support IN for CAS operation so far
+    if (_restrictions->key_is_in_relation()) {
+        throw exceptions::invalid_request_exception(
+                format("IN on the partition key is not supported with conditional {}",
+                    _type.is_update() ? "updates" : "deletions"));
+    }
+
+    if (_restrictions->clustering_key_restrictions_has_IN()) {
+        throw exceptions::invalid_request_exception(
+                format("IN on the clustering key columns is not supported with conditional {}",
+                    _type.is_update() ? "updates" : "deletions"));
+    }
+    if (_type.is_delete() && (_restrictions->has_unrestricted_clustering_columns() ||
+                !_restrictions->clustering_key_restrictions_has_only_eq())) {
+
+        bool deletes_regular_columns = _column_operations.empty() ||
+            std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
+                return !op->column.is_static();
+            });
+        // For example, primary key is (a, b, c), only a and b are restricted
+        if (deletes_regular_columns) {
+            throw exceptions::invalid_request_exception(
+                    "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
+                    " in order to delete non static columns");
+        }
+
+        // All primary key parts must be specified, unless this statement has only static column conditions
+        if (_has_regular_column_conditions) {
+            throw exceptions::invalid_request_exception(
+                    "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
+                    " in order to use IF condition on non static columns");
+        }
+    }
+}
+
 modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, cql_stats& stats_)
     : cql_statement_opt_metadata(modification_statement_timeout(*schema_))
     , type{type_}
     , _bound_terms{bound_terms}
     , _columns_to_read(schema_->all_columns_count())
-    , _columns_of_cas_result_set(schema_->all_columns_count())
     , s{schema_}
     , attrs{std::move(attrs_)}
     , _column_operations{}
@@ -460,115 +666,6 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     });
 }
 
-void modification_statement::build_cas_result_set_metadata() {
-
-    std::vector<lw_shared_ptr<column_specification>> columns;
-    // Add the mandatory [applied] column to result set metadata
-    auto applied = make_lw_shared<cql3::column_specification>(s->ks_name(), s->cf_name(),
-            make_shared<cql3::column_identifier>("[applied]", false), boolean_type);
-
-    columns.push_back(applied);
-
-    const auto& all_columns = s->all_columns();
-    if (_if_exists || _if_not_exists) {
-        // If all our conditions are columns conditions (IF x = ?), then it's enough to query
-        // the columns from the conditions. If we have a IF EXISTS or IF NOT EXISTS however,
-        // we need to query all columns for the row since if the condition fails, we want to
-        // return everything to the user.
-        // XXX Static columns make this a bit more complex, in that if an insert only static
-        // columns, then the existence condition applies only to the static columns themselves, and
-        // so we don't want to include regular columns in that case.
-        for (const auto& def : all_columns) {
-            _columns_of_cas_result_set.set(def.ordinal_id);
-        }
-    } else {
-        expr::for_each_expression<expr::column_value>(_condition, [&] (const expr::column_value& col) {
-            _columns_of_cas_result_set.set(col.col->ordinal_id);
-        });
-    }
-    columns.reserve(columns.size() + all_columns.size());
-    // We must filter conditions using the _columns_of_cas_result_set, since
-    // the same column can be used twice in the condition list:
-    // if a > 0 and a < 3.
-    for (const auto& def : all_columns) {
-        if (_columns_of_cas_result_set.test(def.ordinal_id)) {
-            columns.emplace_back(def.column_specification);
-        }
-    }
-    // Ensure we prefetch all of the columns of the result set. This is also
-    // necessary to check conditions.
-    _columns_to_read.union_with(_columns_of_cas_result_set);
-    _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
-}
-
-void
-modification_statement::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
-    _restrictions = restrictions::analyze_statement_restrictions(db, s, type, where_clause, ctx,
-            applies_only_to_static_columns(), _selects_a_collection, false /* allow_filtering */, restrictions::check_indexes::no);
-    /*
-     * If there's no clustering columns restriction, we may assume that EXISTS
-     * check only selects static columns and hence we can use any row from the
-     * partition to check conditions.
-     */
-    if (_if_exists || _if_not_exists) {
-        throwing_assert(!_has_static_column_conditions && !_has_regular_column_conditions);
-        if (s->has_static_columns() && !_restrictions->has_clustering_columns_restriction()) {
-            _has_static_column_conditions = true;
-        } else {
-            _has_regular_column_conditions = true;
-        }
-    }
-    if (_restrictions->has_token_restrictions()) {
-        throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
-                to_string(_restrictions->get_partition_key_restrictions())));
-    }
-    if (!_restrictions->get_non_pk_restriction().empty()) {
-        throw exceptions::invalid_request_exception(seastar::format("Invalid where clause contains non PRIMARY KEY columns: {}",
-                                                                    fmt::join(_restrictions->get_non_pk_restriction()
-                                         | std::views::keys
-                                         | std::views::transform([](const column_definition* c) {
-                                             return c->name_as_text();
-                                         }), ", ")));
-    }
-    const expr::expression& ck_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (has_slice(ck_restrictions) && !allow_clustering_key_slices()) {
-        throw exceptions::invalid_request_exception(
-                format("Invalid operator in where clause {}", to_string(ck_restrictions)));
-    }
-    if (_restrictions->has_unrestricted_clustering_columns() && !applies_only_to_static_columns() && !s->is_dense()) {
-        // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
-        // Comparator is a thrift concept, not CQL concept, and we want to avoid
-        // using thrift concepts here. I think it's safe to drop this here because the only
-        // case in which we would get a non-composite comparator here would be if the cell
-        // name type is SimpleSparse, which means:
-        //   (a) CQL compact table without clustering columns
-        //   (b) thrift static CF with non-composite comparator
-        // Those tables don't have clustering columns so we wouldn't reach this code, thus
-        // the check seems redundant.
-        if (require_full_clustering_key()) {
-            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
-                _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text()));
-        }
-        // In general, we can't modify specific columns if not all clustering columns have been specified.
-        // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
-        if (!has_slice(ck_restrictions)) {
-            for (auto&& op : _column_operations) {
-                if (!op->column.is_static()) {
-                    throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
-                        _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text(), op->column.name_as_text()));
-                }
-            }
-        }
-    }
-    if (_restrictions->has_partition_key_unrestricted_components()) {
-        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
-            _restrictions->unrestricted_column(column_kind::partition_key).name_as_text()));
-    }
-    if (has_conditions()) {
-        validate_where_clause_for_conditions();
-    }
-}
-
 ::shared_ptr<broadcast_modification_statement>
 modification_statement::prepare_for_broadcast_tables() const {
     // FIXME: implement for every type of `modification_statement`.
@@ -685,10 +782,10 @@ column_condition_prepare(const expr::expression& expr, data_dictionary::database
 
 void
 modification_statement::prepare_conditions(data_dictionary::database db, const schema& schema, prepare_context& ctx,
-        cql3::statements::modification_statement& stmt) const
+        cql3::statements::modification_statement_impl& stmt) const
 {
     if (_if_not_exists || _if_exists || _conditions) {
-        if (stmt.is_counter()) {
+        if (schema.is_counter()) {
             throw exceptions::invalid_request_exception("Conditional updates are not supported on counter tables");
         }
         if (_attrs->timestamp) {
@@ -743,39 +840,6 @@ bool modification_statement::depends_on(std::string_view ks_name, std::optional<
     return keyspace() == ks_name && (!cf_name || column_family() == *cf_name);
 }
 
-void modification_statement::add_operation(::shared_ptr<operation> op) {
-    if (op->column.is_static()) {
-        _sets_static_columns = true;
-    } else {
-        _sets_regular_columns = true;
-        _selects_a_collection |= op->column.type->is_collection();
-    }
-    if (op->requires_read()) {
-        _requires_read = true;
-        _columns_to_read.set(op->column.ordinal_id);
-        if (op->column.type->is_collection() ) {
-            auto ctype = static_pointer_cast<const collection_type_impl>(op->column.type);
-            if (!ctype->is_multi_cell()) {
-                throw std::logic_error(format("cannot prefetch frozen collection: {}", op->column.name_as_text()));
-            }
-        }
-    }
-
-    if (op->requires_lwt()) {
-        _requires_lwt = true;
-    }
-
-    if (op->column.is_counter()) {
-        auto is_raw_counter_shard_write = op->is_raw_counter_shard_write();
-        if (_is_raw_counter_shard_write && _is_raw_counter_shard_write != is_raw_counter_shard_write) {
-            throw exceptions::invalid_request_exception("Cannot mix regular and raw counter updates");
-        }
-        _is_raw_counter_shard_write = is_raw_counter_shard_write;
-    }
-
-    _column_operations.push_back(std::move(op));
-}
-
 void modification_statement::inc_cql_stats(bool is_internal) const {
     const source_selector src_sel = is_internal
             ? source_selector::INTERNAL : source_selector::USER;
@@ -788,72 +852,12 @@ bool modification_statement::is_conditional() const {
     return has_conditions();
 }
 
-void modification_statement::analyze_condition(expr::expression cond) {
-  expr::for_each_expression<expr::column_value>(cond, [&] (const expr::column_value& col) {
-    if (col.col->is_static()) {
-        _has_static_column_conditions = true;
-    } else {
-        _has_regular_column_conditions = true;
-        _selects_a_collection |=  col.col->type->is_collection();
-    }
-  });
-}
-
-void modification_statement::set_if_not_exist_condition() {
-    // We don't know yet if we need to select only static columns to check this
-    // condition or we need regular columns as well. So we postpone setting
-    // _has_regular_column_conditions/_has_static_column_conditions flag until
-    // we process WHERE clause, see process_where_clause().
-    _if_not_exists = true;
-}
-
 bool modification_statement::has_if_not_exist_condition() const {
     return _if_not_exists;
 }
 
-void modification_statement::set_if_exist_condition() {
-    // See a comment in set_if_not_exist_condition().
-    _if_exists = true;
-}
-
 bool modification_statement::has_if_exist_condition() const {
     return _if_exists;
-}
-
-void modification_statement::validate_where_clause_for_conditions() const {
-    // We don't support IN for CAS operation so far
-    if (_restrictions->key_is_in_relation()) {
-        throw exceptions::invalid_request_exception(
-                format("IN on the partition key is not supported with conditional {}",
-                    type.is_update() ? "updates" : "deletions"));
-    }
-
-    if (_restrictions->clustering_key_restrictions_has_IN()) {
-        throw exceptions::invalid_request_exception(
-                format("IN on the clustering key columns is not supported with conditional {}",
-                    type.is_update() ? "updates" : "deletions"));
-    }
-    if (type.is_delete() && (_restrictions->has_unrestricted_clustering_columns() ||
-                !_restrictions->clustering_key_restrictions_has_only_eq())) {
-
-        bool deletes_regular_columns = _column_operations.empty() ||
-            std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
-                return !op->column.is_static();
-            });
-        // For example, primary key is (a, b, c), only a and b are restricted
-        if (deletes_regular_columns) {
-            throw exceptions::invalid_request_exception(
-                    "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
-                    " in order to delete non static columns");
-        }
-
-        // All primary key parts must be specified, unless this statement has only static column conditions
-        if (_has_regular_column_conditions) {
-            throw exceptions::invalid_request_exception(
-                    "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
-                    " in order to use IF condition on non static columns");
-        }
-    }
 }
 
 modification_statement::json_cache_opt modification_statement::maybe_prepare_json_cache(const query_options& options) const {

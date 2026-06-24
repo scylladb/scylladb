@@ -41,7 +41,10 @@ class metadata;
 seastar::shared_ptr<const metadata> make_empty_metadata();
 
 class query_options;
-namespace statements { class modification_statement; }
+namespace statements { 
+    class modification_statement;
+    class modification_statement_impl;
+}
 
 // A vector of CQL warnings generated during execution of a statement.
 using cql_warnings_vec = std::vector<sstring>;

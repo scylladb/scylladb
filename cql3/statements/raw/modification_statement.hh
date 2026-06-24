@@ -44,14 +44,17 @@ public:
     void add_raw(sstring&& raw) { _raw_cql = std::move(raw); }
     const sstring& get_raw_cql() const { return _raw_cql; }
 protected:
-    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
-        prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const = 0;
+    virtual ::shared_ptr<cql3::statements::modification_statement_impl> prepare_internal(
+        data_dictionary::database db,
+        schema_ptr schema,
+        prepare_context& ctx,
+        std::unique_ptr<attributes> attrs) const = 0;
 
     // Helper function used by child classes to prepare conditions for a prepared statement.
     // Must be called before processing WHERE clause, because to perform sanity checks there
     // we need to know what kinds of conditions (static, regular) the statement has.
     void prepare_conditions(data_dictionary::database db, const schema& schema, prepare_context& ctx,
-            cql3::statements::modification_statement& stmt) const;
+            cql3::statements::modification_statement_impl& stmt) const;
 
     virtual audit::statement_category category() const override;
 };

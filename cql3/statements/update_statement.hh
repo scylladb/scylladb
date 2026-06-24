@@ -22,19 +22,10 @@ namespace statements {
 /**
  * An <code>UPDATE</code> statement parsed from a CQL query statement.
  */
-class update_statement : public modification_statement {
+class update_statement_impl : public modification_statement_impl {
 public:
-#if 0
-    private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
-#endif
+    update_statement_impl(const statement_type type, schema_ptr schema);
 
-    update_statement(
-            audit::audit_info_ptr&& audit_info,
-            statement_type type,
-            uint32_t bound_terms,
-            schema_ptr s,
-            std::unique_ptr<attributes> attrs,
-            cql_stats& stats);
 private:
     virtual bool require_full_clustering_key() const override;
 
@@ -43,9 +34,6 @@ private:
     virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const override;
 
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const;
-
-public:
-    virtual ::shared_ptr<broadcast_modification_statement> prepare_for_broadcast_tables() const override;
 };
 
 /*
