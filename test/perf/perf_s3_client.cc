@@ -24,7 +24,6 @@ class tester {
     std::chrono::seconds _duration;
     std::string _object_name;
     size_t _object_size;
-    semaphore _mem;
     shared_ptr<s3::client> _client;
     utils::estimated_histogram _latencies;
     unsigned _errors = 0;
@@ -51,8 +50,7 @@ public:
             , _duration(dur)
             , _object_name(std::move(object_name))
             , _object_size(obj_size)
-            , _mem(memory::stats().total_memory())
-            , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config(sockets), _mem))
+            , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config(sockets)))
             , _part_size_mb(part_size)
             , _remove_file(false)
     {}
