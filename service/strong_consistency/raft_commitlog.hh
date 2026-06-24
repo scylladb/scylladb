@@ -51,7 +51,7 @@ public:
     ~raft_commitlog();
 
     // Persist the given log entries in the commit log and get the replay position handles for them.
-    future<> store_log_entries(const raft::log_entry_ptr_list& entries);
+    future<> store_log_entries(const raft::log_entry_ptr_list& entries, raft::index_t commit_idx);
 
     // Get the log items that were loaded from database commit log on startup.
     raft::log_entries load_log();

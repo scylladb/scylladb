@@ -196,7 +196,7 @@ future<> raft_groups_storage::store_snapshot_descriptor(const raft::snapshot_des
 }
 
 future<> raft_groups_storage::store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
-    return _raft_commitlog.store_log_entries(entries);
+    return _raft_commitlog.store_log_entries(entries, _last_known_commit_idx);
 }
 
 future<> raft_groups_storage::truncate_log(raft::index_t idx) {
