@@ -5,6 +5,17 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, unlabeled]
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to trigger CI for'
+        required: true
+        type: string
+      target_repo:
+        description: 'Repository owner/name (default: scylladb/scylladb)'
+        required: false
+        default: 'scylladb/scylladb'
+        type: string
 
 permissions:
   contents: read
@@ -16,7 +27,9 @@ jobs:
     # 1. PR events (opened/reopened/synchronize/ready_for_review) for non-draft PRs
     # 2. PR unlabeled event when 'conflicts' label is removed
     # 3. issue_comment event when a non-bot org member comments '@scylladbbot trigger-ci'
+    # 4. workflow_dispatch (manual trigger for testing)
     if: |
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_target' && github.event.action != 'unlabeled' && !github.event.pull_request.draft) ||
       (github.event_name == 'pull_request_target' && github.event.action == 'unlabeled' && github.event.label.name == 'conflicts') ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.login != 'scylladbbot')
@@ -122,11 +135,24 @@ jobs:
           AFTER_SHA: ${{ github.event.after }}
           # Comment event context
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          # Manual dispatch context
+          DISPATCH_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          DISPATCH_TARGET_REPO: ${{ github.event.inputs.target_repo }}
         shell: bash
         run: |
           PR_REPO="$PR_REPO_FROM_EVENT"
 
-          if [ "$EVENT_NAME" = "issue_comment" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # For manual dispatch, use the target repo input (defaults to scylladb/scylladb)
+            PR_REPO="$DISPATCH_TARGET_REPO"
+            PR_NUMBER="$DISPATCH_PR_NUMBER"
+            PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
+            PR_SHA=$(echo "$PR_JSON" | jq -r '.head.sha')
+            PR_USER=$(echo "$PR_JSON" | jq -r '.user.login')
+            PR_DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
+            BASE_BRANCH=$(echo "$PR_JSON" | jq -r '.base.ref')
+            PR_URL=$(echo "$PR_JSON" | jq -r '.html_url')
+          elif [ "$EVENT_NAME" = "issue_comment" ]; then
             # For comment events, fetch PR details from the API
             PR_NUMBER="$ISSUE_NUMBER"
             PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
@@ -430,7 +456,7 @@ jobs:
           echo "Required checks: build=$BUILD_REQUIRED dtest=$DTEST_REQUIRED unittest=$UNITTEST_REQUIRED artifacts=$ARTIFACTS_REQUIRED gdb=$GDB_REQUIRED"
 
       - name: Check trusted contributor
-        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true' && github.event_name != 'issue_comment'
+        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true' && github.event_name != 'issue_comment' && github.event_name != 'workflow_dispatch'
         id: trust-check
         env:
           GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
@@ -467,7 +493,7 @@ jobs:
         if: |
           steps.resolve-pr.outputs.should_continue == 'true' &&
           steps.docs-check.outputs.is_docs_only != 'true' &&
-          (steps.trust-check.outputs.trusted == 'true' || github.event_name == 'issue_comment') &&
+          (steps.trust-check.outputs.trusted == 'true' || github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch') &&
           steps.pr-details.outputs.has_conflicts != 'true' &&
           steps.required-checks.outputs.build_required == 'true' &&
           steps.target-folder.outputs.folder != ''
