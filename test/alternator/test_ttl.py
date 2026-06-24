@@ -844,3 +844,17 @@ def test_ttl_tag_is_unwritable(test_table, scylla_only):
         client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag_name, 'Value': 'x'}])
     with pytest.raises(ClientError, match='ValidationException.*internal'):
         client.untag_resource(ResourceArn=arn, TagKeys=[tag_name])
+
+# TimeWindowCompactionStrategy is not supported for Alternator tables.
+# Reproduces scylladb/scylladb#19805.
+def test_twcs_is_not_supported_for_alternator_tables(dynamodb, cql, scylla_only):
+    from cassandra.protocol import ConfigurationException as CqlConfigurationException
+    with new_test_table(dynamodb,
+        Tags=TAGS,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]
+        ) as table:
+            ks = 'alternator_' + table.name
+            with pytest.raises(CqlConfigurationException, match='not supported for Alternator'):
+                cql.execute(f"ALTER TABLE \"{ks}\".\"{table.name}\" WITH "
+                            f"compaction = {{'class': 'TimeWindowCompactionStrategy'}}")
