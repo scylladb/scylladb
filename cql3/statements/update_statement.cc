@@ -86,19 +86,16 @@ parse(const sstring& json_string, const std::vector<column_definition>& expected
 namespace statements {
 
 update_statement_impl::update_statement_impl(const statement_type type, schema_ptr schema)
-    : modification_statement_impl(type, std::move(schema))
+    : modification_statement_impl(type,
+        {
+            .allow_clustering_key_slices = false,
+            .require_full_clustering_key = true,
+        },
+        std::move(schema))
 {
 }
 
-bool update_statement::require_full_clustering_key() const {
-    return true;
-}
-
-bool update_statement::allow_clustering_key_slices() const {
-    return false;
-}
-
-void update_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {
+void update_statement_impl::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {
     for (auto&& update : _column_operations) {
         if (update->should_skip_operation(params._options)) {
             continue;
@@ -107,32 +104,32 @@ void update_statement::execute_operations_for_key(mutation& m, const clustering_
     }
 }
 
-void update_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const {
+void update_statement_impl::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const {
     auto prefix = range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty();
-    if (s->is_dense()) {
-        if (prefix.is_empty(*s) || prefix.components().front().empty()) {
-            throw exceptions::invalid_request_exception(format("Missing PRIMARY KEY part {}", s->clustering_key_columns().begin()->name_as_text()));
+    if (_schema->is_dense()) {
+        if (prefix.is_empty(*_schema) || prefix.components().front().empty()) {
+            throw exceptions::invalid_request_exception(format("Missing PRIMARY KEY part {}", _schema->clustering_key_columns().begin()->name_as_text()));
         }
         // An empty name for the value is what we use to recognize the case where there is not column
         // outside the PK, see CreateStatement.
         // Since v3 schema we use empty_type instead, see schema.cc.
-        auto rb = s->regular_begin();
+        auto rb = _schema->regular_begin();
         if (rb->name().empty() || rb->type == empty_type) {
             // There is no column outside the PK. So no operation could have passed through validation
             throwing_assert(_column_operations.empty());
-            constants::setter(*s->regular_begin(), expr::constant(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
+            constants::setter(*_schema->regular_begin(), expr::constant(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
         } else {
             // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
             if (_column_operations.empty()) {
-                throw exceptions::invalid_request_exception(format("Column {} is mandatory for this COMPACT STORAGE table", s->regular_begin()->name_as_text()));
+                throw exceptions::invalid_request_exception(format("Column {} is mandatory for this COMPACT STORAGE table", _schema->regular_begin()->name_as_text()));
             }
         }
     } else {
         // If there are static columns, there also must be clustering columns, in which
         // case empty prefix can only refer to the static row.
-        bool is_static_prefix = s->has_static_columns() && prefix.is_empty(*s);
-        if (type.is_insert() && !is_static_prefix && s->is_cql3_table()) {
-            auto& row = m.partition().clustered_row(*s, prefix);
+        bool is_static_prefix = _schema->has_static_columns() && prefix.is_empty(*_schema);
+        if (_type.is_insert() && !is_static_prefix && _schema->is_cql3_table()) {
+            auto& row = m.partition().clustered_row(*_schema, prefix);
             row.apply(row_marker(params.timestamp(), params.ttl(), params.expiry()));
         }
     }
@@ -423,11 +420,11 @@ update_statement::update_statement(cf_name name,
     , _where_clause(std::move(where_clause))
 { }
 
-::shared_ptr<cql3::statements::modification_statement>
+::shared_ptr<cql3::statements::modification_statement_impl>
 update_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
 {
-    auto stmt = ::make_shared<cql3::statements::update_statement>(audit_info(), statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = ::make_shared<cql3::statements::update_statement_impl>(statement_type::UPDATE, schema);
 
     // FIXME: quadratic
     for (size_t i = 0; i < _updates.size(); ++i) {

@@ -40,6 +40,7 @@ struct statement_type_desc {
 };
 
 class modification_statement_impl {
+protected:
     const statement_type _type;
     const statement_type_desc _desc;
     const schema_ptr _schema;
@@ -81,8 +82,6 @@ class modification_statement_impl {
     // atomicity, e.g. SET col = col + 1 on a non-counter column.
     bool _requires_lwt = false;
 
-    std::vector<::shared_ptr<operation>> _column_operations;
-
     bool _if_not_exists = false;
     bool _if_exists = false;
 
@@ -94,7 +93,6 @@ class modification_statement_impl {
 
     seastar::shared_ptr<metadata> _metadata;
 
-private:
     // Return true if this statement doesn't update or read any regular rows, only static rows.
     // Note, it isn't enough to just check !_sets_regular_columns && _regular_conditions.empty(),
     // because a DELETE statement that deletes whole rows (DELETE FROM ...) technically doesn't
@@ -105,9 +103,9 @@ private:
         return _sets_static_columns && !_sets_regular_columns && !_has_regular_column_conditions;
     }
 
-protected:
     expr::expression _condition = expr::conjunction{{}}; // TRUE
     shared_ptr<const restrictions::statement_restrictions> _restrictions;
+    std::vector<::shared_ptr<operation>> _column_operations;
 
     /**
      * If there are conditions on the statement, this is called after the where clause and conditions have been
@@ -121,6 +119,7 @@ public:
 
     modification_statement_impl(const statement_type type, statement_type_desc desc, schema_ptr schema);
 
+    /// Prepare time non-constant API:
     void add_operation(::shared_ptr<operation> op);
 
     void set_if_not_exist_condition();
@@ -139,6 +138,9 @@ public:
     bool has_conditions() const { return _has_regular_column_conditions || _has_static_column_conditions; }
 
     friend class raw::modification_statement;
+
+    /// Runtime constant API:
+    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const = 0;
 };
 
 /*
@@ -171,8 +173,6 @@ public:
     virtual bool require_full_clustering_key() const = 0;
 
     virtual bool allow_clustering_key_slices() const = 0;
-
-    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const = 0;
 
     uint32_t get_bound_terms() const override;
 

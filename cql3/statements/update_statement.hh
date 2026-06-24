@@ -27,11 +27,7 @@ public:
     update_statement_impl(const statement_type type, schema_ptr schema);
 
 private:
-    virtual bool require_full_clustering_key() const override;
-
-    virtual bool allow_clustering_key_slices() const override;
-
-    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const override;
+    void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const override;
 
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const;
 };
