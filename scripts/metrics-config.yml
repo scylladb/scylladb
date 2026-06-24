@@ -72,3 +72,6 @@
 "alternator/stats.cc":
   params:
     group_name: "alternator"
+"service/qos/service_level_controller.cc":
+  groups:
+    "134": "service_level"
