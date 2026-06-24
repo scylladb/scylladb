@@ -4318,8 +4318,6 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
         }
 
-        auto erm = ks.get_static_effective_replication_map();
-
         // Build tablet map mutations for all tables and persist them to group0 (system.tablets)
         // in a single command.
         //
@@ -4330,35 +4328,39 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // should turn this into a topology request.
         group0_update_collector updates;
 
-        auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
-            slogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
-                         ks_name, cf_name, tmap.tablet_count(), target_pow2);
+        {
+            auto erm = ks.get_static_effective_replication_map();
 
-            co_await replica::tablet_map_to_mutations(
-                tmap,
-                tid,
-                ks_name,
-                cf_name,
-                guard.write_timestamp(),
-                _feature_service,
-                [&] (mutation m) -> future<> {
-                    updates.emplace_back(co_await make_canonical_mutation_gently(m));
-                });
-        };
+            auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
+                slogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
+                             ks_name, cf_name, tmap.tablet_count(), target_pow2);
 
-        if (use_pow2_presplit) {
-            for (const auto& [tid, cf_name] : tables_to_migrate) {
-                size_t target_pow2 = 0;
-                if (auto it = target_pow2s.find(tid); it != target_pow2s.end()) {
-                    target_pow2 = it->second;
+                co_await replica::tablet_map_to_mutations(
+                    tmap,
+                    tid,
+                    ks_name,
+                    cf_name,
+                    guard.write_timestamp(),
+                    _feature_service,
+                    [&] (mutation m) -> future<> {
+                        updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                    });
+            };
+
+            if (use_pow2_presplit) {
+                for (const auto& [tid, cf_name] : tables_to_migrate) {
+                    size_t target_pow2 = 0;
+                    if (auto it = target_pow2s.find(tid); it != target_pow2s.end()) {
+                        target_pow2 = it->second;
+                    }
+                    auto tmap = build_tablet_map_for_migration(tm, erm, target_pow2);
+                    co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
                 }
-                auto tmap = build_tablet_map_for_migration(tm, erm, target_pow2);
-                co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
-            }
-        } else {
-            auto shared_tmap = build_tablet_map_for_migration(tm, erm, 0);
-            for (const auto& [tid, cf_name] : tables_to_migrate) {
-                co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
+            } else {
+                auto shared_tmap = build_tablet_map_for_migration(tm, erm, 0);
+                for (const auto& [tid, cf_name] : tables_to_migrate) {
+                    co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
+                }
             }
         }
 
