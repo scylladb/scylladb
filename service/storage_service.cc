@@ -3984,8 +3984,8 @@ future<locator::token_metadata_lock> storage_service::get_token_metadata_lock() 
 //
 // By default the merge_lock (that is unified with the token_metadata_lock)
 // is acquired for mutating the token_metadata.  Pass acquire_merge_lock::no
-// when called from paths that already acquire the merge_lock, like
-// db::schema_tables::do_merge_schema.
+// when called from paths that already acquire the merge_lock, like the
+// schema-applier commit path.
 //
 // Note: must be called on shard 0.
 future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock acquire_merge_lock) noexcept {
