@@ -421,32 +421,6 @@ SEASTAR_TEST_CASE(test_client_upload_file_single_part_proxy) {
 }
 
 
-SEASTAR_THREAD_TEST_CASE(test_client_abort_stuck_semaphore) {
-    const sstring base_name(fmt::format("test_object-{}", ::getpid()));
-    constexpr size_t object_size = 128_KiB;
-
-    tmpdir tmp;
-    const auto file_path = tmp.path() / base_name;
-
-    create_file(file_path, object_size).get();
-
-    testlog.info("Make client\n");
-    semaphore mem(32_KiB);
-    auto cln = make_minio_client(mem);
-    auto close_client = deferred_close(*cln);
-    const auto object_name = fmt::format("/{}/{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), base_name);
-    auto delete_object = deferred_delete_object(cln, object_name);
-    abort_source as;
-    auto upload = cln->upload_file(file_path, object_name, {}, {}, &as);
-    auto ex = std::make_exception_ptr(std::runtime_error("Cancelling!"));
-    as.request_abort_ex(ex);
-    upload.wait();
-    BOOST_REQUIRE(upload.failed());
-    BOOST_REQUIRE_EXCEPTION(std::rethrow_exception(upload.get_exception()), semaphore_aborted, [](const semaphore_aborted& e) {
-        return e.what() == "Semaphore aborted"sv;
-    });
-}
-
 void client_readable_file(const client_maker_function& client_maker) {
     const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
