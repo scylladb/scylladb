@@ -170,7 +170,7 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Provide the URL to artifacts directory to generate the link to failed tests directory "
                              "with logs")
     parser.add_argument("--cluster-pool-size", action="store", default=None, type=int,
-                        help="Set the pool_size for PythonTest and its descendants. Alternatively environment variable "
+                        help="Set the pool_size for the per-suite Scylla cluster pool. Alternatively environment variable "
                              "CLUSTER_POOL_SIZE can be used to achieve the same")
     parser.add_argument('--manual-execution', action='store_true', default=False,
                         help='Let me manually run the test executable at the moment this script would run it')
