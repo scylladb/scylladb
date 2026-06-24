@@ -65,17 +65,12 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
 }
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
+    // The io_fiber calls this *before* pushing entries to the applier_fiber,
+    // so _last_known_commit_idx is always >= the raft index of any entry
+    // that has been applied to a memtable. The actual persistence is deferred
+    // to memtable flush (persist_commit_idx_on_flush).
     _last_known_commit_idx = idx;
-    return execute_with_linearization_point([this, idx] {
-        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
-            db::system_keyspace::RAFT_GROUPS);
-        return _qp.execute_internal(
-            store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(idx.value())},
-            cql3::query_processor::cache_internal::yes).discard_result().then([this, idx] {
-                _last_persisted_commit_idx = idx;
-            });
-    });
+    return make_ready_future<>();
 }
 
 future<> raft_groups_storage::persist_commit_idx_on_flush() {
@@ -210,8 +205,14 @@ future<> raft_groups_storage::truncate_log(raft::index_t idx) {
 }
 
 future<> raft_groups_storage::abort() {
-    // wait for pending write requests to complete.
-    // TODO: should we wait for all kinds of requests?
+    // Queue the final commit_idx persist before marking the storage aborted.
+    // persist_commit_idx_on_flush() updates _pending_op_fut synchronously via
+    // execute_with_linearization_point(), so awaiting _pending_op_fut below
+    // waits for older writes and this final commit_idx write.
+    if (_last_known_commit_idx > _last_persisted_commit_idx) {
+        (void)persist_commit_idx_on_flush();
+    }
+    _aborted = true;
     return std::move(_pending_op_fut);
 }
 
