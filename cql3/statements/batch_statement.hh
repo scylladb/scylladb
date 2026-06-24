@@ -138,13 +138,14 @@ private:
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
 
-    future<exceptions::coordinator_result<db::large_data_violation_type>> execute_without_conditions(
+    future<exceptions::coordinator_result<>> execute_without_conditions(
             query_processor& qp,
             utils::chunked_vector<mutation> mutations,
             db::consistency_level cl,
             db::timeout_clock::time_point timeout,
             tracing::trace_state_ptr tr_state,
-            service_permit permit) const;
+            service_permit permit,
+            db::large_data_violation_type* violations) const;
 
     future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
             query_processor& qp,

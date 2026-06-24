@@ -300,7 +300,8 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
         token = keys[0].start()->value().token();
     } 
 
-    auto res = co_await execute_without_condition(qp, qs, options, json_cache, std::move(keys));
+    auto violations = db::large_data_violation_type::none;
+    auto res = co_await execute_without_condition(qp, qs, options, json_cache, std::move(keys), &violations);
     
     if (!res) {
         co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
@@ -313,7 +314,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     }
     // Surface any coordinator-side large data guardrail soft limit violations
     // detected during the write to the client as a CQL warning.
-    if (auto warning = db::large_data_soft_violation_warning(res.value()); !warning.empty()) {
+    if (auto warning = db::large_data_soft_violation_warning(violations); !warning.empty()) [[unlikely]] {
         result->add_warning(std::move(warning));
     }
     if (keys_size_one) {
@@ -330,18 +331,19 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     co_return std::move(result);
 }
 
-future<coordinator_result<db::large_data_violation_type>>
-modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const {
+future<coordinator_result<>>
+modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, json_cache_opt& json_cache, std::vector<dht::partition_range> keys, db::large_data_violation_type* violations) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
-    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, json_cache, std::move(keys)).then([this, cl, timeout, &qp, &qs, &options] (auto mutations) {
+    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, json_cache, std::move(keys)).then([this, cl, timeout, &qp, &qs, &options, violations] (auto mutations) {
         if (mutations.empty()) {
-            return make_ready_future<coordinator_result<db::large_data_violation_type>>(db::large_data_violation_type::none);
+            return make_ready_future<coordinator_result<>>(bo::success());
         }
 
         return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write(), {
             .node_local_only = options.get_specific_options().node_local_only,
-            .bypass_large_data_guardrails = this->attrs->is_bypass_large_data_guardrails()
+            .bypass_large_data_guardrails = this->attrs->is_bypass_large_data_guardrails(),
+            .violations_out = violations
         });
     });
 }
@@ -466,7 +468,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
         }
         // Surface any coordinator-side large data guardrail soft limit violations
         // detected during the LWT to the client as a CQL warning.
-        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) {
+        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
             result->add_warning(std::move(warning));
         }
         return result;

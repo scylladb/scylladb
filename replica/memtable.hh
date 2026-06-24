@@ -241,9 +241,9 @@ public:
         apply(m, nullptr, std::move(h));
     }
     void apply(const frozen_mutation& m, const schema_ptr& m_schema,
-               const db::large_data_guardrail_base& guardrails, db::large_data_cache_tracker* tracker, db::rp_handle&& h = {});
+               const db::large_data_guardrail_base& guardrails, db::large_data_cache_tracker* tracker, db::large_data_violation_type* violations_out = nullptr, db::rp_handle&& h = {});
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
-        apply(m, m_schema, *db::noop_large_data_guardrail::instance(), nullptr, std::move(h));
+        apply(m, m_schema, *db::noop_large_data_guardrail::instance(), nullptr, nullptr, std::move(h));
     }
     void evict_entry(memtable_entry& e, mutation_cleaner& cleaner) noexcept;
 

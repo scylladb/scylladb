@@ -313,12 +313,14 @@ db::guardrail_config make_coordinator_config(
 }
 
 void coordinator_check(const db::large_data_guardrail& g, const mutation& m) {
-    g.check_coordinator(*m.schema(), m.partition(), m.key());
+    g.check_coordinator(*m.schema(), m.partition(), m.key(), nullptr);
 }
 
 // Runs the coordinator check collecting soft limit violations.
 db::large_data_violation_type coordinator_soft_violations(const db::large_data_guardrail& g, const mutation& m) {
-    return g.check_coordinator(*m.schema(), m.partition(), m.key());
+    db::large_data_violation_type violations = db::large_data_violation_type::none;
+    g.check_coordinator(*m.schema(), m.partition(), m.key(), &violations);
+    return violations;
 }
 
 schema_ptr make_set_schema() {
@@ -548,7 +550,7 @@ SEASTAR_THREAD_TEST_CASE(test_coordinator_noop_allows_everything) {
     auto s = make_simple_schema();
     auto m = make_mutation_with_cell(s, 2 * MB);
     BOOST_REQUIRE_NO_THROW(
-        db::noop_large_data_guardrail::instance()->check(*m.schema(), m.partition(), m.key()));
+        db::noop_large_data_guardrail::instance()->check(*m.schema(), m.partition(), m.key(), nullptr));
 }
 
 BOOST_AUTO_TEST_CASE(test_per_table_guardrails_enabled_by_extension) {
@@ -669,7 +671,7 @@ SEASTAR_THREAD_TEST_CASE(test_coordinator_soft_limit_hard_limit_still_throws) {
     auto cfg = make_coordinator_config(1 /* cell_fail_mb */, 0, 0, 0, 0, 0, true);
     db::large_data_guardrail g(std::move(cfg));
     auto m = make_mutation_with_cell(s, MB + 1);
-    BOOST_REQUIRE_THROW(g.check_coordinator(*m.schema(), m.partition(), m.key()),
+    BOOST_REQUIRE_THROW(g.check_coordinator(*m.schema(), m.partition(), m.key(), nullptr),
             exceptions::invalid_request_exception);
 }
 

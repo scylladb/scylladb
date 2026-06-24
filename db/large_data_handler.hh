@@ -116,14 +116,15 @@ private:
     record_set<record_type::collection> _collections;
 };
 
-// Coordinator-side soft limit violation categories.  Used as a set of bit
-// flags so a single write can accumulate violations across all of its rows,
-// cells, and collections (see the operators below).
+// Soft limit violation categories.  Used as a set of bit flags so a single
+// write can accumulate violations across all of its partitions, rows, cells,
+// and collections (see the operators below).
 enum class large_data_violation_type : uint8_t {
     none       = 0,
     row        = 1 << 0,
     cell       = 1 << 1,
     collection = 1 << 2,
+    partition  = 1 << 3,
 };
 
 inline constexpr large_data_violation_type operator|(large_data_violation_type a, large_data_violation_type b) {
@@ -140,8 +141,8 @@ inline constexpr large_data_violation_type operator&(large_data_violation_type a
 
 // Translate a set of soft-limit violation categories into the client-facing CQL
 // warning string, or an empty string when no categories are set.  The message
-// lists the violated categories in row, cell, collection order, e.g.
-//   "Large data guardrail: Soft limit violation for cell, collection"
+// lists the violated categories in partition, row, cell, collection order, e.g.
+//   "Large data guardrail: Soft limit violation for partition, cell"
 sstring large_data_soft_violation_warning(large_data_violation_type violations);
 
 // Each replica::table holds a shared_ptr to either a real guardrail or a
@@ -157,14 +158,12 @@ public:
     // Replica-side check: looks up partition/row/collection in the SSTable
     // metadata index and rejects or warns based on recorded on-disk sizes.
     virtual void check(const schema& s, const mutation_partition& mp,
-            partition_key_view pk) const = 0;
+            partition_key_view pk, db::large_data_violation_type* violations_out) const = 0;
     // Coordinator-side check: inspects the mutation content directly
     // (cell value sizes, row memory usage, collection element counts).
-    // Hard limit violations throw; soft limit violations are logged and, when
-    // CQL warnings are enabled, returned as the set of violated categories so
-    // the CQL layer can surface them to the client as a response warning.
-    virtual large_data_violation_type check_coordinator(const schema& s, const mutation_partition& mp,
-            partition_key_view pk) const = 0;
+    // Hard limit violations throw; soft limit violations are logged.
+    virtual void check_coordinator(const schema& s, const mutation_partition& mp,
+            partition_key_view pk, db::large_data_violation_type* violations_out) const = 0;
     // Returns a tracker to pass to partition_entry::apply(), or nullptr
     // when no memtable-level tracking is needed.  The returned pointer
     // remains valid until the next call to get_memtable_cache_tracker() or
@@ -186,9 +185,9 @@ public:
         return inst;
     }
     void check(const schema&, const mutation_partition&,
-            partition_key_view) const override {}
-    large_data_violation_type check_coordinator(const schema&, const mutation_partition&,
-            partition_key_view) const override { return large_data_violation_type::none; }
+            partition_key_view, db::large_data_violation_type*) const override {}
+    void check_coordinator(const schema&, const mutation_partition&,
+            partition_key_view, db::large_data_violation_type*) const override {}
     large_data_cache_tracker* get_memtable_cache_tracker(const schema&,
             partition_key_view) override { return nullptr; }
     void on_flush() override {}
@@ -203,9 +202,9 @@ public:
         , _tracker(_cfg, _memtable_row_cache, _memtable_collection_cache) {}
 
     void check(const schema& s, const mutation_partition& mp,
-            partition_key_view pk) const override;
-    large_data_violation_type check_coordinator(const schema& s, const mutation_partition& mp,
-            partition_key_view pk) const override;
+            partition_key_view pk, db::large_data_violation_type* violations_out) const override;
+    void check_coordinator(const schema& s, const mutation_partition& mp,
+            partition_key_view pk, db::large_data_violation_type* violations_out) const override;
     large_data_cache_tracker* get_memtable_cache_tracker(const schema& s,
             partition_key_view pk) override;
     void on_flush() override;
@@ -213,11 +212,11 @@ public:
     void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) override;
 
 private:
-    void check_partition(const schema& s, bytes_view pk_bytes, partition_key_view pk) const;
-    void check_rows_and_collections(const schema& s, bytes_view pk_bytes, const mutation_partition& mp, partition_key_view pk) const;
-    void check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+    large_data_violation_type check_partition(const schema& s, bytes_view pk_bytes, partition_key_view pk) const;
+    large_data_violation_type check_rows_and_collections(const schema& s, bytes_view pk_bytes, const mutation_partition& mp, partition_key_view pk) const;
+    large_data_violation_type check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
             bytes_view ck_bytes, const clustering_key_prefix* ck) const;
-    void check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+    large_data_violation_type check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
             const column_definition& cdef, bytes_view ck_bytes,
             const clustering_key_prefix* ck) const;
 

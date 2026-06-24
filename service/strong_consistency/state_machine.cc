@@ -87,7 +87,7 @@ public:
             apply_futures.reserve(muts.size());
             for (size_t i = 0; i < command.size(); ++i) {
                 throwing_assert(replay_positions[i].index == command[i]->idx);
-                apply_futures.emplace_back(_db.apply_in_memory(muts[i], schemas[i], std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance()));
+                apply_futures.emplace_back(_db.apply_in_memory(muts[i], schemas[i], std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance()).discard_result());
             }
             co_await when_all_succeed(apply_futures.begin(), apply_futures.end());
         } catch (replica::no_such_column_family&) {

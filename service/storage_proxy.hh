@@ -173,6 +173,7 @@ struct storage_proxy_coordinator_mutate_options {
     cdc::per_request_options cdc_options;
     node_local_only node_local_only = node_local_only::no;
     bool bypass_large_data_guardrails = false;
+    db::large_data_violation_type* violations_out = nullptr;
 };
 
 // Result of a CAS (LWT) operation: whether the conditional update was applied,
@@ -370,7 +371,7 @@ private:
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void remove_response_handler_entry(response_handlers_map::iterator entry);
-    void got_response(response_id_type id, locator::host_id from, std::optional<db::view::update_backlog> backlog);
+    void got_response(response_id_type id, locator::host_id from, std::optional<db::view::update_backlog> backlog, db::large_data_violation_type violations = {});
     void got_failure_response(response_id_type id, locator::host_id from, size_t count, std::optional<db::view::update_backlog> backlog, error err, std::optional<sstring> msg);
     future<result<>> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
@@ -394,7 +395,7 @@ private:
             std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
             service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable, coordinator_mutate_options options);
     result<response_id_type> make_write_response_handler(locator::effective_replication_map_ptr ermp, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, host_id_vector_replica_set targets,
-            const host_id_vector_topology_change& pending_endpoints, host_id_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable, bool skip_large_data_guardrails = false);
+            const host_id_vector_topology_change& pending_endpoints, host_id_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable, bool skip_large_data_guardrails = false, db::large_data_violation_type* violations_out = nullptr);
     result<response_id_type> create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
     result<response_id_type> create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
     result<response_id_type> create_write_response_handler(const batchlog_replay_mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
@@ -604,7 +605,7 @@ private:
     future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
+    future<db::large_data_violation_type> mutate_locally(const schema_ptr&, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
             smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails = false);
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
@@ -714,13 +715,13 @@ public:
     }
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate(), bool skip_large_data_guardrails = false) {
+    future<db::large_data_violation_type> mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate(), bool skip_large_data_guardrails = false) {
         return mutate_locally(s, m, tr_state, sync, timeout, _write_smp_service_group, rate_limit_info, skip_large_data_guardrails);
     }
     // Applies materialized view mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_mv_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate()) {
-        return mutate_locally(s, m, tr_state, sync, timeout, _write_mv_smp_service_group, rate_limit_info);
+        return mutate_locally(s, m, tr_state, sync, timeout, _write_mv_smp_service_group, rate_limit_info).discard_result();
     }
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
@@ -757,7 +758,7 @@ public:
     future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                            clock_type::time_point timeout, service_permit permit);
 
-    future<result<db::large_data_violation_type>> mutate_with_triggers(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
+    future<result<>> mutate_with_triggers(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                           bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit,
                                           db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false,
                                           coordinator_mutate_options options = {});
