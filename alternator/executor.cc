@@ -1981,13 +1981,27 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
             schema_builder builder(tab);
 
-            if (handle_table_class(request, builder, p.local().features())) {
+            bool table_class_updated = handle_table_class(request, builder, p.local().features());
+            if (table_class_updated) {
                 empty_request = false;
+                if (rjson::find(request, "StreamSpecification") ||
+                    rjson::find(request, "GlobalSecondaryIndexUpdates") ||
+                    rjson::find(request, "VectorIndexUpdates") ||
+                    rjson::find(request, "BillingMode")) {
+                    co_return api_error::validation("TableClass modification must be the only operation in the request");
+                }
             }
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
-            if (stream_specification && stream_specification->IsObject()) {
+            if (stream_specification) {
+                if (!stream_specification->IsObject()) {
+                    co_return api_error::validation("StreamSpecification must be an object");
+                }
                 empty_request = false;
+                if (rjson::find(request, "GlobalSecondaryIndexUpdates") ||
+                    rjson::find(request, "VectorIndexUpdates")) {
+                    co_return api_error::validation("You cannot create or delete index while changing stream status");
+                }
                 if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
                     validate_cdc_log_name_length(builder.cf_name());
                     bool uses_tablets = p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets();
