@@ -37,6 +37,8 @@ static constexpr unsigned maximum_parts_in_piece = 10'000;
 // https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingObjects.html
 static constexpr size_t maximum_object_size = maximum_parts_in_piece * maximum_part_size;
 
+static constexpr size_t max_client_mpu_in_flight = 32;
+
 class range {
     friend struct fmt::formatter<range>;
 
@@ -111,6 +113,7 @@ class client : public enable_shared_from_this<client> {
     std::string _host;
     endpoint_config_ptr _cfg;
     semaphore _creds_sem;
+    semaphore _mpus_sem{max_client_mpu_in_flight};
     timer<seastar::lowres_clock> _creds_invalidation_timer;
     timer<seastar::lowres_clock> _creds_update_timer;
     aws_credentials _credentials;
