@@ -56,7 +56,7 @@ static void register_policy(const std::string& key, failure_policy policy) {
     cln.make_request(std::move(req), [](const http::reply&, input_stream<char>&&) -> future<> { return seastar::make_ready_future(); }).get();
 }
 
-void test_client_upload_file(std::string_view test_name, failure_policy policy, size_t total_size, size_t memory_size) {
+void test_client_upload_file(std::string_view test_name, failure_policy policy, size_t total_size) {
     tmpdir tmp;
     const auto file_path = tmp.path() / fmt::format("test-{}", ::getpid());
     {
@@ -75,8 +75,7 @@ void test_client_upload_file(std::string_view test_name, failure_policy policy, 
     const auto object_name = fmt::format("/{}/{}-{}", "test", test_name, ::getpid());
     register_policy(object_name, policy);
 
-    semaphore mem{memory_size};
-    auto client = s3::client::make(get_address(), make_minio_config(), mem);
+    auto client = s3::client::make(get_address(), make_minio_config());
     auto client_shutdown = deferred_close(*client);
     client->upload_file(file_path, object_name).get();
 }
@@ -85,24 +84,21 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_success) {
     const size_t part_size = 5_MiB;
     const size_t remainder_size = part_size / 2;
     const size_t total_size = 4 * part_size + remainder_size;
-    const size_t memory_size = part_size;
-    BOOST_REQUIRE_NO_THROW(test_client_upload_file(seastar_test::get_name(), failure_policy::SUCCESS, total_size, memory_size));
+    BOOST_REQUIRE_NO_THROW(test_client_upload_file(seastar_test::get_name(), failure_policy::SUCCESS, total_size));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_retryable_success) {
     const size_t part_size = 5_MiB;
     const size_t remainder_size = part_size / 2;
     const size_t total_size = 4 * part_size + remainder_size;
-    const size_t memory_size = part_size;
-    BOOST_REQUIRE_NO_THROW(test_client_upload_file(seastar_test::get_name(), failure_policy::RETRYABLE_FAILURE, total_size, memory_size));
+    BOOST_REQUIRE_NO_THROW(test_client_upload_file(seastar_test::get_name(), failure_policy::RETRYABLE_FAILURE, total_size));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_failure_1) {
     const size_t part_size = 5_MiB;
     const size_t remainder_size = part_size / 2;
     const size_t total_size = 4 * part_size + remainder_size;
-    const size_t memory_size = part_size;
-    BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::NEVERENDING_RETRYABLE_FAILURE, total_size, memory_size),
+    BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::NEVERENDING_RETRYABLE_FAILURE, total_size),
             storage_io_error, [](const storage_io_error& e) {
                 return e.code().value() == EIO && e.what() == "S3 request failed. Code: 1. Reason: We encountered an internal error. Please try again."sv;
             });
@@ -112,8 +108,7 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_failure_2) {
     const size_t part_size = 5_MiB;
     const size_t remainder_size = part_size / 2;
     const size_t total_size = 4 * part_size + remainder_size;
-    const size_t memory_size = part_size;
-    BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::NONRETRYABLE_FAILURE, total_size, memory_size), storage_io_error,
+    BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::NONRETRYABLE_FAILURE, total_size), storage_io_error,
             [](const storage_io_error& e) {
                 return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
             });
@@ -124,8 +119,7 @@ void do_test_client_multipart_upload(failure_policy policy, bool is_jumbo = fals
 
     register_policy(name, policy);
     testlog.info("Make client");
-    semaphore mem(16 << 20);
-    auto cln = s3::client::make(get_address(), make_minio_config(), mem);
+    auto cln = s3::client::make(get_address(), make_minio_config());
     auto close_client = deferred_close(*cln);
 
     testlog.info("Upload object");
