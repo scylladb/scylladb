@@ -172,6 +172,23 @@ def test_tableclass_update_table(dynamodb):
         with pytest.raises(ClientError, match='ValidationException.*table.class'):
             table.meta.client.update_table(TableName=table.name, TableClass='junk')
 
+# Test that a single UpdateTable is NOT allowed to change TableClass together
+# with anything else. DynamoDB returns a ValidationException saying
+# "TableClass modification must be the only operation in the request".
+# We test this by attempting to change both TableClass and StreamSpecification
+# in a single UpdateTable.
+def test_tableclass_update_table_combined(dynamodb):
+    schema = {
+        'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        'AttributeDefinitions': [{ 'AttributeName': 'p', 'AttributeType': 'S'}],
+    }
+    with new_test_table(dynamodb, **schema) as table:
+        with pytest.raises(ClientError, match='ValidationException.*only'):
+            table.meta.client.update_table(
+                TableName=table.name,
+                TableClass='STANDARD_INFREQUENT_ACCESS',
+                StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'})
+
 # DynamoDB includes LastUpdateDateTime in TableClassSummary after an
 # UpdateTable that changes the TableClass. This is not yet implemented.
 @pytest.mark.xfail(reason="LastUpdateDateTime in TableClassSummary not yet implemented")

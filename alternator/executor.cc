@@ -2650,8 +2650,15 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
             schema_builder builder(tab);
 
-            if (handle_table_class(request, builder, p.local().features())) {
+            bool table_class_updated = handle_table_class(request, builder, p.local().features());
+            if (table_class_updated) {
                 empty_request = false;
+                if (rjson::find(request, "StreamSpecification") ||
+                    rjson::find(request, "GlobalSecondaryIndexUpdates") ||
+                    rjson::find(request, "VectorIndexUpdates") ||
+                    rjson::find(request, "BillingMode")) {
+                    co_return api_error::validation("TableClass modification must be the only operation in the request");
+                }
             }
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
