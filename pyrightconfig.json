@@ -1,0 +1,8 @@
+// Pyright / Pylance configuration file.
+// Forces the Python language server to search the workspace root first,
+// which prevents shadowing the local './test' package with Python's standard library 'test' module.
+{
+  "extraPaths": [
+    "."
+  ]
+}
