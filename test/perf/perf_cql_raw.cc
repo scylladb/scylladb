@@ -195,14 +195,22 @@ public:
 
     future<> stop() {
         _reader_stopped = true;
+        // Abort the socket's input so the reader fiber's in-flight read returns
+        // promptly, then join the reader before closing the streams (closing
+        // while a read is outstanding closes the fd from under it).
         try {
-            co_await _in.close();
-            co_await _out.close();
+            _cs.shutdown_input();
         } catch (...) {
             // ignore
         }
         try {
             co_await std::move(_reader_done);
+        } catch (...) {
+            // ignore
+        }
+        try {
+            co_await _in.close();
+            co_await _out.close();
         } catch (...) {
             // ignore
         }
@@ -607,8 +615,19 @@ static future<> prepare_thread_connections(const raw_cql_test_config& cfg) {
             throw std::runtime_error("Failed to connect to native transport port");
         }
         auto c = make_connection(std::move(cs), cfg);
-        co_await c->startup();
-        co_await c->prepare_statements(cfg.tables);
+        std::exception_ptr ep;
+        try {
+            co_await c->startup();
+            co_await c->prepare_statements(cfg.tables);
+        } catch (...) {
+            ep = std::current_exception();
+        }
+        if (ep) {
+            // Drain the reader fiber before c is destroyed; otherwise the
+            // in-flight socket read is torn down under the closing fd.
+            co_await c->stop();
+            std::rethrow_exception(ep);
+        }
         tl_conns.push_back(std::move(c));
     }
 }
@@ -689,8 +708,12 @@ static void wait_for_cql(const raw_cql_test_config& cfg, abort_source& as) {
         try {
             auto cs = connect(socket_address{net::inet_address{cfg.remote_host}, cfg.port}).get();
             auto conn = make_connection(std::move(cs), cfg);
+            // Always stop the connection (joining its reader fiber) before it is
+            // destroyed, even if startup() throws: destroying the connection
+            // while the reader still has a socket read in flight closes the fd
+            // from under that read, which aborts (EBADF) or corrupts the reactor.
+            auto stop_conn = defer([&] () noexcept { conn->stop().get(); });
             conn->startup().get();
-            conn->stop().get();
             return;
         } catch (...) {
         }
