@@ -94,6 +94,15 @@ public:
             std::reference_wrapper<bounded_clock> clock;
         };
         std::optional<leaseguard_configuration> leaseguard;
+        // Servers to prefer as leader, in priority order: element 0 is the strongest
+        // candidate, element k the (k+1)-th. Each listed server gets a unique,
+        // deterministic election-timeout slot ahead of every other server, so while a
+        // listed server is alive it wins leadership. Servers not listed randomize
+        // within the remaining slots and can never undercut a listed one. Listed servers
+        // which cannot vote are skipped, they cannot win an election anyway. The callback
+        // is invoked only when (re)arming the election timer, so it always reflects the
+        // current topology. Empty vector / unset => ordinary Raft.
+        std::function<std::vector<server_id>()> get_priority_members;
     };
 
     virtual ~server() {}

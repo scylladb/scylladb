@@ -12,6 +12,18 @@ namespace raft {
 
 seastar::logger logger("raft");
 
+std::vector<server_id> reserved_election_slots(const configuration& cfg,
+        const std::vector<server_id>& preferred) {
+    std::vector<server_id> slots;
+    slots.reserve(preferred.size());
+    for (const auto& id : preferred) {
+        if (cfg.can_vote(id)) {
+            slots.push_back(id);
+        }
+    }
+    return slots;
+}
+
 size_t log_entry::get_size() const {
     struct overloaded {
         size_t operator()(const command& c) {
