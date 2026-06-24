@@ -25,6 +25,7 @@
 #include "utils/error_injection.hh"
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include <seastar/core/abort_source.hh>
 
@@ -49,6 +50,54 @@ static std::optional<locator::tablet_replica_set> prepare_replicas_for_sc_tablet
     }
     std::ranges::rotate(replicas, leader_it);
     return std::make_optional(std::move(replicas));
+}
+
+// The replicas which should win the tablet group's leader election: the ones in the
+// dedicated rack of their datacenter, which is where a strongly consistent read is
+// cheapest to serve from. At most one - a rack list rejects duplicate racks, so a
+// tablet has a single replica per rack - and none if the keyspace has no dedicated one.
+static std::vector<raft::server_id> dedicated_rack_replicas(replica::database& db,
+        global_tablet_id tablet) {
+    // Nothing to prefer, or nothing left to read the preference from: leave the
+    // election to ordinary Raft, which spreads leadership across the replicas. Looked
+    // up without throwing - a dropped table is legitimate, and the caller must not
+    // throw.
+    const auto table_ptr = db.get_tables_metadata().get_table_if_exists(tablet.table);
+    if (!table_ptr) {
+        return {};
+    }
+    const auto schema = table_ptr->schema();
+    if (!db.has_keyspace(schema->ks_name())) {
+        return {};
+    }
+    const auto consistency = db.find_keyspace(schema->ks_name()).metadata()->consistency_option();
+    if (!consistency || !consistency->has_dedicated_rack()) {
+        return {};
+    }
+    const auto& tm = db.get_token_metadata();
+    if (!tm.tablets().has_tablet_map(tablet.table)) {
+        return {};
+    }
+    const auto& tablet_map = tm.tablets().get_tablet_map(tablet.table);
+    if (size_t(tablet.tablet) >= tablet_map.tablet_count()) {
+        // This map doesn't cover our tablet yet - we are one side of a split which
+        // hasn't been finalized. get_tablet_info() requires an id which belongs to it.
+        return {};
+    }
+    std::vector<raft::server_id> preferred;
+    const auto& topo = tm.get_topology();
+    for (const auto& replica : tablet_map.get_tablet_info(tablet.tablet).replicas) {
+        const auto* node = topo.find_node(replica.host);
+        if (!node) {
+            // Not in our topology (yet), so we can't tell which rack it is in.
+            continue;
+        }
+        const auto it = consistency->dedicated_rack.find(node->dc());
+        if (it != consistency->dedicated_rack.end() && it->second == node->rack()) {
+            preferred.push_back(to_server_id(replica.host));
+        }
+    }
+    return preferred;
 }
 
 class groups_manager::rpc_impl: public service::raft_rpc {
@@ -200,7 +249,15 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // groups pick different replicas instead of all electing the
         // smallest-id node (which would concentrate load on one node when a
         // table starts with many tablets).
-        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
+        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id),
+        // Recomputed on every arming of the election timer, because the keyspace, the
+        // tablet's replicas and the topology all change under a running group - hence
+        // `tm`, a snapshot, must not be captured. Capture the database, not `this`: raft
+        // servers are owned by the raft group registry, which outlives the groups
+        // manager. The tablet id is stable - a split or a merge builds new groups.
+        .get_priority_members = [&db = _db, tablet] {
+            return dedicated_rack_replicas(db, tablet);
+        }
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
