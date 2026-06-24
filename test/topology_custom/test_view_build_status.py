@@ -564,7 +564,7 @@ async def test_view_build_status_with_synchronize_wait(manager: ManagerClient):
     })
     task = asyncio.create_task(manager.server_start(new_server.server_id))
     log = await manager.server_open_log(new_server.server_id)
-    await log.wait_for("start_operation: waiting until local node leaves synchronize state to start a group 0 operation")
+    await log.wait_for("start_operation: waiting until local node in state synchronize completes upgrade to group 0")
     await manager.api.message_injection(new_server.ip_addr, 'sleep_in_synchronize')
 
     await task
