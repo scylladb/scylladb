@@ -57,7 +57,7 @@ def nodetool_cmd():
     if nodetool_cmd.cmd:
         return nodetool_cmd.cmd
     if not nodetool_cmd.failed:
-        nodetool_cmd.conf = os.getenv('NODETOOL').split() or ['nodetool']
+        nodetool_cmd.conf = (os.getenv('NODETOOL') or 'nodetool').split()
         nodetool_cmd.cmd = shutil.which(nodetool_cmd.conf[0])
         if nodetool_cmd.cmd is None:
             nodetool_cmd.failed = True
