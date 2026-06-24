@@ -708,3 +708,40 @@ async def test_per_service_level_cql_request_latency_histogram(manager: ManagerC
                 logger.warning("Paused CQL request failed while cleaning up", exc_info=True)
         await manager.api.disable_injection(server.ip_addr, "transport_cql_request_pause")
         safe_driver_shutdown(cluster_a)
+
+
+async def test_service_level_metrics(manager: ManagerClient) -> None:
+    """
+    Verify service level workload type metrics
+    """
+    server = await manager.server_add(config=auth_config)
+    cql, hosts = await manager.get_ready_cql([server])
+
+    WORKLOAD_UNSPECIFIED = 0
+    WORKLOAD_BATCH = 1
+    WORKLOAD_INTERACTIVE = 2
+
+    async def verify_initial_metrics():
+        m = await manager.metrics.query(server.ip_addr)
+        default_val = m.get("scylla_service_level_workload_type", {"service_level": "default"})
+        driver_val = m.get("scylla_service_level_workload_type", {"service_level": "driver"})
+        assert default_val == WORKLOAD_UNSPECIFIED
+        assert driver_val == WORKLOAD_BATCH
+        return True
+
+    logger.info("Verifying initial service level metrics")
+    await wait_for(verify_initial_metrics, deadline=time.time() + 30)
+
+    sl_name = "test_interactive_sl"
+    logger.info(f"Creating service level {sl_name}")
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl_name} WITH workload_type='interactive'", host=hosts[0])
+
+    async def verify_new_sl_metric():
+        m = await manager.metrics.query(server.ip_addr)
+        new_sl_val = m.get("scylla_service_level_workload_type", {"service_level": sl_name})
+        assert new_sl_val == WORKLOAD_INTERACTIVE
+        return True
+
+    logger.info(f"Verifying service level metric for {sl_name}")
+    await wait_for(verify_new_sl_metric, deadline=time.time() + 30)
+
