@@ -185,6 +185,9 @@ public:
     bool is_group0_alive() const {
         return _group0_is_alive;
     }
+    bool started_group0() const {
+        return _group0_id.has_value();
+    }
 };
 
 // Implementation of `direct_failure_detector::pinger` which uses DIRECT_FD_PING verb for pinging.
