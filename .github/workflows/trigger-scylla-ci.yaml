@@ -1,0 +1,66 @@
+name: Trigger Scylla CI Route
+permissions:
+  contents: read
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types:
+      - unlabeled
+
+jobs:
+  trigger-jenkins:
+    if: (github.event_name == 'issue_comment' && github.event.comment.user.login != 'scylladbbot') || github.event.label.name == 'conflicts'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Org Membership
+        id: verify_author
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
+        shell: bash
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request_target" ]]; then
+            AUTHOR="$PR_AUTHOR"
+            ASSOCIATION="$PR_ASSOCIATION"
+          else
+            AUTHOR="$COMMENT_AUTHOR"
+            ASSOCIATION="$COMMENT_ASSOCIATION"
+          fi
+          if [[ "$ASSOCIATION" == "MEMBER" || "$ASSOCIATION" == "OWNER" ]]; then
+            echo "member=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::${AUTHOR} is not a member of scylladb (association: ${ASSOCIATION}); skipping CI trigger."
+            echo "member=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate Comment Trigger
+        if: github.event_name == 'issue_comment'
+        id: verify_comment
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          CLEAN_BODY=$(echo "$COMMENT_BODY" | grep -v '^[[:space:]]*>')
+
+          if echo "$CLEAN_BODY" | grep -qi '@scylladbbot' && echo "$CLEAN_BODY" | grep -qi 'trigger-ci'; then
+            echo "trigger=true" >> $GITHUB_OUTPUT
+          else
+            echo "trigger=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger Scylla-CI-Route Jenkins Job
+        if: steps.verify_author.outputs.member == 'true' && (github.event_name == 'pull_request_target' || steps.verify_comment.outputs.trigger == 'true')
+        env:
+          JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
+          JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+          JENKINS_URL: "https://jenkins.scylladb.com"
+          PR_NUMBER: "${{ github.event.issue.number || github.event.pull_request.number }}"
+          PR_REPO_NAME: "${{ github.event.repository.full_name }}"
+        run: |
+          curl -X POST "$JENKINS_URL/job/releng/job/Scylla-CI-Route/buildWithParameters?PR_NUMBER=$PR_NUMBER&PR_REPO_NAME=$PR_REPO_NAME" \
+            --user "$JENKINS_USER:$JENKINS_API_TOKEN" --fail
