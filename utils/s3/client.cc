@@ -1758,7 +1758,6 @@ class client::do_upload_file : private multipart_upload {
     future<> put_object(file&& f, uint64_t len) {
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
         s3l.trace("PUT {} ({})", _object_name, _path.native());
-        auto mem_units = co_await _client->claim_memory(_transmit_size, _as);
 
         auto req = http::request::make("PUT", _client->_host, _object_name);
         if (_tag) {
