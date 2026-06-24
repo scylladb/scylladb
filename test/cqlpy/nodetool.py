@@ -85,21 +85,21 @@ def run_nodetool(cql, *args, **subprocess_kwargs):
 def flush(cql, table):
     ks, cf = table.split('.')
     if has_rest_api(cql):
-        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_flush/{ks}', params={'cf' : cf})
+        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_flush/{ks}', params={'cf' : cf}).raise_for_status()
     else:
-        run_nodetool(cql, "flush", ks, cf)
+        run_nodetool(cql, "flush", ks, cf, check=True)
 
 def flush_keyspace(cql, ks):
     if has_rest_api(cql):
-        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_flush/{ks}')
+        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_flush/{ks}').raise_for_status()
     else:
-        run_nodetool(cql, "flush", ks)
+        run_nodetool(cql, "flush", ks, check=True)
 
 def flush_all(cql):
     if has_rest_api(cql):
-        requests.post(f'{rest_api_url(cql)}/storage_service/flush')
+        requests.post(f'{rest_api_url(cql)}/storage_service/flush').raise_for_status()
     else:
-        run_nodetool(cql, "flush")
+        run_nodetool(cql, "flush", check=True)
 
 # Note that this function will, by default (flush_memtables=True), perform
 # both a flush (of all tables) and compaction (of just the specified table).
@@ -111,24 +111,24 @@ def compact(cql, table, flush_memtables=True):
         params = {'cf': cf}
         if not flush_memtables:
             params["flush_memtables"] = "false"
-        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params)
+        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params).raise_for_status()
     else:
         if flush_memtables:
             # note that we flush all memtables, not just the specified table
-            run_nodetool(cql, "flush")
-        run_nodetool(cql, "compact", ks, cf)
+            run_nodetool(cql, "flush", check=True)
+        run_nodetool(cql, "compact", ks, cf, check=True)
 
 def compact_keyspace(cql, ks, flush_memtables=True):
     if has_rest_api(cql):
         params = None
         if not flush_memtables:
             params = {"flush_memtables": "false"}
-        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params)
+        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params).raise_for_status()
     else:
         if flush_memtables:
             # note that we flush all memtables, not just the specified keyspace
-            run_nodetool(cql, "flush")
-        run_nodetool(cql, "compact", ks)
+            run_nodetool(cql, "flush", check=True)
+        run_nodetool(cql, "compact", ks, check=True)
 
 def take_snapshot(cql, table, tag, skip_flush = None, ttl = None):
     ks, cf = table.split('.')
