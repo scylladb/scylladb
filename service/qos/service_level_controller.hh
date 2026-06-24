@@ -158,9 +158,9 @@ public:
                         ? *maybe_sl_opts->shares_name
                         : service_level_controller::default_service_level_name;
 
-                co_return co_await _sl_controller.with_service_level(sl_name, std::forward<Func>(func));
+                return _sl_controller.with_service_level(sl_name, std::forward<Func>(func));
             } else {
-                co_return co_await _sl_controller.with_service_level(service_level_controller::default_service_level_name, std::forward<Func>(func));
+                return _sl_controller.with_service_level(service_level_controller::default_service_level_name, std::forward<Func>(func));
             }
         }
 
