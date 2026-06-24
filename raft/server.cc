@@ -403,7 +403,8 @@ future<> server_impl::start() {
                                      .append_request_threshold = _config.append_request_threshold,
                                      .max_log_size = _config.max_log_size,
                                      .enable_prevoting = _config.enable_prevoting,
-                                     .enable_fast_bootstrap = true
+                                     .enable_fast_bootstrap = true,
+                                     .election_priority = _config.election_priority
                                  },
                                  _events);
 

@@ -8,6 +8,8 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include <algorithm>
+#include <cstdint>
 #include <vector>
 #include <unordered_set>
 #include <functional>
@@ -27,6 +29,26 @@ using command = bytes_ostream;
 using command_cref = std::reference_wrapper<const command>;
 
 extern seastar::logger logger;
+
+// Priority level for Raft leader election. Nodes with higher priority use
+// shorter election timeouts, increasing their chance of becoming leader.
+using election_priority = uint8_t;
+
+inline constexpr election_priority low_election_priority = 1;
+inline constexpr election_priority regular_election_priority = 5;
+inline constexpr election_priority high_election_priority = 9;
+
+// Returns the upper bound for the random election-timeout offset.
+// With priorities in [1, 9] and regular priority 5:
+// - priority 1 -> ceil(base_range * 9 / 5)
+// - priority 5 -> base_range
+// - priority 9 -> ceil(base_range / 5)
+inline constexpr logical_clock::rep election_timeout_max_random_offset(
+        logical_clock::rep base_range, election_priority priority) {
+    const auto bounded_priority = std::clamp(priority, low_election_priority, high_election_priority);
+    const auto multiplier = high_election_priority + 1 - bounded_priority;
+    return (base_range * multiplier + regular_election_priority - 1) / regular_election_priority;
+}
 
 // This is user provided id for a snapshot
 using snapshot_id = internal::tagged_id<struct snapshot_id_tag>;
