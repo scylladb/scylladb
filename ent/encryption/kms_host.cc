@@ -34,6 +34,7 @@
 #include "utils.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/hash.hh"
+#include "utils/http_client_error_processing.hh"
 #include "utils/loading_cache.hh"
 #include "utils/http.hh"
 #include "utils/UUID.hh"
@@ -375,12 +376,20 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
         try {
             co_return co_await do_post(target, aws_assume_role_arn, query);
         } catch (kms_error& e) {
-            // Special case 503. This can be both actual service or ec2 metadata.
-            // In either case, do local backoff-retry here.
-            // https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html#instance-metadata-returns
-            if (e.result() != httpclient::reply_status::service_unavailable || retry >= max_retries) {
+            if (retry >= max_retries || !utils::http::from_http_code(e.result())) {
                 throw;
             }
+            kms_log.debug("Retryable KMS error ({}), retry {}/{}: {}", e.result(), retry + 1, max_retries, e.what());
+        } catch (std::system_error& e) {
+            if (retry >= max_retries || !utils::http::from_system_error(e)) {
+                throw;
+            }
+            kms_log.debug("Retryable system error ({}), retry {}/{}: {}", e.code().message(), retry + 1, max_retries, e.what());
+        } catch (service_error& e) {
+            if (retry >= max_retries) {
+                throw;
+            }
+            kms_log.debug("Retryable service error, retry {}/{}: {}", retry + 1, max_retries, e.what());
         }
 
         co_await exr.retry();
