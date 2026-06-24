@@ -220,6 +220,58 @@ SEASTAR_TEST_CASE(test_commitlog_raft_entry_roundtrip) {
     });
 }
 
+// Test for: SCYLLADB-2877
+SEASTAR_TEST_CASE(test_raft_commitlog_store_log_entries_persists_commit_idx) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+
+        raft::log_entry_ptr_list entries;
+        for (int i = 1; i <= 3; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+
+        auto commit_idx = raft::index_t(2);
+        co_await persistence.store_log_entries(entries, commit_idx);
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        size_t plain_entries = 0;
+        size_t entries_with_commit_idx = 0;
+        for (auto& seg : segments) {
+            co_await db::commitlog::read_log_file(
+                    seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                        auto&& [buf, _] = buf_rp;
+                        commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
+                        auto& entry_var = reader.entry().item;
+
+                        if (std::holds_alternative<raft_commitlog_entry>(entry_var)) {
+                            const auto& rle = std::get<raft_commitlog_entry>(entry_var);
+                            BOOST_REQUIRE_EQUAL(rle.group_id, gid);
+                            BOOST_REQUIRE_NE(rle.entry->idx, entries.back()->idx);
+                            ++plain_entries;
+                        } else {
+                            BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry_with_commit_idx>(entry_var));
+                            const auto& rle = std::get<raft_commitlog_entry_with_commit_idx>(entry_var);
+                            BOOST_REQUIRE_EQUAL(rle.group_id, gid);
+                            BOOST_REQUIRE_EQUAL(rle.entry->idx, entries.back()->idx);
+                            BOOST_REQUIRE_EQUAL(rle.commit_idx, commit_idx);
+                            ++entries_with_commit_idx;
+                        }
+                        co_return;
+                    });
+        }
+
+        BOOST_REQUIRE_EQUAL(plain_entries, entries.size() - 1);
+        BOOST_REQUIRE_EQUAL(entries_with_commit_idx, 1);
+    });
+}
+
 // Test that raft entries and mutation entries can coexist in the same commitlog
 // and are correctly distinguished when read back, with data integrity verified.
 SEASTAR_TEST_CASE(test_commitlog_mixed_raft_and_mutation_entries) {
