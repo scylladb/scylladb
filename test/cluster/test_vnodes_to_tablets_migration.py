@@ -16,7 +16,7 @@ from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import new_test_keyspace, create_new_test_keyspace, reconnect_driver
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
 logger = logging.getLogger(__name__)
@@ -752,71 +752,182 @@ async def test_migration_wait_task(manager: ManagerClient):
         assert wait_status.progress_completed == 1, f"Expected 1 upgraded node for completed migration, got {wait_status.progress_completed}"
 
 
-async def test_migration_multiple_keyspaces(manager: ManagerClient):
-    """Verify that two keyspaces can be migrated from vnodes to tablets simultaneously."""
+@pytest.mark.parametrize("num_keyspaces", [2, 1000])
+async def test_migration_multiple_keyspaces(manager: ManagerClient, num_keyspaces: int):
+    """Verify that multiple vnode keyspaces can be migrated to tablets simultaneously.
+
+    Parametrized by num_keyspaces to exercise both minimal (2 keyspaces) and large-scale
+    (1000 keyspaces) scenarios. The 1000-keyspace variant is a scale test verifying that
+    the migration infrastructure handles large group0 state (1000 tablet maps) without
+    degradation.
+
+    The key invariant: intended_storage_mode is preserved on the node as long as any migration
+    is still in progress, and is cleared only after the last keyspace has been finalized.
+
+    Steps:
+    1. Start a single node with multiple shards and random vnodes.
+    2. Create num_keyspaces vnode keyspaces, each with one table.
+    3. Start migration for all keyspaces (creating tablet maps).
+       All create calls must precede upgrade_node_to_tablets since that sets
+       intended_storage_mode, after which further create calls are rejected.
+    4. Mark the node for upgrade and restart.
+    5. Verify first and last keyspaces show as migrating to tablets.
+    6. Finalize keyspaces one by one:
+       - After the first finalization, assert intended_storage_mode is still preserved
+         (remaining keyspaces still in progress).
+       - After the last finalization, assert intended_storage_mode is cleared.
+    7. Verify all keyspaces have tablets enabled.
+    """
     num_shards = 3
     tokens_per_node = 16
 
     logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
-    cfg = {'num_tokens': tokens_per_node}
-    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config={'num_tokens': tokens_per_node})
     server = servers[0]
     host_id = await manager.get_host_id(server.server_id)
-
     cql, _ = await manager.get_ready_cql(servers)
 
     ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
 
-    logger.info("Creating two vnode keyspaces with tables")
-    async with new_test_keyspace(manager, ks_opts) as ks1:
-        async with new_test_keyspace(manager, ks_opts) as ks2:
-            await cql.run_async(f"CREATE TABLE {ks1}.t (pk int PRIMARY KEY, c int)")
-            await cql.run_async(f"CREATE TABLE {ks2}.t (pk int PRIMARY KEY, c int)")
+    keyspaces = []
+    try:
+        logger.info(f"Creating {num_keyspaces} vnode keyspaces with tables")
+        for _ in range(num_keyspaces):
+            ks = await create_new_test_keyspace(cql, ks_opts)
+            keyspaces.append(ks)
+            await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
 
-            logger.info("Preparing both keyspaces for migration (creating tablet maps)")
-            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks1)
-            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks2)
+        logger.info(f"Preparing all {num_keyspaces} keyspaces for migration (creating tablet maps)")
+        for ks in keyspaces:
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
 
-            logger.info("Marking node for tablets migration and restarting")
-            await manager.api.upgrade_node_to_tablets(server.ip_addr)
-            await manager.server_restart(server.server_id)
+        logger.info("Marking node for tablets migration and restarting")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Verifying first and last keyspaces show as migrating")
+        for ks in [keyspaces[0], keyspaces[-1]]:
+            await verify_migration_status(manager, server, ks,
+                expected_status='migrating_to_tablets',
+                expected_node_statuses={host_id: ('tablets', 'tablets')},
+                retries=1, retry_interval=1)
+
+        logger.info("Finalizing migration for first keyspace")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, keyspaces[0])
+
+        logger.info("Verifying first keyspace has tablets enabled")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspaces[0]}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "First keyspace should use tablets after finalization"
+
+        logger.info("Verifying intended_storage_mode is preserved (remaining keyspaces still migrating)")
+        rows = await cql.run_async("SELECT host_id, intended_storage_mode FROM system.topology WHERE key = 'topology'")
+        for row in rows:
+            assert row.intended_storage_mode is not None, \
+                f"intended_storage_mode should be preserved for node {row.host_id} while other keyspaces are still migrating"
+
+        logger.info(f"Finalizing migration for remaining {num_keyspaces - 1} keyspace(s)")
+        for ks in keyspaces[1:]:
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying all keyspaces have tablets enabled")
+        migrated_ks_set = set(keyspaces)
+        all_ks_rows = await cql.run_async("SELECT keyspace_name, initial_tablets FROM system_schema.scylla_keyspaces")
+        tablet_enabled = {r.keyspace_name for r in all_ks_rows if r.keyspace_name in migrated_ks_set and r.initial_tablets is not None}
+        assert tablet_enabled == migrated_ks_set, \
+            f"Some keyspaces do not have tablets enabled after migration: {migrated_ks_set - tablet_enabled}"
+
+        logger.info("Verifying intended_storage_mode is cleared (all migrations done)")
+        rows = await cql.run_async("SELECT host_id, intended_storage_mode FROM system.topology WHERE key = 'topology'")
+        for row in rows:
+            assert row.intended_storage_mode is None, \
+                f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
+
+    finally:
+        await asyncio.gather(*(cql.run_async(f"DROP KEYSPACE IF EXISTS {ks}") for ks in keyspaces), return_exceptions=True)
+
+
+async def test_migration_many_tables(manager: ManagerClient):
+    """Verify vnodes-to-tablets migration handles 100 tables in a single keyspace.
+
+    Scale test complementing test_migration_multinode: verifies that a single
+    create_vnode_tablet_migration call correctly creates tablet maps for all 100 tables,
+    that a 3-node rolling restart reshards all 100 tables without failure, and that
+    finalization completes with data integrity preserved for every table.
+
+    Routing correctness in the semi-migrated state and intended_storage_mode mechanics
+    are already covered by test_migration_multinode and are not repeated here.
+
+    Steps:
+    1. Start a 3-node cluster with RF=3, multiple shards, and random vnodes.
+    2. Create a vnode keyspace with 100 tables and inject 10 rows into each at CL=QUORUM.
+    3. Create tablet maps for all 100 tables — verify each table gets the correct tablet count.
+    4. Rolling restart — for each node: mark for upgrade, restart.
+    5. Finalize — verify keyspace schema has tablets enabled (proof migration occurred).
+    6. Verify data integrity for all 100 tables.
+    """
+    num_nodes = 3
+    num_shards = 3
+    tokens_per_node = 8
+    num_tables = 100
+    num_keys = 10
+
+    logger.info(f"Starting {num_nodes} nodes with {num_shards} shards each, {tokens_per_node} random tokens per node")
+    servers = []
+    for i in range(1, num_nodes + 1):
+        servers.append(await manager.server_add(
+            cmdline=['--smp', str(num_shards)],
+            property_file={"dc": "dc1", "rack": f"rack{i}"},
+            config={'num_tokens': tokens_per_node}
+        ))
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    all_vnode_tokens = await get_all_vnode_tokens(cql)
+    expected_tablet_count = len(all_vnode_tokens) if all_vnode_tokens[-1] == MAX_TOKEN else len(all_vnode_tokens) + 1
+    logger.info(f"Total vnodes: {len(all_vnode_tokens)}, expected tablets per table: {expected_tablet_count}")
+
+    table_names = [f"t{i}" for i in range(num_tables)]
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {num_nodes}}} AND tablets = {{'enabled': false}}") as ks:
+        logger.info(f"Creating {num_tables} tables")
+        for tname in table_names:
+            await cql.run_async(f"CREATE TABLE {ks}.{tname} (pk int PRIMARY KEY, c int)")
+
+        logger.info(f"Inserting {num_keys} rows into each table at CL=QUORUM")
+        insert_stmts = {tname: cql.prepare(f"INSERT INTO {ks}.{tname} (pk, c) VALUES (?, ?)") for tname in table_names}
+        for stmt in insert_stmts.values():
+            stmt.consistency_level = ConsistencyLevel.QUORUM
+        for tname in table_names:
+            await asyncio.gather(*(cql.run_async(insert_stmts[tname], [k, k]) for k in range(num_keys)))
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps for all tables)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+
+        logger.info(f"Verifying all {num_tables} tables have the correct tablet count")
+        for tname in table_names:
+            tablet_count = await get_tablet_count(manager, servers[0], ks, tname)
+            assert tablet_count == expected_tablet_count, \
+                f"Table {tname}: expected {expected_tablet_count} tablets, got {tablet_count}"
+
+        logger.info("Rolling restart: upgrading all nodes to tablets")
+        for s in servers:
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
             await reconnect_driver(manager)
             cql, _ = await manager.get_ready_cql(servers)
 
-            logger.info("Verifying both keyspaces show as migrating")
-            await verify_migration_status(manager, server, ks1,
-                expected_status='migrating_to_tablets',
-                expected_node_statuses={host_id: ('tablets', 'tablets')},
-                retries=1, retry_interval=1)
-            await verify_migration_status(manager, server, ks2,
-                expected_status='migrating_to_tablets',
-                expected_node_statuses={host_id: ('tablets', 'tablets')},
-                retries=1, retry_interval=1)
+        logger.info("Finalizing tablets migration")
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
 
-            logger.info("Finalizing migration for ks1")
-            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
+        await read_barrier(manager.api, servers[0].ip_addr)
+        logger.info("Verifying keyspace schema has tablets enabled (migration occurred)")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
 
-            logger.info("Verifying ks1 has tablets enabled")
-            res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks1}'")
-            assert len(res) == 1 and res[0].initial_tablets is not None, \
-                f"ks1 should use tablets after finalization"
-
-            logger.info("Verifying intended_storage_mode is preserved (ks2 still migrating)")
-            rows = await cql.run_async("SELECT host_id, intended_storage_mode FROM system.topology WHERE key = 'topology'")
-            for row in rows:
-                assert row.intended_storage_mode is not None, \
-                    f"intended_storage_mode should be preserved for node {row.host_id} while ks2 is still migrating"
-
-            logger.info("Finalizing migration for ks2")
-            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks2)
-
-            logger.info("Verifying ks2 has tablets enabled")
-            res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks2}'")
-            assert len(res) == 1 and res[0].initial_tablets is not None, \
-                f"ks2 should use tablets after finalization"
-
-            logger.info("Verifying intended_storage_mode is cleared (no more migrating keyspaces)")
-            rows = await cql.run_async("SELECT host_id, intended_storage_mode FROM system.topology WHERE key = 'topology'")
-            for row in rows:
-                assert row.intended_storage_mode is None, \
-                    f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
+        logger.info(f"Verifying data integrity for all {num_tables} tables")
+        for tname in table_names:
+            await verify_data_integrity(cql, ks, tname, num_keys)
