@@ -845,6 +845,16 @@ class ScyllaServer:
                                          f"{logpath}\n"
                                          f"{self.log_filename}")
 
+        async def is_expected_state_reached() -> bool:
+            if server_up_state >= expected_server_up_state:
+                if expected_error is not None:
+                    await report_error(
+                        f"the node has reached {server_up_state} state,"
+                        f" but was expected to fail with the expected error"
+                    )
+                return True
+            return False
+
         while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT and not self.stop_event.is_set():
             assert self.cmd is not None
             if self.cmd.returncode is not None:
@@ -860,16 +870,22 @@ class ScyllaServer:
             if await self.try_get_host_id(api):
                 if server_up_state == ServerUpState.PROCESS_STARTED:
                     server_up_state = ServerUpState.HOST_ID_QUERIED
-                server_up_state = await self.get_cql_up_state() or server_up_state
-                # Check for SERVING state (sd_notify "serving" message)
+                if await is_expected_state_reached():
+                    return
+                # Only poll CQL until they are known to be up.
+                # Once CQL_QUERIED is reached, skip the poll to avoid
+                # repeatedly recreating driver connections while waiting for sd_notify.
+                if server_up_state < ServerUpState.CQL_QUERIED:
+                    server_up_state = await self.get_cql_up_state() or server_up_state
+                if await is_expected_state_reached():
+                    return
+                # Check for SERVING state via sd_notify. This is authoritative: Scylla sends
+                # STATUS=serving once all configured listeners are ready, and
+                # STATUS=entering maintenance mode once the maintenance socket is ready.
+                # Both mean the server is fully started and we don't need to wait further.
                 if server_up_state >= ServerUpState.CQL_QUERIED and self.check_serving_notification():
                     server_up_state = ServerUpState.SERVING
-                if server_up_state >= expected_server_up_state:
-                    if expected_error is not None:
-                        await report_error(
-                            f"the node has reached {server_up_state} state,"
-                            f" but was expected to fail with the expected error"
-                        )
+                if await is_expected_state_reached():
                     return
 
             # Sleep and retry
