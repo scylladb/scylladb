@@ -109,6 +109,10 @@ class storage_proxy;
 class storage_service;
 class migration_notifier;
 class raft_group_registry;
+
+namespace strong_consistency {
+class groups_manager;
+}
 }
 
 namespace gms {
@@ -478,6 +482,7 @@ public:
         bool enable_node_aggregated_table_metrics = true;
         size_t view_update_memory_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
+        service::strong_consistency::groups_manager* strong_consistency_groups_manager = nullptr;
         uint32_t tombstone_warn_threshold{0};
         unsigned x_log2_compaction_groups{0};
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
@@ -993,6 +998,10 @@ public:
     api::timestamp_type min_memtable_live_timestamp() const;
     api::timestamp_type min_memtable_live_row_marker_timestamp() const;
     api::timestamp_type get_max_timestamp_for_tablet(locator::tablet_id) const;
+
+    void set_strong_consistency_groups_manager(service::strong_consistency::groups_manager& gm) {
+        _config.strong_consistency_groups_manager = &gm;
+    }
 
     const row_cache& get_row_cache() const {
         return _cache;
@@ -1784,6 +1793,7 @@ private:
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
+    service::strong_consistency::groups_manager* _strong_consistency_groups_manager = nullptr;
     std::vector<std::any> _listeners;
     locator::shared_token_metadata& _shared_token_metadata;
     lang::manager& _lang_manager;
@@ -1815,6 +1825,8 @@ public:
     future<> init_logstor();
     future<> recover_logstor();
     const gms::feature_service& features() const { return _feat; }
+    service::strong_consistency::groups_manager* strong_consistency_groups_manager() const { return _strong_consistency_groups_manager; }
+    void set_strong_consistency_groups_manager(service::strong_consistency::groups_manager& gm);
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&,
                                db::timeout_clock::time_point timeout,
                                 shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* large_data_violation_out = nullptr);
