@@ -28,9 +28,11 @@ jobs:
     steps:
       - name: Set up gh api retry helper
         run: |
-          # Write a reusable retry wrapper for gh api calls into BASH_ENV
-          # so it is automatically available in every subsequent step.
-          cat >> "$BASH_ENV" << 'RETRY_EOF'
+          # Write a reusable retry wrapper for gh api calls into a helper
+          # script that subsequent steps source explicitly.
+          # NOTE: Do NOT use $BASH_ENV here — Blacksmith runners do not set it.
+          mkdir -p "$HOME/.ci-helpers"
+          cat > "$HOME/.ci-helpers/gh_api_retry.sh" << 'RETRY_EOF'
           gh_api_retry() {
             local max_attempts=4 attempt=1 delay=1 output rc
             while [ $attempt -le $max_attempts ]; do
@@ -96,6 +98,7 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         shell: bash
         run: |
+          source "$HOME/.ci-helpers/gh_api_retry.sh"
           PR_REPO="$PR_REPO_FROM_EVENT"
 
           if [ "$EVENT_NAME" = "issue_comment" ]; then
@@ -152,6 +155,7 @@ jobs:
           PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
           PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
         run: |
+          source "$HOME/.ci-helpers/gh_api_retry.sh"
           echo "Fetching PR #$PR_NUMBER files from $PR_REPO..."
           ALL_DOCS=true
           TRIGGER_DOCS_CI=false
@@ -222,6 +226,7 @@ jobs:
           PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
           PR_URL: ${{ steps.resolve-pr.outputs.pr_url }}
         run: |
+          source "$HOME/.ci-helpers/gh_api_retry.sh"
           echo "Fetching PR #$PR_NUMBER details..."
           PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
 
@@ -303,6 +308,7 @@ jobs:
           PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
           PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
         run: |
+          source "$HOME/.ci-helpers/gh_api_retry.sh"
           # Fetch all PR files for pattern matching
           ALL_FILES=""
           PAGE=1
@@ -409,6 +415,7 @@ jobs:
           PR_NUMBER: ${{ steps.resolve-pr.outputs.pr_number }}
           PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
         run: |
+          source "$HOME/.ci-helpers/gh_api_retry.sh"
           TRUSTED=false
 
           # Check if user is a ScyllaDB org member
@@ -449,6 +456,7 @@ jobs:
           PR_REPO: ${{ steps.resolve-pr.outputs.pr_repo }}
           PR_SHA: ${{ steps.resolve-pr.outputs.pr_sha }}
         run: |
+          source "$HOME/.ci-helpers/gh_api_retry.sh"
           TARGET_FOLDER="${{ steps.target-folder.outputs.folder }}"
           RUN_DTEST="${{ steps.required-checks.outputs.dtest_required }}"
           RUN_UNITTEST="${{ steps.required-checks.outputs.unittest_required }}"
