@@ -35,7 +35,10 @@ class TestSetSmp(Tester):
         cluster.stop()
 
         # set_smp to a different value and restart without jvm_args
-        target_smp = 1 if default_smp != 1 else 2
+
+        # Only an increase: audit and system_traces are on tablets, and reducing the shard
+        # count of a node with tablet-enabled tables is not supported.
+        target_smp = default_smp + 1
         node1.set_smp(target_smp)
         mark = node1.mark_log()
         cluster.start(wait_for_binary_proto=True)
