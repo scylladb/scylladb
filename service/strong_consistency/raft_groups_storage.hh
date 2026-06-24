@@ -48,6 +48,19 @@ class raft_groups_storage : public raft::persistence {
     // Used to linearize write operations to system.raft_groups table.
     // This is managed by `execute_with_linearization_point` helper function.
     future<> _pending_op_fut;
+    // Set once abort() is called. After this point direct flush-time commit
+    // index persistence becomes a no-op so no new operation starts while the
+    // object is being torn down. abort() drains any in-flight operation via
+    // _pending_op_fut before this object is destroyed.
+    bool _aborted = false;
+    // Last commit index reported by the raft io_fiber via store_commit_idx().
+    // The io_fiber calls store_commit_idx() *before* pushing entries to the
+    // applier_fiber for apply(), so this value is always >= the raft index
+    // of any entry that has been applied to a memtable.
+    raft::index_t _last_known_commit_idx{0};
+    // Last commit index actually persisted to system.raft_groups by
+    // persist_commit_idx_on_flush(). Used to skip redundant writes.
+    raft::index_t _last_persisted_commit_idx{0};
 
 public:
     explicit raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard,
@@ -82,6 +95,14 @@ public:
     static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
 
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
+
+    // Persist commit index during memtable flush. Unlike store_commit_idx() (which
+    // only records the value in memory), this actually writes to system.raft_groups.
+    // Called from the flush path to ensure commit_idx is never behind flushed data.
+    // Persists _last_known_commit_idx (which is always >= any index applied to a
+    // memtable, since the io_fiber calls store_commit_idx before apply). Skips
+    // the write if _last_known_commit_idx hasn't advanced since the last persist.
+    future<> persist_commit_idx_on_flush();
 
 private:
 

@@ -65,13 +65,43 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
 }
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
+    _last_known_commit_idx = idx;
     return execute_with_linearization_point([this, idx] {
         static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
         return _qp.execute_internal(
             store_cql,
             {int16_t(_shard), _group_id.id, int64_t(idx.value())},
-            cql3::query_processor::cache_internal::yes).discard_result();
+            cql3::query_processor::cache_internal::yes).discard_result().then([this, idx] {
+                _last_persisted_commit_idx = idx;
+            });
+    });
+}
+
+future<> raft_groups_storage::persist_commit_idx_on_flush() {
+    if (_last_known_commit_idx <= _last_persisted_commit_idx) {
+        // Nothing new to persist since the last write.
+        return make_ready_future<>();
+    }
+    if (_aborted) {
+        // The group is being torn down. abort() persists the final commit_idx
+        // before marking the storage aborted, so reaching here with a newer
+        // commit_idx (i.e. one that advanced after abort) is unexpected.
+        rgslog.error("persist_commit_idx_on_flush called after abort for group {}"
+            " with unpersisted commit_idx {} (last persisted: {})",
+            _group_id, _last_known_commit_idx, _last_persisted_commit_idx);
+        return make_ready_future<>();
+    }
+    auto idx = _last_known_commit_idx;
+    return execute_with_linearization_point([this, idx] {
+        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
+            db::system_keyspace::RAFT_GROUPS);
+        return _qp.execute_internal(
+            store_cql,
+            {int16_t(_shard), _group_id.id, int64_t(idx.value())},
+            cql3::query_processor::cache_internal::yes).discard_result().then([this, idx] {
+                _last_persisted_commit_idx = idx;
+            });
     });
 }
 
