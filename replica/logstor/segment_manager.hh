@@ -100,7 +100,7 @@ public:
 class segment_manager_impl;
 class log_index;
 
-class segment_manager {
+class segment_manager : public space_accounting_subscriber {
     std::unique_ptr<segment_manager_impl> _impl;
 private:
     segment_manager_impl& get_impl() noexcept;
@@ -122,7 +122,8 @@ public:
 
     future<log_record> read(log_location location);
 
-    void free_record(log_location location);
+    void on_add_record(log_location location) noexcept override;
+    void on_free_record(log_location location) noexcept override;
 
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
