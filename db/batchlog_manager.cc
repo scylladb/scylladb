@@ -168,6 +168,16 @@ future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_
         auto gate_holder = bm._gate.hold();
         auto sem_units = co_await get_units(bm._sem, 1);
 
+        // Skip replay until token metadata has normal token owners. If the replay
+        // loop fires before token metadata is populated (for example, during the
+        // initial join/bootstrap path), we cannot calculate the throttle rate or
+        // route replay mutations correctly. The replay loop will retry after the
+        // next interval.
+        if (bm._qp.proxy().get_token_metadata_ptr()->count_normal_token_owners() == 0) {
+            blogger.debug("Batchlog replay: skipping, no normal token owners yet (token metadata not populated)");
+            co_return all_batches_replayed::no;
+        }
+
         auto dest = bm._cpu++ % this_smp_shard_count();
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         auto last_replay = gc_clock::now();
