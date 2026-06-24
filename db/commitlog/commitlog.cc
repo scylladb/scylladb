@@ -3143,7 +3143,7 @@ db::commitlog::add_entries(std::vector<commitlog_entry_writer> entry_writers, db
         size_t size(segment& seg, size_t i) override {
             auto& w = _writers.at(i);
             if (_sizes_computed != &seg) {
-                w.set_with_schema(seg.is_schema_version_known(w.schema())); 
+                w.set_with_schema(!seg.is_schema_version_known(w.schema()));
             }
             return w.size();
         }
