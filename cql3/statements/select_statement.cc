@@ -983,9 +983,6 @@ select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::resul
 
         if (needs_post_query_ordering()) {
             rs->sort(_ordering_comparator);
-            if (_is_reversed) {
-                rs->reverse();
-            }
             rs->trim(cmd->get_row_limit());
         }
         update_stats_rows_read(rs->size());
@@ -2139,8 +2136,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
                 verify_ordering_is_valid(prepared_orderings, *schema, *restrictions);
 
-                ordering_comparator = get_ordering_comparator(prepared_orderings, *selection, *restrictions);
                 is_reversed_ = is_ordering_reversed(prepared_orderings);
+                ordering_comparator = get_ordering_comparator(prepared_orderings, is_reversed_, *selection, *restrictions);
             }
         }, orderings.front().second);
     }
@@ -2485,6 +2482,7 @@ void select_statement::verify_ordering_is_valid(const prepared_orderings_type& o
 }
 
 select_statement::ordering_comparator_type select_statement::get_ordering_comparator(const prepared_orderings_type& orderings,
+    bool is_reversed,
     selection::selection& selection,
     const restrictions::statement_restrictions& restrictions) {
     if (!restrictions.key_is_in_relation()) {
@@ -2505,19 +2503,19 @@ select_statement::ordering_comparator_type select_statement::get_ordering_compar
         sorters.emplace_back(index, column_def->type);
     }
 
-    return [sorters = std::move(sorters)] (const result_row_type& r1, const result_row_type& r2) mutable {
+    return [sorters = std::move(sorters), is_reversed] (const result_row_type& r1, const result_row_type& r2) mutable {
         for (auto&& e : sorters) {
             auto& c1 = r1[e.first];
             auto& c2 = r2[e.first];
             auto type = e.second;
 
             if (bool(c1) != bool(c2)) {
-                return bool(c2);
+                return bool(c2) != is_reversed;
             }
             if (c1) {
                 auto result = type->compare(*c1, *c2);
                 if (result != 0) {
-                    return result < 0;
+                    return (result < 0) != is_reversed;
                 }
             }
         }
