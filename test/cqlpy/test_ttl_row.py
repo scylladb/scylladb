@@ -369,22 +369,31 @@ def test_row_ttl_expiration(cql, test_keyspace, ttl_period, typ):
         # my birth date...), it should be ignored and this row will never be
         # expired.
         cql.execute(f'INSERT INTO {table} (p, e) values (4, {to_ttl(typ, 162777600)})')
-        # Row 5 has an expiration one second into the future, so should
+        # Row 5 has an expiration two seconds into the future, so should
         # expire by the time the test ends.
-        cql.execute(f'INSERT INTO {table} (p, e) values (5, {to_ttl(typ, time.time()+1)})')
-        # Row 6 is created with an expiration one second into the future,
+        cql.execute(f'INSERT INTO {table} (p, e) values (5, {to_ttl(typ, time.time()+2)})')
+        # Row 6 is created with an expiration two seconds into the future,
         # but immediately, presumably before it can expire, we change its
         # expiration time to never expire.
-        cql.execute(f'INSERT INTO {table} (p, e) values (6, {to_ttl(typ, time.time()+1)})')
+        # The "+2" here, matching row 5, must not be lowered: the expiration is
+        # truncated to whole seconds, so "+1" can leave almost no slack before
+        # the row counts as expired, letting the expiration scanner delete row 6
+        # in the window between this INSERT and the cancelling UPDATE - the row
+        # deletion is unconditional and clobbers the e=NULL (SCYLLADB-2782).
+        # "+2" leaves a full second for the UPDATE to land first, and keeping it
+        # equal to row 5 ensures row 6 is past its original expiration time by
+        # the time we check below, so its survival still proves the cancellation.
+        cql.execute(f'INSERT INTO {table} (p, e) values (6, {to_ttl(typ, time.time()+2)})')
         cql.execute(f'UPDATE {table} SET e=NULL WHERE p=6')
         # Row 7 is created with an expiration one hour into the future, so
         # it will remain alive until the test ends.
         cql.execute(f'INSERT INTO {table} (p, e) values (7, {to_ttl(typ, time.time()+3600)})')
-        # Row 1, 3, and 5 are expected to expire soon: row 5 will take one
-        # second, plus maybe an extra two ttl_periods until really expired.
+        # Row 1, 3, and 5 are expected to expire soon: row 5 will take two
+        # seconds, plus maybe an extra two ttl_periods until really expired.
         # Let's use a little higher timeout, just in case. But in the
-        # successful case, we won't need to wait so long.
-        deadline = time.time() + 3*ttl_period + 2
+        # successful case, we won't need to wait so long. The "+3" tracks row
+        # 5's two-second expiration plus one second of slack.
+        deadline = time.time() + 3*ttl_period + 3
         while time.time() < deadline:
             p_vals = {row.p for row in cql.execute(f'SELECT p from {table}')}
             if {1, 3, 5}.isdisjoint(p_vals):
