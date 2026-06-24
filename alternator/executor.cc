@@ -2849,6 +2849,13 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             bool table_class_updated = handle_table_class(request, builder, p.local());
             if (table_class_updated) {
                 empty_request = false;
+                if (rjson::find(request, "StreamSpecification") ||
+                    rjson::find(request, "GlobalSecondaryIndexUpdates") ||
+                    rjson::find(request, "VectorIndexUpdates") ||
+                    rjson::find(request, "BillingMode") ||
+                    rjson::find(request, "WarmThroughput")) {
+                    co_return api_error::validation("One or more parameter values were invalid: TableClass modification must be the only operation in the request");
+                }
             }
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");

@@ -193,6 +193,31 @@ def test_tableclass_update_table(dynamodb):
         with pytest.raises(ClientError, match='ValidationException.*table.class'):
             table.meta.client.update_table(TableName=table.name, TableClass='junk')
 
+# Test that a single UpdateTable is NOT allowed to change TableClass together
+# with anything else. DynamoDB returns a ValidationException saying
+# "TableClass modification must be the only operation in the request".
+# We test this by attempting to change TableClass together with each of
+# StreamSpecification and WarmThroughput in a single UpdateTable.
+def test_tableclass_update_table_combined(dynamodb):
+    schema = {
+        'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        'AttributeDefinitions': [{ 'AttributeName': 'p', 'AttributeType': 'S'}],
+    }
+    # The WarmThroughput requested is DynamoDB's baseline, which every new
+    # table already has, so even if this request were wrongly accepted, it
+    # would not start a (costly) pre-warm.
+    other_changes = [
+        {'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}},
+        {'WarmThroughput': {'ReadUnitsPerSecond': 12000, 'WriteUnitsPerSecond': 4000}},
+    ]
+    with new_test_table(dynamodb, **schema) as table:
+        for other_change in other_changes:
+            with pytest.raises(ClientError, match='ValidationException.*TableClass modification must be the only operation'):
+                table.meta.client.update_table(
+                    TableName=table.name,
+                    TableClass='STANDARD_INFREQUENT_ACCESS',
+                    **other_change)
+
 # DynamoDB includes LastUpdateDateTime in TableClassSummary after an
 # UpdateTable that changes the TableClass. This is not yet implemented.
 @pytest.mark.xfail(reason="LastUpdateDateTime in TableClassSummary not yet implemented")
