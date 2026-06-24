@@ -428,6 +428,7 @@ future<> server_impl::start() {
                                      .enable_prevoting = _config.enable_prevoting,
                                      .fast_bootstrap_seed = _config.fast_bootstrap_seed,
                                      .leaseguard = fsm_leaseguard,
+                                     .get_priority_members = _config.get_priority_members
                                  },
                                  _events);
 
