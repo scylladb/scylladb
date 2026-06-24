@@ -95,6 +95,10 @@ public:
             std::reference_wrapper<bounded_clock> clock;
         };
         std::optional<leaseguard_configuration> leaseguard;
+        // Servers to prefer as leader, best first. The first one which can vote and
+        // is alive campaigns before everybody else and normally wins; a bias, not a
+        // guarantee. Replaced by set_priority_members(). Empty => ordinary Raft.
+        std::vector<server_id> priority_members;
     };
 
     virtual ~server() {}
@@ -286,6 +290,9 @@ public:
     // Returns an empty ID if there is an ongoing election.
     // The information is only relevant for the current_term() only.
     virtual raft::server_id current_leader() const = 0;
+
+    // Replaces configuration::priority_members, e.g. when the topology changes.
+    virtual void set_priority_members(std::vector<server_id> members) = 0;
 
     // The function should be called periodically to advance logical clock.
     virtual void tick() = 0;
