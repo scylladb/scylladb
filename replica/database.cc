@@ -1645,6 +1645,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
     cfg.view_update_memory_semaphore_limit = _config.view_update_memory_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
+    cfg.strong_consistency_groups_manager = db.strong_consistency_groups_manager();
     cfg.enable_compacting_data_for_streaming_and_repair = db_config.enable_compacting_data_for_streaming_and_repair;
     cfg.enable_tombstone_gc_for_streaming_and_repair = db_config.enable_tombstone_gc_for_streaming_and_repair;
     cfg.guardrail_config = db::guardrail_config{
@@ -1662,6 +1663,14 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     };
 
     return cfg;
+}
+
+void database::set_strong_consistency_groups_manager(service::strong_consistency::groups_manager& gm) {
+    _strong_consistency_groups_manager = &gm;
+    auto column_families = get_tables_metadata().get_column_families_copy();
+    for (auto&& [_, cf] : column_families) {
+        cf->set_strong_consistency_groups_manager(gm);
+    }
 }
 
 future<> table::init_storage() {
