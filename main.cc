@@ -2451,6 +2451,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_client_routes(ctx).get();
             });
 
+            checkpoint(stop_signal, "starting batchlog manager");
+            db::batchlog_manager_config bm_cfg;
+            bm_cfg.replay_timeout = cfg->write_request_timeout_in_ms() * 1ms * 2;
+            bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
+            bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
+            bm_cfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
+
+            bm.start(std::ref(qp), std::ref(sys_ks), std::ref(feature_service), bm_cfg).get();
+            auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [&bm] {
+                bm.stop().get();
+            });
+
             checkpoint(stop_signal, "join cluster");
             // Allow abort during join_cluster since bootstrap or replace
             // can take a long time.
@@ -2606,18 +2618,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
                     return lifecycle_notifier.local().unregister_subscriber(&controller);
                 }).get();
-            });
-
-            checkpoint(stop_signal, "starting batchlog manager");
-            db::batchlog_manager_config bm_cfg;
-            bm_cfg.replay_timeout = cfg->write_request_timeout_in_ms() * 1ms * 2;
-            bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
-            bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
-            bm_cfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
-
-            bm.start(std::ref(qp), std::ref(sys_ks), std::ref(feature_service), bm_cfg).get();
-            auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [&bm] {
-                bm.stop().get();
             });
 
             checkpoint(stop_signal, "starting load meter");
