@@ -71,6 +71,51 @@ static raft_ticker_type::duration get_tick_interval() {
             .value_or(raft_tick_interval);
 }
 
+
+// The replicas of the tablet in its keyspace's dedicated rack - at most one, since a
+// rack list places one replica per rack - or none if the keyspace has no dedicated rack.
+// The group is identified by its id rather than by the tablet id alone: a split or a
+// merge builds new groups, and a stale one may still be running.
+static std::vector<raft::server_id> preferred_leaders(replica::database& db,
+        global_tablet_id tablet, raft::group_id group_id) {
+    // Looked up without throwing: a dropped table is legitimate, and the caller must
+    // not throw.
+    const auto table_ptr = db.get_tables_metadata().get_table_if_exists(tablet.table);
+    if (!table_ptr) {
+        return {};
+    }
+    const auto schema = table_ptr->schema();
+    if (!db.has_keyspace(schema->ks_name())) {
+        return {};
+    }
+    const auto consistency = db.find_keyspace(schema->ks_name()).metadata()->consistency_option();
+    if (!consistency || !consistency->has_dedicated_rack()) {
+        return {};
+    }
+    const auto& tm = db.get_token_metadata();
+    if (!tm.tablets().has_tablet_map(tablet.table)) {
+        return {};
+    }
+    const auto& tablet_map = tm.tablets().get_tablet_map(tablet.table);
+    if (size_t(tablet.tablet) >= tablet_map.tablet_count() || !tablet_map.has_raft_info()
+            || tablet_map.get_tablet_raft_info(tablet.tablet).group_id != group_id) {
+        return {};
+    }
+    std::vector<raft::server_id> preferred;
+    const auto& topo = tm.get_topology();
+    for (const auto& replica : tablet_map.get_tablet_info(tablet.tablet).replicas) {
+        const auto* node = topo.find_node(replica.host);
+        if (!node) {
+            continue;
+        }
+        const auto it = consistency->dedicated_rack.find(node->dc());
+        if (it != consistency->dedicated_rack.end() && it->second == node->rack()) {
+            preferred.push_back(to_server_id(replica.host));
+        }
+    }
+    return preferred;
+}
+
 class groups_manager::rpc_impl: public service::raft_rpc {
 public:
     rpc_impl(raft_state_machine& sm, netw::messaging_service& ms,
@@ -269,7 +314,13 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // groups pick different replicas instead of all electing the
         // smallest-id node (which would concentrate load on one node when a
         // table starts with many tablets).
-        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
+        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id),
+        // Captures the database rather than `tm` or `this`: the answer must follow the
+        // current topology, and raft servers are owned by the raft group registry, which
+        // outlives the groups manager.
+        .get_priority_members = [&db = _db, tablet, group_id] {
+            return preferred_leaders(db, tablet, group_id);
+        }
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
