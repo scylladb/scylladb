@@ -922,10 +922,16 @@ class ScyllaServer:
                 # repeatedly recreating driver connections while waiting for sd_notify.
                 if server_up_state < ServerUpState.CQL_ALTERNATOR_QUERIED:
                     server_up_state = await self.get_cql_alternator_up_state() or server_up_state
-                # Check for SERVING state via sd_notify. This is authoritative: Scylla sends
-                # STATUS=serving once all configured listeners are ready, and
-                # STATUS=entering maintenance mode once the maintenance socket is ready.
-                # Both mean the server is fully started and we don't need to wait further.
+                # Check for SERVING state via sd_notify. Scylla sends
+                # "STATUS=serving" once all configured listeners are ready, and
+                # "STATUS=entering maintenance mode" once the maintenance socket
+                # is ready. The notification is authoritative for Scylla-side
+                # listener startup, including non-default configured ports; the
+                # tests run on the same machine, so local connectivity follows.
+                # Still, before returning a server to tests, first verify the
+                # harness' CQL/Alternator request path: CQL authentication/query
+                # readiness, Alternator request handling, and the persistent
+                # driver connection used by the test framework.
                 if server_up_state >= ServerUpState.CQL_ALTERNATOR_QUERIED and self.check_serving_notification():
                     server_up_state = ServerUpState.SERVING
                 if server_up_state >= expected_server_up_state:
