@@ -1359,12 +1359,6 @@ data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsi
 }
 
 class client::chunked_download_source final : public seastar::data_source_impl {
-    struct claimed_buffer {
-        temporary_buffer<char> _buffer;
-        std::optional<semaphore_units<>> _claimed_memory;
-        claimed_buffer(temporary_buffer<char>&& buf, std::optional<semaphore_units<>>&& claimed_memory) noexcept
-            : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)) {}
-    };
     struct content_range {
         uint64_t start;
         uint64_t end;
@@ -1374,11 +1368,10 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     sstring _object_name;
     seastar::abort_source* _as;
     range _range;
-    static constexpr size_t _socket_buff_size = 128_KiB;
     static constexpr size_t _max_buffers_size = 5_MiB;
     static constexpr double _buffers_low_watermark = 0.5;
     static constexpr double _buffers_high_watermark = 0.9;
-    std::deque<claimed_buffer> _buffers;
+    std::deque<temporary_buffer<char>> _buffers;
     size_t _buffers_size = 0;
     bool _is_finished = false;
     bool _is_contiguous_mode = false;
@@ -1397,20 +1390,13 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     }
 
     future<> make_filling_fiber() {
+        auto buffered_download_unit = co_await claim_unit(_client->_buffered_dl_sem, _as);
         seastar::http::no_retry_strategy no_retry;
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         while (!_is_finished) {
             try {
                 if (!_is_finished && _buffers_size >= _max_buffers_size * _buffers_low_watermark) {
                     co_await _bg_fiber_cv.when([this] { return _is_finished || (_buffers_size < _max_buffers_size * _buffers_low_watermark); });
-                }
-
-                if (auto units = try_get_units(_client->_memory, _socket_buff_size); !_is_finished && !_buffers.empty() && !units) {
-                    auto& gc = co_await _client->find_or_create_client();
-                    ++gc.downloads_blocked_on_memory;
-                    co_await _bg_fiber_cv.when([this] {
-                        return _is_finished || _buffers.empty() || try_get_units(_client->_memory, _socket_buff_size);
-                    });
                 }
 
                 if (_is_finished) {
@@ -1433,7 +1419,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
                 if (current_range.length() == 0) {
                     s3l.trace("Fiber for object '{}' completed downloading, signals EOS and leaving fiber", _object_name);
-                    _buffers.emplace_back(temporary_buffer<char>(), co_await _client->claim_memory(0, _as));
+                    _buffers.emplace_back(temporary_buffer<char>());
                     _get_cv.signal();
                     _is_finished = true;
                     co_return;
@@ -1464,24 +1450,14 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             });
 
                             s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
-                            temporary_buffer<char> buf;
-                            auto units = try_get_units(_client->_memory, _socket_buff_size);
-                            if (_buffers.empty() || units) {
-                                buf = co_await in.read();
-                                assert(buf.size() <= _socket_buff_size);
-                                if (units) {
-                                    units->return_units(_socket_buff_size - buf.size());
-                                }
-                            } else {
-                                break;
-                            }
+                            temporary_buffer<char> buf = co_await in.read();
                             auto buff_size = buf.size();
                             gc.read_bytes += buff_size;
                             _range += buff_size;
                             _buffers_size += buff_size;
                             if (buff_size == 0 && _range.length() == 0) {
                                 s3l.trace("Fiber for object '{}' signals EOS", _object_name);
-                                _buffers.emplace_back(std::move(buf), std::move(units));
+                                _buffers.emplace_back(std::move(buf));
                                 _get_cv.signal();
                                 _is_finished = true;
                                 break;
@@ -1491,7 +1467,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 break;
                             }
                             s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
-                            _buffers.emplace_back(std::move(buf), std::move(units));
+                            _buffers.emplace_back(std::move(buf));
                             _get_cv.signal();
                             utils::get_local_injector().inject("break_s3_inflight_req", [] {
                                 // Inject a non-`aws_error` after partial data download to verify proper
@@ -1531,12 +1507,12 @@ public:
             if (!_buffers.empty()) {
                 auto claimed_buff = std::move(_buffers.front());
                 _buffers.pop_front();
-                _buffers_size -= claimed_buff._buffer.size();
+                _buffers_size -= claimed_buff.size();
                 if (_buffers_size < _max_buffers_size * _buffers_low_watermark) {
                     _bg_fiber_cv.signal();
                 }
-                s3l.trace("get() for object '{}' popped buffer of {} bytes", _object_name, claimed_buff._buffer.size());
-                co_return std::move(claimed_buff._buffer);
+                s3l.trace("get() for object '{}' popped buffer of {} bytes", _object_name, claimed_buff.size());
+                co_return std::move(claimed_buff);
             }
             _bg_fiber_cv.signal();
             s3l.trace("get() for object '{}' waiting for buffer", _object_name);
