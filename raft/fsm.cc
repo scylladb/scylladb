@@ -36,6 +36,9 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
     // so that the log can be replayed
     _commit_idx = std::max(_commit_idx, commit_idx);
 
+    // Otherwise sampled on tick, but the first election timer is armed below.
+    _clock_ok = lease_time_now().has_value();
+
     // A node "starts as a candidate" -- calls an election immediately instead of
     // waiting for the randomized election timeout, skipping prevoting since there
     // is no existing leader to disrupt. This happens for the sole voter of a
@@ -245,14 +248,41 @@ void fsm::update_current_term(term_t current_term)
     _voted_for = server_id{};
 }
 
+std::optional<server_id> fsm::preferred_leader() const {
+    if (!_config.get_priority_members) {
+        return std::nullopt;
+    }
+    const configuration& cfg = _log.get_configuration();
+    for (const auto& id : _config.get_priority_members()) {
+        if (cfg.can_vote(id)) {
+            return id;
+        }
+    }
+    return std::nullopt;
+}
+
 void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<> dist;
-    // Timeout within range of [1, conf size]
-    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re,
-            std::uniform_int_distribution<int>::param_type{1,
-                    std::max((size_t) ELECTION_TIMEOUT.count(),
-                            _log.get_configuration().current.size())})};
+    static thread_local std::uniform_int_distribution<logical_clock::rep> dist;
+
+    // Timeout within range of [1, number of voters]
+    const auto num_slots = std::max(ELECTION_TIMEOUT.count(),
+            static_cast<logical_clock::rep>(configuration::voter_count(_log.get_configuration().current)));
+
+    const auto preferred = preferred_leader();
+    logical_clock::rep offset;
+    if (preferred == _my_id && (!leaseguard_enabled() || _clock_ok)) {
+        offset = 1;
+    } else {
+        // A preferred leader whose own clock is unusable could hold no lease, so it
+        // declines its slot rather than win and have LeaseGuard hand the leadership away.
+        // Strictly after the reserved slot, so the preferred leader is neither
+        // preceded nor tied.
+        const logical_clock::rep first_free = preferred ? 2 : 1;
+        offset = dist(re, std::uniform_int_distribution<logical_clock::rep>::param_type{
+                first_free, std::max(first_free, num_slots)});
+    }
+    _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{offset};
 }
 
 void fsm::become_leader() {

@@ -159,6 +159,12 @@ struct fsm_config {
         lease_clock::duration delta;
     };
     std::optional<leaseguard_config> leaseguard;
+    // Servers to prefer as leader, best first. The first one which can vote gets the
+    // earliest election timeout slot - unless its own clock is unusable while leases
+    // are on - and everybody else randomizes after it. A bias, not a guarantee.
+    // Invoked whenever the election timer is armed; must neither block nor throw.
+    // Empty / unset => ordinary Raft.
+    std::function<std::vector<server_id>()> get_priority_members;
 };
 
 class fsm;
@@ -432,6 +438,8 @@ private:
     // has been unusable long enough and such a replica exists. A no-op unless
     // leases are enabled. Precondition: is_leader(), not already stepping down.
     void maybe_transfer_leadership_on_clock_loss();
+    // The first of get_priority_members() which can vote, or nullopt.
+    std::optional<server_id> preferred_leader() const;
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
