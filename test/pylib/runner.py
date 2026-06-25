@@ -75,8 +75,6 @@ logger = logging.getLogger(__name__)
 # Store pytest config globally so we can access it in hooks that only receive report
 _pytest_config: pytest.Config | None = None
 
-_system_resource_monitor: SystemResourceMonitor | None = None
-
 _cluster_pools: dict[str, Pool[ScyllaCluster]] = {}
 
 
@@ -386,9 +384,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         # System-wide resource metrics (CPU%, memory) are identical from any process.
         # Only the master needs to record them.
         if not is_xdist_worker:
-            global _system_resource_monitor
-            _system_resource_monitor = SystemResourceMonitor(temp_dir)
-            _system_resource_monitor.start()
+            system_resource_monitor = SystemResourceMonitor(temp_dir)
+            system_resource_monitor.start()
+            async def stop_resource_monitor() -> None:
+                system_resource_monitor.stop()
+            artifacts.add_exit_artifact(stop_resource_monitor)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -438,27 +438,17 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     if session.config.getoption("--collect-only"):
         return
 
-    global _system_resource_monitor
-    if _system_resource_monitor:
-        _system_resource_monitor.stop()
-
-    is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
     # If all tests passed, remove the log file to save space and avoid confusion with logs from failed runs.
     # We check this at the end of the session to ensure that we have the complete log available for any failed tests.
-
     if session.testsfailed == 0 and not session.config.getoption("--save-log-on-success"):
         # Use missing_ok=True because the log file is only created on first write,
         # so it may never have been written if nothing was logged.
         pathlib.Path(_pytest_config.stash[PYTEST_LOG_FILE]).unlink(missing_ok=True)
 
-
-    # Check if this is an xdist worker - workers should not clean up (only the main process should)
-    # Check if test.py has already prepared the environment, so it should clean up
-
-    if is_xdist_worker:
-        return
-
     asyncio.run(artifacts.cleanup_before_exit())
+
+    if xdist.is_xdist_worker(request_or_session=session):
+        return
 
     # Modify exit code to reflect the number of failed tests for easier detection in CI.
     maxfail = session.config.getoption("maxfail")
