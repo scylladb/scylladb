@@ -484,6 +484,18 @@ def test_bm25_like_operator_rejected(cql, fulltext_table):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') LIKE 'x' LIMIT 1")
 
 
+def test_bm25_aggregation_rejected(cql, fulltext_table):
+    """SELECT with aggregate functions must be rejected for full-text search queries."""
+    with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
+        cql.execute(f"SELECT count(*) FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_bm25_per_partition_limit_rejected(cql, fulltext_table):
+    """PER PARTITION LIMIT must be rejected for full-text search queries."""
+    with pytest.raises(InvalidRequest, match="do not support per-partition limits"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') PER PARTITION LIMIT 5 LIMIT 10")
+
+
 def test_bm25_on_nonexistent_column_fails(cql, fulltext_table):
     """BM25 on a column that doesn't exist should be rejected."""
     with pytest.raises(InvalidRequest, match="Unrecognized name nonexistent"):
