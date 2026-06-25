@@ -41,6 +41,7 @@
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "mutation/timestamp.hh"
+#include "types/types.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
 #include <optional>
@@ -105,6 +106,44 @@ bool should_flush_system_topology_after_applying(const mutation& mut, const data
         }
     }
     return false;
+}
+
+static bool is_topology_request_done_mutation(const canonical_mutation& cmut) {
+    auto s = db::system_keyspace::topology_requests();
+    if (cmut.column_family_id() != s->id()) {
+        return false;
+    }
+
+    auto mut = cmut.to_mutation(s);
+    auto done_col = s->get_column_definition("done");
+    if (!done_col) {
+        on_internal_error(slogger, "topology_requests.done column not found");
+    }
+
+    for (const auto& row : mut.partition().clustered_rows()) {
+        const auto* cell = row.row().cells().find_cell(done_col->id);
+        if (cell && value_cast<bool>(done_col->type->deserialize_value(cell->as_atomic_cell(*done_col).value()))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static utils::chunked_vector<canonical_mutation> take_topology_request_done_mutations(utils::chunked_vector<canonical_mutation>& mutations) {
+    utils::chunked_vector<canonical_mutation> done_mutations;
+
+    auto it = mutations.begin();
+    while (it != mutations.end()) {
+        if (is_topology_request_done_mutation(*it)) {
+            done_mutations.emplace_back(std::move(*it));
+            it = mutations.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    return done_mutations;
 }
 
 static void collect_client_routes_update(const mutation& mut, client_routes_service::client_route_keys& client_routes_update) {
@@ -312,6 +351,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     std::optional<storage_service::state_change_hint> topology_state_change_hint;
     modules_to_reload modules_to_reload;
     std::unique_ptr<db::schema_tables::schema_applier> pending_schema;
+    utils::chunked_vector<canonical_mutation> deferred_mixed_change_done;
 
     co_await std::visit(make_visitor(
     [&] (schema_change& chng) -> future<> {
@@ -343,13 +383,24 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         modules_to_reload = get_modules_to_reload(chng.mutations);
         topology_state_change_hint.emplace();
         if (_in_memory_state_machine_enabled) {
-            // Phase 1: persist all mutations (schema + topology) to disk and
+            // Defer topology request completion until after schema Phase 2. Otherwise
+            // waiters can observe system.topology_requests.done=true while schema
+            // mutations are only persisted on disk and not yet committed to in-memory
+            // schema state.
+            deferred_mixed_change_done = take_topology_request_done_mutations(chng.mutations);
+
+            // Phase 1: persist main mutations (schema + topology) to disk and
+            // defer request-completion tracking until after Phase 2, so callers
+            // waiting on topology request completion cannot observe persisted
+            // schema before the in-memory schema is committed.
             // snapshot 'before' schema state.  topology_transition() will run
             // below to load the new topology into memory before Phase 2
             // builds ERMs, ensuring they reflect the correct replica
             // placement.
-            pending_schema = co_await _mm.prepare_schema_change(
-                    locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+            if (!chng.mutations.empty()) {
+                pending_schema = co_await _mm.prepare_schema_change(
+                        locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+            }
         } else {
             co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
         }
@@ -370,6 +421,12 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
             co_await _mm.complete_schema_change(std::move(pending_schema));
         }
         co_await reload_modules(std::move(modules_to_reload));
+
+        if (!deferred_mixed_change_done.empty()) {
+            co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(deferred_mixed_change_done));
+        }
+
+        _ss.wake_up_topology_state_machine();
     }
 
     co_await _sp.mutate_locally({std::move(history)}, nullptr);
@@ -541,7 +598,7 @@ future<> group0_state_machine::reload_state() {
 
     co_await sync_audit_known_entities();
 
-    _ss._topology_state_machine.event.broadcast();
+    _ss.wake_up_topology_state_machine();
     _ss._view_building_state_machine.event.broadcast();
 }
 
