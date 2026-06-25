@@ -94,6 +94,9 @@ public:
     static api_error internal(std::string msg) {
         return api_error("InternalServerError", std::move(msg), http::reply::status_type::internal_server_error);
     }
+    static api_error payload_too_large(std::string msg) {
+        return api_error("PayloadTooLarge", std::move(msg), status_type::payload_too_large);
+    }
 
     // Provide the "std::exception" interface, to make it easier to print this
     // exception in log messages. Note that this function is *not* used to
