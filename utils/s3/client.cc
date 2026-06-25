@@ -824,8 +824,6 @@ sstring parse_multipart_copy_upload_etag(sstring& body) {
 
 class client::multipart_upload {
 protected:
-    static constexpr size_t _max_multipart_concurrency = 16;
-
     shared_ptr<client> _client;
     sstring _object_name;
     sstring _upload_id;
@@ -898,7 +896,7 @@ private:
             auto parts = std::views::iota(size_t{0}, (source_size + part_size - 1) / part_size);
             _part_etags.resize(parts.size());
             co_await max_concurrent_for_each(parts,
-                                             _max_multipart_concurrency,
+                                             max_client_mpu_in_flight,
                                              [part_size, source_size, this](auto part_num) -> future<> {
                                                  auto part_offset = part_num * part_size;
                                                  auto actual_part_size = std::min(source_size - part_offset, part_size);
@@ -1699,8 +1697,7 @@ class client::do_upload_file : private multipart_upload {
 
         std::exception_ptr ex;
         try {
-            co_await max_concurrent_for_each(std::views::iota(size_t{0}, (total_size + part_size - 1) / part_size),
-                                             _max_multipart_concurrency,
+            co_await parallel_for_each(std::views::iota(size_t{0}, (total_size + part_size - 1) / part_size),
                                              [part_size, total_size, this, f = file{f}](auto part_num) -> future<> {
                                                  auto part_offset = part_num * part_size;
                                                  auto actual_part_size = std::min(total_size - part_offset, part_size);
