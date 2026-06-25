@@ -218,6 +218,9 @@ public:
     stop_iteration consume(static_row&& sr, tombstone current_tombstone);
     // Requires that cr.has_any_live_data()
     stop_iteration consume(clustering_row&& cr, row_tombstone current_tombstone);
+    // Serializes cells directly from a const row reference without copying.
+    // For schemas without clustering key only (empty clustering key prefix).
+    stop_iteration consume_row_cells_by_ref(const clustering_key_prefix& ck, const row& cells, row_tombstone current_tombstone);
     stop_iteration consume(range_tombstone_change&&) { return stop_iteration::no; }
     uint64_t consume_end_of_stream();
 };
@@ -235,6 +238,8 @@ public:
     void consume(tombstone t);
     stop_iteration consume(static_row&& sr, tombstone t, bool);
     stop_iteration consume(clustering_row&& cr, row_tombstone t, bool);
+    // Zero-copy variant: serializes cells directly from cache without copying the row.
+    stop_iteration consume_row_cells_by_ref(const clustering_key_prefix& ck, const row& cells, row_tombstone t, bool is_alive);
     stop_iteration consume(range_tombstone_change&& rtc);
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();

@@ -1978,6 +1978,49 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone curr
     return stop;
 }
 
+stop_iteration mutation_querier::consume_row_cells_by_ref(const clustering_key_prefix& ck, const row& cells, row_tombstone current_tombstone) {
+    prepare_writers();
+
+    const query::partition_slice& slice = _pw.slice();
+
+    if (_pw.requested_digest()) {
+        _pw.digest().feed_hash(ck, _schema);
+        _pw.digest().feed_hash(current_tombstone);
+        max_timestamp max_ts{_pw.last_modified()};
+        max_ts.update(current_tombstone.tomb().timestamp);
+        _pw.digest().feed_hash(cells, _schema, column_kind::regular_column, slice.regular_columns, max_ts);
+        _pw.last_modified() = max_ts.max;
+    }
+
+    auto write_row = [&] (auto& rows_writer) {
+        auto cells_wr = [&] {
+            if (slice.options.contains(query::partition_slice::option::send_clustering_key)) {
+                return rows_writer.add().write_key(ck).start_cells().start_cells();
+            } else {
+                return rows_writer.add().skip_key().start_cells().start_cells();
+            }
+        }();
+        get_compacted_row_slice(_schema, slice, column_kind::regular_column, cells, slice.regular_columns, cells_wr);
+        std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
+    };
+
+    auto stop = stop_iteration::no;
+    if (_pw.requested_result()) {
+        auto start = _rows_wr->_out.size();
+        write_row(*_rows_wr);
+        stop = _memory_accounter.update_and_check(_rows_wr->_out.size() - start);
+    } else {
+        seastar::measuring_output_stream stream;
+        ser::qr_partition__rows<seastar::measuring_output_stream> out(stream, { });
+        auto start = stream.size();
+        write_row(out);
+        stop = _memory_accounter.update_and_check(stream.size() - start);
+    }
+
+    _live_clustering_rows++;
+    return stop;
+}
+
 uint64_t mutation_querier::consume_end_of_stream() {
     prepare_writers();
 
@@ -2027,6 +2070,14 @@ stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone 
         return _stop;
     }
     _stop = _mutation_consumer->consume(std::move(cr), t);
+    return _stop;
+}
+stop_iteration query_result_builder::consume_row_cells_by_ref(const clustering_key_prefix& ck, const row& cells, row_tombstone t, bool is_alive) {
+    if (!is_alive) {
+        _stop = _rb.bump_and_check_tombstone_limit();
+        return _stop;
+    }
+    _stop = _mutation_consumer->consume_row_cells_by_ref(ck, cells, t);
     return _stop;
 }
 stop_iteration query_result_builder::consume(range_tombstone_change&& rtc) {

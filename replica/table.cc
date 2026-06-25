@@ -5098,6 +5098,17 @@ table::query(schema_ptr query_schema,
     while (!qs.done()) {
         auto&& range = *qs.current_partition_range++;
 
+        // Fast path: directly query single_row_partition from cache.
+        // Avoids creating querier, mutation_reader, compact_for_query_state,
+        // and mutation_fragment_v2 objects.
+        if (!querier_opt && query::is_single_partition(range)
+                && !qs.cmd.slice.options.contains(query::partition_slice::option::bypass_cache)) {
+            query_result_builder result_builder(*query_schema, qs.builder);
+            if (_cache.query_single_row(query_schema, range, qs.cmd.slice, result_builder)) {
+                continue;
+            }
+        }
+
         if (!querier_opt) {
             querier_base::querier_config conf(_config.tombstone_warn_threshold);
             querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_tombstone_gc_state(), conf);

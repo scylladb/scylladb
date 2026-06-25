@@ -6270,13 +6270,33 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
         storage_proxy::coordinator_query_options query_options) {
-    utils::small_vector<std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>, 1> exec;
-    exec.reserve(partition_ranges.size());
-
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
 
     replica::table& table = _db.local().find_column_family(schema->id());
     auto erm = table.get_effective_replication_map();
+
+    // Fast path for CL=ONE, single-partition, local-shard reads on tables
+    // without clustering keys. Bypasses read_executor and digest_resolver.
+    if (cl == db::consistency_level::ONE
+            && partition_ranges.size() == 1
+            && !query_options.trace_state
+            && table.get_row_cache().get_partition_format() == partition_format::single_row) {
+        auto shard_opt = dht::is_single_shard(erm->get_sharder(*schema), *schema, partition_ranges[0]);
+        if (shard_opt && *shard_opt == this_shard_id()) {
+            auto timeout = query_options.timeout(*this);
+            // Copy ranges into a coroutine-local variable to avoid dangling rvalue reference
+            dht::partition_range_vector local_ranges(partition_ranges);
+            ++get_stats().data_read_attempts.get_ep_stat(erm->get_topology(), erm->get_topology().my_host_id());
+            auto [result, hit_rate] = co_await _db.local().query(schema, *cmd,
+                query::result_options::only_result(), local_ranges, nullptr, timeout);
+            ++get_stats().data_read_completed.get_ep_stat(erm->get_topology(), erm->get_topology().my_host_id());
+            table.set_hit_rate(erm->get_topology().my_host_id(), hit_rate);
+            co_return coordinator_query_result(make_foreign(std::move(result)), {}, db::read_repair_decision::NONE);
+        }
+    }
+
+    utils::small_vector<std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>, 1> exec;
+    exec.reserve(partition_ranges.size());
 
     db::read_repair_decision repair_decision = query_options.read_repair_decision
         ? *query_options.read_repair_decision : db::read_repair_decision::NONE;

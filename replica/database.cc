@@ -89,6 +89,8 @@
 #include "utils/labels.hh"
 #include "service/paxos/paxos_state.hh"
 #include "tracing/trace_keyspace_helper.hh"
+#include "query/query-result-writer.hh"
+#include "replica/query_state.hh"
 
 #include <algorithm>
 #include <flat_set>
@@ -1836,6 +1838,28 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
     if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
         ++_stats->total_reads_rate_limited;
         co_await coroutine::return_exception(replica::rate_limit_exception());
+    }
+
+    // Fast path: for single_row_partition tables, try cache-only query
+    // before acquiring reader permit (which is expensive).
+    if (cf.get_row_cache().get_partition_format() == partition_format::single_row
+            && !cmd.query_uuid
+            && ranges.size() == 1
+            && query::is_single_partition(ranges[0])
+            && !cmd.slice.options.contains(query::partition_slice::option::bypass_cache)
+            && opts.request == query::result_request::only_result) {
+        auto op = cf.read_in_progress();
+        const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
+        auto accounter = co_await get_result_memory_limiter().new_data_read(
+            cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size(), short_read_allowed);
+        replica::query_state qs(query_schema, cmd, opts, ranges, std::move(accounter));
+        query_result_builder result_builder(*query_schema, qs.builder);
+        if (cf.get_row_cache().query_single_row(query_schema, ranges[0], cmd.slice, result_builder)) {
+            auto& semaphore = get_reader_concurrency_semaphore();
+            ++semaphore.get_stats().total_successful_reads;
+            _stats->short_data_queries += bool(qs.builder.is_short_read());
+            co_return std::tuple(make_lw_shared<query::result>(qs.builder.build()), cf.get_global_cache_hit_rate());
+        }
     }
 
     auto& semaphore = get_reader_concurrency_semaphore();

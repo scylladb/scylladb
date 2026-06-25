@@ -32,6 +32,7 @@
 #include "utils/chunked_vector.hh"
 #include "readers/from_mutations.hh"
 #include "readers/from_fragments.hh"
+#include "query/query-result-writer.hh"
 
 namespace cache {
 
@@ -943,6 +944,18 @@ row_cache::make_reader_opt(schema_ptr s,
                 cache_entry& e = *i;
                 upgrade_entry(e);
                 on_partition_hit();
+                if (e.format() == partition_format::single_row) {
+                    // Fast path for single_row_partition cache hits.
+                    // Avoids creating a read_context (which is heavyweight and heap-allocated)
+                    // since the single_row path only needs permit and schema from it.
+                    ++_tracker._stats.reads;
+                    ++_tracker._stats.reads_done;
+                    _stats.reads_with_no_misses.mark();
+                    auto& srp = e.storage.srp;
+                    auto r = make_mutation_reader_from_fragments(srp.get_schema(), permit, srp.as_fragments(e._key, permit));
+                    r.upgrade_schema(s);
+                    return mutation_reader_opt(std::move(r));
+                }
                 return e.read(*this, make_context());
             } else if (i->continuous()) {
                 return {};
@@ -1771,6 +1784,63 @@ void row_cache::upgrade_entry(cache_entry& e) {
             srp.upgrade(_schema);
         }
     }));
+}
+
+bool row_cache::query_single_row(const schema_ptr& s,
+                                 const dht::partition_range& range,
+                                 const query::partition_slice& slice,
+                                 query_result_builder& builder) {
+    if (get_partition_format() != partition_format::single_row) {
+        return false;
+    }
+
+    return _read_section(_tracker.region(), [&] () -> bool {
+        dht::ring_position_comparator cmp(*_schema);
+        auto&& pos = range.start()->value();
+        partitions_type::bound_hint hint;
+        auto i = _partitions.lower_bound(pos, cmp, hint);
+        if (!hint.match) {
+            return false;
+        }
+        cache_entry& e = *i;
+        if (e.format() != partition_format::single_row) {
+            return false;
+        }
+
+        auto& srp = e.storage.srp;
+
+        // Inline schema upgrade check for single_row (avoids visitor dispatch).
+        // If schemas don't match, upgrade and re-check. Fall back if query
+        // schema still doesn't match (e.g., ALTER TABLE changed columns).
+        if (srp.get_schema() != _schema) [[unlikely]] {
+            srp.upgrade(_schema);
+        }
+        if (srp.get_schema() != s) [[unlikely]] {
+            return false;
+        }
+
+        on_partition_hit();
+
+        // Update read stats (normally done by read_context ctor/dtor)
+        ++_tracker._stats.reads;
+        ++_tracker._stats.reads_done;
+        _stats.reads_with_no_misses.mark();
+
+        const auto& row = srp.row();
+        auto partition_tombstone = row.deleted_at().regular();
+        bool is_alive = row.is_live(*s, column_kind::regular_column, partition_tombstone);
+
+        builder.consume_new_partition(e.key());
+        builder.consume(partition_tombstone);
+
+        if (is_alive) {
+            builder.consume_row_cells_by_ref(
+                clustering_key_prefix::make_empty(), row.cells(), row.deleted_at(), true);
+        }
+
+        builder.consume_end_of_partition();
+        return true;
+    });
 }
 
 std::ostream& operator<<(std::ostream& out, row_cache& rc) {

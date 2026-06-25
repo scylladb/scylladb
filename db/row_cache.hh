@@ -27,6 +27,7 @@
 class row_cache;
 class cache_tracker;
 class mutation_reader;
+class query_result_builder;
 
 namespace replica {
 class memtable_entry;
@@ -433,6 +434,17 @@ public:
             const query::partition_slice& slice, tracing::trace_state_ptr ts);
 
     const stats& stats() const { return _stats; }
+
+    // Fast path for querying single-row partitions from cache.
+    // Returns true if the partition was found in cache as a single_row_partition
+    // and the result was written to the builder.
+    // The caller must ensure that `range` is a single partition range.
+    // Only applicable when partition_format is single_row.
+    bool query_single_row(const schema_ptr& s,
+                          const dht::partition_range& range,
+                          const query::partition_slice& slice,
+                          query_result_builder& builder);
+
 public:
     // Populate cache from given mutation, which must be fully continuous.
     // Intended to be used only in tests.
