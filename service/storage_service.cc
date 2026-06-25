@@ -5632,6 +5632,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         }
 
         auto ts = db_clock::now();
+        auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
         for (const auto& token : tokens) {
             auto tid = tmap.get_tablet_id(token);
             auto& tinfo = tmap.get_tablet_info(tid);
@@ -5641,10 +5642,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
                         locator::global_tablet_id{table, tid}, req_id));
             }
             auto last_token = tmap.get_last_token(tid);
-            updates.emplace_back(
-                tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                    .set_repair_task_info(last_token, repair_task_info, _feature_service)
-                    .build());
+            builder.set_repair_task_info(last_token, repair_task_info, _feature_service);
             db::system_keyspace::repair_task_entry entry{
                 .task_uuid   = tasks::task_id(repair_task_info.tablet_task_id.uuid()),
                 .operation   = db::system_keyspace::repair_task_operation::requested,
@@ -5659,6 +5657,9 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
                     updates.push_back(std::move(m));
                 }
             }
+        }
+        if (!tokens.empty()) {
+            updates.emplace_back(builder.build());
         }
 
         sstring reason = format("Repair tablet by API request tokens={} tablet_task_id={}", tokens, repair_task_info.tablet_task_id);
