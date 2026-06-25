@@ -3264,7 +3264,7 @@ inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(const locator::to
     try {
         sstring dc = topo.get_datacenter(ep);
         if (_auto_register_metrics) {
-            register_metrics_for(dc, ep);
+            register_metrics_for(dc);
         }
         return _dc_stats[dc].val;
     } catch (...) {
@@ -3284,7 +3284,7 @@ void storage_proxy_stats::split_stats::register_metrics_local() {
     _metrics = std::exchange(new_metrics, {});
 }
 
-void storage_proxy_stats::split_stats::register_metrics_for(sstring dc, locator::host_id ep) {
+void storage_proxy_stats::split_stats::register_metrics_for(sstring dc) {
     namespace sm = seastar::metrics;
 
     // if this is the first time we see an endpoint from this DC - add a
