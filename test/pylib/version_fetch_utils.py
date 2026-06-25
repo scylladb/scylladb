@@ -35,7 +35,12 @@ def _list_scylla_release_entries(bucket: str, prefix: str, pack: str = "") -> li
     pack_part = rf"{re.escape(pack)}-" if pack else ""    
     pattern = re.compile(rf"^scylla(?:db)?-{pack_part}\d{{4}}\.\d+(?:\.\d+)?(?:/|$|[~.-])")
 
-    s3 = boto3.client("s3", region_name="us-east-1", config=Config(signature_version=UNSIGNED))
+    s3 = boto3.client("s3", region_name="us-east-1", config=Config(
+        signature_version=UNSIGNED,
+        connect_timeout=60,
+        read_timeout=60,
+        retries={"max_attempts": 10, "mode": "adaptive"},
+    ))
 
     files = []
     folders = []
