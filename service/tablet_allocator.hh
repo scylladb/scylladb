@@ -299,6 +299,10 @@ public:
         _rf_change_plan = std::move(rf_change_plan);
     }
 
+    void maybe_add_rack_list_request_to_resume(const utils::UUID& id) {
+        _rack_list_colocation_plan.maybe_add_request_to_resume(id);
+    }
+
     future<std::unordered_set<locator::global_tablet_id>> get_migration_tablet_ids() const;
 };
 
