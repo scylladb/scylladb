@@ -114,7 +114,6 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_split_stats) {
-    auto ep1 = locator::host_id{};
     auto sg1 = create_scheduling_group("apa1", 100).get();
     auto sg2 = create_scheduling_group("apa2", 100).get();
 
@@ -139,8 +138,8 @@ SEASTAR_THREAD_TEST_CASE(test_split_stats) {
     // Point being is that either the above should not happen, or 
     // split_stats should be resilient to being called from different
     // scheduling group.
-    stats1->register_metrics_for("DC1", ep1);
-    stats2->register_metrics_for("DC1", ep1);
+    stats1->register_metrics_for("DC1");
+    stats2->register_metrics_for("DC1");
 }
 
 SEASTAR_TEST_CASE(test_drop_table_during_range_scan) {
