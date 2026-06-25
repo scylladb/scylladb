@@ -980,7 +980,10 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             db::consistency_level::LOCAL_QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
     llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);
     if (sst_infos.empty()) {
-        throw std::runtime_error(format("No SSTables found in system_distributed.snapshot_sstables for {}", snapshot_name));
+        // It can happen when the restored table has more tablets than the original.
+        // Some tablets simply have no data in their token range.
+        llog.info("No SSTables found for tablet {}, skipping", tid);
+        co_return;
     }
 
     auto [ fully, partially ] = co_await get_sstables_for_tablet(sst_infos, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
@@ -1202,25 +1205,6 @@ protected:
     virtual future<> run() override {
         auto& loader = _loader.local();
         co_await loader._ss.local().restore_tablets(_tid, _snap_name);
-
-        auto& db = loader._db.local();
-        auto s = db.find_schema(_tid);
-        // Hold the token_metadata_ptr on the coroutine frame so the ref count keeps it alive
-        // across co_await suspension points. Without this, token_metadata can be replaced and
-        // cleared (via clear_gently) while the loop iterator still references its topology data.
-        // Fixes: https://scylladb.atlassian.net/browse/SCYLLADB-2149
-        auto md = db.get_token_metadata_ptr();
-        const auto& topo = md->get_topology();
-        auto dc = topo.get_datacenter();
-
-        for (const auto& rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
-            auto result = co_await loader._sys_dist_ks.get_snapshot_sstables(_snap_name, s->ks_name(), s->cf_name(), dc, rack);
-            auto it = std::find_if(result.begin(), result.end(), [] (const auto& ent) { return !ent.downloaded; });
-            if (it != result.end()) {
-                llog.warn("Some replicas failed to download SSTables for {}:{} from {}", s->ks_name(), s->cf_name(), _snap_name);
-                throw std::runtime_error(format("Failed to download {}", it->toc_name));
-            }
-        }
     }
 };
 

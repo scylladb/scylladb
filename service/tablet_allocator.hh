@@ -193,6 +193,12 @@ struct tablet_rack_list_colocation_plan {
     }
 };
 
+struct restore_completion_info {
+    utils::UUID request_id;
+    table_id table;
+    sstring error;
+};
+
 struct rf_change_completion_info {
     utils::UUID request_id;
     sstring ks_name;
@@ -230,6 +236,7 @@ private:
     tablet_repair_plan _repair_plan;
     tablet_rack_list_colocation_plan _rack_list_colocation_plan;
     keyspace_rf_change_plan _rf_change_plan;
+    std::vector<restore_completion_info> _restore_completions;
     bool _has_nodes_to_drain = false;
     std::vector<drain_failure> _drain_failures;
 public:
@@ -239,7 +246,14 @@ public:
 
     const migrations_vector& migrations() const { return _migrations; }
     bool empty() const { return !size(); }
-    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size() + _drain_failures.size() + _rf_change_plan.size(); }
+    size_t size() const { return _migrations.size()
+                               + _resize_plan.size()
+                               + _repair_plan.size()
+                               + _rack_list_colocation_plan.size()
+                               + _drain_failures.size()
+                               + _rf_change_plan.size()
+                               + _restore_completions.size();
+                        }
     size_t tablet_migration_count() const { return _migrations.size(); }
     size_t resize_decision_count() const { return _resize_plan.size(); }
     size_t tablet_repair_count() const { return _repair_plan.size(); }
@@ -264,6 +278,7 @@ public:
     void merge(migration_plan&& other) {
         std::move(other._migrations.begin(), other._migrations.end(), std::back_inserter(_migrations));
         std::move(other._drain_failures.begin(), other._drain_failures.end(), std::back_inserter(_drain_failures));
+        std::move(other._restore_completions.begin(), other._restore_completions.end(), std::back_inserter(_restore_completions));
         _has_nodes_to_drain |= other._has_nodes_to_drain;
         _resize_plan.merge(std::move(other._resize_plan));
         _repair_plan.merge(std::move(other._repair_plan));
@@ -297,6 +312,12 @@ public:
 
     void set_rf_change_plan(keyspace_rf_change_plan rf_change_plan) {
         _rf_change_plan = std::move(rf_change_plan);
+    }
+
+    const std::vector<restore_completion_info>& restore_completions() const { return _restore_completions; }
+
+    void add_restore_completion(restore_completion_info info) {
+        _restore_completions.emplace_back(std::move(info));
     }
 
     future<std::unordered_set<locator::global_tablet_id>> get_migration_tablet_ids() const;
