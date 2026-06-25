@@ -33,9 +33,9 @@ static void add_entry(logalloc::region& r,
             auto out = managed_bytes_mutable_view(page._key_storage);
             write_fragmented(out, managed_bytes_view(old_storage));
             write_fragmented(out, single_fragmented_view(bytes_view(sst_key)));
-            page._entries.push_back(index_entry{dht::raw_token_opt()->value, position, key_offset});
+            page._entries.emplace_back(dht::raw_token_opt()->value, position, key_offset);
             if (promoted_index) {
-                page._promoted_indexes.resize(page._entries.size());
+                page._promoted_indexes.grow_to(page._entries.size());
                 page._promoted_indexes[page._entries.size() - 1] = *promoted_index;
             }
         });
