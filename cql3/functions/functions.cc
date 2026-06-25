@@ -473,7 +473,13 @@ functions::get(data_dictionary::database db,
     if (!name.has_keyspace()) {
         // add 'SYSTEM' (native) candidates
         add_declared(name.as_native_function());
-        add_declared(function_name(keyspace, name.name));
+        // Skip the duplicate when the current keyspace is already the system
+        // keyspace: there `function_name(keyspace, name.name)` equals the native
+        // name and would add the same `_declared` entries again, causing a
+        // spurious "Ambiguous call" error.
+        if (keyspace != db::system_keyspace_name()) {
+            add_declared(function_name(keyspace, name.name));
+        }
     } else {
         // function name is fully qualified (keyspace + name)
         add_declared(name);
