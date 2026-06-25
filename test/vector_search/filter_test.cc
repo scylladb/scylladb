@@ -519,6 +519,21 @@ SEASTAR_TEST_CASE(to_json_varint) {
     });
 }
 
+// `single_column_restriction_to_prepared` throws when the operator is not
+// supported for serialization (e.g. LIKE is valid CQL but has no JSON filter
+// representation).
+SEASTAR_TEST_CASE(prepare_filter_throws_on_unsupported_single_column_operator) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table ks.t(pk int, ck int, s text, v vector<float, 3>, primary key(pk, ck))");
+
+        auto restr = make_restrictions("pk=1 AND s LIKE 'abc%'", e);
+        BOOST_CHECK_EXCEPTION(
+            vector_search::prepare_filter(*restr, true),
+            exceptions::invalid_request_exception,
+            exception_predicate::message_contains("Unsupported operator in restriction on column s"));
+    });
+}
+
 // Regression test: `binary_operator_to_prepared` used to silently drop
 // restrictions whose LHS was a subscript expression (e.g. map_col['key']),
 // causing the filter to be omitted from vector ANN queries instead of
