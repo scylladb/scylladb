@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include "bytes.hh"
+#include "utils/managed_bytes.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/hash.hh"
 #include "utils/updateable_value.hh"
@@ -26,27 +27,40 @@ namespace db {
 // Memtable-level guardrail cache keys.
 //
 // Each key has two flavours:
-//   *_key       — owns the data stored in the cache.
-//   *_key_view  — non-owning view used for allocation-free heterogeneous lookup.
+//   *_key       — owns its clustering key as a (possibly fragmented)
+//                 managed_bytes, stored in the cache.
+//   *_key_view  — non-owning views into the keys of the mutation being
+//                 checked, used for heterogeneous, allocation-free lookups.
 //
-// Hashing and equality are defined on the view types; owning keys expose view()
-// so the transparent functors (cache_key_hash / cache_key_eq) treat an owning
-// key and a matching view as equal.
+// Hashing and equality are defined once, on the view types, in terms of their
+// fields; the owning keys expose view() so the shared transparent functors
+// (cache_key_hash / cache_key_eq) treat an owning key and a view with the same
+// content as equal.
+//
+// IMPORTANT (allocator safety): these caches are plain std::unordered_maps that
+// outlive the LSA allocator context in which they are populated (on_row_merged()
+// runs inside the memtable's allocating_section) and are cleared in
+// on_flush()/rebuild() under the standard allocator.  managed_bytes picks its
+// allocator from current_allocator(), so every construction and destruction of
+// an *owning* key (inserts and clears) MUST happen under
+// with_allocator(standard_allocator(), ...); otherwise an LSA-allocated key
+// would be freed under the wrong allocator and corrupt memory.  Lookups use the
+// non-owning views and so neither copy nor allocate.
 
 struct row_key_view {
     bytes_view pk;
-    bytes_view ck;
+    managed_bytes_view ck;
     bool operator==(const row_key_view&) const noexcept = default;
     size_t hash() const noexcept {
         return utils::hash_combine(
             std::hash<bytes_view>{}(pk),
-            std::hash<bytes_view>{}(ck));
+            std::hash<managed_bytes_view>{}(ck));
     }
 };
 
 struct collection_key_view {
     bytes_view pk;
-    bytes_view ck;
+    managed_bytes_view ck;
     column_id col;
     bool operator==(const collection_key_view&) const noexcept = default;
     size_t hash() const noexcept {
@@ -58,15 +72,15 @@ struct collection_key_view {
 
 struct row_key {
     bytes pk;
-    bytes ck;
-    row_key_view view() const noexcept { return {bytes_view(pk), bytes_view(ck)}; }
+    managed_bytes ck;
+    row_key_view view() const noexcept { return { bytes_view(pk), managed_bytes_view(ck)}; }
 };
 
 struct collection_key {
     bytes pk;
-    bytes ck;
+    managed_bytes ck;
     column_id col;
-    collection_key_view view() const noexcept { return {bytes_view(pk), bytes_view(ck), col}; }
+    collection_key_view view() const noexcept { return { bytes_view(pk), managed_bytes_view(ck), col}; }
 };
 
 inline row_key_view as_key_view(const row_key& k) noexcept { return k.view(); }
