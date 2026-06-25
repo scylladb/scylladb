@@ -308,15 +308,20 @@ go_arch() {
     echo ${GO_ARCH["$(arch)"]}
 }
 
-NODE_EXPORTER_VERSION=1.10.2
+NODE_EXPORTER_VERSION=1.11.1
 declare -A NODE_EXPORTER_CHECKSUM=(
-    ["x86_64"]=c46e5b6f53948477ff3a19d97c58307394a29fe64a01905646f026ddc32cb65b
-    ["aarch64"]=de69ec8341c8068b7c8e4cfe3eb85065d24d984a3b33007f575d307d13eb89a6
+    ["x86_64"]=6610e05de127871d2718e8ffe7b545f68a58cc987f63ca7dbdf934fceffbec40
+    ["aarch64"]=af16580d15c4971d502d90dd90de1ab4c532f1a3ab8b365ac6b13be38c649bc0
 )
 NODE_EXPORTER_DIR=/opt/scylladb/dependencies
 
 node_exporter_filename() {
-    echo "node_exporter-$NODE_EXPORTER_VERSION.linux-$(go_arch).tar.gz"
+    echo "scylla-node-exporter-$NODE_EXPORTER_VERSION.$(go_arch).tar.gz"
+}
+
+# Top-level directory the tarball extracts to (version only, no arch).
+node_exporter_dirname() {
+    echo "scylla-node-exporter-$NODE_EXPORTER_VERSION"
 }
 
 node_exporter_fullpath() {
@@ -328,7 +333,7 @@ node_exporter_checksum() {
 }
 
 node_exporter_url() {
-    echo "https://github.com/prometheus/node_exporter/releases/download/v$NODE_EXPORTER_VERSION/$(node_exporter_filename)"
+    echo "https://downloads.scylladb.com/downloads/scylla/node-exporter/relocatable/$(node_exporter_filename)"
 }
 
 MINIO_BINARIES_DIR=/usr/local/bin
@@ -359,6 +364,7 @@ print_usage() {
     echo "  --print-pip-runtime-packages Print required pip packages for Scylla"
     echo "  --print-pip-symlinks Print list of pip provided commands which need to install to /usr/bin"
     echo "  --print-node-exporter-filename Print node_exporter filename"
+    echo "  --print-node-exporter-dirname Print node_exporter tarball top-level directory"
     echo "  --future Install dependencies for future toolchain (Fedora rawhide based)"
     exit 1
 }
@@ -367,6 +373,7 @@ PRINT_PYTHON3=false
 PRINT_PIP=false
 PRINT_PIP_SYMLINK=false
 PRINT_NODE_EXPORTER=false
+PRINT_NODE_EXPORTER_DIRNAME=false
 FUTURE=false
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -384,6 +391,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--print-node-exporter-filename")
             PRINT_NODE_EXPORTER=true
+            shift 1
+            ;;
+        "--print-node-exporter-dirname")
+            PRINT_NODE_EXPORTER_DIRNAME=true
             shift 1
             ;;
         "--future")
@@ -417,6 +428,11 @@ fi
 
 if $PRINT_NODE_EXPORTER; then
     node_exporter_fullpath
+    exit 0
+fi
+
+if $PRINT_NODE_EXPORTER_DIRNAME; then
+    node_exporter_dirname
     exit 0
 fi
 
@@ -464,17 +480,6 @@ elif [ "$ID" = "fedora" ]; then
         pip_constrained_packages="${pip_constrained_packages} ${package}${pip_packages[$package]}"
     done
     pip3 install --upgrade --no-cache-dir "$PIP_DEFAULT_ARGS" $pip_constrained_packages
-
-    if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
-        echo "$(node_exporter_filename) already exists, skipping download"
-    else
-        mkdir -p "$NODE_EXPORTER_DIR"
-        curl -fSL -o "$(node_exporter_fullpath)" "$(node_exporter_url)"
-        if ! node_exporter_checksum; then
-            echo "$(node_exporter_filename) download failed"
-            exit 1
-        fi
-    fi
 elif [ "$ID" = "centos" ]; then
     centos_packages+=(openssl-devel)
     dnf install -y "${centos_packages[@]}"
@@ -515,6 +520,19 @@ elif [ "$ID" == "arch" ]; then
         popd > /dev/null || exit 1
     fi
     echo -e "Configure example:\n\t./configure.py\n\tninja release"
+fi
+
+# Download the ScyllaDB-built node_exporter relocatable tarball (bundled into
+# the build). Done for all distributions, not just Fedora.
+if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
+    echo "$(node_exporter_filename) already exists, skipping download"
+else
+    mkdir -p "$NODE_EXPORTER_DIR"
+    curl -fSL -o "$(node_exporter_fullpath)" "$(node_exporter_url)"
+    if ! node_exporter_checksum; then
+        echo "$(node_exporter_filename) download failed"
+        exit 1
+    fi
 fi
 
 cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --version 1.0.83 --root /usr/local
