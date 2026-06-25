@@ -63,8 +63,12 @@ public:
             cql_stats& stats, const secondary_index::index& index, external_search::prepared_filter prepared_filter, std::unique_ptr<cql3::attributes> attrs);
 
 private:
-    future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
-            query_processor& qp, service::query_state& state, const query_options& options) const override;
+    std::string_view index_search_type_name() const override {
+        return "Vector Search";
+    }
+
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_search(
+            query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const override;
 };
 
 } // namespace cql3::statements

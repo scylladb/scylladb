@@ -137,8 +137,8 @@ fulltext_indexed_table_select_statement::fulltext_indexed_table_select_statement
               is_reversed, ordering_comparator, limit, per_partition_limit, stats, index, std::move(attrs)} {
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_table_select_statement::do_execute(
-        query_processor& qp, service::query_state& state, const query_options& options) const {
+future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_table_select_statement::execute_search(
+        query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const {
     throw exceptions::invalid_request_exception("Full-text search not implemented");
 }
 

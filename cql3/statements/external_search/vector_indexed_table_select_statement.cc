@@ -16,7 +16,6 @@
 #include "cql3/util.hh"
 
 #include "db/consistency_level_validations.hh"
-#include "replica/database.hh"
 #include "exceptions/exceptions.hh"
 #include "index/vector_index.hh"
 #include "types/vector.hh"
@@ -200,47 +199,30 @@ vector_indexed_table_select_statement::vector_indexed_table_select_statement(sch
     }
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::do_execute(
-        query_processor& qp, service::query_state& state, const query_options& options) const {
+future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::execute_search(
+        query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const {
 
-    auto limit = get_limit(options, _limit);
-
-    auto result = co_await measure_index_latency(*_schema, _index, [this, &qp, &state, &options, &limit](this auto) -> future<shared_ptr<cql_transport::messages::result_message>> {
-        tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
-        validate_for_read(options.get_consistency());
-
-        _query_start_time_point = gc_clock::now();
-
-        update_stats();
-
-        if (limit > max_ann_query_limit) {
-            co_await coroutine::return_exception(exceptions::invalid_request_exception(
-                    fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
-        }
-
-        auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-        auto aoe = abort_on_expiry(timeout);
-        auto filter_json = _prepared_filter.to_json(options);
-        uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
-        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema,
-                get_ann_ordering_vector(_prepared_ann_ordering, options), fetch, filter_json, aoe.abort_source());
-        if (!pkeys.has_value()) {
-            co_await coroutine::return_exception(
-                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
-        }
-
-        if (pkeys->size() > limit && !secondary_index::vector_index::is_rescoring_enabled(_index.metadata().options())) {
-            pkeys->erase(pkeys->begin() + limit, pkeys->end());
-        }
-
-        co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
-    });
-
-    auto page_size = options.get_page_size();
-    if (page_size > 0 && (uint64_t) page_size < limit) {
-        result->add_warning("Paging is not supported for Vector Search queries. The entire result set has been returned.");
+    if (limit > max_ann_query_limit) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
     }
-    co_return result;
+
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    auto aoe = abort_on_expiry(timeout);
+    auto filter_json = _prepared_filter.to_json(options);
+    uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
+    auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema,
+            get_ann_ordering_vector(_prepared_ann_ordering, options), fetch, filter_json, aoe.abort_source());
+    if (!pkeys.has_value()) {
+        co_await coroutine::return_exception(
+                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+    }
+
+    if (pkeys->size() > limit && !secondary_index::vector_index::is_rescoring_enabled(_index.metadata().options())) {
+        pkeys->erase(pkeys->begin() + limit, pkeys->end());
+    }
+
+    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
 }
 
 } // namespace statements

@@ -8,7 +8,9 @@
 
 #include "cql3/statements/external_search/external_index_select_statement.hh"
 
+#include "cql3/statements/index_latency.hh"
 #include "cql3/query_processor.hh"
+#include "db/consistency_level_validations.hh"
 #include "query/query_result_merger.hh"
 #include "service/storage_proxy.hh"
 #include "utils/result_loop.hh"
@@ -149,6 +151,35 @@ future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> external_i
 void external_index_select_statement::update_stats() const {
     ++_stats.secondary_index_reads;
     ++_stats.query_cnt(source_selector::USER, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
+}
+
+void external_index_select_statement::setup_execute(service::query_state& state, const query_options& options) const {
+    tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
+    validate_for_read(options.get_consistency());
+    _query_start_time_point = gc_clock::now();
+    update_stats();
+}
+
+void external_index_select_statement::maybe_add_paging_warning(
+        const ::shared_ptr<cql_transport::messages::result_message>& result, const query_options& options, uint64_t limit) const {
+    auto page_size = options.get_page_size();
+    if (page_size > 0 && (uint64_t)page_size < limit) {
+        result->add_warning(fmt::format("Paging is not supported for {} queries. The entire result set has been returned.", index_search_type_name()));
+    }
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>> external_index_select_statement::do_execute(
+        query_processor& qp, service::query_state& state, const query_options& options) const {
+    auto limit = get_limit(options, _limit);
+
+    auto result = co_await measure_index_latency(
+            *_schema, _index, [this, &qp, &state, &options, &limit]() mutable -> future<::shared_ptr<cql_transport::messages::result_message>> {
+                setup_execute(state, options);
+                co_return co_await execute_search(qp, state, options, limit);
+            });
+
+    maybe_add_paging_warning(result, options, limit);
+    co_return result;
 }
 
 } // namespace statements

@@ -17,9 +17,8 @@ namespace cql3::statements {
 /// and then fetch base-table rows by primary key, preserving the index node's
 /// result ordering.
 ///
-/// Subclasses implement `do_execute()` to call the appropriate index API,
-/// obtain the ordered primary-key list, and delegate the base-table fetch
-/// to the helpers provided here.
+/// Subclasses implement `execute_search()` to call the external index service
+/// and return the result rows ordered by relevance.
 class external_index_select_statement : public select_statement {
 protected:
     secondary_index::index _index;
@@ -53,7 +52,8 @@ protected:
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
             std::vector<dht::partition_range> partition_ranges) const;
 
-    void update_stats() const;
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_search(
+            query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const = 0;
 
     void update_stats_rows_read(int64_t rows_read) const override {
         _stats.rows_read += rows_read;
@@ -63,6 +63,16 @@ protected:
     bool needs_post_filtering() const override {
         return false; // All filtering is done by the index query, so no post-filtering is allowed.
     }
+
+private:
+    virtual std::string_view index_search_type_name() const = 0;
+
+    future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
+            query_processor& qp, service::query_state& state, const query_options& options) const final;
+
+    void update_stats() const;
+    void setup_execute(service::query_state& state, const query_options& options) const;
+    void maybe_add_paging_warning(const ::shared_ptr<cql_transport::messages::result_message>& result, const query_options& options, uint64_t limit) const;
 };
 
 } // namespace cql3::statements
