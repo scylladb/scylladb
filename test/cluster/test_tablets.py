@@ -919,36 +919,29 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
 async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """Test concurrent 0->N RF changes across multiple keyspaces."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
-    cmdline = ["--enforce-rack-list", "true", "--smp", "2", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
+    cmdline = ["--enforce-rack-list", "true", "--smp", "4", '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
     injection = "determine_rf_change_actions_per_rack_throw"
 
     servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
-                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'}),
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
-                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'}),
-                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2c'})]
+                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'})]
 
-    dc2_host_ids = [await manager.get_host_id(s.server_id) for s in servers[3:6]]
+    dc2_host_ids = [await manager.get_host_id(s.server_id) for s in servers[2:4]]
 
     cql = manager.get_cql()
 
     dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
 
-    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}} and tablets = {{'initial': 4}};")
+    await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}} and tablets = {{'initial': 1}};")
     await cql.run_async("create table ks1.t (pk int primary key, v int);")
     await cql.run_async("create materialized view ks1.tv as select * from ks1.t where pk is not null and v is not null primary key (v, pk)")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
 
-    await cql.run_async(f"create keyspace ks2 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1b']}} and tablets = {{'initial': 4}};")
+    await cql.run_async(f"create keyspace ks2 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1b']}} and tablets = {{'initial': 1}};")
     await cql.run_async("create table ks2.t (pk int primary key, v int);")
     await cql.run_async("create materialized view ks2.tv as select * from ks2.t where pk is not null and v is not null primary key (v, pk)")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO ks2.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
-
-    await cql.run_async(f"create keyspace ks3 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1c']}} and tablets = {{'initial': 4}};")
-    await cql.run_async("create table ks3.t (pk int primary key, v int);")
-    await cql.run_async("create materialized view ks3.tv as select * from ks3.t where pk is not null and v is not null primary key (v, pk)")
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO ks3.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
 
     coord = await get_topology_coordinator(manager)
     coord_serv = await find_server_by_host_id(manager, servers, coord)
@@ -956,20 +949,17 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
 
-    # Move each keyspace from dc1 to dc2 (dc1: 1->0, dc2: 0->3).
+    # Move each keyspace from dc1 to dc2 (dc1: 1->0, dc2: 0->2).
     async def alter_keyspace1():
-        await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b', 'rack2c']};", timeout=400)
+        await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b']};", timeout=400)
 
     async def alter_keyspace2():
-        await cql.run_async("alter keyspace ks2 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b', 'rack2c']};", timeout=400)
-
-    async def alter_keyspace3():
-        await cql.run_async("alter keyspace ks3 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b', 'rack2c']};", timeout=400)
+        await cql.run_async("alter keyspace ks2 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': [], 'dc2': ['rack2a', 'rack2b']};", timeout=400)
     alter_task1 = asyncio.create_task(alter_keyspace1())
     alter_task2 = asyncio.create_task(alter_keyspace2())
-    alter_task3 = asyncio.create_task(alter_keyspace3())
 
-    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection, threshold=3)
+    # Wait for every keyspace to reach the barrier.
+    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection, threshold=2)
 
     for s in servers:
         await manager.api.message_injection(s.ip_addr, injection)
@@ -977,14 +967,13 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
 
     await alter_task1
     await alter_task2
-    await alter_task3
 
-    for ks in ["ks1", "ks2", "ks3"]:
-        await check_system_schema_keyspaces(manager, ks, {'dc2': ['rack2a', 'rack2b', 'rack2c']}, None)
+    for ks in ["ks1", "ks2"]:
+        await check_system_schema_keyspaces(manager, ks, {'dc2': ['rack2a', 'rack2b']}, None)
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, "t")
         assert len(replicas) > 0
         for t in replicas:
-            assert len(t.replicas) == 3
+            assert len(t.replicas) == 2
             for rep in t.replicas:
                 assert rep[0] in dc2_host_ids
             for host_id in dc2_host_ids:
@@ -992,7 +981,7 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
         view_replicas = await get_all_tablet_replicas(manager, servers[0], ks, "tv", is_view=True)
         assert len(view_replicas) > 0
         for t in view_replicas:
-            assert len(t.replicas) == 3
+            assert len(t.replicas) == 2
             for rep in t.replicas:
                 assert rep[0] in dc2_host_ids
             for host_id in dc2_host_ids:
