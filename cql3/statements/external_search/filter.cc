@@ -115,7 +115,7 @@ void single_column_restriction_to_prepared(
         const expr::binary_operator& binop, const expr::column_value& col, std::vector<prepared_restriction>& restrictions) {
     auto op_str = to_single_column_op_string(binop.op);
     if (!op_str) {
-        throw exceptions::unsupported_operation_exception(sstring("Unsupported operator in restriction on column ") + col.col->name_as_text());
+        throw exceptions::invalid_request_exception(sstring("Unsupported operator in restriction on column ") + col.col->name_as_text());
     }
 
     restrictions.push_back(make_prepared_restriction(*op_str, lhs_to_json(col), binop.rhs));
@@ -125,7 +125,7 @@ void multi_column_restriction_to_prepared(
         const expr::binary_operator& binop, const expr::tuple_constructor& lhs_tuple, std::vector<prepared_restriction>& restrictions) {
     auto op_str = to_multi_column_op_string(binop.op);
     if (!op_str) {
-        throw exceptions::unsupported_operation_exception(sstring("Unsupported operator in restriction on columns ") + to_string(lhs_tuple));
+        throw exceptions::invalid_request_exception(sstring("Unsupported operator in restriction on columns ") + to_string(lhs_tuple));
     }
 
     restrictions.push_back(make_prepared_restriction(*op_str, lhs_to_json(lhs_tuple), binop.rhs));
