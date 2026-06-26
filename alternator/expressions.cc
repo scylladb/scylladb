@@ -641,6 +641,86 @@ std::unordered_map<std::string_view, function_handler_type*> function_handlers {
     },
 };
 
+// validate_filter_expression() recursively validates a parsed condition
+// expression eagerly, after resolve_condition_expression() has substituted
+// all value references with their actual values, but before we need to
+// evaluate the filter expression on an actual item. It is only called for
+// FilterExpression, not for ConditionExpression, because ConditionExpression
+// is always evaluated against an item so lazy validation is sufficient.
+// FilterExpression, on the other hand, may never be evaluated at all if the
+// query returns zero items, so errors such as wrong function argument types
+// would be silently missed without this eager check.
+static void validate_value_in_filter_expression(const parsed::value& v) {
+    std::visit(overloaded_functor {
+        [&] (const parsed::constant&) { },
+        [&] (const parsed::value::function_call& f) {
+            if (function_handlers.find(std::string_view(f._function_name)) == function_handlers.end()) {
+                throw api_error::validation(
+                        fmt::format("Invalid FilterExpression: unknown function '{}' called.", f._function_name));
+            }
+            // Validate parameter counts for all condition expression functions
+            // eagerly. The same checks happen lazily inside function_handlers,
+            // but would be silently missed if no items are scanned.
+            static const std::unordered_map<std::string_view, unsigned> condition_function_param_counts = {
+                {"attribute_exists", 1}, {"attribute_not_exists", 1}, {"size", 1},
+                {"attribute_type", 2}, {"begins_with", 2}, {"contains", 2},
+            };
+            auto count_it = condition_function_param_counts.find(std::string_view(f._function_name));
+            if (count_it != condition_function_param_counts.end()
+                    && f._parameters.size() != count_it->second) {
+                throw api_error::validation(
+                        fmt::format("Invalid FilterExpression: {}() accepts {} parameter{}, got {}",
+                                f._function_name, count_it->second,
+                                count_it->second == 1 ? "" : "s",
+                                f._parameters.size()));
+            }
+            // Some functions have additional checks on the types of their
+            // parameters, which we also want to validate eagerly:
+            // For begins_with(), any constant argument must be of type S or B.
+            if (f._function_name == "begins_with") {
+                for (const parsed::value& param : f._parameters) {
+                    if (param.is_constant()) {
+                        const rjson::value& val = calculate_value(std::get<parsed::constant>(param._value));
+                        if (!val.IsObject() || val.MemberCount() != 1
+                                || (val.MemberBegin()->name != "S" && val.MemberBegin()->name != "B")) {
+                            throw api_error::validation(
+                                    fmt::format("Invalid FilterExpression: begins_with() supports only string or binary type, got: {}", val));
+                        }
+                    }
+                }
+            }
+            // For attribute_type(), the second argument must be a string constant.
+            if (f._function_name == "attribute_type"
+                    && f._parameters[1].is_constant()) {
+                const rjson::value& val = calculate_value(std::get<parsed::constant>(f._parameters[1]._value));
+                if (!val.IsObject() || val.MemberCount() != 1 || val.MemberBegin()->name != "S") {
+                    throw api_error::validation(
+                            fmt::format("Invalid FilterExpression: attribute_type() second parameter must refer to a string, got {}", val));
+                }
+            }
+            for (const parsed::value& param : f._parameters) {
+                validate_value_in_filter_expression(param);
+            }
+        },
+        [&] (const parsed::path&) { }
+    }, v._value);
+}
+
+void validate_filter_expression(const parsed::condition_expression& ce) {
+    std::visit(overloaded_functor {
+        [&] (const parsed::primitive_condition& cond) {
+            for (const parsed::value& v : cond._values) {
+                validate_value_in_filter_expression(v);
+            }
+        },
+        [&] (const parsed::condition_expression::condition_list& list) {
+            for (const parsed::condition_expression& cond : list.conditions) {
+                validate_filter_expression(cond);
+            }
+        }
+    }, ce._expression);
+}
+
 // Given a parsed::path and an item read from the table, extract the value
 // of a certain attribute path, such as "a" or "a.b.c[3]". Returns a null
 // value if the item or the requested attribute does not exist.

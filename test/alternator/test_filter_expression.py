@@ -829,3 +829,32 @@ def test_filter_expression_scan_sort_key(filled_test_table):
     expected_items = [item for item in items if item['c'] == 3]
     print(expected_items)
     assert multiset(expected_items) == multiset(got_items)
+
+# When FilterExpression is used in a Query or Scan, the expression is parsed
+# before doing the query, so a parse error will be detected even if the query
+# yields no items. However, before we fixed SCYLLADB-2346, some of the
+# validations of the FilterExpression were only done at filtering time, so these
+# errors were NOT be reported if the query happens to return zero items - in
+# which case the filter was never actually invoked.
+# This test verifies that such errors are now correctly reported, even when
+# the query returns no items.
+def test_filter_expression_validation_without_results(test_table_sn):
+    # Use a partition key that doesn't exist, so the query returns zero items.
+    # The FilterExpression errors should still be caught eagerly.
+    p = random_string()
+    # begins_with() requires a string or bytes argument, not a number.
+    # This must raise a ValidationException even though the table is empty.
+    with pytest.raises(ClientError, match='ValidationException.*Invalid FilterExpression.*begins_with'):
+        test_table_sn.query(KeyConditionExpression='p=:p',
+            FilterExpression='begins_with(s, :n)',
+            ExpressionAttributeValues={':p': p, ':n': 3})
+    # The function begins_with() requires two arguments, not just one.
+    with pytest.raises(ClientError, match='ValidationException.*Invalid FilterExpression.*begins_with'):
+        test_table_sn.query(KeyConditionExpression='p=:p',
+            FilterExpression='begins_with(s)',
+            ExpressionAttributeValues={':p': p})
+    # An unknown function name must also raise a ValidationException eagerly.
+    with pytest.raises(ClientError, match='ValidationException.*Invalid FilterExpression.*dog'):
+        test_table_sn.query(KeyConditionExpression='p=:p',
+            FilterExpression='dog(s, :v)',
+            ExpressionAttributeValues={':p': p, ':v': 'hello'})
