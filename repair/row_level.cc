@@ -3390,7 +3390,7 @@ private:
 private:
     // Update system.repair_history table
     future<> update_system_repair_table() {
-        // Update repair_history table only if it is a reguar repair.
+        // Update repair_history table only if it is a regular repair.
         if (_shard_task.reason() != streaming::stream_reason::repair) {
             co_return;
         }
@@ -3796,7 +3796,7 @@ repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht:
                     repair_id, range, table_id, finished_shards);
             co_return rh.repair_time;
         } else {
-            rlogger.debug("repair[{}]: Finished range {} for table {} on all shards, updating system.repair_historytable, finished_shards={}",
+            rlogger.debug("repair[{}]: Finished range {} for table {} on all shards, updating system.repair_history table, finished_shards={}",
                     repair_id, range, table_id, finished_shards);
             co_return std::nullopt;
         }
