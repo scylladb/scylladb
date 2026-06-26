@@ -271,7 +271,7 @@ public:
         rpc::stats get_stats() const;
     };
 
-    void foreach_client(std::function<void(const msg_addr& id, const shard_info& info)> f) const;
+    void foreach_client(utils::wrapped_function<void(const msg_addr& id, const shard_info& info)> f) const;
 
     void increment_dropped_messages(messaging_verb verb);
 
@@ -445,7 +445,7 @@ public:
     void register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func);
     future<> unregister_repair_get_full_row_hashes_with_rpc_stream();
 
-    void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
+    void foreach_server_connection_stats(utils::wrapped_function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 
     // Drops all connections from the given hosts and prevents further communication from it to happen.
     //

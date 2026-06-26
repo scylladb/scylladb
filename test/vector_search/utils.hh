@@ -92,7 +92,7 @@ inline auto listen_on_port(std::unique_ptr<seastar::httpd::http_server> server, 
     co_return std::make_tuple(std::move(server), listeners.at(0).local_address().port());
 }
 
-inline auto make_http_server(std::function<void(seastar::httpd::routes& r)> set_routes) {
+inline auto make_http_server(utils::wrapped_function<void(seastar::httpd::routes& r)> set_routes) {
     static unsigned id = 0;
     auto server = std::make_unique<seastar::httpd::http_server>(fmt::format("test_vector_store_client_{}", id++));
     set_routes(server->_routes);
@@ -100,13 +100,13 @@ inline auto make_http_server(std::function<void(seastar::httpd::routes& r)> set_
     return server;
 }
 
-inline auto new_http_server(std::function<void(seastar::httpd::routes& r)> set_routes, seastar::sstring host = LOCALHOST, uint16_t port = 0,
+inline auto new_http_server(utils::wrapped_function<void(seastar::httpd::routes& r)> set_routes, seastar::sstring host = LOCALHOST, uint16_t port = 0,
         seastar::httpd::http_server::server_credentials_ptr credentials = nullptr)
         -> seastar::future<std::tuple<std::unique_ptr<seastar::httpd::http_server>, seastar::socket_address>> {
     co_return co_await listen_on_port(make_http_server(set_routes), std::move(host), port, credentials);
 }
 
-inline auto new_http_server(std::function<void(seastar::httpd::routes& r)> set_routes, seastar::server_socket socket)
+inline auto new_http_server(utils::wrapped_function<void(seastar::httpd::routes& r)> set_routes, seastar::server_socket socket)
         -> seastar::future<std::tuple<std::unique_ptr<seastar::httpd::http_server>, seastar::socket_address>> {
     auto server = make_http_server(set_routes);
     auto& listeners = seastar::httpd::http_server_tester::listeners(*server);

@@ -14,6 +14,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/simple-stream.hh>
 #include "replay_position.hh"
+#include "utils/wrapped_function.hh"
 #include "commitlog_entry.hh"
 #include "db/timeout_clock.hh"
 #include "gc_clock.hh"
@@ -189,7 +190,7 @@ public:
      * Don't write less, absolutely don't write more...
      */
     using output = typename seastar::memory_output_stream<detail::sector_split_iterator>;
-    using serializer_func = std::function<void(output&)>;
+    using serializer_func = utils::wrapped_function<void(output&)>;
 
     /**
      * Add a "Mutation" to the commit log.
@@ -280,7 +281,7 @@ public:
      * in the background.
      *
      */
-    typedef std::function<void(cf_id_type, replay_position)> flush_handler;
+    typedef utils::wrapped_function<void(cf_id_type, replay_position)> flush_handler;
     typedef uint64_t flush_handler_id;
 
     class flush_handler_anchor {

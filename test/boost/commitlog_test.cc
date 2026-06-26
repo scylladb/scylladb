@@ -325,7 +325,7 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
                 }
 
                 // Verify #5899 - file size should not exceed the config max.
-                return parallel_for_each(active_segments, [](sstring filename) {
+                (void)parallel_for_each(active_segments, [](sstring filename) {
                     return file_size(filename).then([](uint64_t size) {
                         BOOST_REQUIRE_LE(size, max_size_mb * 1024 * 1024);
                     });

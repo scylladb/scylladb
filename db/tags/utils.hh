@@ -14,6 +14,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
+#include "utils/wrapped_function.hh"
 
 #include "schema/schema.hh"
 #include "service/migration_manager.hh"
@@ -45,5 +46,5 @@ std::optional<std::string> find_tag(const schema& s, const sstring& tag);
 // If the table didn't have the tags schema extension, it's fine: The function
 // is passed an empty map, and the tags it adds will be added to the table.
 future<> modify_tags(service::migration_manager& mm, sstring ks, sstring cf,
-                     std::function<void(std::map<sstring, sstring>&)> modify_func);
+                     utils::wrapped_function<void(std::map<sstring, sstring>&)> modify_func);
 }

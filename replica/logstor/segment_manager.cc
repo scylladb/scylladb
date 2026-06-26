@@ -603,8 +603,8 @@ class segment_manager_impl {
     std::vector<write_buffer> _separator_buffer_pool;
     std::vector<write_buffer*> _available_separator_buffers;
 
-    std::function<void()> _trigger_compaction_fn;
-    std::function<void(segment_sequence)> _trigger_separator_flush_fn;
+    utils::wrapped_function<void()> _trigger_compaction_fn;
+    utils::wrapped_function<void(segment_sequence)> _trigger_separator_flush_fn;
 
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
@@ -647,7 +647,7 @@ public:
     }
 
     future<> load_segment(replica::database&, log_segment_id);
-    future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, std::function<void(const segment_header&)> on_header);
+    future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, utils::wrapped_function<void(const segment_header&)> on_header);
     future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&);
 
     void trigger_compaction() {
@@ -670,11 +670,11 @@ public:
         return _compaction_mgr;
     }
 
-    void set_trigger_compaction_hook(std::function<void()> fn) {
+    void set_trigger_compaction_hook(utils::wrapped_function<void()> fn) {
         _trigger_compaction_fn = std::move(fn);
     }
 
-    void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
+    void set_trigger_separator_flush_hook(utils::wrapped_function<void(segment_sequence)> fn) {
         _trigger_separator_flush_fn = std::move(fn);
     }
 
@@ -1825,7 +1825,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
 }
 
 future<> segment_manager_impl::recover_segment(replica::database& db, log_segment_id segment_id,
-        primary_index::entry_cmp_fn cmp, std::function<void(const segment_header&)> on_header) {
+        primary_index::entry_cmp_fn cmp, utils::wrapped_function<void(const segment_header&)> on_header) {
     auto& desc = get_segment_descriptor(segment_id);
     desc.reset(_cfg.segment_size);
 
@@ -1985,11 +1985,11 @@ void segment_manager::free_record(log_location location) {
     _impl->free_record(location);
 }
 
-void segment_manager::set_trigger_compaction_hook(std::function<void()> fn) {
+void segment_manager::set_trigger_compaction_hook(utils::wrapped_function<void()> fn) {
     _impl->set_trigger_compaction_hook(std::move(fn));
 }
 
-void segment_manager::set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
+void segment_manager::set_trigger_separator_flush_hook(utils::wrapped_function<void(segment_sequence)> fn) {
     _impl->set_trigger_separator_flush_hook(std::move(fn));
 }
 

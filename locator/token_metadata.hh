@@ -13,6 +13,7 @@
 #include <functional>
 #include <unordered_set>
 #include <unordered_map>
+#include "utils/wrapped_function.hh"
 #include "gms/inet_address.hh"
 #include "dht/ring_position.hh"
 #include <optional>
@@ -320,7 +321,7 @@ public:
 
     const std::unordered_set<host_id>& get_normal_token_owners() const;
 
-    void for_each_token_owner(std::function<void(const node&)> func) const;
+    void for_each_token_owner(utils::wrapped_function<void(const node&)> func) const;
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */

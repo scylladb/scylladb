@@ -243,7 +243,7 @@ rpc::stats messaging_service::shard_info::get_stats() const {
     return rpc_client->get_stats();
 }
 
-void messaging_service::foreach_client(std::function<void(const msg_addr& id, const shard_info& info)> f) const {
+void messaging_service::foreach_client(utils::wrapped_function<void(const msg_addr& id, const shard_info& info)> f) const {
     for (unsigned idx = 0; idx < _clients.size(); idx ++) {
         for (auto i = _clients[idx].cbegin(); i != _clients[idx].cend(); i++) {
             f(i->first, i->second);
@@ -251,7 +251,7 @@ void messaging_service::foreach_client(std::function<void(const msg_addr& id, co
     }
 }
 
-void messaging_service::foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const {
+void messaging_service::foreach_server_connection_stats(utils::wrapped_function<void(const rpc::client_info&, const rpc::stats&)>&& f) const {
     for (auto&& s : _server) {
         if (s) {
             s->foreach_connection([f](const rpc_protocol::server::connection& c) {

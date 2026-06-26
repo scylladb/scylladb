@@ -116,9 +116,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader) {
         return;
     }
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         run_mutation_source_tests(make_populate(false, false));
-        return make_ready_future<>();
     }).get();
 }
 
@@ -128,9 +127,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_evict_paused) {
         return;
     }
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         run_mutation_source_tests(make_populate(true, false));
-        return make_ready_future<>();
     }).get();
 }
 
@@ -143,9 +141,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer) {
         return;
     }
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         run_mutation_source_tests_plain(make_populate(true, true), true);
-        return make_ready_future<>();
     }).get();
 }
 
@@ -155,9 +152,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_rever
         return;
     }
 
-    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) {
         run_mutation_source_tests_reverse(make_populate(true, true), true);
-        return make_ready_future<>();
     }).get();
 }
 

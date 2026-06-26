@@ -522,7 +522,7 @@ schema::schema(private_tag, const raw_schema& raw, const schema_static_props& pr
     }
 }
 
-schema::schema(const schema& o, const std::function<void(schema&)>& transform)
+schema::schema(const schema& o, const utils::wrapped_function<void(schema&)>& transform)
     : _raw(o._raw)
     , _static_props(o._static_props)
     , _cdc_schema(o._cdc_schema)

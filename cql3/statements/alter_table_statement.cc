@@ -356,7 +356,7 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
     auto cf = db.find_column_family(s);
     std::vector<view_ptr> view_updates;
 
-    using column_change_fn = std::function<void (const alter_table_statement*, const query_options&, const schema&, data_dictionary::table, schema_builder&, std::vector<view_ptr>&, const column_identifier&, const data_type, const column_definition*, bool)>;
+    using column_change_fn = utils::wrapped_function<void (const alter_table_statement*, const query_options&, const schema&, data_dictionary::table, schema_builder&, std::vector<view_ptr>&, const column_identifier&, const data_type, const column_definition*, bool)>;
 
     auto invoke_column_change_fn = [&] (column_change_fn fn) {
          for (auto& [raw_name, raw_validator, is_static] : _column_changes) {

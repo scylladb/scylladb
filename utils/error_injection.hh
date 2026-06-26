@@ -10,6 +10,7 @@
 
 #include "utils/assert.hh"
 #include "utils/from_chars_exactly.hh"
+#include "utils/wrapped_function.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sleep.hh>
@@ -135,7 +136,7 @@ struct wait_for_message {
 template <bool injection_enabled>
 class error_injection {
     inline static thread_local error_injection _local;
-    using handler_fun = std::function<void()>;
+    using handler_fun = utils::wrapped_function<void()>;
 
     /**
      * It is shared between the injection_data. It is created once when enabling an injection
@@ -340,7 +341,7 @@ private:
     // Callbacks invoked when a specific injection is disabled.
     // Registered independently of the injection being enabled, so
     // the callback can be set up before the injection is ever activated.
-    std::unordered_map<sstring, std::function<void()>> _on_disable_callbacks;
+    std::unordered_map<sstring, utils::wrapped_function<void()>> _on_disable_callbacks;
 
     bool is_one_shot(const std::string_view& injection_name) const {
         const auto it = _enabled.find(injection_name);
@@ -467,7 +468,7 @@ public:
     // before the injection is ever activated and survives enable/disable
     // cycles.  Only one callback per injection name is supported; a second
     // registration for the same name replaces the previous one.
-    void register_on_disable(const sstring& injection_name, std::function<void()> callback) {
+    void register_on_disable(const sstring& injection_name, utils::wrapped_function<void()> callback) {
         _on_disable_callbacks[injection_name] = std::move(callback);
     }
 
@@ -670,7 +671,7 @@ public:
 template <>
 class error_injection<false> {
     static thread_local error_injection _local;
-    using handler_fun = std::function<void()>;
+    using handler_fun = utils::wrapped_function<void()>;
     using waiting_handler_fun = std::function<future<>(error_injection<true>::injection_handler&)>;
 public:
     bool is_enabled(const std::string_view& name) const {
@@ -706,7 +707,7 @@ public:
     std::vector<sstring> enabled_injections() const { return {}; };
 
     [[gnu::always_inline]]
-    void register_on_disable(const sstring&, std::function<void()>) {}
+    void register_on_disable(const sstring&, utils::wrapped_function<void()>) {}
 
     [[gnu::always_inline]]
     void unregister_on_disable(const sstring&) {}

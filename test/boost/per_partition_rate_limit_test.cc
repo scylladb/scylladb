@@ -13,7 +13,7 @@
 BOOST_AUTO_TEST_SUITE(per_partition_rate_limit_test)
 
 SEASTAR_TEST_CASE(test_internal_operation_filtering) {
-    return do_with_cql_env_thread([] (cql_test_env& e) -> future<> {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         // The test requires at least two shards
         // so that it can test the shard!=coordinator case
         BOOST_REQUIRE_GT(this_smp_shard_count(), 1);
@@ -106,8 +106,6 @@ SEASTAR_TEST_CASE(test_internal_operation_filtering) {
                 }
             }
         }
-
-        return make_ready_future<>();
     });
 }
 

@@ -9,16 +9,17 @@
 #pragma once
 
 #include "readers/mutation_reader.hh"
+#include "utils/wrapped_function.hh"
 
 // A reader which allows to insert a deferring operation before reading.
 // All calls will first wait for a future to resolve, then forward to a given underlying reader.
 class chained_delegating_reader : public mutation_reader::impl {
     std::unique_ptr<mutation_reader> _underlying;
     std::function<future<mutation_reader>()> _populate_reader;
-    std::function<void()> _on_destroyed;
+    utils::wrapped_function<void()> _on_destroyed;
     
 public:
-    chained_delegating_reader(schema_ptr s, std::function<future<mutation_reader>()>&& populate, reader_permit permit, std::function<void()> on_destroyed = []{})
+    chained_delegating_reader(schema_ptr s, std::function<future<mutation_reader>()>&& populate, reader_permit permit, utils::wrapped_function<void()> on_destroyed = []{})
         : impl(s, std::move(permit))
         , _populate_reader(std::move(populate))
         , _on_destroyed(std::move(on_destroyed))

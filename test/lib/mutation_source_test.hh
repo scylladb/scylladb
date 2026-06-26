@@ -10,6 +10,7 @@
 
 #include "readers/mutation_reader_fwd.hh"
 #include "test/lib/simple_schema.hh"
+#include "utils/wrapped_function.hh"
 
 using populate_fn = std::function<mutation_source(schema_ptr s, const utils::chunked_vector<mutation>&)>;
 using populate_fn_ex = std::function<mutation_source(schema_ptr s, const utils::chunked_vector<mutation>&, gc_clock::time_point)>;
@@ -32,10 +33,10 @@ enum are_equal { no, yes };
 
 // Calls the provided function on mutation pairs, equal and not equal. Is supposed
 // to exercise all potential ways two mutations may differ.
-void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal)>);
+void for_each_mutation_pair(utils::wrapped_function<void(const mutation&, const mutation&, are_equal)>);
 
 // Calls the provided function on mutations. Is supposed to exercise as many differences as possible.
-void for_each_mutation(std::function<void(const mutation&)>);
+void for_each_mutation(utils::wrapped_function<void(const mutation&)>);
 
 // Returns true if mutations in schema s1 can be upgraded to s2.
 inline bool can_upgrade_schema(schema_ptr from, schema_ptr to) {
@@ -80,8 +81,8 @@ public:
 
 bytes make_blob(size_t blob_size);
 
-void for_each_schema_change(std::function<void(schema_ptr, const utils::chunked_vector<mutation>&,
-                                               schema_ptr, const utils::chunked_vector<mutation>&)>);
+void for_each_schema_change(utils::wrapped_function<void(schema_ptr, const utils::chunked_vector<mutation>&,
+                                                schema_ptr, const utils::chunked_vector<mutation>&)>);
 
 void compare_readers(const schema&, mutation_reader authority, mutation_reader tested, bool exact = false);
 void compare_readers(const schema&, mutation_reader authority, mutation_reader tested, const std::vector<position_range>& fwd_ranges);

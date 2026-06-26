@@ -255,7 +255,7 @@ future<> migration_manager::merge_schema_from(locator::host_id src, const utils:
     co_await db::schema_tables::merge_schema(_sys_ks, proxy.container(), ss.get()->container(), std::move(mutations));
 }
 
-future<> migration_notifier::on_schema_change(std::function<void(migration_listener*)> notify, std::function<std::string(std::exception_ptr)> describe_error) {
+future<> migration_notifier::on_schema_change(utils::wrapped_function<void(migration_listener*)> notify, std::function<std::string(std::exception_ptr)> describe_error) {
     return seastar::async([this, notify = std::move(notify), describe_error = std::move(describe_error)] {
         std::exception_ptr ex;
         _listeners.thread_for_each([&] (migration_listener* listener) {

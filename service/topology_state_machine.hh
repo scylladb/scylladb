@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/sstring.hh>
+#include "utils/wrapped_function.hh"
 #include "cdc/generation_id.hh"
 #include "dht/token.hh"
 #include "raft/raft.hh"
@@ -290,7 +291,7 @@ struct topology_state_machine {
     // Called by the tablet split monitor when all local storage groups
     // for a table are split-ready, to trigger an early load stats
     // refresh so the coordinator can finalize the resize promptly.
-    std::function<void()> on_tablet_split_ready;
+    utils::wrapped_function<void()> on_tablet_split_ready;
 
     future<> await_not_busy();
     future<sstring> wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry);

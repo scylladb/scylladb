@@ -10,6 +10,7 @@
 
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
+#include "utils/wrapped_function.hh"
 #include "sstables/progress_monitor.hh"
 #include "sstables/types_fwd.hh"
 #include "sstables/index_reader.hh"
@@ -68,7 +69,7 @@ future<uint64_t> validate(
         shared_sstable sstable,
         reader_permit permit,
         abort_source& abort,
-        std::function<void(sstring)> error_handler,
+        utils::wrapped_function<void(sstring)> error_handler,
         sstables::read_monitor& monitor);
 
 } // namespace mx

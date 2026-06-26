@@ -156,12 +156,12 @@ future<> run_compaction_task(test_env& env, sstables::run_id output_run_id, comp
     co_await tcm.perform_compaction(std::move(task));
 }
 
-future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify) {
+future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, utils::wrapped_function<void(mutation_opt&)> verify) {
     auto sstp = co_await make_sstable_containing(std::move(sst), mt);
     co_return co_await verify_mutation(env, std::move(sstp), std::move(key), std::move(verify));
 }
 
-future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sstp, bytes key, std::function<void(mutation_opt&)> verify) {
+future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sstp, bytes key, utils::wrapped_function<void(mutation_opt&)> verify) {
     auto s = sstp->get_schema();
     auto pr = dht::partition_range::make_singular(make_dkey(s, key));
     auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());

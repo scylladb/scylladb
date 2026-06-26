@@ -13,6 +13,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include "utils/wrapped_function.hh"
 #include "locator/host_id.hh"
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
@@ -250,7 +251,7 @@ private:
     // which is then copied to temporary copies for all shards
     // and then applied atomcically on all shards.
     //
-    future<> mutate_live_and_unreachable_endpoints(std::function<void(live_and_unreachable_endpoints&)> func);
+    future<> mutate_live_and_unreachable_endpoints(utils::wrapped_function<void(live_and_unreachable_endpoints&)> func);
 
     // replicate shard 0 live and unreachable endpoints sets across all other shards.
     // _endpoint_update_semaphore must be held for the whole duration
@@ -387,7 +388,7 @@ public:
 
     // Calls func for each endpoint_state.
     // Called function must not yield
-    void for_each_endpoint_state(std::function<void(const endpoint_state&)> func) const {
+    void for_each_endpoint_state(utils::wrapped_function<void(const endpoint_state&)> func) const {
         for_each_endpoint_state_until([func = std::move(func)] (const endpoint_state& eps) {
             func(eps);
             return stop_iteration::no;

@@ -507,7 +507,7 @@ public:
     }
 
 private:
-    static auto defer_verbose_shutdown(const char* what, std::function<void()> func) {
+    static auto defer_verbose_shutdown(const char* what, utils::wrapped_function<void()> func) {
         return defer([what, func = std::move(func)] {
             testlog.info("Shutting down {}", what);
             try {
@@ -1333,7 +1333,7 @@ future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_c
     return single_node_cql_env::do_with(func, std::move(cfg_in), std::move(init_configurables));
 }
 
-future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config cfg_in, thread_attributes thread_attr, std::optional<cql_test_init_configurables> init_configurables) {
+future<> do_with_cql_env_thread(utils::wrapped_function<void(cql_test_env&)> func, cql_test_config cfg_in, thread_attributes thread_attr, std::optional<cql_test_init_configurables> init_configurables) {
     return single_node_cql_env::do_with([func = std::move(func), thread_attr] (auto& e) {
         return seastar::async(thread_attr, [func = std::move(func), &e] {
             return func(e);
@@ -1346,7 +1346,7 @@ void do_with_cql_env_noreentrant_in_thread(std::function<future<>(cql_test_env&)
 }
 
 // this function should be called in seastar thread
-void do_with_mc(cql_test_env& env, std::function<void(service::group0_batch&)> func) {
+void do_with_mc(cql_test_env& env, utils::wrapped_function<void(service::group0_batch&)> func) {
     seastar::abort_source as;
     auto& g0 = env.get_raft_group0_client();
     auto guard = g0.start_operation(as).get();

@@ -23,7 +23,7 @@ class columns_assertions {
     const std::vector<managed_bytes_opt>& _columns;
     std::source_location _loc;
 
-    columns_assertions& do_with_raw_column(const char* name, std::function<void(data_type, managed_bytes_view)> func);
+    columns_assertions& do_with_raw_column(const char* name, utils::wrapped_function<void(data_type, managed_bytes_view)> func);
 
     void fail(const sstring& msg);
 
@@ -98,7 +98,7 @@ public:
 
     columns_assertions with_columns_of_row(size_t row_index);
 
-    rows_assertions& assert_for_columns_of_each_row(std::function<void(columns_assertions&)> func);
+    rows_assertions& assert_for_columns_of_each_row(utils::wrapped_function<void(columns_assertions&)> func);
 
     rows_assertions is_null();
     rows_assertions is_not_null();

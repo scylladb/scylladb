@@ -83,7 +83,7 @@ public:
             .build();
     }
 
-    future<> execute(std::function<void(mutation)> mutation_sink) override {
+    future<> execute(utils::wrapped_function<void(mutation)> mutation_sink) override {
         auto muts = co_await _dist_ss.invoke_on(0, [this] (service::storage_service& ss) -> future<utils::chunked_vector<frozen_mutation>> {
             auto& gossiper = _dist_gossiper.local();
             auto ownership = co_await ss.get_ownership();
@@ -358,7 +358,7 @@ public:
             .build();
     }
 
-    future<> execute(std::function<void(mutation)> mutation_sink) override {
+    future<> execute(utils::wrapped_function<void(mutation)> mutation_sink) override {
         // Servers are registered on shard 0 only
         const auto server_infos = co_await smp::submit_to(0ul, [&ss = _ss.container()] {
             return ss.local().protocol_servers()
@@ -396,7 +396,7 @@ private:
         return std::nullopt;
     }
 
-    void do_add_partition(std::function<void(mutation)>& mutation_sink, dht::decorated_key key, std::vector<std::pair<sstring, sstring>> rows) {
+    void do_add_partition(utils::wrapped_function<void(mutation)>& mutation_sink, dht::decorated_key key, std::vector<std::pair<sstring, sstring>> rows) {
         mutation m(schema(), std::move(key));
         for (auto&& [ckey, cvalue] : rows) {
             row& cr = m.partition().clustered_row(*schema(), clustering_key::from_single_value(*schema(), data_value(std::move(ckey)).serialize_nonnull())).cells();
@@ -405,26 +405,26 @@ private:
         mutation_sink(std::move(m));
     }
 
-    void add_partition(std::function<void(mutation)>& mutation_sink, sstring key, sstring value) {
+    void add_partition(utils::wrapped_function<void(mutation)>& mutation_sink, sstring key, sstring value) {
         if (_generic_key) {
             do_add_partition(mutation_sink, *_generic_key, {{key, std::move(value)}});
         }
     }
 
-    void add_partition(std::function<void(mutation)>& mutation_sink, sstring key, std::initializer_list<std::pair<sstring, sstring>> rows) {
+    void add_partition(utils::wrapped_function<void(mutation)>& mutation_sink, sstring key, std::initializer_list<std::pair<sstring, sstring>> rows) {
         auto dk = maybe_make_key(std::move(key));
         if (dk) {
             do_add_partition(mutation_sink, std::move(*dk), std::move(rows));
         }
     }
 
-    future<> add_partition(std::function<void(mutation)>& mutation_sink, sstring key, std::function<future<sstring>()> value_producer) {
+    future<> add_partition(utils::wrapped_function<void(mutation)>& mutation_sink, sstring key, std::function<future<sstring>()> value_producer) {
         if (_generic_key) {
             do_add_partition(mutation_sink, *_generic_key, {{key, co_await value_producer()}});
         }
     }
 
-    future<> add_partition(std::function<void(mutation)>& mutation_sink, sstring key, std::function<future<std::vector<std::pair<sstring, sstring>>>()> value_producer) {
+    future<> add_partition(utils::wrapped_function<void(mutation)>& mutation_sink, sstring key, std::function<future<std::vector<std::pair<sstring, sstring>>>()> value_producer) {
         auto dk = maybe_make_key(std::move(key));
         if (dk) {
             do_add_partition(mutation_sink, std::move(*dk), co_await value_producer());
@@ -485,7 +485,7 @@ public:
             .build();
     }
 
-    future<> execute(std::function<void(mutation)> mutation_sink) override {
+    future<> execute(utils::wrapped_function<void(mutation)> mutation_sink) override {
         co_await add_partition(mutation_sink, "gossip_active", [this] () -> future<sstring> {
             return _ss.is_gossip_running().then([] (bool running){
                 return format("{}", running);
@@ -626,7 +626,7 @@ public:
             .build();
     }
 
-    future<> execute(std::function<void(mutation)> mutation_sink) override {
+    future<> execute(utils::wrapped_function<void(mutation)> mutation_sink) override {
         mutation m(schema(), partition_key::from_single_value(*schema(), data_value("local").serialize_nonnull()));
         row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
         set_cell(cr, "version", scylla_version());
@@ -1054,7 +1054,7 @@ public:
         co_return leader == _raft_gr.local().get_my_raft_id();
     }
 
-    future<> redirect_to_leader(std::function<void(mutation)> mutation_sink, reader_permit permit) {
+    future<> redirect_to_leader(utils::wrapped_function<void(mutation)> mutation_sink, reader_permit permit) {
         auto leader = co_await get_leader(permit);
         auto cmd = query::read_command(_s->id(),
                                        _s->version(),
@@ -1083,9 +1083,9 @@ public:
     // This function is executed on the node which was a group0 leader at some point since the query started.
     // The node may not be the leader anymore by the time it is executed.
     // Only executed on shard 0.
-    virtual future<> execute_on_leader(std::function<void(mutation)> mutation_sink, reader_permit) = 0;
+    virtual future<> execute_on_leader(utils::wrapped_function<void(mutation)> mutation_sink, reader_permit) = 0;
 
-    future<> execute(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+    future<> execute(utils::wrapped_function<void(mutation)> mutation_sink, reader_permit permit) override {
         if (this_shard_id() != 0) {
             co_return;
         }
@@ -1116,7 +1116,7 @@ public:
         , _gossiper(gossiper)
     { }
 
-    future<> execute_on_leader(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+    future<> execute_on_leader(utils::wrapped_function<void(mutation)> mutation_sink, reader_permit permit) override {
         auto stats = _talloc.local().get_load_stats();
         while (!stats) {
             // Wait for stats to be refreshed by topology coordinator
@@ -1221,7 +1221,7 @@ public:
         , _db(db)
     { }
 
-    future<> execute_on_leader(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+    future<> execute_on_leader(utils::wrapped_function<void(mutation)> mutation_sink, reader_permit permit) override {
         auto stats = _talloc.local().get_load_stats();
         while (!stats) {
             // Wait for stats to be refreshed by topology coordinator

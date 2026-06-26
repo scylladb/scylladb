@@ -201,7 +201,7 @@ public:
 
         operator updateable_value<T>() const &;
 
-        observer<T> observe(std::function<void (const T&)> callback) const;
+        observer<T> observe(utils::wrapped_function<void (const T&)> callback) const;
 
         void add_command_line_option(bpo::options_description_easy_init&) override;
         void set_value(const YAML::Node&, config_source) override;
@@ -245,7 +245,7 @@ public:
      * If invalid, it is invalid. Otherwise, a parse error.
      *
      */
-    using error_handler = std::function<void(const sstring&, const sstring&, std::optional<value_status>)>;
+    using error_handler = utils::wrapped_function<void(const sstring&, const sstring&, std::optional<value_status>)>;
 
     void read_from_yaml(const sstring&, error_handler = {});
     void read_from_yaml(const char *, error_handler = {});

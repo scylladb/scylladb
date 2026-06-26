@@ -1098,7 +1098,7 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
     tablet_logger.trace("Updated tablet metadata: {}", tm);
 }
 
-future<> read_tablet_mutations(seastar::sharded<replica::database>& db, std::function<void(canonical_mutation)> process_mutation) {
+future<> read_tablet_mutations(seastar::sharded<replica::database>& db, utils::wrapped_function<void(canonical_mutation)> process_mutation) {
     auto s = db::system_keyspace::tablets();
     auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::TABLETS);
     utils::chunked_vector<canonical_mutation> result;

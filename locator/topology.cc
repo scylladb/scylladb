@@ -540,7 +540,7 @@ int topology::distance(const locator::host_id& address, const endpoint_dc_rack& 
     return d1;
 }
 
-void topology::for_each_node(std::function<void(const node&)> func) const {
+void topology::for_each_node(utils::wrapped_function<void(const node&)> func) const {
     for (const auto& np : _nodes) {
         if (np && !np->left() && !np->is_none()) {
             func(*np);

@@ -1974,7 +1974,7 @@ build_get_multi_column_clustering_bounds_fn(
         const std::vector<predicate>& multi_column_restrictions,
         bool all_natural, bool all_reverse) {
     const auto prefix3cmp = get_unreversed_tri_compare(*schema);
-    std::vector<std::function<void (multi_column_range_accumulator&, const query_options&)>> range_builders;
+    std::vector<utils::wrapped_function<void (multi_column_range_accumulator&, const query_options&)>> range_builders;
     for (const auto& pred : multi_column_restrictions) {
         const auto& binop = expr::as<binary_operator>(pred.filter);
         range_builders.emplace_back([binop, schema, prefix3cmp] (multi_column_range_accumulator& acc, const query_options& options) {

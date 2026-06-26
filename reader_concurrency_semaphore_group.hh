@@ -10,6 +10,7 @@
 
 #include <unordered_map>
 #include <optional>
+#include "utils/wrapped_function.hh"
 #include "reader_concurrency_semaphore.hh"
 
 // The reader_concurrency_semaphore_group is a group of semaphores that shares a common pool of memory,
@@ -81,7 +82,7 @@ public:
     reader_concurrency_semaphore& add_or_update(scheduling_group sg, size_t shares);
     future<> remove(scheduling_group sg);
     size_t size();
-    void foreach_semaphore(std::function<void(scheduling_group, reader_concurrency_semaphore&)> func);
+    void foreach_semaphore(utils::wrapped_function<void(scheduling_group, reader_concurrency_semaphore&)> func);
 
     future<> foreach_semaphore_async(std::function<future<> (scheduling_group, reader_concurrency_semaphore&)> func);
 

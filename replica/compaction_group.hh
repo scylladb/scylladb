@@ -385,7 +385,7 @@ public:
 
     uint64_t live_disk_space_used() const;
 
-    void for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const;
+    void for_each_compaction_group(utils::wrapped_function<void(const compaction_group_ptr&)> action) const;
     utils::small_vector<compaction_group_ptr, 3> compaction_groups_immediate();
     utils::small_vector<const_compaction_group_ptr, 3> compaction_groups_immediate() const;
 
@@ -491,7 +491,7 @@ public:
     // invalidated when storage group count changes (e.g. split or merge).
     future<> parallel_foreach_storage_group(std::function<future<>(storage_group&)> f);
     future<> for_each_storage_group_gently(std::function<future<>(storage_group&)> f);
-    void for_each_storage_group(std::function<void(size_t, storage_group&)> f) const;
+    void for_each_storage_group(utils::wrapped_function<void(size_t, storage_group&)> f) const;
     const storage_group_map& storage_groups() const;
 
     future<> stop_storage_groups() noexcept;

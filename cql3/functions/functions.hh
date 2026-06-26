@@ -15,6 +15,7 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/functions/function_name.hh"
 #include "schema/schema.hh"
+#include "utils/wrapped_function.hh"
 #include <unordered_map>
 #include "data_dictionary/user_types_metadata.hh"
 
@@ -74,7 +75,7 @@ public:
     std::optional<function_name> used_by_user_aggregate(shared_ptr<user_function>) const;
     std::optional<function_name> used_by_user_function(const ut_name& user_type) const;
 private:
-    void with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, std::function<void(declared_t::iterator)> f);
+    void with_udf_iter(const function_name& name, const std::vector<data_type>& arg_types, utils::wrapped_function<void(declared_t::iterator)> f);
 
     template <typename F>
     std::vector<shared_ptr<F>> get_filtered_transformed(const sstring& keyspace) const;

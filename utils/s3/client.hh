@@ -11,6 +11,7 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
+#include "utils/wrapped_function.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/queue.hh>
@@ -144,7 +145,7 @@ class client : public enable_shared_from_this<client> {
     future<group_client&> find_or_create_client_slow();
     future<> rebalance_connections();
 
-    using error_handler = std::function<void(std::exception_ptr)>;
+    using error_handler = utils::wrapped_function<void(std::exception_ptr)>;
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
 
     http::client::reply_handler wrap_handler(http::request& request,

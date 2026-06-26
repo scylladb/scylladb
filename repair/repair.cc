@@ -605,7 +605,7 @@ named_semaphore& repair::task_manager_module::range_parallelism_semaphore() {
     return _range_parallelism_semaphore;
 }
 
-future<> repair::task_manager_module::run(repair_uniq_id id, std::function<void ()> func) {
+future<> repair::task_manager_module::run(repair_uniq_id id, utils::wrapped_function<void()> func) {
     return seastar::with_gate(async_gate(), [this, id, func = std::move(func)] () mutable {
         start(id);
         return seastar::async([func = std::move(func)] { func(); }).then([this, id] {

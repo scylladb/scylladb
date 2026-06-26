@@ -93,8 +93,6 @@ SEASTAR_TEST_CASE(test_group_by_syntax) {
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t2 group by p1, p2").get(), ire, partition);
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t2 group by p1").get(), ire, partition);
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t1 group by p1").get(), ire, partition);
-
-        return make_ready_future<>();
     });
 }
 
@@ -130,7 +128,6 @@ SEASTAR_TEST_CASE(test_group_by_aggregate_single_key) {
         require_rows(e, "select sum(n) from t group by p", {{I(10), I(1)}, {I(20), I(2)}});
         require_rows(e, "select avg(n) from t group by p", {{I(20), I(2)}, {I(10), I(1)}});
         require_rows(e, "select count(n) from t group by p", {{L(1), I(2)}, {L(1), I(1)}});
-        return make_ready_future<>();
     });
 }
 
@@ -151,7 +148,6 @@ SEASTAR_TEST_CASE(test_group_by_aggregate_partition_only) {
         cquery_nofail(e, "delete from t where p1=1 and p2=1 and p3=1");
         require_rows(e, "select sum(v) from t group by p1, p2, p3",
                      {{I(100), I(1), I(2), I(1)}, {I(100), I(1), I(2), I(2)}});
-        return make_ready_future<>();
     });
 }
 
@@ -172,7 +168,6 @@ SEASTAR_TEST_CASE(test_group_by_aggregate_clustering) {
         require_rows(e, "select sum(v) from t group by p1, c1, c2",
                      {{I(100), I(1), I(1), I(1)}, {I(100), I(1), I(1), I(2)},
                       {I(100), I(2), I(1), I(1)}, {I(100), I(2), I(2), I(2)}});
-        return make_ready_future<>();
     });
 }
 
@@ -204,7 +199,6 @@ SEASTAR_TEST_CASE(test_group_by_text_key) {
         require_rows(e, "select avg(v) from t2 group by p, c1", {{I(15), T(" "), T("")}, {I(35), T(" "), T("a")}});
         require_rows(e, "select sum(v) from t2 where c1='' group by p, c2 allow filtering",
                      {{I(10), T(" "), T("")}, {I(20), T(" "), T("b")}});
-        return make_ready_future<>();
     });
 }
 
@@ -221,7 +215,6 @@ SEASTAR_TEST_CASE(test_group_by_non_aggregate) {
         cquery_nofail(e, "insert into t (p, c, n) values (1, 2, 12)");
         cquery_nofail(e, "insert into t (p, c, n) values (1, 3, 13)");
         require_rows(e, "select n from t group by p", {{I(11), I(1)}, {I(21), I(2)}});
-        return make_ready_future<>();
     });
 }
 
@@ -230,7 +223,6 @@ SEASTAR_TEST_CASE(test_group_by_null_clustering) {
         cquery_nofail(e, "create table t (p int, c int, sv int static, primary key(p, c))");
         cquery_nofail(e, "insert into t (p, sv) values (1, 100)"); // c will be NULL.
         require_rows(e, "select sv from t where p=1 group by c", {{I(100), std::nullopt}});
-        return make_ready_future<>();
     });
 }
 

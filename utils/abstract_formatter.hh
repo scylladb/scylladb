@@ -10,11 +10,12 @@
 
 #include <fmt/format.h>
 #include <functional>
+#include "utils/wrapped_function.hh"
 
 /// Type-erased formatter.
 /// Allows passing formattable objects without exposing their types.
 class abstract_formatter {
-    std::function<void(fmt::format_context&)> _formatter;
+    utils::wrapped_function<void(fmt::format_context&)> _formatter;
 public:
     abstract_formatter() = default;
 

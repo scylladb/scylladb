@@ -2823,7 +2823,6 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_map_layout) {
         // so the layout should remain arbitrary.
         BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).tablet_count() == 2);
         BOOST_REQUIRE(tablet_layout::arbitrary == stm.get()->tablets().get_tablet_map(table1).get_layout());
-        return make_ready_future<>();
     }, std::move(cfg)).get();
 }
 

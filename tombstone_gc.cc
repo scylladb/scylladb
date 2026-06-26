@@ -205,7 +205,7 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
     std::abort();
 }
 
-void shared_tombstone_gc_state::mutate_repair_history(std::function<void(per_table_history_maps&)> mutator) {
+void shared_tombstone_gc_state::mutate_repair_history(utils::wrapped_function<void(per_table_history_maps&)> mutator) {
     auto new_maps = make_lw_shared<per_table_history_maps>(*_reconcile_history_maps);
     mutator(*new_maps);
     _reconcile_history_maps = std::move(new_maps);

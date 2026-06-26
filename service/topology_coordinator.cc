@@ -1709,7 +1709,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         return true;
     }
 
-    future<> for_each_tablet_group_transition(std::function<void(const locator::tablet_map&,
+    future<> for_each_tablet_group_transition(utils::wrapped_function<void(const locator::tablet_map&,
                                                            table_id,
                                                            const locator::table_group_set&,
                                                            locator::tablet_id,

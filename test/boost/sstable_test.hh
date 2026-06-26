@@ -10,6 +10,7 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include "utils/wrapped_function.hh"
 #include "types/map.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
@@ -339,11 +340,11 @@ inline dht::decorated_key make_dkey(schema_ptr s, bytes b)
 }
 
 // Must be called from a seastar thread.
-future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify);
-inline future<sstables::shared_sstable> verify_mutation(test_env& env, std::function<shared_sstable()> sst_gen, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify) {
+future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, utils::wrapped_function<void(mutation_opt&)> verify);
+inline future<sstables::shared_sstable> verify_mutation(test_env& env, std::function<shared_sstable()> sst_gen, lw_shared_ptr<replica::memtable> mt, bytes key, utils::wrapped_function<void(mutation_opt&)> verify) {
     return verify_mutation(env, sst_gen(), std::move(mt), std::move(key), std::move(verify));
 }
-future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sstp, bytes key, std::function<void(mutation_opt&)> verify);
+future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sstp, bytes key, utils::wrapped_function<void(mutation_opt&)> verify);
 
 future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify);
 inline future<sstables::shared_sstable> verify_mutation(test_env& env, std::function<shared_sstable()> sst_gen, lw_shared_ptr<replica::memtable> mt, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {

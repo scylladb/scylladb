@@ -193,7 +193,7 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
         const tracing::trace_state_ptr& trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
-        std::function<void(size_t)> reserve_fn) const {
+        utils::wrapped_function<void(size_t)> reserve_fn) const {
     auto add_memtables_from_cg = [&] (compaction_group& cg) mutable {
         for (auto&& mt: *cg.memtables()) {
             if (auto reader_opt = mt->make_mutation_reader_opt(s, permit, range, slice, trace_state, fwd, fwd_mr)) {
@@ -650,7 +650,7 @@ future<> storage_group_manager::for_each_storage_group_gently(std::function<futu
     }
 }
 
-void storage_group_manager::for_each_storage_group(std::function<void(size_t, storage_group&)> f) const {
+void storage_group_manager::for_each_storage_group(utils::wrapped_function<void(size_t, storage_group&)> f) const {
     for (auto& [id, sg]: _storage_groups) {
         if (auto holder = try_hold_gate(sg->async_gate())) {
             f(id, *sg);
@@ -1014,7 +1014,7 @@ compaction_group_ptr& storage_group::select_compaction_group(dht::token first, d
     return _main_cg;
 }
 
-void storage_group::for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const {
+void storage_group::for_each_compaction_group(utils::wrapped_function<void(const compaction_group_ptr&)> action) const {
     action(_main_cg);
     for (auto& cg : _merging_groups) {
         action(cg);
@@ -1490,7 +1490,7 @@ future<> table::parallel_foreach_compaction_group(std::function<future<>(compact
     });
 }
 
-void table::for_each_compaction_group(std::function<void(compaction_group&)> action) {
+void table::for_each_compaction_group(utils::wrapped_function<void(compaction_group&)> action) {
     _sg_manager->for_each_storage_group([&] (size_t, storage_group& sg) {
         sg.for_each_compaction_group([&] (const compaction_group_ptr& cg) {
             if (auto holder = try_hold_gate(cg->async_gate())) {
@@ -1500,7 +1500,7 @@ void table::for_each_compaction_group(std::function<void(compaction_group&)> act
     });
 }
 
-void table::for_each_compaction_group(std::function<void(const compaction_group&)> action) const {
+void table::for_each_compaction_group(utils::wrapped_function<void(const compaction_group&)> action) const {
     _sg_manager->for_each_storage_group([&] (size_t, storage_group& sg) {
         sg.for_each_compaction_group([&] (const compaction_group_ptr& cg) {
             if (auto holder = try_hold_gate(cg->async_gate())) {

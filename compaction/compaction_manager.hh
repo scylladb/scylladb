@@ -17,6 +17,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/rwlock.hh>
+#include "utils/wrapped_function.hh"
 #include "sstables/shared_sstable.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/updateable_value.hh"
@@ -149,7 +150,7 @@ private:
 
     utils::pluggable<db::system_keyspace> _sys_ks;
 
-    std::function<void()> compaction_submission_callback();
+    utils::wrapped_function<void()> compaction_submission_callback();
     // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
@@ -372,7 +373,7 @@ public:
             tasks::task_info info,
             std::vector<sstables::shared_sstable> sstables,
             sstables::component_type component,
-            std::function<void(sstables::sstable&)> modifier,
+            utils::wrapped_function<void(sstables::sstable&)> modifier,
             compaction_type_options::component_rewrite::update_sstable_id update_id = compaction_type_options::component_rewrite::update_sstable_id::yes);
 
     // Submit a table for major compaction.

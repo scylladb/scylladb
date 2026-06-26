@@ -200,7 +200,7 @@ BOOST_AUTO_TEST_SUITE(multishard_query_test)
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
@@ -228,8 +228,6 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
         query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, db::no_timeout).get();
 
         require_eventually_empty_caches(env.db());
-
-        return make_ready_future<>();
     }, cql_config_with_extensions()).get();
 }
 
@@ -544,7 +542,7 @@ namespace multishard_query_test {
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_read_all) {
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
@@ -594,14 +592,12 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
         }).first;
 
         check_results_are_equal(results1, results3);
-
-        return make_ready_future<>();
     }, cql_config_with_extensions()).get();
 }
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
@@ -656,14 +652,12 @@ SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
         }
 
         require_eventually_empty_caches(env.db());
-
-        return make_ready_future<>();
     }, cql_config_with_extensions()).get();
 }
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
@@ -722,14 +716,12 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
             tests::require_equal(aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::time_based_evictions), 0u);
             tests::require_equal(aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::resource_based_evictions), 0u);
         } } }
-
-        return make_ready_future<>();
     }, cql_config_with_extensions()).get();
 }
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
@@ -775,14 +767,12 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::resource_based_evictions), evictions);
 
         require_eventually_empty_caches(env.db());
-
-        return make_ready_future<>();
     }, cql_config_with_extensions()).get();
 }
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         using namespace std::chrono_literals;
 
         auto& db = env.db();
@@ -832,8 +822,6 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
         } } }
 
         require_eventually_empty_caches(env.db());
-
-        return make_ready_future<>();
     }, cql_config_with_extensions()).get();
 }
 
@@ -1145,7 +1133,7 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
     auto cql_cfg = cql_config_with_extensions();
     cql_cfg.db_config->enable_commitlog(false);
 
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         // REPLACE RANDOM SEED HERE.
         const auto seed = tests::random::get_int<uint32_t>();
         testlog.info("fuzzy test seed: {}", seed);
@@ -1196,8 +1184,6 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
             // Fail the test on any exception.
             BOOST_FAIL("Test run finished with exception");
         }).get();
-
-        return make_ready_future<>();
     }, cql_cfg).get();
 }
 

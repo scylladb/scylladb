@@ -894,7 +894,7 @@ future<semaphore_units<>> gossiper::lock_endpoint_update_semaphore() {
     return get_units(_endpoint_update_semaphore, 1, _abort_source);
 }
 
-future<> gossiper::mutate_live_and_unreachable_endpoints(std::function<void(live_and_unreachable_endpoints&)> func) {
+future<> gossiper::mutate_live_and_unreachable_endpoints(utils::wrapped_function<void(live_and_unreachable_endpoints&)> func) {
     auto lock = co_await lock_endpoint_update_semaphore();
     auto cloned = std::make_unique<live_and_unreachable_endpoints>(_live_endpoints, _unreachable_endpoints);
     func(*cloned);

@@ -290,7 +290,7 @@ public:
         return h;
     }
 
-    void modify_group0(std::function<void(service::group0_guard&, utils::chunked_vector<canonical_mutation>&)> func) {
+    void modify_group0(utils::wrapped_function<void(service::group0_guard&, utils::chunked_vector<canonical_mutation>&)> func) {
         abort_source as;
         auto& client = _env.get_raft_group0_client();
         while (true) {
@@ -308,7 +308,7 @@ public:
         }
     }
 
-    void modify_topology(std::function<void(service::topology_mutation_builder&)> func) {
+    void modify_topology(utils::wrapped_function<void(service::topology_mutation_builder&)> func) {
         modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
             service::topology_mutation_builder builder(guard.write_timestamp());
             func(builder);

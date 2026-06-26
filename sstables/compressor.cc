@@ -56,7 +56,7 @@ public:
 
 // A custom allocator for zstd, so that we can track its memory usage.
 struct zstd_callback_allocator {
-    using callback_type = std::function<void(ssize_t)>;
+    using callback_type = utils::wrapped_function<void(ssize_t)>;
     callback_type _callback;
     using self = zstd_callback_allocator;
     zstd_callback_allocator(callback_type cb) : _callback(std::move(cb)) {}

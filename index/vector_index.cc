@@ -34,7 +34,7 @@ static const std::vector<sstring> quantization_values = {
     "f32", "f16", "bf16", "i8", "b1"
 };
 
-const static std::unordered_map<sstring, std::function<void(std::string_view, const sstring&, const sstring&)>> vector_index_options = {
+const static std::unordered_map<sstring, utils::wrapped_function<void(std::string_view, const sstring&, const sstring&)>> vector_index_options = {
         // `similarity_function` defines method of calculating similarity between vectors
         // Used internally by vector store during both indexing and querying
         // CQL implements corresponding functions in cql3/functions/similarity_functions.hh

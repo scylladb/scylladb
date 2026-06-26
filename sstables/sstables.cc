@@ -1593,7 +1593,7 @@ bool sstable::should_update_repaired_at(int64_t repaired_at) const {
 //    - Copy sharding information, seal the SSTable, and open data files
 future<shared_sstable> sstable::link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
         component_type component,
-        std::function<void(sstable&)> modifier,
+        utils::wrapped_function<void(sstable&)> modifier,
         bool update_sstable_id) {
     if (!is_component_rewrite_supported(component)) {
         on_internal_error(sstlog, "Only Statistics component can be rewritten.");
@@ -2480,7 +2480,7 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 }
 
 future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
-        std::function<void(sstring)> error_handler, sstables::read_monitor& monitor, bool validate_index) {
+        utils::wrapped_function<void(sstring)> error_handler, sstables::read_monitor& monitor, bool validate_index) {
     auto handle_sstable_exception = [&error_handler](const malformed_sstable_exception& e, uint64_t& errors) -> std::exception_ptr {
         std::exception_ptr ex;
         try {

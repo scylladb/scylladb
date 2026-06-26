@@ -161,7 +161,7 @@ sstable_set::all() const {
     return _impl->all();
 }
 
-void sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
+void sstable_set::for_each_sstable(utils::wrapped_function<void(const shared_sstable&)> func) const {
     _impl->for_each_sstable_until([func = std::move(func)] (const shared_sstable& sst) {
         func(sst);
         return stop_iteration::no;

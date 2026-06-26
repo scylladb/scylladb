@@ -11,6 +11,7 @@
 #include <span>
 #include <tuple>
 #include <seastar/core/shared_ptr.hh>
+#include "utils/wrapped_function.hh"
 #include "gc_clock.hh"
 #include "db/commitlog/replay_position.hh"
 #include "dht/token.hh"
@@ -74,7 +75,7 @@ class shared_tombstone_gc_state {
     std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
 private:
-    void mutate_repair_history(std::function<void(per_table_history_maps&)>);
+    void mutate_repair_history(utils::wrapped_function<void(per_table_history_maps&)>);
 
 public:
     shared_tombstone_gc_state();

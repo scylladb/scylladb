@@ -506,7 +506,7 @@ future<> raft_group0::leadership_monitor_fiber() {
     }
 }
 
-utils::observer<bool> raft_group0::observe_leadership(std::function<void(bool)> cb) {
+utils::observer<bool> raft_group0::observe_leadership(utils::wrapped_function<void(bool)> cb) {
     if (_leadership_observable.get()) {
         cb(true);
     }

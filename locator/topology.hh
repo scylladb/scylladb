@@ -22,6 +22,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 
+#include "utils/wrapped_function.hh"
 #include "locator/types.hh"
 #include "inet_address_vectors.hh"
 
@@ -384,7 +385,7 @@ public:
     static int distance(const locator::host_id& address, const endpoint_dc_rack& loc, const locator::host_id& address1, const endpoint_dc_rack& loc1) noexcept;
 
     // Executes a function for each node in a state other than "none" and "left".
-    void for_each_node(std::function<void(const node&)> func) const;
+    void for_each_node(utils::wrapped_function<void(const node&)> func) const;
 
     // Returns pointers to all nodes in a state other than "none" and "left".
     std::unordered_set<std::reference_wrapper<const node>> get_nodes() const;

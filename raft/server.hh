@@ -8,6 +8,7 @@
 #pragma once
 #include <seastar/core/abort_source.hh>
 #include "raft.hh"
+#include "utils/wrapped_function.hh"
 
 namespace raft {
 
@@ -62,7 +63,7 @@ public:
         size_t max_command_size = 100 * 1024;
         // A callback to invoke if one of internal server
         // background activities has stopped because of an error.
-        std::function<void(std::exception_ptr e)> on_background_error;
+        utils::wrapped_function<void(std::exception_ptr e)> on_background_error;
     };
 
     virtual ~server() {}

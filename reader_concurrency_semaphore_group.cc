@@ -98,7 +98,7 @@ size_t reader_concurrency_semaphore_group::size() {
     return _semaphores.size();
 }
 
-void reader_concurrency_semaphore_group::foreach_semaphore(std::function<void(scheduling_group, reader_concurrency_semaphore&)> func) {
+void reader_concurrency_semaphore_group::foreach_semaphore(utils::wrapped_function<void(scheduling_group, reader_concurrency_semaphore&)> func) {
     for (auto& [sg, wsem] : _semaphores) {
         func(sg, wsem.sem);
     }

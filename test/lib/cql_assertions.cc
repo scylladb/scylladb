@@ -27,7 +27,7 @@ void columns_assertions::fail(const sstring& msg) {
     ::fail(msg, _loc);
 }
 
-columns_assertions& columns_assertions::do_with_raw_column(const char* name, std::function<void(data_type, managed_bytes_view)> func) {
+columns_assertions& columns_assertions::do_with_raw_column(const char* name, utils::wrapped_function<void(data_type, managed_bytes_view)> func) {
     const auto& names = _metadata.get_names();
 
     auto it = std::ranges::find_if(names, [name] (const auto& col) {
@@ -233,7 +233,7 @@ columns_assertions rows_assertions::with_columns_of_row(size_t row_index) {
     return columns_assertions(rs.get_metadata(), rs.rows().at(row_index), _loc);
 }
 
-rows_assertions& rows_assertions::assert_for_columns_of_each_row(std::function<void(columns_assertions&)> func) {
+rows_assertions& rows_assertions::assert_for_columns_of_each_row(utils::wrapped_function<void(columns_assertions&)> func) {
     const auto& rs = _rows->rs().result_set();
     for (size_t i = 0; i < rs.size(); ++i) {
         auto columns = with_columns_of_row(i);
