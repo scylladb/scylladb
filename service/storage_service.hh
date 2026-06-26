@@ -990,6 +990,7 @@ public:
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> restore_tablets(table_id, sstring snap_name);
+    future<> abort_restore_tablets(table_id);
     future<> set_tablet_balancing_enabled(bool);
 
     future<utils::UUID> submit_quiesce_topology_request();
