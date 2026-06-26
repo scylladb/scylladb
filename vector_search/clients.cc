@@ -147,7 +147,9 @@ future<> clients::close_clients() {
         co_await client->close();
     }
     for (auto& client : _old_clients) {
-        co_await client->close();
+        if (client) {
+            co_await client->close();
+        }
     }
     _clients.clear();
     _old_clients.clear();
