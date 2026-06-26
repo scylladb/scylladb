@@ -11,6 +11,8 @@ Depends on helper functions injected to GDB by `scylla-gdb.py` script.
 get_seastar_memory_start_and_size).
 """
 
+import contextlib
+import tempfile
 import gdb
 import uuid
 
@@ -90,8 +92,61 @@ class get_coroutine(gdb.Function):
         print("COROUTINE_NOT_FOUND")
 
 
+@contextlib.contextmanager
+def with_saved_breakpoints():
+    """Save the current breakpoints, delete them, and restore them on exit."""
+    had_breakpoints = bool(gdb.breakpoints())
+    if had_breakpoints:
+        with tempfile.NamedTemporaryFile() as breakpoint_file:
+            gdb.execute(f"save breakpoints {breakpoint_file.name}")
+            gdb.execute("delete breakpoints")
+            try:
+                yield
+            finally:
+                gdb.execute(f"source {breakpoint_file.name}")
+    else:
+        try:
+            yield
+        finally:
+            if gdb.breakpoints():
+                gdb.execute("delete breakpoints")
+
+
+@contextlib.contextmanager
+def with_saved_thread():
+    """Save the current thread and restore it on exit."""
+    orig = gdb.selected_thread()
+    try:
+        yield
+    finally:
+        orig.switch()
+
+
+class scylla_run_all_shards_until_poll(gdb.Command):
+    """Advance all reactor threads until a poll point."""
+
+    def __init__(self):
+        gdb.Command.__init__(self, "scylla run-all-shards-until-poll", gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    def invoke(self, arg, for_tty):
+        with with_saved_breakpoints():
+            with gdb.with_parameter("scheduler-locking", "on"):
+                with with_saved_thread():
+                    for t in gdb.selected_inferior().threads():
+                        t.switch()
+                        reactor = gdb.parse_and_eval("::seastar::local_engine")
+                        if not reactor:
+                            continue
+                        gdb.execute("tbreak ::seastar::reactor::poll_once")
+                        # If setting the breakpoint fails, gdb only warns.
+                        # If we want that to turn into a test failure, we have to do that ourselves.
+                        assert gdb.breakpoints()
+                        gdb.execute("continue")
+
+
 # Register the functions in GDB
 get_schema()
 get_sstable()
 get_task()
 get_coroutine()
+scylla_run_all_shards_until_poll()
