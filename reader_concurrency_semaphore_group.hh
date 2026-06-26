@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <optional>
 #include "reader_concurrency_semaphore.hh"
+#include "utils/serialized_action.hh"
 
 // The reader_concurrency_semaphore_group is a group of semaphores that shares a common pool of memory.
 // The total memory is divided based on the shared_pool_fraction parameter:
@@ -24,7 +25,7 @@ class reader_concurrency_semaphore_group {
     size_t _total_weight;
     size_t _max_concurrent_reads;
     size_t _max_queue_length;
-    double _shared_pool_fraction;
+    utils::updateable_value<double> _shared_pool_fraction;
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
     utils::updateable_value<uint32_t> _cpu_concurrency;
@@ -52,6 +53,11 @@ class reader_concurrency_semaphore_group {
     reader_concurrency_semaphore_shared_pool _shared_pool;
     seastar::semaphore _operations_serializer;
     std::optional<sstring> _name_prefix;
+    // Re-splits the memory between the dedicated and shared portions whenever
+    // the shared pool fraction changes at runtime. Must be declared before
+    // its observer so the observer is destroyed first.
+    serialized_action _shared_pool_fraction_action;
+    utils::observer<double> _shared_pool_fraction_observer;
 
     future<> change_weight(weighted_reader_concurrency_semaphore& sem, size_t new_weight);
 
@@ -61,13 +67,13 @@ public:
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
             utils::updateable_value<float> preemptive_abort_factor,
-            double shared_pool_fraction,
+            utils::updateable_value<double> shared_pool_fraction,
             std::optional<sstring> name_prefix = std::nullopt)
             : _total_memory(memory)
             , _total_weight(0)
             , _max_concurrent_reads(max_concurrent_reads)
             ,  _max_queue_length(max_queue_length)
-            , _shared_pool_fraction(shared_pool_fraction)
+            , _shared_pool_fraction(std::move(shared_pool_fraction))
             , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
             , _kill_limit_multiplier(std::move(kill_limit_multiplier))
             , _cpu_concurrency(std::move(cpu_concurrency))
@@ -75,10 +81,15 @@ public:
             , _shared_pool(0)
             , _operations_serializer(1)
             , _name_prefix(std::move(name_prefix))
+            , _shared_pool_fraction_action([this] { return adjust(); })
+            // adjust() clamps out-of-range values, so the action can't fail on
+            // a bad update.
+            , _shared_pool_fraction_observer(_shared_pool_fraction.observe(_shared_pool_fraction_action.make_observer()))
     {
-        if (shared_pool_fraction > 0) {
-            _shared_pool.register_metrics(_name_prefix.value_or("unnamed"));
-        }
+        // Register metrics unconditionally so they remain valid when the shared
+        // pool is enabled at runtime via a live config update (the gauges report
+        // 0 while the pool is disabled).
+        _shared_pool.register_metrics(_name_prefix.value_or("unnamed"));
     }
 
     ~reader_concurrency_semaphore_group() {

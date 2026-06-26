@@ -1281,7 +1281,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group) {
             utils::updateable_value(kill_multiplier),
             utils::updateable_value(cpu_concurrency),
             utils::updateable_value(preemptive_abort_factor),
-            0);
+            utils::updateable_value<double>(0));
 
     auto stop_sem = deferred_stop(sem_group);
 
@@ -1396,7 +1396,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_shared_pool) {
             utils::updateable_value(kill_multiplier),
             utils::updateable_value(cpu_concurrency),
             utils::updateable_value(preemptive_abort_factor),
-            shared_pool_fraction);
+            utils::updateable_value<double>(shared_pool_fraction));
     auto stop_sem = deferred_stop(sem_group);
 
     auto sg1 = create_scheduling_group("test_sg1", 1000).get();
@@ -1458,7 +1458,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_multiple_borrow
             utils::updateable_value(kill_multiplier),
             utils::updateable_value(cpu_concurrency),
             utils::updateable_value(preemptive_abort_factor),
-            shared_pool_fraction);
+            utils::updateable_value<double>(shared_pool_fraction));
     auto stop_sem = deferred_stop(sem_group);
 
     auto sg1 = create_scheduling_group("test_sg1", 1000).get();
@@ -1790,7 +1790,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_zero_shared_poo
             utils::updateable_value(kill_multiplier),
             utils::updateable_value(cpu_concurrency),
             utils::updateable_value(preemptive_abort_factor),
-            shared_pool_fraction);
+            utils::updateable_value<double>(shared_pool_fraction));
     auto stop_sem = deferred_stop(sem_group);
 
     auto sg = create_scheduling_group("test_sg", 1000).get();
@@ -1801,6 +1801,72 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_zero_shared_poo
 
     BOOST_CHECK_EQUAL(sem_group.get_shared_pool().total_memory(), 0);
     BOOST_CHECK_EQUAL(sem_group.get(sg).initial_resources().memory, total_memory);
+}
+
+// Test that updating shared_pool_fraction at runtime re-splits the memory
+// between the shared pool and the per-scheduling-group dedicated portions.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_shared_pool_live_update) {
+    const ssize_t total_memory = 100 * 1024;
+    const int max_count = 100;
+
+    auto serialize_multiplier = utils::updateable_value_source<uint32_t>(100);
+    auto kill_multiplier = utils::updateable_value_source<uint32_t>(100);
+    auto cpu_concurrency = utils::updateable_value_source<uint32_t>(100);
+    auto preemptive_abort_factor = utils::updateable_value_source<float>(0.0f);
+    auto shared_pool_fraction = utils::updateable_value_source<double>(0.5);
+
+    reader_concurrency_semaphore_group sem_group(total_memory, max_count, 1000,
+            utils::updateable_value(serialize_multiplier),
+            utils::updateable_value(kill_multiplier),
+            utils::updateable_value(cpu_concurrency),
+            utils::updateable_value(preemptive_abort_factor),
+            utils::updateable_value(shared_pool_fraction));
+    auto stop_sem = deferred_stop(sem_group);
+
+    auto sg1 = create_scheduling_group("test_sg1", 1000).get();
+    auto destroy_sg1 = defer([&] { destroy_scheduling_group(sg1).get(); });
+    auto sg2 = create_scheduling_group("test_sg2", 1000).get();
+    auto destroy_sg2 = defer([&] { destroy_scheduling_group(sg2).get(); });
+
+    sem_group.add_or_update(sg1, 1000);
+    sem_group.add_or_update(sg2, 1000);
+    sem_group.wait_adjust_complete().get();
+
+    auto& sem1 = sem_group.get(sg1);
+    auto& shared_pool = sem_group.get_shared_pool();
+
+    auto check_split = [&] (double fraction) {
+        const ssize_t expected_shared_pool = total_memory * fraction;
+        const ssize_t expected_ded_per_sg = (total_memory - expected_shared_pool) / 2;
+        BOOST_CHECK_EQUAL(shared_pool.total_memory(), expected_shared_pool);
+        BOOST_CHECK_LE(std::abs(sem1.initial_resources().memory - expected_ded_per_sg), 2);
+    };
+
+    check_split(0.5);
+
+    // Shrinking the shared pool gives the freed memory back to the dedicated portions.
+    testlog.info("updating shared_pool_fraction 0.5 -> 0.2");
+    shared_pool_fraction.set(0.2);
+    sem_group.wait_adjust_complete().get();
+    check_split(0.2);
+
+    // Disabling the shared pool moves all memory into the dedicated portions.
+    testlog.info("updating shared_pool_fraction 0.2 -> 0");
+    shared_pool_fraction.set(0.0);
+    sem_group.wait_adjust_complete().get();
+    check_split(0.0);
+
+    // Growing the shared pool again takes memory from the dedicated portions.
+    testlog.info("updating shared_pool_fraction 0 -> 0.9");
+    shared_pool_fraction.set(0.9);
+    sem_group.wait_adjust_complete().get();
+    check_split(0.9);
+
+    // Out-of-range values are clamped to 1 rather than throwing.
+    testlog.info("updating shared_pool_fraction 0.9 -> 1.5 (clamped to 1)");
+    shared_pool_fraction.set(1.5);
+    sem_group.wait_adjust_complete().get();
+    check_split(1.0);
 }
 
 namespace {
