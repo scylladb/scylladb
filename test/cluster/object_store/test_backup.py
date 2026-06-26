@@ -765,6 +765,8 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
         tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
         status = await manager.api.wait_task(servers[1].ip_addr, tid)
         assert (status is not None) and (status['state'] == 'done')
+        assert status['progress_total'] > 0
+        assert status['progress_completed'] == status['progress_total']
 
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
@@ -852,6 +854,9 @@ async def test_restore_tablets_download_failure(build_mode: str, manager: Manage
         status = await manager.api.wait_task(servers[0].ip_addr, tid)
         assert 'state' in status and status['state'] == 'failed'
         assert 'error' in status and 'Failing sstable download' in status['error']
+        # Partial progress: some SSTables were downloaded before the failure
+        assert status['progress_total'] > 0
+        assert status['progress_completed'] < status['progress_total']
 
 
 @pytest.mark.parametrize("target", ['coordinator', 'replica', 'api'])

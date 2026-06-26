@@ -11,6 +11,7 @@
 #include <seastar/core/map_reduce.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/shared_mutex.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/core/units.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
@@ -1192,6 +1193,31 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
     table_id _tid;
     sstring _snap_name;
     size_t _tablet_count;
+    tasks::task_manager::task::progress _progress;
+    seastar::named_gate _gate{"progress_updater"};
+    timer<seastar::lowres_clock> _progress_update_timer;
+
+    future<> update_progress() {
+        auto& loader = _loader.local();
+        auto& db = loader._db.local();
+        auto s = db.find_schema(_tid);
+        auto md = db.get_token_metadata_ptr();
+        const auto& topo = md->get_topology();
+        auto dc = topo.get_datacenter();
+        auto dc_racks_it = topo.get_datacenter_racks().find(dc);
+        if (dc_racks_it == topo.get_datacenter_racks().end()) {
+            co_return;
+        }
+
+        db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
+        tasks::task_manager::task::progress progress = {};
+        co_await max_concurrent_for_each(dc_racks_it->second, 16, [&](const auto& rack_entry) -> future<> {
+            auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
+            progress.total += p.nr_sstables;
+            progress.completed += p.nr_downloaded_sstables;
+        });
+        _progress = progress;
+    }
 
 public:
     tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
@@ -1201,8 +1227,19 @@ public:
         , _tid(std::move(tid))
         , _snap_name(std::move(snap_name))
         , _tablet_count(ms.tablet_count)
+        , _progress_update_timer([this] {
+            if (auto gh = _gate.try_hold()) {
+                std::ignore = update_progress().finally([this, gh = std::move(*gh)] {
+                    if (!_gate.is_closed()) {
+                        _progress_update_timer.rearm(lowres_clock::now() + 5s);
+                    }
+                });
+            }
+        })
     {
-        _status.progress_units = "batches";
+        _status.progress_units = "sstables";
+        _progress.total = ms.nr_sstables;
+        _progress_update_timer.arm(lowres_clock::now());
     }
 
     virtual std::string type() const override {
@@ -1219,6 +1256,15 @@ public:
 
     tasks::is_abortable is_abortable() const noexcept override {
         return tasks::is_abortable::no;
+    }
+
+    future<tasks::task_manager::task::progress> get_progress() const override {
+        co_return _progress;
+    }
+
+    future<> release_resources() noexcept override {
+        _progress_update_timer.cancel();
+        co_await _gate.close();
     }
 
 protected:
@@ -1248,6 +1294,11 @@ protected:
         if (eptr) {
             std::rethrow_exception(eptr);
         }
+
+        // Restore complete. The total was known upfront from manifest parsing.
+        // Mark all progress as complete and stop the background update timer.
+        _progress_update_timer.cancel();
+        _progress.completed = _progress.total;
     }
 };
 
