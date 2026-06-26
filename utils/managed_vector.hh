@@ -62,13 +62,25 @@ private:
         auto new_capacity = std::max({ _capacity + std::min(_capacity, size_type(1024)), new_size, size_type(InternalSize + 8) });
         reserve(new_capacity);
     }
+    static allocation_strategy& choose_allocator(size_t n_bytes) {
+        if (n_bytes <= current_allocator().preferred_max_contiguous_allocation()) {
+            return current_allocator();
+        }
+        return standard_allocator();
+    }
+    static void* alloc_external(size_t n_bytes) {
+        return choose_allocator(n_bytes).alloc<external>(n_bytes);
+    }
+    static void free_external(void* ptr, size_t n_bytes) {
+        choose_allocator(n_bytes).free(ptr, n_bytes);
+    }
 public:
     // Clears the vector and ensures that the destructor will not have to free any memory so
     // that the object can be destroyed under any allocator.
     void clear_and_release() noexcept {
         clear();
         if (is_external()) {
-            current_allocator().free(get_external(), get_external()->storage_size());
+            free_external(get_external(), get_external()->storage_size());
             _data = reinterpret_cast<T*>(_internal.data());
         }
     }
@@ -172,7 +184,7 @@ public:
         if (new_capacity <= _capacity) {
             return;
         }
-        auto ptr = current_allocator().alloc<external>(sizeof(external) + sizeof(T) * new_capacity);
+        auto ptr = alloc_external(sizeof(external) + sizeof(T) * new_capacity);
         auto ext = static_cast<external*>(ptr);
         ext->_backref = this;
         T* data_ptr = ext->_data;
@@ -181,7 +193,7 @@ public:
             _data[i].~T();
         }
         if (is_external()) {
-            current_allocator().free(get_external(), get_external()->storage_size());
+            free_external(get_external(), get_external()->storage_size());
         }
         _data = data_ptr;
         _capacity = new_capacity;

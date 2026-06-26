@@ -142,3 +142,11 @@ SEASTAR_THREAD_TEST_CASE(test_compaction) {
         verify_filled(vec);
     });
 }
+
+SEASTAR_THREAD_TEST_CASE(test_large_allocation) {
+    logalloc::region reg;
+    with_allocator(reg.allocator(), [&] {
+        managed_vector<unsigned> vec;
+        vec.resize(logalloc::max_managed_object_size * 2);
+    });
+}
