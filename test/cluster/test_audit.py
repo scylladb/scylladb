@@ -30,11 +30,13 @@ from cassandra import AlreadyExists, AuthenticationFailed, ConsistencyLevel, Inv
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import NoHostAvailable, Session, EXEC_PROFILE_DEFAULT
 from cassandra.query import BatchStatement, BatchType, SimpleStatement, named_tuple_factory
+from botocore.exceptions import ClientError
 
 from test.cluster.dtest.dtest_class import create_ks, wait_for
 from test.cluster.dtest.tools.assertions import assert_invalid
 from test.cluster.dtest.tools.data import rows_to_list, run_in_parallel
 
+from test.cluster.test_alternator import alternator_config, get_alternator, unique_table_name
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
 from test.pylib.skip_types import skip_env
@@ -2101,3 +2103,59 @@ async def test_upgrade_preserves_ddl_audit_for_tables(
         table=table,
         ks=keyspace,
     )
+
+
+# Alternator audit regression test
+
+async def test_alternator_basic_ops_audit_disabled(manager: ManagerClient):
+    # Basic Alternator operations must not crash when audit is disabled.
+    config = alternator_config | {'audit': 'none'}
+    server = await manager.server_add(config=config)
+    alternator = get_alternator(server.ip_addr)
+    client = alternator.meta.client
+
+    table_name = unique_table_name()
+    try:
+        # DDL: CreateTable
+        table = alternator.create_table(
+            TableName=table_name,
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+                {'AttributeName': 'c', 'KeyType': 'RANGE'},
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'c', 'AttributeType': 'S'},
+            ],
+        )
+        # DML: PutItem
+        table.put_item(Item={'p': 'pk0', 'c': 'ck0', 'v': 'val0'})
+        # DML: UpdateItem
+        table.update_item(
+            Key={'p': 'pk0', 'c': 'ck0'},
+            AttributeUpdates={'v': {'Value': 'updated0', 'Action': 'PUT'}},
+        )
+        # QUERY: GetItem — verify data correctness
+        resp = table.get_item(Key={'p': 'pk0', 'c': 'ck0'}, ConsistentRead=True)
+        assert resp['Item']['v'] == 'updated0'
+        # QUERY: Query
+        qr = table.query(
+            KeyConditionExpression='p = :p',
+            ExpressionAttributeValues={':p': 'pk0'},
+            ConsistentRead=True,
+        )
+        assert qr['Count'] >= 1
+        # QUERY: Scan
+        sr = table.scan(ConsistentRead=True)
+        assert sr['Count'] >= 1
+        # DML: DeleteItem
+        table.delete_item(Key={'p': 'pk0', 'c': 'ck0'})
+        # Verify deletion
+        resp = table.get_item(Key={'p': 'pk0', 'c': 'ck0'}, ConsistentRead=True)
+        assert 'Item' not in resp
+    finally:
+        try:
+            client.delete_table(TableName=table_name)
+        except ClientError:
+            pass
