@@ -114,12 +114,18 @@ class allocation_strategy {
         return instance;
     }
 
+private:
+    // const: there are some users of allocation_strategy which rely on this being stable
+    // over the allocator's lifetime.
+    const size_t _preferred_max_contiguous_allocation = std::numeric_limits<size_t>::max();
 protected:
-    size_t _preferred_max_contiguous_allocation = std::numeric_limits<size_t>::max();
     uint64_t _invalidate_counter = 1;
 public:
     using migrate_fn = const migrate_fn_type*;
 
+    allocation_strategy(size_t preferred_max_contiguous_allocation)
+        : _preferred_max_contiguous_allocation(preferred_max_contiguous_allocation)
+    {}
     virtual ~allocation_strategy() {}
 
     // Allocates space.
@@ -233,8 +239,7 @@ public:
 
 class standard_allocation_strategy : public allocation_strategy {
 public:
-    constexpr standard_allocation_strategy() {
-        _preferred_max_contiguous_allocation = 128 * 1024;
+    constexpr standard_allocation_strategy(size_t preferred_max_contiguous_allocation=128*1024) : allocation_strategy(preferred_max_contiguous_allocation) {
     }
     virtual void* alloc(migrate_fn, size_t size, size_t alignment) override {
         seastar::memory::on_alloc_point();

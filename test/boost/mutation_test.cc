@@ -2574,8 +2574,7 @@ SEASTAR_TEST_CASE(test_continuity_merging_past_last_entry_in_evictable) {
 class measuring_allocator final : public allocation_strategy {
     size_t _allocated_bytes = 0;
 public:
-    measuring_allocator() {
-        _preferred_max_contiguous_allocation = standard_allocator().preferred_max_contiguous_allocation();
+    measuring_allocator() : allocation_strategy(standard_allocator().preferred_max_contiguous_allocation()) {
     }
     virtual void* alloc(migrate_fn mf, size_t size, size_t alignment) override {
         _allocated_bytes += size;
