@@ -330,6 +330,12 @@ future<> view_building_worker::create_staging_sstable_tasks() {
         }
     }
 
+    // Release `_started_staging_tasks_mutex` before `add_entry()` below: it is only needed to read
+    // `_started_staging_tasks` in the loop above. Holding it across `add_entry()` deadlocks, since
+    // `add_entry()` waits for the command to be applied (which takes the group0 read-apply mutex)
+    // while the view building state observer holds the read-apply mutex and waits for this mutex.
+    started_tasks_lock.return_all();
+
     utils::chunked_vector<canonical_mutation> cmuts;
     cmuts.emplace_back(builder.build());
     auto cmd = _group0.client().prepare_command(service::write_mutations{std::move(cmuts)}, guard, "create view building tasks");
