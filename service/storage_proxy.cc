@@ -7303,8 +7303,18 @@ void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, 
 }
 
 future<> storage_proxy::stop_remote() {
-    co_await drain_on_shutdown();
+    co_await cancel_nonlocal_write_response_handlers();
+    co_await _hints_resource_manager.stop();
+
+    // Local write handlers must remain alive while storage-proxy RPC
+    // handlers can still run. Some local-looking operations, such as
+    // raft log persistence through internal CQL, need their local write
+    // handler to complete normally during shutdown; canceling all write
+    // handlers before unregistering RPC verbs can turn those local writes
+    // into spurious timeouts. After _remote->stop() finishes, no RPC
+    // handler can start or continue storage-proxy work through _remote.
     co_await _remote->stop();
+    co_await cancel_all_write_response_handlers();
     _remote = nullptr;
 }
 
@@ -7541,11 +7551,6 @@ void storage_proxy::on_down(const gms::inet_address& endpoint, locator::host_id 
         return std::ranges::find(targets, id) != targets.end();
     }).get();
 };
-
-future<> storage_proxy::drain_on_shutdown() {
-    co_await cancel_all_write_response_handlers();
-    co_await _hints_resource_manager.stop();
-}
 
 future<> storage_proxy::abort_view_writes() {
     return cancel_write_handlers([] (const abstract_write_response_handler& handler) { 
