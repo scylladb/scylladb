@@ -3,7 +3,7 @@ Nodetool info
 **info** - Provides detailed statistics for a specific node in the
 cluster, such as uptime, load, key cache hit rate, the total count of all
 exceptions, and more. If needed, you can specify which node to view by
-using the --host argument with the host IP address.
+using the ``--host`` argument with the host IP address.
 
 For example:
 
