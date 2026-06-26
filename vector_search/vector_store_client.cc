@@ -369,9 +369,9 @@ void vector_store_client::start_background_tasks() {
 }
 
 auto vector_store_client::stop() -> future<> {
+    co_await _impl->dns.stop();
     co_await _impl->_primary_clients.stop();
     co_await _impl->_secondary_clients.stop();
-    co_await _impl->dns.stop();
     co_await _impl->_truststore.stop();
 }
 
