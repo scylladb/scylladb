@@ -18,6 +18,7 @@
 #include "executor.hh"
 #include "tracing/trace_state.hh"
 #include "keys/keys.hh"
+#include "dht/i_partitioner.hh"
 
 namespace alternator {
 
@@ -115,6 +116,7 @@ public:
     virtual ~rmw_operation() = default;
     const wcu_consumed_capacity_counter& consumed_capacity() const noexcept { return _consumed_capacity; }
     schema_ptr schema() const { return _schema; }
+    dht::token token() const { return dht::get_token(*_schema, _pk); }
     const rjson::value& request() const { return _request; }
     rjson::value&& move_request() && { return std::move(_request); }
     future<executor::request_return_type> execute(service::storage_proxy& proxy,

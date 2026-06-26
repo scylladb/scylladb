@@ -2730,6 +2730,69 @@ db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
 }
 
+// If routing awareness is enabled and this node is not the right coordinator
+// for the given schema and partition key, adds the routing-hint header to ret.
+// The header format is:
+//   X-Scylla-Alternator-Routing-V1: <start_token>,<end_token>,<addr1>[/<shard1>],...
+// Tokens are int64 decimal values (as returned by dht::token::to_int64()).
+// In shard_aware mode each address is followed by /shard; in node_aware mode
+// the shard is omitted. Only replicas in the local DC are included.
+void executor::add_routing_header_if_needed(
+        request_return_type& ret,
+        const schema_ptr& schema,
+        const dht::token& token,
+        const client_state& cs) {
+    if constexpr (routing_awareness == node_awareness::none) {
+        return;
+    }
+    auto erm = schema->table().get_effective_replication_map();
+    const auto& topo = erm->get_token_metadata_ptr()->get_topology();
+
+    std::optional<locator::tablet_routing_info> routing_info;
+    if (routing_awareness == node_awareness::shard_aware) {
+        routing_info = erm->check_locality(token, cs.get_original_shard());
+    } else {
+        // node_aware: add header only if this node is not a natural replica.
+        // We cannot simply call check_locality() here: for tablets, it
+        // checks both host and shard, so it would incorrectly return routing
+        // info when this node IS a natural replica but shard 0 is not its
+        // natural shard. We must first check host membership alone.
+        auto my_host = topo.my_host_id();
+        auto replicas = erm->get_natural_replicas(token);
+        bool am_i_a_replica = std::ranges::any_of(replicas,
+                [my_host](const auto& r) { return r == my_host; });
+        if (!am_i_a_replica) {
+            // This node is not a replica; check_locality() with any shard
+            // (e.g., 0) gives us the routing info we need.
+            routing_info = erm->check_locality(token, 0);
+        }
+    }
+    if (!routing_info) {
+        return;
+    }
+
+    const auto& [range_start, range_end] = routing_info->token_range;
+    sstring value = fmt::format("{},{}", dht::token::to_int64(range_start), dht::token::to_int64(range_end));
+
+    // Append only replicas that are in the local DC
+    const sstring& local_dc = topo.get_datacenter();
+    for (const auto& replica : routing_info->tablet_replicas) {
+        if (topo.find_node(replica.host) == nullptr) {
+            continue;
+        }
+        if (topo.get_datacenter(replica.host) != local_dc) {
+            continue;
+        }
+        sstring addr = _gossiper.get_rpc_address(replica.host);
+        if (routing_awareness == node_awareness::shard_aware) {
+            value += fmt::format(",{}/{}", addr, replica.shard);
+        } else {
+            value += fmt::format(",{}", addr);
+        }
+    }
+    ret.extra_headers.emplace_back(sstring(ROUTING_HEADER_NAME), std::move(value));
+}
+
 static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
         schema_ptr schema,
         const clustering_key& ck,
@@ -3140,6 +3203,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    add_routing_header_if_needed(res, op->schema(), op->token(), client_state);
     co_return res;
 }
 
@@ -3256,6 +3320,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     per_table_stats->api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    add_routing_header_if_needed(res, op->schema(), op->token(), client_state);
     co_return res;
 }
 
@@ -4426,6 +4491,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    add_routing_header_if_needed(res, op->schema(), op->token(), client_state);
     co_return res;
 }
 

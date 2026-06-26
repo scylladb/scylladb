@@ -112,8 +112,38 @@ host_id_vector_replica_set vnode_effective_replication_map::get_replicas_for_rea
     return *endpoints | std::ranges::to<host_id_vector_replica_set>();
 }
 
-std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token&, unsigned) const {
-    return {};
+std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token& search_token, unsigned) const {
+    // For strategies where all tokens map to the same set of endpoints
+    // (e.g. LocalStrategy), every node is a replica, so routing is always correct.
+    if (!_rs->natural_endpoints_depend_on_token()) {
+        return std::nullopt;
+    }
+
+    auto my_host = _tmptr->get_topology().my_host_id();
+    auto replicas = do_get_replicas(search_token, false);
+
+    // Check if we're a natural replica for this token.
+    bool am_i_a_replica = std::ranges::any_of(replicas, [my_host](const auto& r) { return r == my_host; });
+    if (am_i_a_replica) {
+        return std::nullopt; // correctly routed
+    }
+
+    // Not a natural replica. Compute the token range and return routing info.
+    // For vnodes, shard routing is not supported, so shard=0 is a placeholder.
+    auto vnode_token = _tmptr->first_token(search_token);
+    const auto& sorted = _tmptr->sorted_tokens();
+    auto it = std::ranges::lower_bound(sorted, vnode_token);
+    dht::token range_start = dht::token::minimum();
+    if (it != sorted.begin()) {
+        --it;
+        range_start = *it;
+    }
+
+    tablet_replica_set replica_set;
+    for (const auto& r : replicas) {
+        replica_set.push_back({r, 0});
+    }
+    return tablet_routing_info{std::move(replica_set), {range_start, vnode_token}};
 }
 
 bool vnode_effective_replication_map::has_pending_ranges(locator::host_id endpoint) const {
