@@ -149,8 +149,8 @@ Traces are created in the context of a **tracing session**. For instance, if we 
 * ``duration``:  the total duration of this tracing session in microseconds
 * ``parameters``: this map contains string pairs that describe the query. This may include *query string* or *consistency level*.
 * ``request``: a short string describing the current query, like "Execute CQL3 query".
-* ``request_size``: size of the request (available from ScyllaDB 3.0).
-* ``response_size``: size of the response (available from ScyllaDB 3.0).
+* ``request_size``: size of the request.
+* ``response_size``: size of the response.
 * ``started_at``: a timestamp taken when the tracing session has begun.
 
 ``events`` table column descriptions
@@ -323,7 +323,7 @@ Therefore all of them are likely going to hit the Slow Query threshold and get l
 If queueing is caused by some particularly heavy request, we would like to be able to filter this request from those that got logged due to a long queueing. 
 We have recently added tools that would help us do that:
 
-New columns were added to `system_traces.sessions`_ (available from ScyllaDB 3.0)
+New columns were added to `system_traces.sessions`_
 
 * ``request_size``
 * ``response_size``

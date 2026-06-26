@@ -388,7 +388,7 @@ Limiting results
 ~~~~~~~~~~~~~~~~
 
 The ``LIMIT`` option to a ``SELECT`` statement limits the number of rows returned by a query, while the ``PER PARTITION
-LIMIT``  option (introduced in ScyllaDB 3.1) limits the number of rows returned for a given **partition** by the query. Note that both types of limit can be
+LIMIT`` option limits the number of rows returned for a given **partition** by the query. Note that both types of limit can be
 used in the same statement.
 
 .. note::
