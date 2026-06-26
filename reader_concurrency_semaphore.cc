@@ -1049,11 +1049,14 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
     // This is a cheap check and should be false most of the time, providing a
     // cheap short-circuit.
     if (_resources.memory <= 0 && std::cmp_greater_equal(oom_protection_consumed_memory() + r.memory, get_kill_limit())) [[unlikely]] {
-        if (permit.on_oom_kill()) {
-            ++_stats.total_reads_killed_due_to_kill_limit;
+        // Don't kill unless kill limit is reached also when shared pool is out from the calculations
+        if (std::cmp_greater_equal(consumed_resources().memory + r.memory, _unreduced_memory * _kill_limit_multiplier())) {
+            if (permit.on_oom_kill()) {
+                ++_stats.total_reads_killed_due_to_kill_limit;
+            }
+            maybe_dump_reader_permit_diagnostics(*this, "kill limit triggered", &permit);
+            throw utils::memory_limit_reached(format("kill limit triggered on semaphore {} by permit {}", _name, permit.description()));
         }
-        maybe_dump_reader_permit_diagnostics(*this, "kill limit triggered", &permit);
-        throw utils::memory_limit_reached(format("kill limit triggered on semaphore {} by permit {}", _name, permit.description()));
     }
 
     if (_resources.memory < r.memory && _shared_pool.available_memory() > 0) {
@@ -1809,7 +1812,8 @@ future<> reader_concurrency_semaphore::with_ready_permit(reader_permit permit, r
     return with_ready_permit(*permit);
 }
 
-void reader_concurrency_semaphore::set_resources(resources r) {
+void reader_concurrency_semaphore::set_resources(resources r, size_t unreduced_memory) {
+    _unreduced_memory = unreduced_memory;
     auto delta = r - _initial_resources;
     _initial_resources = r;
     _resources += delta;

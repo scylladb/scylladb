@@ -1228,14 +1228,17 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
     auto stop_sem = deferred_stop(semaphore);
 
+    BOOST_REQUIRE_EQUAL(semaphore.unreduced_memory(), 0);
+
     auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get();
     auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get();
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(2, 2 * 1024));
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(4, 4 * 1024));
 
-    semaphore.set_resources({8, 8 * 1024});
+    semaphore.set_resources({8, 8 * 1024}, 42);
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(6, 6 * 1024));
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(8, 8 * 1024));
+    BOOST_REQUIRE_EQUAL(semaphore.unreduced_memory(), 42);
 
     semaphore.set_resources({2, 2 * 1024});
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(0, 0));

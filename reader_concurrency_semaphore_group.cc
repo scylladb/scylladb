@@ -73,13 +73,14 @@ future<> reader_concurrency_semaphore_group::adjust() {
         ssize_t distributed_memory = 0;
         for (auto& [sg, wsem] : _semaphores) {
             const ssize_t memory_share = std::floor((double(wsem.weight) / double(_total_weight)) * dedicated_memory);
-            wsem.sem.set_resources({_max_concurrent_reads, memory_share});
+            const ssize_t unreduced_memory_share = std::floor((double(wsem.weight) / double(_total_weight)) * _total_memory);
+            wsem.sem.set_resources({_max_concurrent_reads, memory_share}, unreduced_memory_share);
             distributed_memory += memory_share;
         }
         // Slap the remainder on one of the semaphores.
         // This will be a few bytes, doesn't matter where we add it.
         auto& sem = _semaphores.begin()->second.sem;
-        sem.set_resources(sem.initial_resources() + reader_resources{0, dedicated_memory - distributed_memory});
+        sem.set_resources(sem.initial_resources() + reader_resources{0, dedicated_memory - distributed_memory}, sem.unreduced_memory());
     });
 }
 

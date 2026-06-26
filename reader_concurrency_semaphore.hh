@@ -297,6 +297,7 @@ private:
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
+    size_t _unreduced_memory = 0;
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
     utils::updateable_value<uint32_t> _cpu_concurrency;
@@ -598,7 +599,11 @@ public:
     ///
     /// After this call, \ref initial_resources() will reflect the new value.
     /// Available resources will be adjusted by the delta.
-    void set_resources(resources r);
+    void set_resources(resources r, size_t unreduced_memory = 0);
+
+    size_t unreduced_memory() const noexcept {
+        return _unreduced_memory;
+    }
 
     const resources initial_resources() const {
         return _initial_resources;
