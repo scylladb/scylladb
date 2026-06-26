@@ -1048,57 +1048,57 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     named_gate g("sstables_loader::download_tablet_sstables");
     std::exception_ptr ex;
     try {
-    auto& session_as = session_guard.abort_source();
-    session_as.check();
-    auto sub = session_as.subscribe([&shard_aborts, &g, &session_as] () noexcept {
-        try {
-            auto h = g.hold();
-            (void)smp::invoke_on_all([&shard_aborts, ex = session_as.abort_requested_exception_ptr()] {
-                shard_aborts[this_shard_id()].request_abort_ex(ex);
-            }).finally([h = std::move(h)] {});
-        } catch (...) {
-        }
-    });
+        auto& session_as = session_guard.abort_source();
+        session_as.check();
+        auto sub = session_as.subscribe([&shard_aborts, &g, &session_as] () noexcept {
+            try {
+                auto h = g.hold();
+                (void)smp::invoke_on_all([&shard_aborts, ex = session_as.abort_requested_exception_ptr()] {
+                    shard_aborts[this_shard_id()].request_abort_ex(ex);
+                }).finally([h = std::move(h)] {});
+            } catch (...) {
+            }
+        });
 
-    auto downloaded_ssts = co_await container().map_reduce0(
-        [tid, &sstables_on_shards](auto& loader) -> future<std::vector<std::vector<minimal_sst_info>>> {
-            sstables_col sst_chunk;
-            for (auto& psst : sstables_on_shards[this_shard_id()]) {
-                for (auto&& sst : psst) {
-                    sst_chunk.push_back(std::move(sst));
+        auto downloaded_ssts = co_await container().map_reduce0(
+            [tid, &sstables_on_shards](auto& loader) -> future<std::vector<std::vector<minimal_sst_info>>> {
+                sstables_col sst_chunk;
+                for (auto& psst : sstables_on_shards[this_shard_id()]) {
+                    for (auto&& sst : psst) {
+                        sst_chunk.push_back(std::move(sst));
+                    }
                 }
-            }
-            std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
-            co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos](const auto& sst) -> future<> {
-                auto& table = loader._db.local().find_column_family(tid.table);
-                auto stream_guard = table.stream_in_progress();
-                auto min_info = co_await download_sstable(loader._db.local(), table, sst, llog);
-                local_min_infos[min_info.shard].emplace_back(std::move(min_info));
+                std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
+                co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos](const auto& sst) -> future<> {
+                    auto& table = loader._db.local().find_column_family(tid.table);
+                    auto stream_guard = table.stream_in_progress();
+                    auto min_info = co_await download_sstable(loader._db.local(), table, sst, llog);
+                    local_min_infos[min_info.shard].emplace_back(std::move(min_info));
+                });
+                co_return local_min_infos;
+            },
+            std::vector<std::vector<minimal_sst_info>>(this_smp_shard_count()),
+            [](auto init, auto&& item) -> std::vector<std::vector<minimal_sst_info>> {
+                for (std::size_t i = 0; i < item.size(); ++i) {
+                    init[i].append_range(std::move(item[i]));
+                }
+                return init;
             });
-            co_return local_min_infos;
-        },
-        std::vector<std::vector<minimal_sst_info>>(this_smp_shard_count()),
-        [](auto init, auto&& item) -> std::vector<std::vector<minimal_sst_info>> {
-            for (std::size_t i = 0; i < item.size(); ++i) {
-                init[i].append_range(std::move(item[i]));
-            }
-            return init;
-        });
 
-    co_await container().invoke_on_all([tid, &downloaded_ssts, snap_name = snapshot_name, keyspace_name, table_name, datacenter, rack] (auto& loader) -> future<> {
-        auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
-        co_await max_concurrent_for_each(shard_ssts, 16, [&loader, tid, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
-            sstables::shared_sstable attached_sst = co_await loader.attach_sstable(tid.table, min_info);
-            co_await loader._sys_dist_ks.update_sstable_download_status(snap_name,
-                                                                         keyspace_name,
-                                                                         table_name,
-                                                                         datacenter,
-                                                                         rack,
-                                                                         *attached_sst->sstable_identifier(),
-                                                                         attached_sst->get_first_decorated_key().token(),
-                                                                         db::is_downloaded::yes);
+        co_await container().invoke_on_all([tid, &downloaded_ssts, snap_name = snapshot_name, keyspace_name, table_name, datacenter, rack] (auto& loader) -> future<> {
+            auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
+            co_await max_concurrent_for_each(shard_ssts, 16, [&loader, tid, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
+                sstables::shared_sstable attached_sst = co_await loader.attach_sstable(tid.table, min_info);
+                co_await loader._sys_dist_ks.update_sstable_download_status(snap_name,
+                                                                             keyspace_name,
+                                                                             table_name,
+                                                                             datacenter,
+                                                                             rack,
+                                                                             *attached_sst->sstable_identifier(),
+                                                                             attached_sst->get_first_decorated_key().token(),
+                                                                             db::is_downloaded::yes);
+            });
         });
-    });
     } catch (...) {
         ex = std::current_exception();
     }
