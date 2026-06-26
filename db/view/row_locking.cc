@@ -16,6 +16,8 @@ row_locker::row_locker(schema_ptr s)
     : _schema(s)
     , _two_level_locks(1, decorated_key_hash(), decorated_key_equals_comparator(this))
 {
+    // Increase max load factor to allow up to ~128K concurrent requests without oversized allocations.
+    _two_level_locks.max_load_factor(8);
 }
 
 void row_locker::upgrade(schema_ptr new_schema) {
