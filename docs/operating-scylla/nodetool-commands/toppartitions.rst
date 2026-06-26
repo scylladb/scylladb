@@ -9,26 +9,18 @@ Nodetool toppartitions
 
    The command needs to be run while there are writes and reads operations.
 
-=========  ============================
-Parameter  Description
-=========  ============================
-keyspace   The keyspace name
----------  ----------------------------
-table      The table name
----------  ----------------------------
-duration   The duration in milliseconds
-=========  ============================
-
-Additional parameters from ScyllaDB 4.6
-
 ==========  ===================================
 Parameter   Description
 ==========  ===================================
+keyspace    The keyspace name
+----------  -----------------------------------
+table       The table name
+----------  -----------------------------------
+duration    The duration in milliseconds (requires a ``-d`` prefix)
+----------  -----------------------------------
 ks-filters  List of keyspaces
 ----------  -----------------------------------
 cf-filters  List of Tables (Column Families)
-----------  -----------------------------------
-duration    The duration in milliseconds
 ----------  -----------------------------------
 capacity    The capacity of the sampler; higher values increase accuracy at the cost of memory (default 256 keys).
 ----------  -----------------------------------
@@ -41,18 +33,13 @@ For example:
 
    nodetool toppartitions nba team_roster 5000
 
-For Example (Starting from ScyllaDB 4.6):
+Additional examples:
 
 * listing the top partitions from *all* tables in *all* keyspaces ``nodetool toppartitions``
 * listing the top partitions for the last 1000 ms ``nodetool toppartitions -d 1000``
 * listing the top partitions from a list of tables ``nodetool toppartitions --cf-filters ks:t,system:status``
 * listing the top partitions from all tables from a list of keyspaces ``nodetool toppartitions --ks-filters ks,system``
 * combining lists of keyspaces and tables ``nodetool toppartitions --ks-filters ks --cf-filters system:local``
-
-.. note::
-
-   In ScyllaDB 4.6, **duration** parameter requires a *-d* prefix
-  
 
 Example output:
 
@@ -92,7 +79,7 @@ Output
 =============  =============================================================================================
 Parameter      Description
 =============  =============================================================================================
-Partition      The Partition Key, prefixed by the Keyspace and table (ks:cf) for ScyllaDB 4.6 and later
+Partition      The Partition Key, prefixed by the Keyspace and table (ks:cf)
 -------------  ---------------------------------------------------------------------------------------------
 Count          The number of operations of the specified type that occurred during the specified time period
 -------------  ---------------------------------------------------------------------------------------------

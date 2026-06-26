@@ -142,7 +142,7 @@ To configure using :code:`scylla.yaml` file:
    
    :code:`$ docker stop <your_node> && docker start <your_node>`
 
-Alternately, starting from ScyllaDB 3.3, you can enable features directly via command line flags the :code:`--experimental-features` flag as follows. This command line options can be repeated multiple times. For example, to enable UDF and Strongly Consistent Tables:
+Alternately, you can enable features directly via command line flags the :code:`--experimental-features` flag as follows. This command line options can be repeated multiple times. For example, to enable UDF and Strongly Consistent Tables:
 
 .. code-block:: console
 
@@ -160,12 +160,6 @@ Check the `Operating System Support Guide <https://docs.scylladb.com/stable/vers
 
 * On a docker node: :code:`$ docker exec -it Node_Z scylla --version`
 
-I am upgrading my nodes to a version that uses a newer SSTable format, when will the nodes start using the new SSTable format?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The :doc:`new "mc" SSTable format</architecture/sstable/sstable3/index>` is supported in ScyllaDB 3.0 and later.
-ScyllaDB only starts using the newer format when every node in the cluster is capable to generate it.
-Therefore, only when all nodes in the cluster are upgraded the new format is used.
 
 Docker
 -------
