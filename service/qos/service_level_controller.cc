@@ -21,6 +21,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -31,9 +32,12 @@
 #include "service/topology_state_machine.hh"
 #include <seastar/core/reactor.hh>
 #include "utils/managed_string.hh"
+#include "utils/labels.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");
+static const seastar::metrics::label service_level_label("service_level");
+static const seastar::metrics::label workload_type_label("workload_type");
 
 sstring service_level_controller::default_service_level_name = "default";
 constexpr const char* scheduling_group_name_pattern = "sl:{}";
@@ -125,6 +129,28 @@ void service_level_controller::reload_distributed_data_accessor(cql3::query_proc
     auto accessor = static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
         make_shared<qos::raft_service_level_distributed_data_accessor>(qp, g0));
     set_distributed_data_accessor(std::move(accessor));
+}
+
+void service_level_controller::register_metrics() {
+    if (this_shard_id() != global_controller) {
+        return;
+    }
+    _metrics = {};
+    namespace sm = seastar::metrics;
+    auto new_metrics = sm::metric_groups();
+    std::vector<sm::metric_definition> metrics;
+    metrics.reserve(_service_levels_db.size());
+    for (const auto& [name, sl] : _service_levels_db) {
+        const auto workload_type = service_level_options::to_string(sl.slo.workload);
+        metrics.emplace_back(sm::make_gauge("workload_type", sm::description("Configured workload type for each service level. 0 - unspecified, 1 - batch, 2 - interactive."), {
+            service_level_label(name),
+            workload_type_label(workload_type),
+        }, [&sl] {
+            return static_cast<unsigned>(sl.slo.workload);
+        })(basic_level));
+    }
+    new_metrics.add_group("service_level", std::move(metrics));
+    _metrics = std::exchange(new_metrics, {});
 }
 
 void service_level_controller::do_abort() noexcept {
@@ -508,6 +534,7 @@ future<>  service_level_controller::notify_service_level_added(sstring name, ser
             unsigned sl_idx = internal::scheduling_group_index(sl_data.sg);
             _sl_lookup[sl_idx].first = &(result.first->first);
             _sl_lookup[sl_idx].second = &(result.first->second);
+            register_metrics();
         }
     });
 
@@ -540,6 +567,7 @@ future<> service_level_controller::notify_service_level_updated(sstring name, se
             }
 
             sl_it->second.slo = slo;
+            register_metrics();
         });
     }
     return f;
@@ -560,6 +588,7 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
             .sg = sl_it->second.sg,
         };
         _service_levels_db.erase(sl_it);
+        register_metrics();
         co_return co_await seastar::async( [this, name, sl_info] {
             _subscribers.thread_for_each([name, sl_info] (qos_configuration_change_subscriber* subscriber) {
                 try {

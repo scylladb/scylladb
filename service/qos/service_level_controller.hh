@@ -14,6 +14,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/core/lowres_clock.hh>
 
@@ -208,6 +209,7 @@ private:
     std::set<sstring> _effectively_dropped_sls;
     std::pair<const sstring*, service_level*> _sl_lookup[max_scheduling_groups()];
     service_level _default_service_level;
+    seastar::metrics::metric_groups _metrics;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
     locator::shared_token_metadata& _token_metadata;
@@ -432,6 +434,7 @@ private:
     future<> notify_service_level_updated(sstring name, service_level_options slo);
     future<> notify_service_level_removed(sstring name);
     future<> notify_effective_service_levels_cache_reloaded();
+    void register_metrics();
 
     enum class  set_service_level_op_type {
         add_if_not_exists,
