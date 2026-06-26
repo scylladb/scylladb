@@ -1473,7 +1473,7 @@ void cql_server::connection::update_user_scheduling_group(const std::optional<au
 }
 
 void cql_server::connection::update_control_connection_scheduling_group() {
-    auto shg_grp = _server._sl_controller.get_scheduling_group(qos::service_level_controller::driver_service_level_name);
+    auto shg_grp = _server._sl_controller.get_driver_scheduling_group().value_or(_server._sl_controller.get_default_scheduling_group());
     _current_scheduling_group = shg_grp;
     switch_tenant([this] (this auto self, noncopyable_function<future<> ()> process_loop) -> future<> {
         co_return co_await _server._sl_controller.with_service_level(qos::service_level_controller::driver_service_level_name, std::move(process_loop));
