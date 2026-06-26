@@ -704,7 +704,6 @@ private:
         fencing_token caller_token, locator::host_id caller_id,
         Func&& write_func);
 
-    future<> drain_on_shutdown();
 public:
     void update_fence_version(locator::token_metadata::version_t fence_version);
 
