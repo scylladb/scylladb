@@ -854,6 +854,88 @@ async def test_restore_tablets_download_failure(build_mode: str, manager: Manage
         assert 'error' in status and 'Failing sstable download' in status['error']
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_abort(build_mode: str, manager: ManagerClient, object_storage):
+    '''Verify that aborting a tablet restore task interrupts in-flight downloads
+    without crashing the node.
+
+    Pause the restore inside download_sstable (after the sstables are opened, so
+    the abort exercises the per-shard download abort sources), abort the restore
+    task and wait (via a read barrier) for the session removal to reach every node,
+    then release the pause. The task must fail with an abort error and no download
+    must have completed.'''
+
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    num_keys = 12
+    tablet_count = 4
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
+
+        # Park every download inside download_sstable (after the sstables are opened),
+        # so the abort below has to interrupt the object store reads themselves.
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "pause_download_sstable", one_shot=False) for s in servers))
+
+        logger.info(f'Restore cluster via {servers[0].ip_addr}')
+        manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+
+        # Wait until a download is parked on at least one node.
+        enter_waiters = [asyncio.create_task(manager.api.wait_for_injection_enter(s.ip_addr, "pause_download_sstable")) for s in servers]
+        done, pending = await asyncio.wait(enter_waiters, timeout=30, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        assert done, "Restore did not reach the download pause on any node"
+
+        coordinator_log = await manager.server_open_log(servers[0].server_id)
+        log_mark = await coordinator_log.mark()
+
+        logger.info('Aborting restore task')
+        await manager.api.abort_task(servers[0].ip_addr, tid)
+
+        # Wait for the abort to delete the restore session before releasing the pause, so
+        # the resumed downloads observe the closed session and abort their object store reads.
+        await coordinator_log.wait_for("Aborted tablet restore for table_id", from_mark=log_mark)
+
+        # The coordinator commits the session removal to group0, but the other nodes apply it
+        # asynchronously. Issue a read barrier on the non-coordinator nodes so that, by the time
+        # we release the pause, every node has applied the removal and armed its download abort.
+        await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in servers[1:]))
+
+        # Release the parked downloads; disabling also prevents any retry from re-parking.
+        await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, "pause_download_sstable") for s in servers))
+
+        status = await asyncio.wait_for(manager.api.wait_task(servers[0].ip_addr, tid), timeout=60)
+        assert status is not None and status['state'] == 'failed', f"Expected task to fail after abort, got: {status}"
+        assert 'abort' in status['error'].lower(), f"Expected abort error, got: {status['error']}"
+        logger.info(f'Restore task aborted as expected: {status["error"]}')
+
+        # Every node had its session closed before the pause was released, so no download could
+        # complete: none of the sstables must be marked as downloaded.
+        dc = servers[0].datacenter
+        rack = 'rack0'
+        rows = list(await cql.run_async(f"SELECT downloaded FROM system_distributed.snapshot_sstables "
+                                        f"WHERE snapshot_name = '{snap_name}' AND \"keyspace\" = '{ks}' AND \"table\" = 'test' "
+                                        f"AND datacenter = '{dc}' AND rack = '{rack}'"))
+        total = len(rows)
+        downloaded = sum(1 for row in rows if row.downloaded)
+        assert total > 0, "No sstables were recorded for the snapshot"
+        assert downloaded == 0, f"Expected no downloads to complete after abort, but {downloaded} of {total} sstables were downloaded"
+
+
 @pytest.mark.parametrize("target", ['coordinator', 'replica', 'api'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: ManagerClient, object_storage, target):

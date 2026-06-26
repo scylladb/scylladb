@@ -959,9 +959,16 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     if (!trinfo) {
         throw std::runtime_error(fmt::format("No transition info for tablet {}", tid));
     }
+    if (!trinfo->session_id) {
+        throw std::runtime_error(fmt::format("Restore of tablet {} was cancelled", tid));
+    }
     if (trinfo->snapshot_name.empty()) {
         throw std::runtime_error(format("No snapshot name for tablet {} restore transition", tid));
     }
+
+    // Aborting the restore closes the session, which fires this guard's abort source and
+    // interrupts the downloads below.
+    service::session_topology_guard session_guard(trinfo->session_id);
 
     sstring snapshot_name = trinfo->snapshot_name;
 
@@ -1012,9 +1019,15 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     using sstables_col = std::vector<sstables::shared_sstable>;
     using prefix_sstables = std::vector<sstables_col>;
 
+    // Per-shard abort sources for the object-store download pipeline (cf. download_task_impl::run).
+    // They are wired to the session abort only after the sstables are opened (see below).
+    std::vector<seastar::abort_source> shard_aborts(this_smp_shard_count());
+
     auto sstables_on_shards = co_await map_reduce(toc_names_by_prefix, [&] (auto ent) {
         return replica::distributed_loader::get_sstables_from_object_store(_db, s->ks_name(), s->cf_name(),
-                std::move(ent.second), snapshot_info.endpoint, ep_type, snapshot_info.bucket, std::move(ent.first), cfg, [&] { return nullptr; }).then_unpack([] (table_id, auto sstables) {
+                std::move(ent.second), snapshot_info.endpoint, ep_type, snapshot_info.bucket, std::move(ent.first), cfg, [&] {
+                    return &shard_aborts[this_shard_id()];
+                }).then_unpack([] (table_id, auto sstables) {
                     return make_ready_future<std::vector<sstables_col>>(std::move(sstables));
                 });
     }, std::vector<prefix_sstables>(this_smp_shard_count()), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
@@ -1027,6 +1040,24 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             a[i].push_back(std::move(b[i]));
         }
         return a;
+    });
+
+    // Wire the session abort into the download sources only now, after opening: an aborted
+    // metadata read would be misreported as sstable corruption, so opening above must stay
+    // non-abortable.
+    named_gate g("sstables_loader::download_tablet_sstables");
+    std::exception_ptr ex;
+    try {
+    auto& session_as = session_guard.abort_source();
+    session_as.check();
+    auto sub = session_as.subscribe([&shard_aborts, &g, &session_as] () noexcept {
+        try {
+            auto h = g.hold();
+            (void)smp::invoke_on_all([&shard_aborts, ex = session_as.abort_requested_exception_ptr()] {
+                shard_aborts[this_shard_id()].request_abort_ex(ex);
+            }).finally([h = std::move(h)] {});
+        } catch (...) {
+        }
     });
 
     auto downloaded_ssts = co_await container().map_reduce0(
@@ -1068,6 +1099,22 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                                                                          db::is_downloaded::yes);
         });
     });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    // Drain any in-flight abort dispatch before shard_aborts/session_as go out of scope.
+    co_await g.close();
+
+    if (ex) {
+        // An aborted download leaves unconsumed sstables in sstables_on_shards. These are
+        // lw_shared_ptr-s owned by their respective shards, so they must be released there
+        // rather than while this coroutine frame unwinds on the home shard.
+        co_await container().invoke_on_all([&sstables_on_shards] (sstables_loader&) {
+            sstables_on_shards[this_shard_id()] = {}; // clear on correct shard
+        });
+        std::rethrow_exception(ex);
+    }
 }
 
 future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_tests(const std::vector<sstables::shared_sstable>& sstables,
@@ -1198,7 +1245,18 @@ public:
     }
 
     tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable::no;
+        return tasks::is_abortable::yes;
+    }
+
+    void abort() noexcept override {
+        tasks::task_manager::task::impl::abort();
+        // Closing the restore sessions makes the in-flight download RPCs fail and the
+        // topology coordinator clear the restore transitions, which lets run() (waiting
+        // on the topology request) return. Fire-and-forget: the task's own abort source,
+        // already triggered above, surfaces the abort_requested error to the caller.
+        (void)_loader.local()._ss.local().abort_restore_tablets(_tid).handle_exception([tid = _tid] (std::exception_ptr ex) {
+            llog.warn("Failed to abort restore for table {}: {}", tid, ex);
+        });
     }
 
 protected:

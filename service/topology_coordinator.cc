@@ -1482,7 +1482,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         .set_stage(last_token, locator::tablet_transition_stage::restore)
                         .set_new_replicas(last_token, info.replicas)
                         .set_snapshot_name(last_token, snap_name)
-                        .set_transition(last_token, locator::tablet_transition_kind::restore);
+                        .set_transition(last_token, locator::tablet_transition_kind::restore)
+                        .set_session(last_token, service::session_id(req_id));
                     return make_ready_future<>();
                 });
                 updates.emplace_back(tablet_builder.build());
@@ -2450,7 +2451,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (action_failed(tablet_state.restore)) {
                         auto ep = tablet_state.restore->get_exception();
                         rtlogger.debug("Clearing restore transition for {} due to error", gid);
-                        updates.emplace_back(get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).build());
+                        updates.emplace_back(get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token).build());
                         // Record error on the ongoing restore request so it's propagated to the caller.
                         if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end()) {
                             updates.emplace_back(
@@ -2474,7 +2475,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         });
                     })) {
                         rtlogger.debug("Clearing restore transition for {}", gid);
-                        updates.emplace_back(get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).build());
+                        updates.emplace_back(get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token).build());
                     }
                 }
                     break;

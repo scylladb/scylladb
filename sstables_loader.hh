@@ -18,6 +18,7 @@
 #include "tasks/task_manager.hh"
 #include "db/consistency_level_type.hh"
 #include "locator/tablets.hh"
+#include "service/topology_guard.hh"
 
 using namespace seastar;
 
