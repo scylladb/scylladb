@@ -10,6 +10,7 @@
 #include <seastar/core/format.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
+#include "utils/allocation_strategy.hh"
 #include "db/system_keyspace.hh"
 #include "db/large_data_handler.hh"
 #include "keys/keys.hh"
@@ -28,18 +29,9 @@ static logging::logger large_data_logger("large_data");
 
 namespace db {
 
-size_t row_key::hash::operator()(const row_key& k) const noexcept {
-    return utils::hash_combine(
-        std::hash<bytes_view>{}(bytes_view(k.pk)),
-        std::hash<bytes_view>{}(bytes_view(k.ck)));
-}
-
-size_t collection_key::hash::operator()(const collection_key& k) const noexcept {
-    return utils::hash_combine(
-        utils::hash_combine(
-            std::hash<bytes_view>{}(bytes_view(k.pk)),
-            std::hash<bytes_view>{}(bytes_view(k.ck))),
-        std::hash<column_id>{}(k.col));
+template <typename Func>
+static decltype(auto) with_standard_allocator(Func&& f) {
+    return with_allocator(standard_allocator(), std::forward<Func>(f));
 }
 
 namespace {
@@ -196,7 +188,7 @@ large_data_record_index::lookup_partition(bytes_view pk_bytes) const {
 }
 
 std::optional<uint64_t> large_data_record_index::lookup_row(bytes_view pk_bytes,
-        bytes_view ck_bytes) const {
+        managed_bytes_view ck_bytes) const {
     lookup_key lk{pk_bytes, ck_bytes, {}};
     auto [begin, end] = _rows.equal_range(lk, _rows.key_comp());
     if (begin == end) {
@@ -210,7 +202,7 @@ std::optional<uint64_t> large_data_record_index::lookup_row(bytes_view pk_bytes,
 }
 
 std::optional<uint64_t> large_data_record_index::lookup_collection(bytes_view pk_bytes,
-        bytes_view ck_bytes, bytes_view column_name) const {
+        managed_bytes_view ck_bytes, bytes_view column_name) const {
     lookup_key lk{pk_bytes, ck_bytes, column_name};
     auto [begin, end] = _collections.equal_range(lk, _collections.key_comp());
     if (begin == end) {
@@ -227,15 +219,29 @@ void large_data_guardrail::register_sstable(sstables::shared_sstable sst) {
     _index.register_sstable(std::move(sst));
 }
 
+void large_data_guardrail::clear_memtable_caches() noexcept {
+    // Clearing destroys the owned managed_bytes keys; do it under the standard
+    // allocator they were allocated from (see with_standard_allocator()).
+    with_standard_allocator([&] {
+        _memtable_row_cache.clear();
+        _memtable_collection_cache.clear();
+    });
+}
+
 void large_data_guardrail::on_flush() {
-    _memtable_row_cache.clear();
-    _memtable_collection_cache.clear();
+    clear_memtable_caches();
 }
 
 void large_data_guardrail::rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) {
     _index.rebuild(sstables);
-    _memtable_row_cache.clear();
-    _memtable_collection_cache.clear();
+    clear_memtable_caches();
+}
+
+large_data_guardrail::~large_data_guardrail() {
+    // Empty the caches before the maps themselves are destroyed, so the owned
+    // managed_bytes keys are freed from the heap they were allocated on and the
+    // maps are then destroyed empty (and so allocate/free nothing).
+    clear_memtable_caches();
 }
 
 void large_data_guardrail::check(const schema& s, const mutation_partition& mp,
@@ -301,7 +307,7 @@ large_data_violation_type large_data_guardrail::check_row_size(const schema& s, 
     auto row_size_opt = _index.lookup_row(pk_bytes, ck_bytes);
     uint64_t row_size = row_size_opt.value_or(0);
     if (ck) {
-        auto it = _memtable_row_cache.find(row_key{bytes(pk_bytes), bytes(ck_bytes)});
+        auto it = _memtable_row_cache.find(row_key_view{pk_bytes, ck_bytes});
         if (it != _memtable_row_cache.end()) {
             row_size = std::max(row_size, it->second);
         }
@@ -327,7 +333,7 @@ large_data_violation_type large_data_guardrail::check_collection_element_count(c
     uint64_t count = count_opt.value_or(0);
     if (ck) {
         auto it = _memtable_collection_cache.find(
-            collection_key{bytes(pk_bytes), bytes(ck_bytes), cdef.id});
+            collection_key_view{pk_bytes, ck_bytes, cdef.id});
         if (it != _memtable_collection_cache.end()) {
             count = std::max(count, it->second);
         }
@@ -424,21 +430,27 @@ void large_data_cache_tracker::on_row_merged(const schema& s, const rows_entry& 
         const uint64_t row_warn = uint64_t(_cfg.row_size_warn_threshold_mb()) * MB;
         const uint64_t row_fail = uint64_t(_cfg.row_size_fail_threshold_mb()) * MB;
 
-        auto ck_bytes = row.key().view().representation().linearize();
+        // The cache keys own a managed_bytes clustering key.  on_row_merged()
+        // runs under the memtable's LSA allocator, so build the key and insert
+        // (which copies it into the cache) under the standard allocator the
+        // caches are torn down with (see with_standard_allocator()).
+        with_standard_allocator([&] {
+            auto ck_bytes_view = row.key().view().representation();
 
-        if (row_warn > 0 || row_fail > 0) {
-            size_t row_size = row.memory_usage(s);
-            uint64_t threshold = row_warn > 0 ? row_warn : row_fail;
-            if (row_size >= threshold) {
-                _row_cache.insert_or_assign(row_key{_pk_bytes, ck_bytes}, row_size);
+            if (row_warn > 0 || row_fail > 0) {
+                size_t row_size = row.memory_usage(s);
+                uint64_t threshold = row_warn > 0 ? row_warn : row_fail;
+                if (row_size >= threshold) {
+                    _row_cache.insert_or_assign(row_key{_pk_bytes, managed_bytes(ck_bytes_view)}, row_size);
+                }
             }
-        }
 
-        // Flush buffered collection observations from on_collection_merged().
-        for (auto& pc : _pending_collections) {
-            _collection_cache.insert_or_assign(
-                collection_key{_pk_bytes, ck_bytes, pc.id}, pc.count);
-        }
+            // Flush buffered collection observations from on_collection_merged().
+            for (auto& pc : _pending_collections) {
+                _collection_cache.insert_or_assign(
+                    collection_key{_pk_bytes, managed_bytes(ck_bytes_view), pc.id}, pc.count);
+            }
+        });
         _pending_collections.clear();
     } catch (...) {
         // noexcept: a failure here only means the memtable-level cache is not

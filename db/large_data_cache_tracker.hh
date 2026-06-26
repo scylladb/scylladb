@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include "bytes.hh"
+#include "utils/managed_bytes.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/hash.hh"
 #include "utils/updateable_value.hh"
@@ -23,27 +24,86 @@ class atomic_cell_or_collection;
 
 namespace db {
 
+// Memtable-level guardrail cache keys.
+//
+// Each key has two flavours:
+//   *_key       — owns its clustering key as a (possibly fragmented)
+//                 managed_bytes, stored in the cache.
+//   *_key_view  — non-owning views into the keys of the mutation being
+//                 checked, used for heterogeneous, allocation-free lookups.
+//
+// Hashing and equality are defined once, on the view types, in terms of their
+// fields; the owning keys expose view() so the shared transparent functors
+// (cache_key_hash / cache_key_eq) treat an owning key and a view with the same
+// content as equal.
+//
+// IMPORTANT (allocator safety): these caches are plain std::unordered_maps that
+// outlive the LSA allocator context in which they are populated (on_row_merged()
+// runs inside the memtable's allocating_section) and are cleared in
+// on_flush()/rebuild() under the standard allocator.  managed_bytes picks its
+// allocator from current_allocator(), so every construction and destruction of
+// an *owning* key (inserts and clears) MUST happen under
+// with_allocator(standard_allocator(), ...); otherwise an LSA-allocated key
+// would be freed under the wrong allocator and corrupt memory.  Lookups use the
+// non-owning views and so neither copy nor allocate.
+
+struct row_key_view {
+    bytes_view pk;
+    managed_bytes_view ck;
+    bool operator==(const row_key_view&) const noexcept = default;
+    size_t hash() const noexcept {
+        return utils::hash_combine(
+            std::hash<bytes_view>{}(pk),
+            std::hash<managed_bytes_view>{}(ck));
+    }
+};
+
+struct collection_key_view {
+    bytes_view pk;
+    managed_bytes_view ck;
+    column_id col;
+    bool operator==(const collection_key_view&) const noexcept = default;
+    size_t hash() const noexcept {
+        return utils::hash_combine(
+            row_key_view{pk, ck}.hash(),
+            std::hash<column_id>{}(col));
+    }
+};
+
 struct row_key {
     bytes pk;
-    bytes ck;
-    bool operator==(const row_key&) const = default;
-    struct hash {
-        size_t operator()(const row_key& k) const noexcept;
-    };
+    managed_bytes ck;
+    row_key_view view() const noexcept { return { bytes_view(pk), managed_bytes_view(ck)}; }
 };
 
 struct collection_key {
     bytes pk;
-    bytes ck;
+    managed_bytes ck;
     column_id col;
-    bool operator==(const collection_key&) const = default;
-    struct hash {
-        size_t operator()(const collection_key& k) const noexcept;
-    };
+    collection_key_view view() const noexcept { return { bytes_view(pk), managed_bytes_view(ck), col}; }
 };
 
-using memtable_row_cache = std::unordered_map<row_key, uint64_t, row_key::hash>;
-using memtable_collection_cache = std::unordered_map<collection_key, uint64_t, collection_key::hash>;
+inline row_key_view as_key_view(const row_key& k) noexcept { return k.view(); }
+inline row_key_view as_key_view(const row_key_view& k) noexcept { return k; }
+inline collection_key_view as_key_view(const collection_key& k) noexcept { return k.view(); }
+inline collection_key_view as_key_view(const collection_key_view& k) noexcept { return k; }
+
+// Transparent hash/equality shared by both caches; heterogeneous lookups with
+// a *_key_view are allocation-free.
+struct cache_key_hash {
+    using is_transparent = void;
+    template <typename K>
+    size_t operator()(const K& k) const noexcept { return as_key_view(k).hash(); }
+};
+
+struct cache_key_eq {
+    using is_transparent = void;
+    template <typename A, typename B>
+    bool operator()(const A& a, const B& b) const noexcept { return as_key_view(a) == as_key_view(b); }
+};
+
+using memtable_row_cache = std::unordered_map<row_key, uint64_t, cache_key_hash, cache_key_eq>;
+using memtable_collection_cache = std::unordered_map<collection_key, uint64_t, cache_key_hash, cache_key_eq>;
 
 struct guardrail_config {
     // Partition thresholds (replica-side only — checked via SSTable metadata index)

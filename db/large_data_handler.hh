@@ -16,6 +16,8 @@
 #include <seastar/core/future.hh>
 #include <boost/intrusive/set.hpp>
 #include "bytes.hh"
+#include "utils/managed_bytes.hh"
+#include "utils/fragment_range.hh"
 #include "schema/schema_fwd.hh"
 #include "system_keyspace.hh"
 #include "sstables/shared_sstable.hh"
@@ -42,7 +44,7 @@ using sstables::large_data_record;
 
 struct lookup_key {
     bytes_view pk;
-    bytes_view ck;
+    managed_bytes_view ck;
     bytes_view column_name;
 };
 
@@ -57,8 +59,8 @@ struct record_compare {
 private:
     static bytes_view get_pk(const large_data_record& r) noexcept { return bytes_view(r.partition_key.value); }
     static bytes_view get_pk(const lookup_key& k) noexcept { return k.pk; }
-    static bytes_view get_ck(const large_data_record& r) noexcept { return bytes_view(r.clustering_key.value); }
-    static bytes_view get_ck(const lookup_key& k) noexcept { return k.ck; }
+    static single_fragmented_view get_ck(const large_data_record& r) noexcept { return single_fragmented_view(bytes_view(r.clustering_key.value)); }
+    static managed_bytes_view get_ck(const lookup_key& k) noexcept { return k.ck; }
     static bytes_view get_col(const large_data_record& r) noexcept { return bytes_view(r.column_name.value); }
     static bytes_view get_col(const lookup_key& k) noexcept { return k.column_name; }
 public:
@@ -72,9 +74,8 @@ public:
         if constexpr (Depth == record_type::partition) {
             return false;
         }
-        auto l_ck = get_ck(a), r_ck = get_ck(b);
-        if (l_ck != r_ck) {
-            return l_ck < r_ck;
+        if (auto c = compare_unsigned(get_ck(a), get_ck(b)); c != 0) {
+            return c < 0;
         }
         if constexpr (Depth == record_type::row) {
             return false;
@@ -106,9 +107,9 @@ public:
     void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables);
 
     std::optional<partition_entry> lookup_partition(bytes_view pk_bytes) const;
-    std::optional<uint64_t> lookup_row(bytes_view pk_bytes, bytes_view ck_bytes) const;
+    std::optional<uint64_t> lookup_row(bytes_view pk_bytes, managed_bytes_view ck_bytes) const;
     std::optional<uint64_t> lookup_collection(bytes_view pk_bytes,
-            bytes_view ck_bytes, bytes_view column_name) const;
+            managed_bytes_view ck_bytes, bytes_view column_name) const;
 
 private:
     record_set<record_type::partition> _partitions;
@@ -201,6 +202,11 @@ public:
         : _cfg(std::move(cfg))
         , _tracker(_cfg, _memtable_row_cache, _memtable_collection_cache) {}
 
+    // The memtable caches own managed_bytes keys allocated on the standard
+    // heap (see with_standard_allocator() in the .cc).  Empty them under the
+    // standard allocator before the maps themselves are destroyed.
+    virtual ~large_data_guardrail() override;
+
     void check(const schema& s, const mutation_partition& mp,
             partition_key_view pk, db::large_data_violation_type* violations_out) const override;
     void check_coordinator(const schema& s, const mutation_partition& mp,
@@ -219,6 +225,9 @@ private:
     large_data_violation_type check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
             const column_definition& cdef, bytes_view ck_bytes,
             const clustering_key_prefix* ck) const;
+    // Empties the memtable caches, destroying their owning managed_bytes keys
+    // under the standard allocator (see large_data_cache_tracker.hh).
+    void clear_memtable_caches() noexcept;
 
     guardrail_config _cfg;
     large_data_record_index _index;
