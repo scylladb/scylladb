@@ -638,6 +638,8 @@ class segment_manager_impl {
         uint64_t compaction_data_bytes_written{0};
         uint64_t separator_bytes_written{0};
         uint64_t separator_data_bytes_written{0};
+        uint64_t live_record_bytes{0};
+        uint64_t live_record_count{0};
     };
 
     file_manager _file_mgr;
@@ -946,6 +948,10 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of segments currently in use.")),
         sm::make_gauge("free_segments", [this] { return available_segment_count(); },
                        sm::description("Counts number of free segments currently available.")),
+        sm::make_gauge("live_record_bytes", [this] { return _stats.live_record_bytes; },
+                       sm::description("Counts the durable live record bytes currently referenced by the primary index.")),
+        sm::make_gauge("live_record_count", [this] { return _stats.live_record_count; },
+                   sm::description("Counts the durable live records currently referenced by the primary index.")),
         sm::make_gauge("segment_pool_size", [this] { return _segment_pool.size(); },
                        sm::description("Counts number of segments in the segment pool.")),
         sm::make_counter("segment_pool_segments_put", _segment_pool.get_stats().segments_put,
@@ -1129,11 +1135,15 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, compaction_g
 void segment_manager_impl::on_add_record(log_location location) noexcept {
     auto& desc = get_segment_descriptor(location);
     desc.on_write(location);
+    _stats.live_record_bytes += location.size;
+    _stats.live_record_count++;
 }
 
 void segment_manager_impl::on_free_record(log_location location) noexcept {
     auto& desc = get_segment_descriptor(location);
     desc.on_free(location);
+    _stats.live_record_bytes -= location.size;
+    _stats.live_record_count--;
     if (desc.owner) {
         try {
             desc.owner->update_segment(desc);
