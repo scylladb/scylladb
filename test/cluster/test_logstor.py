@@ -569,6 +569,113 @@ async def test_shrink_logstor_disk_size_live_data(manager: ManagerClient):
             assert rows[0].v == value, f"Wrong value for key {i} after attempted shrink with live data"
 
 
+async def test_space_accounting_metrics(manager: ManagerClient):
+    """
+    Verify the space accounting metrics scylla_logstor_sm_live_record_bytes and
+    scylla_logstor_sm_live_record_count are correct after writes, overwrites,
+    restarts, and table drops.
+    """
+    disk_size_mb = 4
+    file_size_mb = 1
+    key_count = 100
+    value_size = 2000
+    max_value_overhead = 500
+
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'experimental_features': ['logstor']
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+    cql = manager.get_cql()
+
+    async def get_live_record_metrics() -> tuple[int, int]:
+        metrics = await manager.metrics.query(server.ip_addr)
+        live_record_bytes = metrics.get("scylla_logstor_sm_live_record_bytes")
+        live_record_count = metrics.get("scylla_logstor_sm_live_record_count")
+        assert live_record_bytes is not None
+        assert live_record_count is not None
+        return int(live_record_bytes), int(live_record_count)
+
+    def make_value(tag: str) -> str:
+        return tag + ('x' * (value_size - len(tag)))
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+
+        initial_value = make_value("initial_")
+        await asyncio.gather(*[cql.run_async(insert, [pk, initial_value]) for pk in range(key_count)])
+
+        await manager.api.logstor_flush(server.ip_addr)
+
+        baseline_live_record_bytes, baseline_live_record_count = await get_live_record_metrics()
+        logger.info(f"baseline live_record_bytes={baseline_live_record_bytes}, baseline_live_record_count={baseline_live_record_count}, avg overhead per record={(baseline_live_record_bytes / baseline_live_record_count) - value_size}")
+
+        assert baseline_live_record_count == key_count, (
+            f"expected live_record_count to be {key_count}, got {baseline_live_record_count}"
+        )
+
+        assert baseline_live_record_bytes >= key_count * value_size, (
+            f"expected live_record_bytes to be at least {key_count * value_size}, "
+            f"got {baseline_live_record_bytes}"
+        )
+        # live_record_bytes tracks full durable record bytes, so allow room for
+        # mutation and log record metadata on top of the raw value payload.
+        assert baseline_live_record_bytes <= key_count * (value_size + max_value_overhead), (
+            f"expected live_record_bytes to be at most {key_count * (value_size + max_value_overhead)}, "
+            f"got {baseline_live_record_bytes}"
+        )
+
+        # overwrite few keys and verify that the live_record_bytes and live_record_count remain unchanged
+        for i in range(10):
+            overwrite_value = make_value(f"overwrite_{i}_")
+            await asyncio.gather(*[cql.run_async(insert, [pk, overwrite_value]) for pk in range(key_count)])
+
+        live_record_bytes_after_overwrites, live_record_count_after_overwrites = await get_live_record_metrics()
+        assert live_record_bytes_after_overwrites == baseline_live_record_bytes, (
+            f"expected live_record_bytes to remain {baseline_live_record_bytes} after overwrites, "
+            f"got {live_record_bytes_after_overwrites}"
+        )
+        assert live_record_count_after_overwrites == baseline_live_record_count, (
+            f"expected live_record_count to remain {baseline_live_record_count} after overwrites, "
+            f"got {live_record_count_after_overwrites}"
+        )
+
+        # restart the server and verify that after recovery the live_record_bytes and live_record_count are correct
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_start(server.server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        final_live_record_bytes_after_restart, final_live_record_count_after_restart = await get_live_record_metrics()
+        logger.info(f"final_live_record_bytes_after_restart={final_live_record_bytes_after_restart}, final_live_record_count_after_restart={final_live_record_count_after_restart}")
+
+        assert final_live_record_count_after_restart == key_count, (
+            f"expected live_record_count to remain {key_count} after restart, "
+            f"got {final_live_record_count_after_restart}"
+        )
+
+        assert final_live_record_bytes_after_restart == baseline_live_record_bytes, (
+            f"expected live_record_bytes to remain {baseline_live_record_bytes} after restart, "
+            f"got {final_live_record_bytes_after_restart}"
+        )
+
+        # drop the table and verify the space accounting metrics are cleared to 0
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        final_live_record_bytes_after_drop, final_live_record_count_after_drop = await get_live_record_metrics()
+        assert final_live_record_bytes_after_drop == 0, (
+            f"expected live_record_bytes to be 0 after table drop, "
+            f"got {final_live_record_bytes_after_drop}"
+        )
+        assert final_live_record_count_after_drop == 0, (
+            f"expected live_record_count to be 0 after table drop, "
+            f"got {final_live_record_count_after_drop}"
+        )
+
 async def test_compaction(manager: ManagerClient):
     """
     Test log compaction by creating dead data and verifying space reclamation.
