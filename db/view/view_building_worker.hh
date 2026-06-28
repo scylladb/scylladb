@@ -140,6 +140,7 @@ private:
     semaphore _staging_sstables_mutex = semaphore(1);
     std::unordered_map<table_id, std::vector<staging_sstable_task_info>> _sstables_to_register;
     std::unordered_map<table_id, std::vector<sstables::shared_sstable>> _staging_sstables;
+    // This mutex must be held while iterating over and modifying _started_staging_tasks
     semaphore _started_staging_tasks_mutex = semaphore(1);
     std::unordered_map<locator::tablet_replica, std::set<std::pair<table_id, utils::UUID>>> _started_staging_tasks;
     future<> _staging_sstables_registrator = make_ready_future<>();

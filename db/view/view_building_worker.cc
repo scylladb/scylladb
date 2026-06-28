@@ -283,7 +283,6 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     auto uuid_gen = _vb_state_machine.building_state.make_task_uuid_generator(guard.write_timestamp());
     view_building_task_mutation_builder builder(guard.write_timestamp(), std::move(uuid_gen));
     auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
-    auto started_tasks_lock = co_await get_units(_started_staging_tasks_mutex, 1, _as);
     for (auto& [table_id, sst_infos]: _sstables_to_register) {
         std::set<std::pair<shard_id, dht::token>> new_tasks;
         auto task_exists = [&, this] (shard_id shard, dht::token last_token) {
@@ -301,8 +300,9 @@ future<> view_building_worker::create_staging_sstable_tasks() {
                     continue;
                 }
                 for (auto& staging_task: tasks.staging_tasks) {
-                    if (_started_staging_tasks[replica].contains(std::make_pair(table_id, staging_task.first))) {
-                        // This view building tasks is already started, we cannot attach this staging sstable to it
+                    if (_started_staging_tasks.contains(replica) &&
+                            _started_staging_tasks.at(replica).contains(std::make_pair(table_id, staging_task.first))) {
+                        // This view building task is already started, we cannot attach this staging sstable to it
                         continue;
                     }
                     if (staging_task.second.last_token == last_token && !staging_task.second.aborted) {
@@ -330,10 +330,14 @@ future<> view_building_worker::create_staging_sstable_tasks() {
         }
     }
 
+    co_await utils::get_local_injector().inject("view_building_worker_pause_before_add_entry",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
     utils::chunked_vector<canonical_mutation> cmuts;
     cmuts.emplace_back(builder.build());
     auto cmd = _group0.client().prepare_command(service::write_mutations{std::move(cmuts)}, guard, "create view building tasks");
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
+    vbw_logger.debug("create_staging_sstable_tasks: committed group0 entry creating staging view building tasks");
 
     // Move staging sstables from `_sstables_to_register` (on shard0) to `_staging_sstables` on corresponding shards.
     // Firstly reorgenize `_sstables_to_register` for easier movement.
@@ -436,6 +440,8 @@ future<> view_building_worker::run_view_building_state_observer() {
         bool sleep = false;
         try {
             vbw_logger.trace("view_building_state_observer() iteration");
+            co_await utils::get_local_injector().inject("view_building_worker_pause_before_read_apply_mutex",
+                    utils::wait_for_message(std::chrono::minutes(5)));
             auto read_apply_mutex_holder = co_await _group0.client().hold_read_apply_mutex(_as);
 
             co_await update_built_views();
