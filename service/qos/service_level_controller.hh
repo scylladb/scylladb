@@ -23,6 +23,7 @@
 #include "auth/service.hh"
 #include "cql3/description.hh"
 #include <map>
+#include <unordered_map>
 #include "qos_common.hh"
 #include "mutation/mutation.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
@@ -207,7 +208,7 @@ private:
 
     // Keeps names of effectively dropped service levels. Those service levels exits in the table but are not present in _service_levels_db cache
     std::set<sstring> _effectively_dropped_sls;
-    std::pair<const sstring*, service_level*> _sl_lookup[max_scheduling_groups()];
+    std::unordered_map<scheduling_group, std::pair<const sstring*, service_level*>> _sl_lookup;
     service_level _default_service_level;
     seastar::metrics::metric_groups _metrics;
     std::optional<scheduling_group> _driver_scheduling_group = std::nullopt;
