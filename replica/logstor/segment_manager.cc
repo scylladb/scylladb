@@ -2017,23 +2017,46 @@ future<separator_buffer> compaction_manager_impl::allocate_separator_buffer() {
 }
 
 future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::record_in_buffer>& records, segment_ref seg_ref, segment_sequence segment_seq_num) {
-    for (auto&& w : records) {
+    static constexpr size_t separator_group_write_concurrency = 4;
+
+    struct separator_group_records {
+        logstor_group* cg;
+        std::vector<write_buffer::record_in_buffer*> records;
+    };
+
+    std::vector<separator_group_records> groups;
+    groups.reserve(records.size());
+    absl::flat_hash_map<logstor_group*, size_t> group_index;
+    group_index.reserve(records.size());
+
+    for (auto& record : records) {
+        auto [it, inserted] = group_index.emplace(record.target.cg, groups.size());
+        if (inserted) {
+            groups.push_back(separator_group_records{
+                .cg = record.target.cg,
+            });
+        }
+        groups[it->second].records.push_back(&record);
         co_await coroutine::maybe_yield();
-
-        auto key = w.writer.record().header.key;
-        log_location prev_loc = co_await std::move(w.loc);
-        auto* index_ptr = &w.target.cg->logstor_index();
-
-        co_await w.target.cg->write_to_separator(std::move(w.writer), seg_ref, segment_seq_num,
-            [this, index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
-                if (index_ptr->update_record_location(key, prev_loc, new_loc)) {
-                    free_record(prev_loc);
-                } else {
-                    free_record(new_loc);
-                }
-            }
-        );
     }
+
+    co_await seastar::max_concurrent_for_each(groups, separator_group_write_concurrency, [this, seg_ref, segment_seq_num] (separator_group_records& group) -> future<> {
+        for (auto* record : group.records) {
+            auto key = record->writer.record().header.key;
+            log_location prev_loc = co_await std::move(record->loc);
+            auto* index_ptr = &group.cg->logstor_index();
+
+            co_await group.cg->write_to_separator(std::move(record->writer), seg_ref, segment_seq_num,
+                [this, index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) mutable noexcept {
+                    if (index_ptr->update_record_location(key, prev_loc, new_loc)) {
+                        free_record(prev_loc);
+                    } else {
+                        free_record(new_loc);
+                    }
+                }
+            );
+        }
+    });
 }
 
 future<> segment_manager_impl::write_to_separator(table& t, log_location prev_loc, log_record record, segment_ref seg_ref) {
