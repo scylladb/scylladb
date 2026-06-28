@@ -817,6 +817,8 @@ private:
     repair_hasher _repair_hasher;
     gc_clock::time_point _compaction_time;
     bool _is_tablet;
+    bool _explicit_dst_cpu_id;
+    bool _table_is_migrating;
     reader_concurrency_semaphore::inactive_read_handle _fake_inactive_read_handle;
     std::unique_ptr<const locator::token_metadata> _small_table_optimization_tm;
     seastar::semaphore _small_table_optimization_tm_sem{1};
@@ -906,7 +908,8 @@ public:
             gc_clock::time_point compaction_time,
             service::frozen_topology_guard topo_guard,
             std::optional<int64_t> repaired_at,
-            locator::tablet_repair_incremental_mode incremental_mode)
+            locator::tablet_repair_incremental_mode incremental_mode,
+            bool explicit_dst_cpu_id)
             : _rs(rs)
             , _db(rs.get_db())
             , _messaging(rs.get_messaging())
@@ -950,6 +953,8 @@ public:
             , _repair_hasher(_seed, _schema)
             , _compaction_time(compaction_time)
             , _is_tablet(cf.uses_tablets())
+            , _explicit_dst_cpu_id(explicit_dst_cpu_id)
+            , _table_is_migrating(is_table_migrating(_db.local(), *_schema))
             , _frozen_topology_guard(topo_guard)
             , _topology_guard(_frozen_topology_guard)
             , _is_eligible_to_repair_rejection(cf.is_eligible_to_write_rejection_on_critical_disk_utilization())
@@ -997,9 +1002,10 @@ public:
             gc_clock::time_point compaction_time,
             service::frozen_topology_guard topo_guard,
             std::optional<int64_t> repaired_at,
-            locator::tablet_repair_incremental_mode incremental_mode)
+            locator::tablet_repair_incremental_mode incremental_mode,
+            bool explicit_dst_cpu_id)
         : repair_meta(rs, cf, std::move(s), std::move(permit), std::move(range), algo, max_row_buf_size, seed, master, repair_meta_id, reason,
-                std::move(master_node_shard_config), std::move(all_live_peer_nodes), 1, {std::nullopt}, nullptr, compaction_time, topo_guard, repaired_at, incremental_mode)
+                std::move(master_node_shard_config), std::move(all_live_peer_nodes), 1, {std::nullopt}, nullptr, compaction_time, topo_guard, repaired_at, incremental_mode, explicit_dst_cpu_id)
     {
     }
 
@@ -1107,7 +1113,7 @@ private:
 
     future<uint64_t> get_estimated_partitions() {
         auto gate_held = _gate.hold();
-        if (_repair_master || _same_sharding_config || _is_tablet) {
+        if (can_read_locally()) {
             co_return co_await do_estimate_partitions_on_local_shard();
         } else {
             auto sharder = dht::selective_token_range_sharder(_remote_sharder, _range, _master_node_shard_config.shard);
@@ -1144,6 +1150,45 @@ private:
         return sharder.shard_count() == _master_node_shard_config.shard_count
                && sharder.sharding_ignore_msb() == _master_node_shard_config.ignore_msb
                && this_shard_id() == _master_node_shard_config.shard;
+    }
+
+    // Check if a table is undergoing vnodes-to-tablets migration.
+    // True when the keyspace uses vnodes but the table has a tablet map.
+    static bool is_table_migrating(const replica::database& db, const schema& s) {
+        return db.find_keyspace(s.ks_name()).get_replication_strategy().is_vnode_based()
+                && db.get_token_metadata().tablets().has_tablet_map(s.id());
+    }
+
+    bool can_read_locally() const {
+        if (_repair_master) {
+            return true;
+        }
+
+        // Sharding flavors for master and follower.
+        // Deduce the master's flavor from whether it has specified a destination shard (expected to be true only for tablet-style masters).
+        // Deduce the current follower's flavor from the table's ERM.
+        const bool master_uses_tablets = _explicit_dst_cpu_id;
+        const bool follower_uses_tablets = _is_tablet;
+        const bool same_flavor = master_uses_tablets == follower_uses_tablets;
+
+        if (same_flavor) {
+            return _same_sharding_config || _is_tablet;
+        }
+
+        if (!_table_is_migrating) {
+            on_internal_error(rlogger, format(
+                    "repair_meta[{}]: master and follower have different flavors for table {}.{}, but the table is not undergoing vnodes-to-tablets migration",
+                    _repair_meta_id, _schema->ks_name(), _schema->cf_name()));
+        }
+
+        if (master_uses_tablets && !follower_uses_tablets) {
+            throw std::runtime_error(format(
+                    "repair_meta[{}]: tablet-based master cannot repair vnode-based follower, operation is not supported (table: {}.{} range: {})",
+                    _repair_meta_id, _schema->ks_name(), _schema->cf_name(), _range));
+        }
+
+        // vnode master -> tablet follower : multishard read required
+        return false;
     }
 
     future<size_t> get_repair_rows_size(const std::list<repair_row>& rows) const {
@@ -1290,7 +1335,7 @@ private:
                         return repair_reader::read_strategy::incremental_repair;
                     }
 
-                    if (_repair_master || _same_sharding_config || _is_tablet) {
+                    if (can_read_locally()) {
                         rlogger.debug("repair_reader: meta_id={}, _repair_master={}, _same_sharding_config={},"
                                       "read_strategy {} is chosen",
                            _repair_meta_id, _repair_master, _same_sharding_config,
@@ -1813,14 +1858,15 @@ public:
     repair_row_level_start_handler(repair_service& repair, locator::host_id from_id, uint32_t src_cpu_id, uint32_t repair_meta_id, sstring ks_name, sstring cf_name,
             dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size,
             uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason,
-            gc_clock::time_point compaction_time, abort_source& as, service::frozen_topology_guard topo_guard, std::optional<int64_t> repaired_at, locator::tablet_repair_incremental_mode incremental_mode) {
+            gc_clock::time_point compaction_time, abort_source& as, service::frozen_topology_guard topo_guard, std::optional<int64_t> repaired_at, locator::tablet_repair_incremental_mode incremental_mode,
+            bool explicit_dst_cpu_id) {
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
                 repair.my_host_id(), from_id, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         try {
             // Trigger read barrier to ensure that session_id is visible.
             auto& mm = repair.get_migration_manager();
             co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
-            co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard, repaired_at, incremental_mode);
+            co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard, repaired_at, incremental_mode, explicit_dst_cpu_id);
             co_return repair_row_level_start_response{repair_row_level_start_status::ok};
         } catch (replica::no_such_column_family&) {
             co_return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
@@ -2886,17 +2932,18 @@ future<> repair_service::init_ms_handlers() {
             rpc::optional<service::frozen_topology_guard> topo_guard, rpc::optional<std::optional<int64_t>> repaired_at,
             rpc::optional<locator::tablet_repair_incremental_mode> incremental_mode) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        bool explicit_dst_cpu_id = bool(dst_cpu_id_opt && *dst_cpu_id_opt != repair_unspecified_shard);
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
         auto from_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return container().invoke_on(shard, [from_id, src_cpu_id, repair_meta_id, ks_name, cf_name,
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this,
-                topo_guard = topo_guard.value_or(service::default_session_id), repaired_at = repaired_at.value_or(std::nullopt), incremental_mode = incremental_mode.value_or(locator::tablet_repair_incremental_mode::disabled)] (repair_service& local_repair) mutable {
+                topo_guard = topo_guard.value_or(service::default_session_id), repaired_at = repaired_at.value_or(std::nullopt), incremental_mode = incremental_mode.value_or(locator::tablet_repair_incremental_mode::disabled), explicit_dst_cpu_id] (repair_service& local_repair) mutable {
             streaming::stream_reason r = reason ? *reason : streaming::stream_reason::repair;
             const gc_clock::time_point ct = compaction_time ? *compaction_time : gc_clock::now();
             return repair_meta::repair_row_level_start_handler(local_repair, from_id, src_cpu_id, repair_meta_id, std::move(ks_name),
                     std::move(cf_name), std::move(range), algo, max_row_buf_size, seed,
                     shard_config{remote_shard, remote_shard_count, remote_ignore_msb},
-                    schema_version, r, ct, _repair_module->abort_source(), topo_guard, repaired_at, incremental_mode);
+                    schema_version, r, ct, _repair_module->abort_source(), topo_guard, repaired_at, incremental_mode, explicit_dst_cpu_id);
         });
     });
     ser::repair_rpc_verbs::register_repair_row_level_stop(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
@@ -3503,7 +3550,8 @@ public:
                     compaction_time,
                     _topo_guard,
                     repaired_at,
-                    _shard_task.sched_info.incremental_mode);
+                    _shard_task.sched_info.incremental_mode,
+                    false);
             auto auto_stop_master = defer([&master] noexcept {
                 try {
                     master.stop().get();
@@ -3896,7 +3944,8 @@ repair_service::insert_repair_meta(
         abort_source& as,
         service::frozen_topology_guard topo_guard,
         std::optional<int64_t> repaired_at,
-        locator::tablet_repair_incremental_mode incremental_mode) {
+        locator::tablet_repair_incremental_mode incremental_mode,
+        bool explicit_dst_cpu_id) {
     schema_ptr s = co_await get_migration_manager().get_schema_for_write(schema_version, from_id, src_cpu_id, get_messaging(), as);
     auto& db = get_db();
     reader_permit permit = co_await db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {});
@@ -3917,7 +3966,8 @@ repair_service::insert_repair_meta(
             compaction_time,
             topo_guard,
             repaired_at,
-            incremental_mode);
+            incremental_mode,
+            explicit_dst_cpu_id);
     rm->set_repair_state_for_local_node(repair_state::row_level_start_started);
     bool insertion = repair_meta_map().emplace(id, rm).second;
     if (!insertion) {
