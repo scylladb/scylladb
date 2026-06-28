@@ -51,7 +51,8 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
             if (line.find("server started at") != std::string::npos) {
                 return tp::service_parse_state::success;
             }
-            if (line.find("address already in use") != std::string::npos) {
+            if (line.find("address already in use") != std::string::npos || line.find("Address already in use") != std::string::npos ||
+                line.find("port is already allocated") != std::string::npos) {
                 return tp::service_parse_state::failed;
             }
             return tp::service_parse_state::cont;
