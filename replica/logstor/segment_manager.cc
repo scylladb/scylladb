@@ -509,7 +509,7 @@ public:
     future<> remove(logstor_group&) override;
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
     compaction_reenabler disable_compaction_no_wait(logstor_group&) override;
-    future<> split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group) override;
+    future<> submit_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group) override;
 
 private:
 
@@ -517,8 +517,10 @@ private:
     std::optional<compaction_candidate> select_segments_for_compaction(logstor_group&);
     future<std::vector<compaction_candidate>> find_top_compaction_candidates(size_t);
     future<> start_compaction(logstor_group&);
+    future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>);
     future<> run_auto_compaction();
     future<> do_compact(logstor_group&, abort_source&);
+    future<> do_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group, abort_source&);
     future<> compact_segments(logstor_group&, std::vector<log_segment_id>);
     group_compaction_state& get_group_state(logstor_group&);
     group_compaction_state* find_group_state(logstor_group&) noexcept;
@@ -1494,10 +1496,36 @@ future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
     co_await in.close();
 }
 
-future<> compaction_manager_impl::start_compaction(logstor_group& cg) {
-    if (_async_gate.is_closed() || !_cfg.compaction_enabled) {
-        return make_ready_future<>();
+future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std::function<future<>(group_compaction_state&)> op) {
+    while (true) {
+        if (_async_gate.is_closed() || !_cfg.compaction_enabled) {
+            co_return;
+        }
+
+        auto* state = find_group_state(cg);
+        if (!state) {
+            throw std::runtime_error(fmt::format("logstor group with table {} submitted for compaction but it is not registered", cg.table_id()));
+        }
+
+        auto completion = state->completion;
+        if (!completion.available()) {
+            co_await completion.get_future().handle_exception([] (std::exception_ptr) {});
+            continue;
+        }
+
+        state->as = {};
+        state->completion = shared_future(with_gate(_async_gate,
+            [state, op = std::move(op)] () mutable -> future<> {
+                return op(*state);
+            }
+        ));
+
+        co_await state->completion.get_future();
+        co_return;
     }
+}
+
+future<> compaction_manager_impl::start_compaction(logstor_group& cg) {
     auto* state = find_group_state(cg);
     if (!state) {
         throw std::runtime_error(fmt::format("logstor group with table {} submitted for compaction but it is not registered", cg.table_id()));
@@ -1508,13 +1536,9 @@ future<> compaction_manager_impl::start_compaction(logstor_group& cg) {
     if (state->compaction_disabled_counter > 0) {
         return make_ready_future<>();
     }
-    state->as = {};
-    state->completion = shared_future(with_gate(_async_gate,
-        [this, &cg, state] -> future<> {
-            return do_compact(cg, state->as);
-        }
-    ));
-    return state->completion.get_future();
+    return submit_group_compaction(cg, [this, &cg] (group_compaction_state& state) {
+        return do_compact(cg, state.as);
+    });
 }
 
 void compaction_manager_impl::submit(logstor_group& cg) {
@@ -1845,19 +1869,23 @@ future<> compaction_manager_impl::compact_segments(logstor_group& cg, std::vecto
     _stats.compaction_records_skipped += cb.stats.records_skipped;
 }
 
-future<> compaction_manager_impl::split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier) {
+future<> compaction_manager_impl::submit_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier) {
+    co_await submit_group_compaction(src, [this, &t, &src, classifier = std::move(classifier)] (group_compaction_state& state) mutable {
+        return do_split_compaction(t, src, std::move(classifier), state.as);
+    });
+}
+
+future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier, abort_source& as) {
     static constexpr size_t batch_size = 32;
 
-    // Disable compaction on src for the duration of the split.
-    // This waits for any running compaction on src to finish first.
-    auto compaction_disable_guard = co_await disable_compaction(src);
+    auto sem_units = co_await get_units(_compaction_sem, 1, as);
 
     auto& src_segments = src.logstor_segments();
 
     // the src and target groups both share the table index
     auto& index = t.logstor_index();
 
-    while (!src_segments._segments.empty()) {
+    while (!src_segments._segments.empty() && !as.abort_requested()) {
         // Collect candidate IDs without yielding to avoid iterator invalidation.
         std::vector<log_segment_id> candidates;
         candidates.reserve(batch_size);
@@ -1899,9 +1927,6 @@ future<> compaction_manager_impl::split_compaction(replica::table& t, logstor_gr
         // Slow path: rewrite live records from straddling segments into two compaction_buffers
         // (one per target group). Both buffers write back into src; the next outer loop
         // iteration will fast-path the resulting single-group segments to the correct child group.
-
-        // Acquire _compaction_sem to be mutually exclusive with background compaction.
-        auto sem_units = co_await get_units(_compaction_sem, 1);
 
         std::array<compaction_buffer, 2> bufs{
             co_await compaction_buffer::allocate(_sm, src),
