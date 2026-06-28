@@ -2450,7 +2450,18 @@ future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num)
         _logstor_separator.reset();
         pending.push_back(cm.flush_separator_buffer(std::move(b), *this));
     }
-    co_await when_all(pending.begin(), pending.end());
+    _separator_flushes_in_progress += pending.size();
+    auto pending_guard = defer([this, count = pending.size()] {
+        _separator_flushes_in_progress -= count;
+    });
+    auto completed = co_await when_all(pending.begin(), pending.end());
+    for (auto& f : completed) {
+        try {
+            co_await std::move(f);
+        } catch (...) {
+            logstor_logger.warn("separator flush failed for table {}: {}", table_id(), std::current_exception());
+        }
+    }
 }
 
 }

@@ -354,6 +354,7 @@ class logstor_group {
     segment_set _logstor_segments;
     std::optional<separator_buffer> _logstor_separator;
     std::vector<future<>> _separator_flushes;
+    size_t _separator_flushes_in_progress{0};
     seastar::semaphore _separator_flush_sem{1};
 
 protected:
@@ -389,7 +390,8 @@ public:
     bool empty() const noexcept {
         return _logstor_segments.empty()
             && (!_logstor_separator || _logstor_separator->empty())
-            && _separator_flushes.empty();
+            && _separator_flushes.empty()
+            && _separator_flushes_in_progress == 0;
     }
 
     bool separator_has_data() const noexcept {
