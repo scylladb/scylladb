@@ -203,7 +203,7 @@ The string map in the SUPPORTED response will contain the following parameters:
   - `ERROR_CODE`: a 32-bit signed decimal integer which Scylla
     will use as the error code for the rate limit exception.
 
-## Sending tablet info to the drivers
+## Tablets routing v1
 
 This extension adds support for sending tablet info to the drivers if the 
 request was routed to the wrong node/shard.
@@ -236,7 +236,7 @@ the previously received tablets has an overlapping token range.
 The group of tablets that meets this criterion has to be deleted, and the new
 tablet should replace them.
 
-## Negotiate sending tablets info to the drivers
+### Negotiating tablets-routing-v1 extension
 
 This extension allows the driver to inform the database that it is aware of
 tablets and is able to interpret the tablet information sent in `custom_payload`.
