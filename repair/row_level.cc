@@ -2191,7 +2191,7 @@ public:
 public:
     future<> mark_sstable_as_repaired() {
         auto& sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
-        if (!_incremental_repair_meta.sst_set && !sstables.empty()) {
+        if (!_incremental_repair_meta.sst_set && sstables.empty()) {
             co_return;
         }
 
