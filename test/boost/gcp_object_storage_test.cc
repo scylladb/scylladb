@@ -23,6 +23,8 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/with_timeout.hh>
 
+#include "ent/encryption/symmetric_key.hh"
+#include "ent/encryption/encrypted_file_impl.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
@@ -67,6 +69,31 @@ static auto check_gcp_storage_test_enabled() {
     return tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true);
 }
 
+static future<> write_object_of_size(data_sink& sink
+                                      , size_t dest_size
+                                      , std::vector<temporary_buffer<char>>* buffer_store = nullptr
+                                      , std::optional<size_t> specific_buffer_size = std::nullopt
+                                      , bool can_share = true
+                                    ) 
+{
+    size_t done = 0;
+    while (done < dest_size) {
+        auto rem = dest_size - done;
+        auto len = std::min(rem, specific_buffer_size.value_or(tests::random::get_int(size_t(1), size_t(4*1024*1024))));
+        auto rnd = tests::random::get_bytes(len);
+        temporary_buffer<char> buf(reinterpret_cast<char*>(rnd.data()), rnd.size());
+        if (buffer_store) {
+            // maybe don't use share. if sink is encrypted, it will do in-place transforms
+            buffer_store->emplace_back(can_share 
+                ? buf.share()
+                : temporary_buffer<char>(buf.get(), len)
+            );
+        }
+        co_await sink.put(std::move(buf));
+        done += len;
+    }
+}
+
 static future<> create_object_of_size(storage::client& c
                                       , std::string_view bucket
                                       , std::string_view name
@@ -76,18 +103,7 @@ static future<> create_object_of_size(storage::client& c
                                     ) 
 {
     auto sink = c.create_upload_sink(bucket, name);
-    size_t done = 0;
-    while (done < dest_size) {
-        auto rem = dest_size - done;
-        auto len = std::min(rem, specific_buffer_size.value_or(tests::random::get_int(size_t(1), size_t(4*1024*1024))));
-        auto rnd = tests::random::get_bytes(len);
-        temporary_buffer<char> buf(reinterpret_cast<char*>(rnd.data()), rnd.size());
-        if (buffer_store) {
-            buffer_store->emplace_back(buf.share());
-        }
-        co_await sink.put(std::move(buf));
-        done += len;
-    }
+    co_await write_object_of_size(sink, dest_size, buffer_store, specific_buffer_size);
     co_await sink.flush();
     co_await sink.close();
 }
@@ -396,6 +412,86 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_in_parallel, local_gcs_wrapper, 
         BOOST_REQUIRE_EQUAL(t2, total);
         co_await compare_stream_data(is2, is_ref, total);
     }
+}
+
+static future<> chunked_read_helper(const local_gcs_wrapper& w, bool do_ranged, bool encrypt, bool do_additional_skip) {
+    auto& c = w.client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+
+    auto dest_size = 56*1024*1024 + 357 + 1022*67;
+
+    // ensure we remove the object
+    w.objects_to_delete.emplace_back(name);
+
+    auto k = make_shared<encryption::symmetric_key>(encryption::key_info{ "AES", 128 });
+
+    {
+        data_sink sink = c.create_upload_sink(w.bucket, name);
+        if (encrypt) {
+            sink = data_sink(encryption::make_encrypted_sink(std::move(sink), k));
+        }
+        co_await write_object_of_size(sink, dest_size, &written, std::nullopt, !encrypt);
+        co_await sink.flush();
+        co_await sink.close();
+    }
+
+    auto [is_ref, total] = stream_from_buffers(std::move(std::move(written)));
+
+    auto chunk_size = 64 * 1024;
+    auto start = do_ranged ? 48*1024*1024 + 6 * chunk_size : 0;
+    auto len = dest_size - start;
+    auto skip = do_additional_skip ? chunk_size : 0;
+
+    co_await is_ref.skip(start + skip);
+
+    data_source source = c.create_download_source(w.bucket, name);
+    if (encrypt) {
+        source = data_source(encryption::make_encrypted_source(std::move(source), k));
+    }
+    if (do_ranged) {
+        source = create_ranged_source(std::move(source), start, len);
+    }
+
+    input_stream<char> is(std::move(source));
+
+    if (skip) {
+        co_await is.skip(chunk_size);
+    }
+
+    for (auto rem = len - skip; rem > 0;) {
+        auto chunk = std::min(rem, chunk_size);
+
+        auto buf1 = co_await is_ref.read_exactly(chunk_size);
+        auto buf2 = co_await is.read_exactly(chunk_size);
+
+        BOOST_REQUIRE_EQUAL(buf1.size(), chunk);
+        BOOST_REQUIRE_EQUAL(buf2.size(), chunk);
+
+        BOOST_REQUIRE_EQUAL(buf1, buf2);
+
+        rem -= chunk;
+    }
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, true, false, false);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial_with_skip, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, true, false, true);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_fully_encrypted, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, false, true, false);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial_encrypted, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, true, true, false);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial_encrypted_with_skip, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, true, true, true);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
