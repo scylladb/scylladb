@@ -51,6 +51,10 @@ public:
     tablet_mutation_builder& del_resize_task_info(const gms::feature_service& features);
     tablet_mutation_builder& set_base_table(table_id base_table);
 
+    bool empty() const {
+        return _m.partition().empty();
+    }
+
     mutation build() {
         return std::move(_m);
     }
