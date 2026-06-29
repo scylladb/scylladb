@@ -616,6 +616,64 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
     co_return msg;
 }
 
+bool select_statement::can_be_split_into_token_ranges(const query_options& options) const {
+    // Splitting reproduces the full result only if each row is read by exactly
+    // one sub-range scan and no global, cross-range operation is involved.
+    if (_selection->is_aggregate() || has_group_by()) {
+        return false;
+    }
+    if (_limit || _per_partition_limit) {
+        return false;
+    }
+    if (needs_post_query_ordering()) {
+        return false;
+    }
+    if (_restrictions->uses_secondary_indexing()) {
+        return false;
+    }
+    // Only a true full-ring scan (no partition-key restriction) is worth
+    // splitting; a restricted query already targets few partitions and is
+    // handled by the single-pass path.
+    auto ranges = _restrictions->get_partition_key_ranges(options);
+    return ranges.size() == 1 && !ranges[0].start() && !ranges[0].end();
+}
+
+future<shared_ptr<cql_transport::messages::result_message>>
+select_statement::execute_paged_for_token_range(query_processor& qp, service::query_state& state,
+        const query_options& options, const dht::partition_range& range) const {
+    // Mirrors do_execute()'s read-command construction, but reads only `range`
+    // instead of the ranges derived from restrictions. Callers must ensure
+    // can_be_split_into_token_ranges() holds, so there is no aggregation,
+    // ordering or LIMIT to coordinate across ranges.
+    auto cl = options.get_consistency();
+    validate_for_read(cl);
+    auto now = gc_clock::now();
+    const auto parsed_limit = get_limit(options, _limit);
+    const uint64_t inner_loop_limit = get_inner_loop_limit(parsed_limit, _selection->is_aggregate());
+    auto slice = make_partition_slice(options);
+    auto max_result_size = qp.proxy().get_max_result_size(slice);
+    auto command = ::make_lw_shared<query::read_command>(
+            _query_schema->id(),
+            _query_schema->version(),
+            std::move(slice),
+            max_result_size,
+            query::tombstone_limit(qp.proxy().get_tombstone_limit()),
+            query::row_limit(inner_loop_limit),
+            query::partition_limit(query::max_partitions),
+            now,
+            tracing::make_trace_info(state.get_trace_state()),
+            query_id::create_null_id(),
+            query::is_first_page::no,
+            options.get_timestamp(state));
+    command->allow_limit = db::allow_per_partition_rate_limit::yes;
+    int32_t page_size = options.get_page_size();
+    dht::partition_range_vector key_ranges{range};
+    // A full-ring scan never targets a single partition, so there is no CAS shard.
+    return execute_without_checking_exception_message_aggregate_or_paged(qp, command,
+            std::move(key_ranges), state, options, now, page_size, /*aggregate=*/false,
+            /*nonpaged_filtering=*/false, parsed_limit, std::optional<service::cas_shard>{});
+}
+
 template<typename KeyType>
 requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
 static KeyType

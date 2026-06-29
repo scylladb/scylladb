@@ -46,6 +46,8 @@ options {
 #include "cql3/statements/raw/truncate_statement.hh"
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
+#include "cql3/statements/raw/insert_select_statement.hh"
+#include "cql3/statements/raw/create_table_select_statement.hh"
 #include "cql3/statements/raw/delete_statement.hh"
 #include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/raw/use_statement.hh"
@@ -427,7 +429,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
-      ( usingTimeoutServiceLevelClause[attrs] )?
+      ( (K_USING (K_TIMEOUT | serviceLevel)) => usingTimeoutServiceLevelClause[attrs] )?
       {
           auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
           $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
@@ -549,20 +551,30 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
         bool if_not_exists = false;
         bool default_unset = false;
         std::optional<expression> json_value;
+        std::unique_ptr<raw::select_statement> select_source;
     }
     : K_INSERT K_INTO cf=columnFamilyName
         ('(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
-            K_VALUES
-            '(' v1=term { values.push_back(std::move(v1)); } ( ',' vn=term { values.push_back(std::move(vn)); } )* ')'
-            ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
-            ( usingClause[attrs] )?
-              {
-              $expr = std::make_unique<raw::insert_statement>(std::move(cf),
-                                                       std::move(attrs),
-                                                       std::move(column_names),
-                                                       std::move(values),
-                                                       if_not_exists);
-              }
+            ( K_VALUES
+              '(' v1=term { values.push_back(std::move(v1)); } ( ',' vn=term { values.push_back(std::move(vn)); } )* ')'
+              ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
+              ( usingClause[attrs] )?
+                {
+                $expr = std::make_unique<raw::insert_statement>(std::move(cf),
+                                                         std::move(attrs),
+                                                         std::move(column_names),
+                                                         std::move(values),
+                                                         if_not_exists);
+                }
+            | sel=selectStatement { select_source = std::move(sel); }
+              ( usingClause[attrs] )?
+                {
+                $expr = std::make_unique<raw::insert_select_statement>(std::move(cf),
+                                                         std::move(attrs),
+                                                         std::move(column_names),
+                                                         std::move(select_source));
+                }
+            )
         | K_JSON
           json_token=jsonValue { json_value = std::move(json_token); }
             ( K_DEFAULT K_UNSET { default_unset = true; } | K_DEFAULT K_NULL )?
@@ -574,6 +586,14 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
                                                        std::move(*json_value),
                                                        if_not_exists,
                                                        default_unset);
+              }
+        | sel=selectStatement { select_source = std::move(sel); }
+            ( usingClause[attrs] )?
+              {
+              $expr = std::make_unique<raw::insert_select_statement>(std::move(cf),
+                                                       std::move(attrs),
+                                                       std::move(column_names),
+                                                       std::move(select_source));
               }
         )
     ;
@@ -900,11 +920,25 @@ createKeyspaceStatement returns [std::unique_ptr<cql3::statements::create_keyspa
  *     <name3> <type>
  * ) WITH <property> = <value> AND ...;
  */
-createTableStatement returns [std::unique_ptr<cql3::statements::create_table_statement::raw_statement> expr]
-    @init { bool if_not_exists = false; }
+createTableStatement returns [std::unique_ptr<cql3::statements::raw::cf_statement> expr]
+    @init {
+        bool if_not_exists = false;
+        std::unique_ptr<cql3::statements::create_table_statement::raw_statement> ct_raw;
+    }
     : K_CREATE K_COLUMNFAMILY (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
-      cf=columnFamilyName { $expr = std::make_unique<cql3::statements::create_table_statement::raw_statement>(cf, if_not_exists); }
-      cfamDefinition[*expr]
+      cf=columnFamilyName
+      { ct_raw = std::make_unique<cql3::statements::create_table_statement::raw_statement>(cf, if_not_exists); }
+      cfamDefinition[*ct_raw]
+      ( // CREATE TABLE ... (PRIMARY KEY (...)) AS SELECT ... : columns and their
+        // types come from the SELECT result; the primary key from the body above.
+        // Decided by a single-token lookahead on K_AS (no backtracking DFA).
+        K_AS sel=selectStatement
+          {
+          $expr = std::make_unique<cql3::statements::raw::create_table_select_statement>(cf,
+                  if_not_exists, ct_raw->partition_key_columns(), ct_raw->clustering_key_columns(), std::move(sel));
+          }
+      | { $expr = std::move(ct_raw); }
+      )
     ;
 
 cfamDefinition[cql3::statements::create_table_statement::raw_statement& expr]
