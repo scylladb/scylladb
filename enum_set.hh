@@ -109,6 +109,8 @@ struct super_enum {
     static constexpr sequence_type max_sequence = sequence_for<max<Items...>::value>();
     static constexpr sequence_type min_sequence = sequence_for<min<Items...>::value>();
 
+    static constexpr size_t num_items = sizeof...(Items);
+
     static_assert(min_sequence >= 0, "negative enum values unsupported");
 };
 
@@ -120,8 +122,20 @@ public:
 
 template<typename Enum>
 class enum_set {
+    // Smallest unsigned int type that can hold N bits.
+    template <size_t N>
+    struct smallest_uint {
+        using type = std::conditional_t<N <= 8, uint8_t,
+                    std::conditional_t<N <= 16, uint16_t,
+                    std::conditional_t<N <= 32, uint32_t,
+                    uint64_t>>>;
+    };
+    template <size_t N>
+    using smallest_uint_t = typename smallest_uint<N>::type;
+
 public:
-    using mask_type = size_t; // TODO: use the smallest sufficient type
+    // Pick the smallest integer that can hold bits 0..max_sequence.
+    using mask_type = smallest_uint_t<Enum::max_sequence + 1>;
     using enum_type = typename Enum::enum_type;
 
 private:
@@ -161,7 +175,14 @@ public:
     }
 
     static constexpr mask_type full_mask() {
-        return ~(std::numeric_limits<mask_type>::max() << (Enum::max_sequence + 1));
+        // (mask_type(1) << (max_sequence+1)) - 1 would be cleaner but
+        // shifting by the full width of mask_type is UB.  When the set
+        // occupies every bit, return all-ones directly.
+        if constexpr (Enum::max_sequence + 1 == std::numeric_limits<mask_type>::digits) {
+            return ~mask_type(0);
+        } else {
+            return mask_type((mask_type(1) << (Enum::max_sequence + 1)) - 1);
+        }
     }
 
     static constexpr enum_set full() {
@@ -193,7 +214,7 @@ public:
         return {mask_for<e>()};
     }
 
-    static_assert(std::numeric_limits<mask_type>::max() >= ((size_t)1 << Enum::max_sequence), "mask type too small");
+    static_assert(Enum::max_sequence + 1 <= std::numeric_limits<mask_type>::digits, "mask type too small");
 
     template<enum_type e>
     bool contains() const {
