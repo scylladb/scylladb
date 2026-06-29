@@ -424,6 +424,7 @@ public:
     named_value<unsigned> murmur3_partitioner_ignore_msb_bits;
     named_value<double> unspooled_dirty_soft_limit;
     named_value<double> sstable_summary_ratio;
+    named_value<uint64_t> sstable_summary_max_partitions_per_page;
     named_value<double> components_memory_reclaim_threshold;
     named_value<size_t> large_memory_allocation_warning_threshold;
     named_value<bool> enable_deprecated_partitioners;
