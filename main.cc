@@ -2109,7 +2109,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting group 0 service");
             group0_service.start().get();
-            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
+            // Temporary shutdown guards for startup failures before the storage proxy
+            // dependencies used by group0 state-machine apply are initialized. Once
+            // they exist, these guards are re-registered after them so group0 shuts
+            // down first.
+            auto early_stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
                 sl_controller.local().abort_group0_operations();
                 group0_service.abort_and_drain().get();
                 group0_service.destroy();
@@ -2130,8 +2134,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Need to make sure storage service stopped using group0 before running group0_service.abort()
             // Normally it is done in storage_service::do_drain(), but in case start up fail we need to do it
             // here as well
-            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
-               ss.local().wait_for_group0_stop().get();
+            auto early_stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
+                ss.local().wait_for_group0_stop().get();
             });
 
             if (!group0_service.maintenance_mode() && sys_ks.local().bootstrap_complete()) {
@@ -2226,6 +2230,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
             });
+            // Keep group0 alive only until after local storage users stop, but abort
+            // its raft server before closing storage proxy/paxos gates used by apply().
+            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
+                sl_controller.local().abort_group0_operations();
+                group0_service.abort_and_drain().get();
+                group0_service.destroy();
+            });
+            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
+                ss.local().wait_for_group0_stop().get();
+            });
+            early_stop_group0_usage_in_storage_service->cancel();
+            early_stop_group0_service->cancel();
 
             checkpoint(stop_signal, "starting hinted handoff manager");
             if (!hinted_handoff_enabled.is_disabled_for_all()) {
