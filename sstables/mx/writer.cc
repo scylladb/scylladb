@@ -887,6 +887,7 @@ public:
         _pi_write_m.promoted_index_block_size = cfg.promoted_index_block_size;
         _pi_write_m.promoted_index_auto_scale_threshold = cfg.promoted_index_auto_scale_threshold;
         _index_sampling_state.summary_byte_cost = _cfg.summary_byte_cost;
+        _index_sampling_state.max_partitions_per_page = _cfg.summary_max_partitions_per_page;
       if (_index_writer) {
         prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
       }

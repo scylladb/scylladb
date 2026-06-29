@@ -377,6 +377,7 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
         .enable_sstable_key_validation = cfg.enable_sstable_key_validation(),
         .enable_data_integrity_check = cfg.enable_sstable_data_integrity_check(),
         .sstable_summary_ratio = cfg.sstable_summary_ratio(),
+        .sstable_summary_max_partitions_per_page = cfg.sstable_summary_max_partitions_per_page,
         .column_index_size = cfg.column_index_size_in_kb() * 1024,
         .column_index_auto_scale_threshold_in_kb = cfg.column_index_auto_scale_threshold_in_kb,
         .memory_reclaim_threshold = cfg.components_memory_reclaim_threshold,
