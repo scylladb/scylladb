@@ -72,15 +72,11 @@ class CppFile(pytest.File, ABC):
         self.test_name = self.path.stem
 
     # Implement following properties as cached_property because they are read-only, and based on stash items which
-    # will be assigned in test/pylib/runner.py::pytest_collect_file() hook after a CppFile instance was created.
+    # will be assigned in test/pylib/runner.py::pytest_collect_file() and modify_pytest_item() after instance creation.
 
     @cached_property
     def build_mode(self) -> str:
         return self.stash[BUILD_MODE]
-
-    @cached_property
-    def run_id(self) -> int:
-        return self.stash[RUN_ID]
 
     @cached_property
     def suite_config(self) -> dict[str, Any]:
@@ -166,9 +162,13 @@ class CppTestCase(pytest.Item):
         self.own_markers = [getattr(pytest.mark, mark_name) for mark_name in own_markers]
         self.add_marker(pytest.mark.cpp)
 
+    @cached_property
+    def run_id(self) -> int:
+        return self.stash[RUN_ID]
+
     def get_artifact_path(self, extra: str = "", suffix: str = "") -> pathlib.Path:
         return self.parent.log_dir / ".".join(
-            (self.path.relative_to(TEST_DIR).with_suffix("") / f"{self.name}{extra}.{self.parent.run_id}{suffix}").parts
+            (self.path.relative_to(TEST_DIR).with_suffix("") / f"{self.name}{extra}.{self.run_id}{suffix}").parts
         )
 
     def make_testpy_test_object_mock(self) -> SimpleNamespace:
@@ -179,7 +179,7 @@ class CppTestCase(pytest.Item):
         return SimpleNamespace(
             time_end=0,
             time_start=0,
-            id=self.parent.run_id,
+            id=self.run_id,
             mode=self.parent.build_mode,
             success=False,
             shortname=self.name,
