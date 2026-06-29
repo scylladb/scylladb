@@ -986,7 +986,10 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         co_return;
     }
 
-    auto [ fully, partially ] = co_await get_sstables_for_tablet(sst_infos, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
+    // Skip sstables a previous restore attempt already fetched so a re-entered
+    // or retried restore doesn't re-download what's already in place.
+    auto pending = sst_infos | std::views::filter([] (const auto& si) { return si.downloaded == db::is_downloaded::no; });
+    auto [ fully, partially ] = co_await get_sstables_for_tablet(pending, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
     if (!partially.empty()) {
         llog.debug("Sstable {} is partially contained", partially.front().sstable_id);
         throw std::logic_error("sstables_partially_contained");
