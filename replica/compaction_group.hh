@@ -192,8 +192,6 @@ public:
 
     int64_t get_sstables_repaired_at() const noexcept;
 
-    future<> update_repaired_at_for_merge();
-
     void set_counter_id(counter_id cid) noexcept {
         _counter_id = cid;
     }
