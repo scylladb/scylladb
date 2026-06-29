@@ -5408,10 +5408,8 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
                 .table_uuid  = table,
             };
             if (_feature_service.tablet_repair_tasks_table) {
-                auto cmuts = co_await _sys_ks.local().get_update_repair_task_mutations(entry, guard.write_timestamp());
-                for (auto& m : cmuts) {
-                    updates.push_back(std::move(m));
-                }
+                auto m = co_await _sys_ks.local().get_update_repair_task_mutation(entry, guard.write_timestamp());
+                updates.emplace_back(std::move(m));
             }
         }
 
