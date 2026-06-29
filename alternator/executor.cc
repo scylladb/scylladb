@@ -526,6 +526,13 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
     } else {
         rjson::add(table_description["BillingModeSummary"], "BillingMode", "PROVISIONED");
     }
+    auto compression_algorithm = schema->get_compressor_params().get_algorithm();
+    if (compression_algorithm == compression_parameters::algorithm::zstd_with_dicts ||
+            compression_algorithm == compression_parameters::algorithm::zstd) {
+        rjson::value table_class_summary = rjson::empty_object();
+        rjson::add(table_class_summary, "TableClass", "STANDARD_INFREQUENT_ACCESS");
+        rjson::add(table_description, "TableClassSummary", std::move(table_class_summary));
+    }
     rjson::add(table_description, "ProvisionedThroughput", rjson::empty_object());
     rjson::add(table_description["ProvisionedThroughput"], "ReadCapacityUnits", rcu);
     rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", wcu);
@@ -1419,6 +1426,35 @@ static std::string get_similarity_function(const rjson::value& vector_index, std
     return sf;
 }
 
+// Parse the optional TableClass parameter from a CreateTable or UpdateTable
+// request and, if present, set the appropriate compressor on the builder.
+// Returns true if TableClass was present, false if absent.
+// Throws a ValidationException for unsupported or malformed values.
+static bool handle_table_class(const rjson::value& request, schema_builder& builder, const gms::feature_service& features) {
+    const rjson::value* table_class_value = rjson::find(request, "TableClass");
+    if (!table_class_value) {
+        return false;
+    }
+    if (!table_class_value->IsString()) {
+        throw api_error::validation("Invalid table-class parameter provided. Valid values are: [STANDARD, STANDARD_INFREQUENT_ACCESS].");
+    }
+
+    const bool dicts_enabled = bool(features.sstable_compression_dicts);
+    std::string_view table_class_name = rjson::to_string_view(*table_class_value);
+    if (table_class_name == "STANDARD") {
+        builder.set_compressor_params(dicts_enabled
+                ? compression_parameters::algorithm::lz4_with_dicts
+                : compression_parameters::algorithm::lz4);
+    } else if (table_class_name == "STANDARD_INFREQUENT_ACCESS") {
+        builder.set_compressor_params(dicts_enabled
+                ? compression_parameters::algorithm::zstd_with_dicts
+                : compression_parameters::algorithm::zstd);
+    } else {
+        throw api_error::validation("Invalid table-class parameter provided. Valid values are: [STANDARD, STANDARD_INFREQUENT_ACCESS].");
+    }
+    return true;
+}
+
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
             const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     throwing_assert(this_shard_id() == 0);
@@ -1461,6 +1497,8 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
 
     billing_mode_type bm = verify_billing_mode(request);
+
+    handle_table_class(request, builder, _proxy.features());
 
     schema_ptr partial_schema = builder.build();
 
@@ -1943,9 +1981,27 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
             schema_builder builder(tab);
 
-            rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
-            if (stream_specification && stream_specification->IsObject()) {
+            bool table_class_updated = handle_table_class(request, builder, p.local().features());
+            if (table_class_updated) {
                 empty_request = false;
+                if (rjson::find(request, "StreamSpecification") ||
+                    rjson::find(request, "GlobalSecondaryIndexUpdates") ||
+                    rjson::find(request, "VectorIndexUpdates") ||
+                    rjson::find(request, "BillingMode")) {
+                    co_return api_error::validation("TableClass modification must be the only operation in the request");
+                }
+            }
+
+            rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
+            if (stream_specification) {
+                if (!stream_specification->IsObject()) {
+                    co_return api_error::validation("StreamSpecification must be an object");
+                }
+                empty_request = false;
+                if (rjson::find(request, "GlobalSecondaryIndexUpdates") ||
+                    rjson::find(request, "VectorIndexUpdates")) {
+                    co_return api_error::validation("You cannot create or delete index while changing stream status");
+                }
                 if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
                     validate_cdc_log_name_length(builder.cf_name());
                     bool uses_tablets = p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets();
@@ -2253,7 +2309,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
 
             if (empty_request) {
-                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification or BillingMode to be specified");
+                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification, BillingMode or TableClass to be specified");
             }
 
             co_await verify_permission(enforce_authorization, warn_authorization, client_state_other_shard.get(), schema, auth::permission::ALTER, e.local()._stats);
