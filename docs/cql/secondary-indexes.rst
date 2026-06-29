@@ -329,6 +329,53 @@ The ``similarity_function`` option is supported by both Cassandra SAI and Scylla
       -- ScyllaDB creates the equivalent of:
       CREATE INDEX ON my_table (ENTRIES(metadata_s));
 
+.. _create-fulltext-index-statement:
+
+Fulltext Index :label-note:`ScyllaDB Cloud`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. note::
+
+   Fulltext indexes are supported in ScyllaDB Cloud only in clusters that have the Vector and Text Search feature enabled.
+   Fulltext indexes do not support all ScyllaDB features (e.g., tracing, TTL, paging, and grouping). More information
+   about Full-Text Search is available in the
+   :doc:`Full-Text Search documentation </features/fulltext-search>`.
+
+ScyllaDB supports creating fulltext indexes on text columns, enabling full-text search queries that rank results
+by relevance using the BM25 scoring algorithm. A fulltext index is a custom index created using the ``CUSTOM``
+keyword and specifying the index type as ``fulltext_index``.
+
+CDC is enabled automatically on the base table when a fulltext index is created.
+
+**Column restrictions:**
+
+* The indexed column must be of type ``text``, ``varchar``, or ``ascii``. Other types are rejected.
+* The indexed column must be a regular or clustering-key column. Partition-key columns cannot be indexed.
+* The table must use tablets (not vnodes).
+
+Example::
+
+   CREATE CUSTOM INDEX ON articles (body) USING 'fulltext_index';
+
+You can specify an analyzer to control how text is tokenized::
+
+   CREATE CUSTOM INDEX ON articles (body) USING 'fulltext_index'
+       WITH OPTIONS = {'analyzer': 'english'};
+
+The following options are supported for fulltext indexes:
+
++----------------+-------------------------------------------------------------------------------------------+-------------------+
+| Option         | Description                                                                               | Default Value     |
++================+===========================================================================================+===================+
+| ``analyzer``   | Text analyzer for tokenization. Determines how text is split into terms.                  | ``standard``      |
+|                | Supported values (case-insensitive): ``standard``, ``english``, ``german``,               |                   |
+|                | ``french``, ``spanish``, ``italian``, ``portuguese``, ``russian``, ``simple``,            |                   |
+|                | ``whitespace``. CJK analyzers (``chinese``, ``japanese``, ``korean``) are not supported.  |                   |
++----------------+-------------------------------------------------------------------------------------------+-------------------+
+| ``positions``  | Whether token positions are stored. Required for phrase queries.                          | ``true``          |
+|                | Supported values: ``true``, ``false`` (case-insensitive).                                 |                   |
++----------------+-------------------------------------------------------------------------------------------+-------------------+
+
 .. _drop-index-statement:
 
 DROP INDEX
