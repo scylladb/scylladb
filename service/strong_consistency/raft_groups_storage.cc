@@ -136,35 +136,9 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
 future<> raft_groups_storage::store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) {
     // TODO: check that snap.idx refers to an already persisted entry
     return execute_with_linearization_point([this, &snap, preserve_log_entries] () -> future<> {
-        static const auto store_snp_cql = format("INSERT INTO system.{} (shard, group_id, snapshot_id, idx, term) VALUES (?, ?, ?, ?, ?)",
-            db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
-        co_await _qp.execute_internal(
-            store_snp_cql,
-            {int16_t(_shard), _group_id.id, snap.id.id, int64_t(snap.idx.value()), int64_t(snap.term.value())},
-            cql3::query_processor::cache_internal::yes
-        );
-        // remove old configs
-        static const auto delete_raft_cfg_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?", db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG);
-        co_await _qp.execute_internal(delete_raft_cfg_cql, {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
-        // store current and previous raft configurations
-        static const auto store_raft_cfg_cql = format("INSERT INTO system.{} (shard, group_id, disposition, server_id, can_vote) VALUES (?, ?, ?, ?, ?)",
-            db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG);
-        for (const raft::config_member& srv : snap.config.current) {
-            co_await _qp.execute_internal(store_raft_cfg_cql,
-                {int16_t(_shard), _group_id.id, "CURRENT", srv.addr.id.id, srv.can_vote},
-                    cql3::query_processor::cache_internal::yes);
-        }
-        for (const raft::config_member& srv : snap.config.previous) {
-            co_await _qp.execute_internal(store_raft_cfg_cql,
-                {int16_t(_shard), _group_id.id, "PREVIOUS", srv.addr.id.id, srv.can_vote},
-                    cql3::query_processor::cache_internal::yes);
-        }
-
-        co_await update_snapshot(snap);
-        // Release replay position handles for entries covered by the snapshot.
-        // state_machine::apply() only acquires handles for command entries;
-        // configuration and dummy entries retain their handles in the map
-        // and are cleaned up here.
+        co_await persist_snapshot_descriptor(_qp, _group_id, _shard, snap);
+        // Also remove the corresponding replay position handles from raft_commitlog
+        // so that commitlog segments can be reclaimed.
         raft::index_t log_tail_index(snap.idx.value() - preserve_log_entries);
         _raft_commitlog.truncate_log_tail(log_tail_index);
     });
@@ -185,15 +159,50 @@ future<> raft_groups_storage::abort() {
     return std::move(_pending_op_fut);
 }
 
-future<> raft_groups_storage::update_snapshot(const raft::snapshot_descriptor &snap) {
+future<> raft_groups_storage::persist_snapshot_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap) {
+    // Persist the snapshot configuration if present.
+    // Written before idx/term so that on crash-retry the guard in store_snapshot_index
+    // won't consider the operation complete when config hasn't been persisted yet.
+    if (!snap.config.current.empty()) {
+        // Remove old configs.
+        static const auto delete_cfg_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?",
+            db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG);
+        co_await qp.execute_internal(delete_cfg_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+
+        // Store current and previous raft configurations.
+        static const auto store_cfg_cql = format("INSERT INTO system.{} (shard, group_id, disposition, server_id, can_vote) VALUES (?, ?, ?, ?, ?)",
+            db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG);
+        for (const raft::config_member& srv : snap.config.current) {
+            co_await qp.execute_internal(store_cfg_cql,
+                {int16_t(shard), gid.id, "CURRENT", srv.addr.id.id, srv.can_vote},
+                cql3::query_processor::cache_internal::yes);
+        }
+        for (const raft::config_member& srv : snap.config.previous) {
+            co_await qp.execute_internal(store_cfg_cql,
+                {int16_t(shard), gid.id, "PREVIOUS", srv.addr.id.id, srv.can_vote},
+                cql3::query_processor::cache_internal::yes);
+        }
+    }
+
+    // Write snapshot_id reference to RAFT_GROUPS.
     static const auto update_snapshot_cql = format(
         "INSERT INTO system.{} (shard, group_id, snapshot_id) VALUES (?, ?, ?)",
         db::system_keyspace::RAFT_GROUPS);
-    return _qp.execute_internal(
+    co_await qp.execute_internal(
         update_snapshot_cql,
-        {int16_t(_shard), _group_id.id, snap.id.id},
+        {int16_t(shard), gid.id, snap.id.id},
         cql3::query_processor::cache_internal::yes
-    ).discard_result();
+    );
+
+    // Write idx/term last — this is the "commit point" that store_snapshot_index's
+    // guard reads. Everything above must already be persisted by the time this succeeds.
+    static const auto store_snp_cql = format("INSERT INTO system.{} (shard, group_id, snapshot_id, idx, term) VALUES (?, ?, ?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
+    co_await qp.execute_internal(
+        store_snp_cql,
+        {int16_t(shard), gid.id, snap.id.id, int64_t(snap.idx.value()), int64_t(snap.term.value())},
+        cql3::query_processor::cache_internal::yes
+    );
 }
 
 future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap) {
@@ -209,20 +218,7 @@ future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, ra
         }
     }
 
-    // Update both tables atomically so a crash between writes cannot leave
-    // an inconsistent snapshot_id reference.
-    static const auto store_snapshot_batch_cql = format(
-        "BEGIN UNLOGGED BATCH"
-        "   INSERT INTO system.{} (shard, group_id, snapshot_id, idx, term) VALUES (?, ?, ?, ?, ?);"
-        "   INSERT INTO system.{} (shard, group_id, snapshot_id) VALUES (?, ?, ?);"
-        "APPLY BATCH",
-        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS, db::system_keyspace::RAFT_GROUPS);
-    co_await qp.execute_internal(
-        store_snapshot_batch_cql,
-        {int16_t(shard), gid.id, snap.id.id, int64_t(snap.idx.value()), int64_t(snap.term.value()),
-         int16_t(shard), gid.id, snap.id.id},
-        cql3::query_processor::cache_internal::yes
-    );
+    co_await persist_snapshot_descriptor(qp, gid, shard, snap);
 }
 
 future<> raft_groups_storage::execute_with_linearization_point(std::function<future<>()> f) {

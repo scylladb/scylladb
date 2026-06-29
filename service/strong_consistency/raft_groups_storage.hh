@@ -75,17 +75,20 @@ public:
     // Static version that doesn't require constructing a full raft_groups_storage object.
     // Useful during commitlog replay when only read access to metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
-    // Store snapshot idx and term without updating the configuration.
+    // Store snapshot idx, term, and configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new
     // index is higher than the existing one (safe to call on repeated replays).
+    // If snap.config is non-empty, also persists it to RAFT_GROUPS_SNAPSHOT_CONFIG.
     static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
 
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 
 private:
 
-    future<> update_snapshot(const raft::snapshot_descriptor &snap);
+    // Shared implementation: persists snapshot idx, term, snapshot_id, and config
+    // to system tables (RAFT_GROUPS_SNAPSHOTS, RAFT_GROUPS, RAFT_GROUPS_SNAPSHOT_CONFIG).
+    static future<> persist_snapshot_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
 
     future<> execute_with_linearization_point(std::function<future<>()> f);
 };

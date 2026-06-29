@@ -30,6 +30,10 @@
 #include "idl/commitlog.dist.impl.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+#include "service/strong_consistency/raft_groups_storage.hh"
+#include "db/system_keyspace.hh"
+#include "locator/tablets.hh"
+#include "locator/token_metadata.hh"
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
 
@@ -1808,6 +1812,97 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
         BOOST_REQUIRE(entries2.empty());
         co_return;
     });
+}
+
+// Test that process_raft_replayed_items tracks the last committed
+// configuration entry and persists it to the snapshot descriptor.
+// This exercises the commitlog replayer code path by:
+// 1. Setting up token metadata with a tablet that maps group_id -> table_id
+// 2. Inserting a commit_idx row in system.raft_groups
+// 3. Adding multiple config entries (some committed, some not) to the replay buffer
+// 4. Calling process_raft_replayed_items
+// 5. Verifying that load_snapshot_descriptor returns the last committed configuration
+SEASTAR_TEST_CASE(test_process_raft_replayed_items_persists_last_committed_config) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto& qp = env.local_qp();
+                auto& db = env.local_db();
+
+                auto gid = make_group_id();
+                auto tid = make_table_id();
+
+                // Create distinguishable configurations with different member counts.
+                auto make_config = [](size_t num_members) {
+                    raft::configuration cfg;
+                    for (size_t i = 0; i < num_members; ++i) {
+                        cfg.current.insert(raft::config_member{
+                                raft::server_address{raft::server_id::create_random_id(), {}},
+                                raft::is_voter::yes});
+                    }
+                    return cfg;
+                };
+
+                auto cfg_2_members = make_config(2);
+                auto cfg_3_members = make_config(3);
+                auto cfg_5_members = make_config(5);
+
+                // Step 1: Set up token metadata so that our group_id maps to our table_id.
+                auto& stm = env.shared_token_metadata().local();
+                co_await stm.mutate_token_metadata([&](locator::token_metadata& tm) -> future<> {
+                    locator::tablet_map tmap(1, /*with_raft_info=*/true);
+                    auto tb = tmap.first_tablet();
+                    // Set raft info mapping this tablet to our group_id.
+                    tmap.set_tablet_raft_info(tb, locator::tablet_raft_info{.group_id = gid});
+                    // Assign a replica on shard 0 of the local host so that the tablet is considered local.
+                    auto local_host = tm.get_my_id();
+                    tmap.set_tablet(tb, locator::tablet_info{
+                            locator::tablet_replica_set{locator::tablet_replica{local_host, 0}}});
+                    tm.tablets().set_tablet_map(tid, std::move(tmap));
+                    return make_ready_future<>();
+                });
+
+                // Step 2: Insert commit_idx = 5 for the group (entries 1-5 are committed, 6+ are not).
+                raft::index_t commit_idx(5);
+                co_await qp.execute_internal(
+                        format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
+                                db::system_keyspace::RAFT_GROUPS),
+                        {int16_t(0), gid.id, int64_t(commit_idx.value())},
+                        cql3::query_processor::cache_internal::yes);
+
+                // Step 3: Populate the replay buffer with entries.
+                // Use dummy and config entries only (no command entries, so no mutation
+                // deserialization is needed).
+                db::raft_commitlog_replay_buffer buffer;
+                buffer.add(gid, make_dummy_entry(raft::term_t(1), raft::index_t(1)));
+                // First committed config (2 members) — should be overwritten by the later one.
+                buffer.add(gid, make_lw_shared<raft::log_entry>(raft::log_entry{
+                        .term = raft::term_t(1), .idx = raft::index_t(2), .data = cfg_2_members}));
+                buffer.add(gid, make_dummy_entry(raft::term_t(1), raft::index_t(3)));
+                // Second committed config (3 members) — this is the LAST committed config.
+                buffer.add(gid, make_lw_shared<raft::log_entry>(raft::log_entry{
+                        .term = raft::term_t(2), .idx = raft::index_t(4), .data = cfg_3_members}));
+                buffer.add(gid, make_dummy_entry(raft::term_t(2), raft::index_t(5)));
+                // Uncommitted config (5 members) — must NOT be persisted.
+                buffer.add(gid, make_lw_shared<raft::log_entry>(raft::log_entry{
+                        .term = raft::term_t(2), .idx = raft::index_t(6), .data = cfg_5_members}));
+
+                // Step 4: Run the commitlog replayer.
+                co_await buffer.process_raft_replayed_items(db, qp, env.get_system_keyspace().local());
+
+                // Step 5: Verify that the persisted snapshot has the LAST committed config (3 members),
+                // not the earlier one (2 members) and not the uncommitted one (5 members).
+                auto& cl = *db.commitlog();
+                service::strong_consistency::raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(),
+                        0 /*shard*/, cl, tid, {});
+                auto snap = co_await storage.load_snapshot_descriptor();
+
+                BOOST_CHECK_EQUAL(snap.idx, commit_idx);
+                BOOST_CHECK_EQUAL(snap.term, raft::term_t(2));
+                BOOST_CHECK_EQUAL(snap.config.current.size(), 3);
+            },
+            std::move(db_cfg_ptr));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
