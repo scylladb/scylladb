@@ -1279,8 +1279,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
         // Record the repair_time returned by the repair_tablet rpc call
         db_clock::time_point repair_time;
-        // Record the repair task update muations
-        utils::chunked_vector<canonical_mutation> repair_task_updates;
+        // Record the repair task update mutation
+        std::optional<mutation> repair_task_updates;
         service::session_id session_id;
         uint32_t repair_update_compaction_ctrl_retried = 0;
     };
@@ -1886,7 +1886,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
                         if (_feature_service.tablet_repair_tasks_table) {
                             entry.timestamp = db_clock::now();
-                            tablet_state.repair_task_updates = co_await _sys_ks.get_update_repair_task_mutations(entry, api::new_timestamp());
+                            tablet_state.repair_task_updates = co_await _sys_ks.get_update_repair_task_mutation(entry, api::new_timestamp());
                         }
                         rtlogger.info("Finished tablet repair host={} tablet={} duration={} repair_time={}",
                                 dst, tablet, duration, res.repair_time);
@@ -1906,8 +1906,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                         .set_stage(last_token, locator::tablet_transition_stage::end_repair)
                                         .del_repair_task_info(last_token, _feature_service)
                                         .del_session(last_token);
-                        for (auto& m : tablet_state.repair_task_updates) {
-                            updates.push_back(m);
+                        if (tablet_state.repair_task_updates) {
+                            updates.push_back(canonical_mutation(*tablet_state.repair_task_updates));
                         }
                         // Skip update repair time in case hosts filter or dcs filter is set.
                         if (valid && is_filter_off) {
