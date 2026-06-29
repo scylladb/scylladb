@@ -171,12 +171,15 @@ SEASTAR_THREAD_TEST_CASE(test_response_metadata_changed_for_empty_request_metada
             "ks", "cf", ::make_shared<cql3::column_identifier>("v", true), utf8_type);
     cql3::metadata m({col});
     auto calculated_metadata_id = m.calculate_metadata_id();
-    auto expected_metadata_id = bytes(calculated_metadata_id._metadata_id);
+    auto expected_metadata_id = calculated_metadata_id.to_bytes_view();
 
+    // Create a different (zero-filled) metadata_id for request to trigger METADATA_CHANGED
+    bytes dummy_request_bytes(bytes::initialized_later(), 16);
+    std::fill(dummy_request_bytes.begin(), dummy_request_bytes.end(), int8_t(0));
     auto res = cql_transport::response(0, cql_transport::cql_binary_opcode::RESULT, tracing::trace_state_ptr());
     res.write(m, cql_transport::cql_metadata_id_wrapper(
-            cql3::cql_metadata_id_type(bytes{}),
-            cql3::cql_metadata_id_type(bytes(expected_metadata_id))), true);
+            cql3::cql_metadata_id_type(bytes_view(dummy_request_bytes)),
+            cql3::cql_metadata_id_type(bytes_view(expected_metadata_id))), true);
 
     memory_data_sink_buffers buffers;
     {

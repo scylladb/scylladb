@@ -91,7 +91,8 @@ cql3::cql_metadata_id_type metadata::calculate_metadata_id() const {
         feed_hash(h, _column_info->_names[i]->type->name());
     }
     // Return first 16 bytes to have the same length as Cassandra's MD5
-    return cql_metadata_id_type(h.finalize().substr(0, 16));
+    auto hash = h.finalize();
+    return cql_metadata_id_type(bytes_view(hash).substr(0, 16));
 }
 
 prepared_metadata::prepared_metadata(const std::vector<lw_shared_ptr<column_specification>>& names,

@@ -683,13 +683,13 @@ SEASTAR_TEST_CASE(test_system_schema_version_is_stable) {
 // The purpose of this check is to make sure that we don't accidentally change the metadata_id.
 // The metadata_id should be stable to avoid ping-pong when driver connects to a mixed cluster.
 void verify_metadata_id_is_stable(cql3::cql_metadata_id_type metadata_id, sstring known_hash) {
-    BOOST_REQUIRE_EQUAL(metadata_id._metadata_id, from_hex(known_hash));
+    BOOST_REQUIRE_EQUAL(metadata_id.to_bytes_view(), from_hex(known_hash));
 }
 
 BOOST_AUTO_TEST_CASE(metadata_id_from_empty_metadata) {
     auto m = cql3::metadata{std::vector<lw_shared_ptr<cql3::column_specification>>{}};
     auto metadata_id = m.calculate_metadata_id();
-    BOOST_REQUIRE_EQUAL(metadata_id._metadata_id.size(), 16);
+    BOOST_REQUIRE_EQUAL(metadata_id.to_bytes_view().size(), 16);
     verify_metadata_id_is_stable(metadata_id, "e3b0c44298fc1c149afbf4c8996fb924");
 }
 
