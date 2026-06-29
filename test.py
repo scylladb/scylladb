@@ -169,9 +169,6 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
                         help="Provide the URL to artifacts directory to generate the link to failed tests directory "
                              "with logs")
-    parser.add_argument("--cluster-pool-size", action="store", default=None, type=int,
-                        help="Set the pool_size for the per-suite Scylla cluster pool. Alternatively environment variable "
-                             "CLUSTER_POOL_SIZE can be used to achieve the same")
     parser.add_argument('--manual-execution', action='store_true', default=False,
                         help='Let me manually run the test executable at the moment this script would run it')
     parser.add_argument('--byte-limit', action="store", default=randint(0, 2000), type=int,

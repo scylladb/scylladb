@@ -111,9 +111,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                           "The lcov files can eventually be used for generating coverage reports")
     parser.addoption("--coverage-mode", action='append', type=str, dest="coverage_modes",
                      help="Collect and process coverage only for the modes specified. implies: --coverage, default: All built modes")
-    parser.addoption("--cluster-pool-size", type=int,
-                     help="Set the pool_size for the per-suite Scylla cluster pool.  Alternatively environment variable "
-                          "CLUSTER_POOL_SIZE can be used to achieve the same")
     parser.addoption("--extra-scylla-cmdline-options", default='',
                      help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
                           " '--logger-log-level raft=trace --default-log-level error'")
@@ -809,13 +806,7 @@ def create_suite_pool(suite_config: TestSuiteConfig,
         base_env["LLVM_PROFILE_FILE"] = str(log_dir / "coverage" / suite_config.name / "%m.profraw")
 
     cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
-    env_pool_size = os.getenv("CLUSTER_POOL_SIZE")
-    if options.cluster_pool_size is not None:
-        pool_size = options.cluster_pool_size
-    elif env_pool_size is not None:
-        pool_size = int(env_pool_size)
-    else:
-        pool_size = suite_config.cfg.get("pool_size", 2)
+    pool_size = suite_config.cfg.get("pool_size", int(os.getenv("CLUSTER_POOL_SIZE", 2)))
 
     def create_server(create_cfg: ScyllaCluster.CreateServerParams):
         cmdline_options = suite_config.cfg.get("extra_scylla_cmdline_options", [])
