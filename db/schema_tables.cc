@@ -21,8 +21,10 @@
 #include "schema/schema_builder.hh"
 #include "utils/map_difference.hh"
 #include "utils/assert.hh"
+#include "utils/on_internal_error.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/to_string.hh"
+#include "utils/overloaded_functor.hh"
 #include <algorithm>
 #include <ranges>
 #include <seastar/coroutine/all.hh>
@@ -232,6 +234,7 @@ schema_ptr scylla_keyspaces() {
             {"storage_options", map_type_impl::get_instance(utf8_type, utf8_type, false)},
             {"initial_tablets", int32_type},
             {"consistency", utf8_type},
+            {"dedicated_rack", map_type_impl::get_instance(utf8_type, utf8_type, false)},
         },
         // static columns
         {},
@@ -1182,7 +1185,10 @@ utils::chunked_vector<mutation> make_create_keyspace_mutations(schema_features f
         }
         auto consistency = keyspace->consistency_option();
         if (consistency) {
-            scylla_m.set_cell(ckey, "consistency", data_dictionary::consistency_config_option_to_string(*consistency), timestamp);
+            scylla_m.set_cell(ckey, "consistency", data_dictionary::consistency_config_option_to_string(consistency->type), timestamp);
+            if (consistency->has_dedicated_rack()) {
+                store_map(scylla_m, ckey, "dedicated_rack", timestamp, consistency->dedicated_rack);
+            }
         }
         mutations.emplace_back(std::move(scylla_m));
     }
@@ -1262,7 +1268,7 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
 
     data_dictionary::storage_options storage_opts;
     std::optional<unsigned> initial_tablets;
-    std::optional<data_dictionary::consistency_config_option> consistency;
+    std::optional<data_dictionary::consistency_config> consistency;
     // Scylla-specific row will only be present if SCYLLA_KEYSPACES schema feature is available in the cluster
     if (scylla_specific_rs) {
         if (!scylla_specific_rs->empty()) {
@@ -1279,7 +1285,15 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
             initial_tablets = row.get<int>("initial_tablets");
             auto copt = row.get<sstring>("consistency");
             if (copt) {
-                consistency = data_dictionary::consistency_config_option_from_string(*copt);
+                data_dictionary::consistency_config cfg;
+                cfg.type = data_dictionary::consistency_config_option_from_string(*copt);
+                auto dr = row.get<map_type_impl::native_type>("dedicated_rack");
+                if (dr) {
+                    for (const auto& entry : *dr) {
+                        cfg.dedicated_rack.emplace(value_cast<sstring>(entry.first), value_cast<sstring>(entry.second));
+                    }
+                }
+                consistency = std::move(cfg);
             }
         }
     }

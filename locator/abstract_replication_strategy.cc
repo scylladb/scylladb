@@ -198,6 +198,9 @@ replication_factor_data::replication_factor_data(const replication_strategy_conf
             [&] (const std::vector<sstring>& racks) {
                 _data.emplace<std::vector<sstring>>(racks);
                 _count = racks.size();
+            },
+            [&] (const replication_strategy_config_map&) {
+                on_internal_error(rslogger, "replication strategy configuration map used as replication factor");
             }
     }, rf);
 }

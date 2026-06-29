@@ -20,6 +20,8 @@
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
 #include "db/config.hh"
+#include "utils/overloaded_functor.hh"
+#include "utils/on_internal_error.hh"
 #include <random>
 
 namespace cql3 {
@@ -322,10 +324,15 @@ void ks_prop_defs::validate() {
 
 locator::replication_strategy_config_options ks_prop_defs::get_replication_options() const {
     auto replication_options = get_extended_map(KW_REPLICATION);
-    if (replication_options) {
-        return replication_options.value();
+    if (!replication_options) {
+        return {};
     }
-    return {};
+    if (std::any_of(replication_options->begin(), replication_options->end(), [] (const auto& opt) {
+        return std::holds_alternative<map_type>(opt.second);
+    })) {
+        throw exceptions::configuration_exception("Cannot specify replication options as a map");
+    }
+    return *replication_options;
 }
 
 data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
@@ -383,13 +390,53 @@ std::optional<unsigned> ks_prop_defs::get_initial_tablets(std::optional<unsigned
     return initial_count;
 }
 
-std::optional<data_dictionary::consistency_config_option> ks_prop_defs::get_consistency_option() const {
-    auto value = get_simple(KW_CONSISTENCY);
-    if (value) {
-        return data_dictionary::consistency_config_option_from_string(value.value());
-    } else {
+std::optional<data_dictionary::consistency_config> ks_prop_defs::get_consistency_option() const {
+    if (!has_property(KW_CONSISTENCY)) {
         return std::nullopt;
     }
+
+    // Support both legacy simple string format: consistency = 'global'
+    // and new map format: consistency = {'type': 'global', 'dedicated_rack': {'dc1': 'rack1'}}
+    auto raw_value = get(KW_CONSISTENCY);
+    if (!raw_value) {
+        return std::nullopt;
+    }
+
+    return std::visit(overloaded_functor{
+        [](const sstring& str) -> data_dictionary::consistency_config {
+            data_dictionary::consistency_config config;
+            config.type = data_dictionary::consistency_config_option_from_string(str);
+            return config;
+        },
+        [](const extended_map_type& map_value) -> data_dictionary::consistency_config {
+            data_dictionary::consistency_config config;
+            std::optional<data_dictionary::consistency_config_option> consistency_type = std::nullopt;
+            for (const auto& [key, value] : map_value) {
+                if (key == "type") {
+                    if (!std::holds_alternative<sstring>(value)) {
+                        throw exceptions::configuration_exception("consistency 'type' must be a string value");
+                    }
+                    consistency_type = data_dictionary::consistency_config_option_from_string(std::get<sstring>(value));
+                    continue;
+                }
+                if (key == "dedicated_rack") {
+                    if (!std::holds_alternative<map_type>(value)) {
+                        throw exceptions::configuration_exception(
+                            "consistency 'dedicated_rack' must be a map of datacenter to rack name, e.g. {'dc1': 'rack1'}");
+                    }
+                    config.dedicated_rack = std::get<map_type>(value);
+                    continue;
+                }
+                throw exceptions::configuration_exception(
+                    fmt::format("Unrecognized consistency option '{}'. Valid options are: 'type', 'dedicated_rack'", key));
+            }
+            if (!consistency_type) {
+                throw exceptions::configuration_exception("consistency option requires a 'type' field");
+            }
+            config.type = *consistency_type;
+            return config;
+        }
+    }, *raw_value);
 }
 
 std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
@@ -440,7 +487,8 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         sc = old->strategy_name();
         options = old_options;
     }
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt());
+    auto consistency = has_property(KW_CONSISTENCY) ? get_consistency_option() : old->consistency_option();
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, consistency, get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt());
 }
 
 namespace {

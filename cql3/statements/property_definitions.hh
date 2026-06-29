@@ -28,7 +28,7 @@ class property_definitions {
 public:
     using map_type = std::map<sstring, sstring>;
     using list_type = std::vector<sstring>;
-    using extended_map_type = std::map<sstring, std::variant<sstring, list_type>>;
+    using extended_map_type = std::map<sstring, std::variant<sstring, list_type, map_type>>;
     using value_type = std::variant<sstring, extended_map_type>;
     using properties_map_type = std::unordered_map<sstring, value_type>;
 protected:
