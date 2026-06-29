@@ -5786,6 +5786,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         group0_update_collector updates;
 
+        auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
             auto& tinfo = tmap.get_tablet_info(tid);
             if (!tinfo.repair_task_info || tinfo.repair_task_info->tablet_task_id != tablet_task_id) {
@@ -5793,13 +5794,12 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             }
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
-            auto update = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                            .del_repair_task_info(last_token, _feature_service);
+            builder.del_repair_task_info(last_token, _feature_service);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
-                update.del_session(last_token);
+                builder.del_session(last_token);
             }
-            updates.add_small(update.build());
         });
+        co_await updates.add(builder.build());
 
         sstring reason = format("Deleting tablet repair request by API request tablet_id={} tablet_task_id={}", table, tablet_task_id);
         if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
