@@ -1210,6 +1210,7 @@ private:
             group0_command g0_cmd = _group0_client.prepare_command(std::move(change), guard, reason);
             try {
                 co_await _group0_client.add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+                co_await utils::get_local_injector().inject("do_topology_request/request_added", utils::wait_for_message(5min));
                 break;
             } catch (group0_concurrent_modification&) {
                 slogger.debug("{}: concurrent modification, retrying", origin);
