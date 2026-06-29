@@ -202,6 +202,9 @@ def cql_table_name(tab):
 def cql_gsi_name(tab, gsi):
     return maybe_quote('alternator_' + tab.name) + '.' + maybe_quote(tab.name + ":" + gsi)
 
+def cql_lsi_name(tab, lsi):
+    return maybe_quote('alternator_' + tab.name) + '.' + maybe_quote(tab.name + "!:" + lsi)
+
 def cql_cdclog_name(tab):
     return maybe_quote('alternator_' + tab.name) + '.' + maybe_quote(tab.name + "_scylla_cdc_log")
 
@@ -405,43 +408,125 @@ def test_rbac_query(dynamodb, cql, test_table):
 # from a view (GSI or LSI) instead of from the base table. We decided that
 # the base table and each individual view can have *separate* permissions,
 # so granting SELECT permission on the base table does not allow reading
-# a view, and vice versa. This test verifies this.
+# a view, and vice versa. This test verifies this for both GSI and LSI.
 # Note that if a table is created *by* a role, the auto-grant feature
 # (tested below) ensures that this role can read the base and all views.
 # So here the table is not created by the role - but rather by the superuser,
 # and the permissions are granted explicitly to the role on a specific table.
-def test_rbac_query_separate_index_permissions(dynamodb, cql):
-    schema = {
-        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
-        'AttributeDefinitions': [
-                    { 'AttributeName': 'p', 'AttributeType': 'S' },
-                    { 'AttributeName': 'x', 'AttributeType': 'S' } ],
-        'GlobalSecondaryIndexes': [
-            {   'IndexName': 'hello',
-                'KeySchema': [
-                    { 'AttributeName': 'x', 'KeyType': 'HASH' },
-                ],
-                'Projection': { 'ProjectionType': 'ALL' }
-            } ]
-    }
+@pytest.mark.parametrize('index_type', ['gsi', 'lsi'])
+def test_rbac_query_separate_index_permissions(dynamodb, cql, index_type):
+    if index_type == 'gsi':
+        schema = {
+            'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            'AttributeDefinitions': [
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' } ],
+            'GlobalSecondaryIndexes': [
+                {   'IndexName': 'hello',
+                    'KeySchema': [ { 'AttributeName': 'x', 'KeyType': 'HASH' } ],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                } ]
+        }
+        index_name_fn = cql_gsi_name
+        index_key_conditions = {'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}
+    else:  # lsi
+        schema = {
+            'KeySchema': [
+                { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+            ],
+            'AttributeDefinitions': [
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'c', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' } ],
+            'LocalSecondaryIndexes': [
+                {   'IndexName': 'hello',
+                    'KeySchema': [
+                        { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'x', 'KeyType': 'RANGE' }
+                    ],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                } ]
+        }
+        index_name_fn = cql_lsi_name
+        # LSI shares the base table's partition key, so query by 'p'
+        index_key_conditions = {'p': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}
     with new_test_table(dynamodb, **schema) as table:
         with new_role(cql) as (role, key):
             with new_dynamodb(dynamodb, role, key) as d:
                 tab = d.Table(table.name)
                 # Without extra permissions, the new role can read neither
-                # the base table nore the view:
+                # the base table nor the view:
                 unauthorized(lambda: tab.query(KeyConditions={'p': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
-                unauthorized(lambda: tab.query(IndexName='hello', KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+                unauthorized(lambda: tab.query(IndexName='hello', KeyConditions=index_key_conditions))
                 # Granting permissions on the base table we can read the
                 # base table but NOT the view:
                 with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
                     authorized(lambda: tab.query(KeyConditions={'p': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
-                    unauthorized(lambda: tab.query(IndexName='hello', KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
-                # Granting permissions on the GSI we can read the GSI but not
+                    unauthorized(lambda: tab.query(IndexName='hello', KeyConditions=index_key_conditions))
+                # Granting permissions on the index we can read the index but not
                 # the base table:
-                with temporary_grant(cql, 'SELECT', cql_gsi_name(tab, 'hello'), role):
+                with temporary_grant(cql, 'SELECT', index_name_fn(tab, 'hello'), role):
                     unauthorized(lambda: tab.query(KeyConditions={'p': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
-                    authorized(lambda: tab.query(IndexName='hello', KeyConditions={'x': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}))
+                    authorized(lambda: tab.query(IndexName='hello', KeyConditions=index_key_conditions))
+
+# When querying an LSI that has only projects some of the attributes (e.g.,
+# ProjectionType=KEYS_ONLY) with Select=ALL_ATTRIBUTES or SPECIFIC_ATTRIBUTES
+# (allowed only for LSI), Alternator needs to read non-projected attributes
+# from the base table in addition to scanning the LSI. This test verifies that
+# SELECT permissions on *both* the LSI and the base table are required for
+# such a query to succeed - neither the LSI permission nor the base-table
+# permission is enough alone.
+def test_rbac_lsi_query_all_attributes_permissions(dynamodb, cql):
+    schema = {
+        'KeySchema': [
+            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+            { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        'AttributeDefinitions': [
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' }
+        ],
+        'LocalSecondaryIndexes': [
+            {   'IndexName': 'lsi',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' }
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            }
+        ]
+    }
+    with new_test_table(dynamodb, **schema) as table:
+        with new_role(cql) as (role, key):
+            with new_dynamodb(dynamodb, role, key) as d:
+                tab = d.Table(table.name)
+                # Run the same permission test for two types of Select that
+                # both require a base-table fetch: ALL_ATTRIBUTES and
+                # SPECIFIC_ATTRIBUTES with a non-key attribute.
+                for (select, extra_kwargs) in [
+                        ('ALL_ATTRIBUTES', {}),
+                        ('SPECIFIC_ATTRIBUTES', {'ProjectionExpression': 'v'})]:
+                    query_lsi = lambda: tab.query(IndexName='lsi', Select=select,
+                        KeyConditions={'p': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}},
+                        **extra_kwargs)
+                    # Without any permissions, the LSI query fails:
+                    unauthorized(query_lsi)
+                    # With only base table SELECT, the query still fails because
+                    # the LSI permission is missing:
+                    with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                        unauthorized(query_lsi)
+                    # With only LSI SELECT, the query still fails because
+                    # requesting non-projected attributes triggers a base table
+                    # fetch and the base table permission is missing:
+                    with temporary_grant(cql, 'SELECT', cql_lsi_name(tab, 'lsi'), role):
+                        unauthorized(query_lsi)
+                    # With SELECT on both the LSI and the base table, the query
+                    # succeeds:
+                    with temporary_grant(cql, 'SELECT', cql_lsi_name(tab, 'lsi'), role):
+                        with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                            authorized(query_lsi)
 
 # Test Scan's support of permissions - the "SELECT" permission is needed.
 def test_rbac_scan(dynamodb, cql, test_table):

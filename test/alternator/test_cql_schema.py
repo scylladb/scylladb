@@ -161,3 +161,78 @@ def test_alternator_aux_tables(dynamodb, table1, option):
     # Check Streams log table:
     alternator_cdc_schema = scylla_get_schema(dynamodb, cql_table_for_cdclog(table1))
     assert alternator_base_schema[option] == alternator_cdc_schema[option]
+
+# Test that on a GSI and LSI with ProjectionType=ALL, the view has in its
+# schema include_all_columns=True - but for ProjectionType=KEYS_ONLY it is
+# false. This schema flag doesn't actually have any real effect on Alternator
+# or its use of materialized views (which only cares about which columns
+# exist in the view table). Rather, this flag is mainly used by CQL's
+# DESCRIBE MATERIALIZED VIEW and ALTER TABLE ... ADD COLUMN. But let's check
+# it is correct just in case somebody tries to use CQL's "DESCRIBE
+# MATERIALIZED VIEW" or "ALTER TABLE ... ADD COLUMN" on an Alternator table.
+def test_include_all_columns(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[
+            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+            { 'AttributeName': 'c', 'KeyType': 'RANGE' },
+        ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi_all',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_keys_only',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            },
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'lsi_all',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'lsi_keys_only',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            },
+        ],
+    ) as table:
+        gsi_all_schema = scylla_get_schema(dynamodb, cql_table_for_gsi(table, 'gsi_all'))
+        assert gsi_all_schema['include_all_columns'] == 'true'
+        gsi_keys_only_schema = scylla_get_schema(dynamodb, cql_table_for_gsi(table, 'gsi_keys_only'))
+        assert gsi_keys_only_schema['include_all_columns'] == 'false'
+        lsi_all_schema = scylla_get_schema(dynamodb, cql_table_for_lsi(table, 'lsi_all'))
+        assert lsi_all_schema['include_all_columns'] == 'true'
+        lsi_keys_only_schema = scylla_get_schema(dynamodb, cql_table_for_lsi(table, 'lsi_keys_only'))
+        assert lsi_keys_only_schema['include_all_columns'] == 'false'
+        # Now add more GSIs via UpdateTable and check that these new GSIs also
+        # have the correct "include_all_columns" flag:
+        table.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{'AttributeName': 'y', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexUpdates=[{'Create': {
+                'IndexName': 'gsi_all_2',
+                'KeySchema': [{'AttributeName': 'y', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            }}])
+        gsi_all_2_schema = scylla_get_schema(dynamodb, cql_table_for_gsi(table, 'gsi_all_2'))
+        assert gsi_all_2_schema['include_all_columns'] == 'true'
+        table.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{'AttributeName': 'y', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexUpdates=[{'Create': {
+                'IndexName': 'gsi_keys_only_2',
+                'KeySchema': [{'AttributeName': 'y', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'KEYS_ONLY'},
+            }}])
+        gsi_keys_only_2_schema = scylla_get_schema(dynamodb, cql_table_for_gsi(table, 'gsi_keys_only_2'))
+        assert gsi_keys_only_2_schema['include_all_columns'] == 'false'
