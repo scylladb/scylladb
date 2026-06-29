@@ -48,7 +48,7 @@ prepared_statement::prepared_statement(
     , bound_names(std::move(bound_names_))
     , partition_key_bind_indices(std::move(partition_key_bind_indices))
     , warnings(std::move(warnings))
-    , _metadata_id(bytes{})
+    , _metadata_id()
 {
     statement->set_audit_info(std::move(audit_info));
 }
