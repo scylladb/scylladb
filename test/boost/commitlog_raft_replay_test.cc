@@ -92,6 +92,16 @@ future<rp_handle> write_raft_entry_to_commitlog(commitlog& cl, table_id tid, raf
     });
 }
 
+template <typename Func>
+void visit_raft_commitlog_entry(const commitlog_entry_variant& entry_var, Func&& func) {
+    if (std::holds_alternative<raft_commitlog_entry>(entry_var)) {
+        func(std::get<raft_commitlog_entry>(entry_var));
+    } else {
+        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry_with_commit_idx>(entry_var));
+        func(std::get<raft_commitlog_entry_with_commit_idx>(entry_var));
+    }
+}
+
 } // anonymous namespace
 
 // Test commitlog_raft_log_entry_writer: size computation is consistent with
@@ -116,8 +126,8 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
             // the writer wraps it in a commitlog_entry + raft_commitlog_entry envelope.
             BOOST_REQUIRE_GT(writer.size(), 0u);
             BOOST_REQUIRE_GT(writer.size(), ser::get_sizeof(*entry));
-            BOOST_REQUIRE_EQUAL(writer.get_log_entry().group_id, gid);
-            BOOST_REQUIRE_EQUAL(writer.get_log_entry().entry->idx, entry->idx);
+            BOOST_REQUIRE_EQUAL(writer.group_id(), gid);
+            BOOST_REQUIRE_EQUAL(writer.entry()->idx, entry->idx);
 
             auto handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
             rps.push_back(handle.rp());
@@ -143,13 +153,12 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
 
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
-                        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry>(entry_var));
-
-                        auto& rle = std::get<raft_commitlog_entry>(entry_var);
-                        BOOST_REQUIRE_EQUAL(rle.group_id, gid);
-                        BOOST_REQUIRE_EQUAL(rle.entry->term, expected->term);
-                        BOOST_REQUIRE_EQUAL(rle.entry->idx, expected->idx);
-                        BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected->data.index());
+                        visit_raft_commitlog_entry(entry_var, [&] (const auto& rle) {
+                            BOOST_REQUIRE_EQUAL(rle.group_id, gid);
+                            BOOST_REQUIRE_EQUAL(rle.entry->term, expected->term);
+                            BOOST_REQUIRE_EQUAL(rle.entry->idx, expected->idx);
+                            BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected->data.index());
+                        });
                         ++found;
                         co_return;
                     });
@@ -194,15 +203,13 @@ SEASTAR_TEST_CASE(test_commitlog_raft_entry_roundtrip) {
 
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
-                        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry>(entry_var));
-
-                        auto& rle = std::get<raft_commitlog_entry>(entry_var);
-                        BOOST_REQUIRE_EQUAL(rle.group_id, gid);
-
                         auto idx = std::distance(rps.begin(), it);
-                        BOOST_REQUIRE_EQUAL(rle.entry->idx, entries[idx]->idx);
-                        BOOST_REQUIRE_EQUAL(rle.entry->term, entries[idx]->term);
-                        BOOST_REQUIRE(std::holds_alternative<raft::log_entry::dummy>(rle.entry->data));
+                        visit_raft_commitlog_entry(entry_var, [&] (const auto& rle) {
+                            BOOST_REQUIRE_EQUAL(rle.group_id, gid);
+                            BOOST_REQUIRE_EQUAL(rle.entry->idx, entries[idx]->idx);
+                            BOOST_REQUIRE_EQUAL(rle.entry->term, entries[idx]->term);
+                            BOOST_REQUIRE(std::holds_alternative<raft::log_entry::dummy>(rle.entry->data));
+                        });
 
                         ++raft_entries_found;
                         co_return;
@@ -210,6 +217,58 @@ SEASTAR_TEST_CASE(test_commitlog_raft_entry_roundtrip) {
         }
 
         BOOST_REQUIRE_EQUAL(raft_entries_found, n);
+    });
+}
+
+// Test for: SCYLLADB-2877
+SEASTAR_TEST_CASE(test_raft_commitlog_store_log_entries_persists_commit_idx) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+
+        raft::log_entry_ptr_list entries;
+        for (int i = 1; i <= 3; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+
+        auto commit_idx = raft::index_t(2);
+        co_await persistence.store_log_entries(entries, commit_idx);
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        size_t plain_entries = 0;
+        size_t entries_with_commit_idx = 0;
+        for (auto& seg : segments) {
+            co_await db::commitlog::read_log_file(
+                    seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                        auto&& [buf, _] = buf_rp;
+                        commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
+                        auto& entry_var = reader.entry().item;
+
+                        if (std::holds_alternative<raft_commitlog_entry>(entry_var)) {
+                            const auto& rle = std::get<raft_commitlog_entry>(entry_var);
+                            BOOST_REQUIRE_EQUAL(rle.group_id, gid);
+                            BOOST_REQUIRE_NE(rle.entry->idx, entries.back()->idx);
+                            ++plain_entries;
+                        } else {
+                            BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry_with_commit_idx>(entry_var));
+                            const auto& rle = std::get<raft_commitlog_entry_with_commit_idx>(entry_var);
+                            BOOST_REQUIRE_EQUAL(rle.group_id, gid);
+                            BOOST_REQUIRE_EQUAL(rle.entry->idx, entries.back()->idx);
+                            BOOST_REQUIRE_EQUAL(rle.commit_idx, commit_idx);
+                            ++entries_with_commit_idx;
+                        }
+                        co_return;
+                    });
+        }
+
+        BOOST_REQUIRE_EQUAL(plain_entries, entries.size() - 1);
+        BOOST_REQUIRE_EQUAL(entries_with_commit_idx, 1);
     });
 }
 
@@ -268,16 +327,16 @@ SEASTAR_TEST_CASE(test_commitlog_mixed_raft_and_mutation_entries) {
                         auto& entry_var = reader.entry().item;
 
                         if (is_raft_entry) {
-                            BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry>(entry_var));
                             auto it = std::ranges::find(raft_rps, rp);
                             auto idx = std::distance(raft_rps.begin(), it);
                             const auto& expected = raft_entries[idx];
 
-                            auto& rle = std::get<raft_commitlog_entry>(entry_var);
-                            BOOST_REQUIRE_EQUAL(rle.group_id, gid);
-                            BOOST_REQUIRE_EQUAL(rle.entry->term, expected->term);
-                            BOOST_REQUIRE_EQUAL(rle.entry->idx, expected->idx);
-                            BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected->data.index());
+                            visit_raft_commitlog_entry(entry_var, [&] (const auto& rle) {
+                                BOOST_REQUIRE_EQUAL(rle.group_id, gid);
+                                BOOST_REQUIRE_EQUAL(rle.entry->term, expected->term);
+                                BOOST_REQUIRE_EQUAL(rle.entry->idx, expected->idx);
+                                BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected->data.index());
+                            });
                             ++raft_found;
                         } else {
                             BOOST_REQUIRE(std::holds_alternative<mutation_entry>(entry_var));
@@ -1521,13 +1580,12 @@ SEASTAR_TEST_CASE(test_end_to_end_commitlog_replay_full_verification) {
 
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
-                        BOOST_REQUIRE(std::holds_alternative<raft_commitlog_entry>(entry_var));
-
-                        auto& rle = std::get<raft_commitlog_entry>(entry_var);
-                        BOOST_REQUIRE_EQUAL(rle.group_id, expected.gid);
-                        BOOST_REQUIRE_EQUAL(rle.entry->term, expected.term);
-                        BOOST_REQUIRE_EQUAL(rle.entry->idx, expected.idx);
-                        BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected.variant_idx);
+                        visit_raft_commitlog_entry(entry_var, [&] (const auto& rle) {
+                            BOOST_REQUIRE_EQUAL(rle.group_id, expected.gid);
+                            BOOST_REQUIRE_EQUAL(rle.entry->term, expected.term);
+                            BOOST_REQUIRE_EQUAL(rle.entry->idx, expected.idx);
+                            BOOST_REQUIRE_EQUAL(rle.entry->data.index(), expected.variant_idx);
+                        });
                         ++found;
                         co_return;
                     });
@@ -1552,7 +1610,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_store_and_truncate_log) {
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        co_await persistence.store_log_entries(all_entries);
+        co_await persistence.store_log_entries(all_entries, raft::index_t(0));
 
         // Truncate at idx 6 — entries 6-10 should be removed.
         persistence.truncate_log(raft::index_t(6));
@@ -1595,7 +1653,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_truncate_log_tail_releases_handles) {
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        co_await persistence.store_log_entries(all_entries);
+        co_await persistence.store_log_entries(all_entries, raft::index_t(0));
 
         // Truncate tail at idx 5 — entries 1-5 handles should be released.
         persistence.truncate_log_tail(raft::index_t(5));
@@ -1653,9 +1711,11 @@ SEASTAR_TEST_CASE(test_replay_with_multiple_segments) {
                         auto&& [buf, rp] = buf_rp;
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
-                        if (std::holds_alternative<raft_commitlog_entry>(entry_var)) {
-                            auto& rle = std::get<raft_commitlog_entry>(entry_var);
-                            replayed_entries.emplace_back(rle.entry->idx, rle.entry->term);
+                        if (std::holds_alternative<raft_commitlog_entry>(entry_var) ||
+                                std::holds_alternative<raft_commitlog_entry_with_commit_idx>(entry_var)) {
+                            visit_raft_commitlog_entry(entry_var, [&] (const auto& rle) {
+                                replayed_entries.emplace_back(rle.entry->idx, rle.entry->term);
+                            });
                         }
                         co_return;
                     });
@@ -1716,9 +1776,11 @@ SEASTAR_TEST_CASE(test_mixed_raft_and_mutation_entries_replay_separation) {
                         commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
                         auto& entry_var = reader.entry().item;
 
-                        if (std::holds_alternative<raft_commitlog_entry>(entry_var)) {
-                            auto& rle = std::get<raft_commitlog_entry>(entry_var);
-                            buffer.add(rle.group_id, rle.entry);
+                        if (std::holds_alternative<raft_commitlog_entry>(entry_var) ||
+                                std::holds_alternative<raft_commitlog_entry_with_commit_idx>(entry_var)) {
+                            visit_raft_commitlog_entry(entry_var, [&] (const auto& rle) {
+                                buffer.add(rle.group_id, rle.entry);
+                            });
                         } else {
                             BOOST_REQUIRE(std::holds_alternative<mutation_entry>(entry_var));
                             ++mutation_count;
@@ -1748,7 +1810,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_combined_truncation) {
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        co_await persistence.store_log_entries(all_entries);
+        co_await persistence.store_log_entries(all_entries, raft::index_t(0));
 
         // Truncate tail (entries <= 3) and head (entries >= 8).
         persistence.truncate_log_tail(raft::index_t(3));

@@ -235,6 +235,12 @@ future<> db::commitlog_replayer::impl::process(
             rlogger.debug("Adding raft log entry for group {} at {} to replay buffer", raft_entry.group_id, rp);
             _raft_buffer->local().add(raft_entry.group_id, raft_entry.entry);
             co_return;
+        } else if (std::holds_alternative<raft_commitlog_entry_with_commit_idx>(read_entry)) {
+            const auto& raft_entry = std::get<raft_commitlog_entry_with_commit_idx>(read_entry);
+            SCYLLA_ASSERT(_raft_buffer);
+            rlogger.debug("Adding raft log entry for group {} at {} to replay buffer", raft_entry.group_id, rp);
+            _raft_buffer->local().add(raft_entry.group_id, raft_entry.entry);
+            co_return;
         } else if (std::holds_alternative<mutation_entry>(read_entry)) {
             const auto& mut_entry = std::get<mutation_entry>(read_entry);
 

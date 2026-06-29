@@ -61,6 +61,7 @@
 #include "dht/i_partitioner.hh"
 #include "replica/global_table_ptr.hh"
 #include "locator/tablets.hh"
+#include "service/strong_consistency/groups_manager.hh"
 
 #include "utils/error_injection.hh"
 #include "readers/reversing.hh"
@@ -1937,6 +1938,23 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
         }();
         return make_ready_future<>();
     });
+
+    if (_config.strong_consistency_groups_manager && uses_tablets()) {
+        const auto& tablet_map = _erm->get_token_metadata().tablets().get_tablet_map(_schema->id());
+        if (tablet_map.has_raft_info()) {
+            const auto tablet = locator::tablet_id(cg.group_id());
+            const auto& raft_info = tablet_map.get_tablet_raft_info(tablet);
+            // Persist the raft commit index after the memtable has been sealed
+            // (add_memtable() above) but before its commitlog segments are
+            // discarded. Once sealed, `old` no longer accepts writes, so the
+            // tracked commit index already covers every entry that ended up in
+            // it. Persisting here guarantees crash recovery never sees
+            // commit_idx behind data flushed to SSTables. Persisting *before*
+            // the seal would race with concurrent applies landing in `old`,
+            // which could leave commit_idx behind the flushed data.
+            co_await _config.strong_consistency_groups_manager->save_commit_log_index(_schema->id(), raft_info.group_id);
+        }
+    }
 
     co_await with_retry([&] {
         previous_flush = _flush_barrier.advance_and_await();

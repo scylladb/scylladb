@@ -1575,16 +1575,9 @@ async def test_data_survives_crash(manager: ManagerClient):
             assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"
             assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
 
-        # Verify that the snapshot index was advanced during replay.
-        # After commitlog replay, store_snapshot_index should have bumped
-        # snapshot.idx to commit_idx for the tablet's raft group.
-        table_id = await manager.get_table_id(ks.replace('"', ''), "test")
-        tablet_rows = await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")
-        assert len(tablet_rows) == 1
-        group_id = tablet_rows[0].raft_group_id
-        snp_rows = await cql.run_async(f"SELECT idx FROM system.raft_groups_snapshots WHERE shard = 0 AND group_id = {group_id}")
-        assert len(snp_rows) == 1, f"Expected snapshot row for group {group_id}"
-        assert snp_rows[0].idx > 0, f"Expected snapshot idx > 0 after replay, got {snp_rows[0].idx}"
+        # Note: commit_idx is no longer persisted on every batch (optimization),
+        # so after crash the raft server re-commits entries from the log.
+        # Snapshot index advancement is tested separately.
 
     await manager.server_stop_gracefully(server.server_id)
 

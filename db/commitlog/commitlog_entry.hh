@@ -102,11 +102,26 @@ struct raft_commitlog_entry {
     raft::log_entry_ptr entry;
 };
 
-// The on-disk envelope for variant-format commitlog segments. Each
-// entry contains exactly one of the variant alternatives: a mutation_entry
-// (normal table write) or a raft_commitlog_entry (Raft log entry for
-// strongly-consistent tables).
-using commitlog_entry_variant = std::variant<raft_commitlog_entry, mutation_entry>;
+struct raft_commitlog_entry_with_commit_idx {
+    raft::group_id group_id;
+    raft::log_entry_ptr entry;
+    // The last known commit index at the time of writing. Allows recovery of
+    // the commit index from the commitlog without relying on system.raft_groups.
+    // This value is from the *previous* commit batch (store_log_entries is called
+    // before store_commit_idx in the same FSM output), so it may be one batch behind.
+    raft::index_t commit_idx{0};
+};
+
+// The on-disk envelope for variant-format commitlog segments. Each entry
+// contains exactly one of the variant alternatives: a mutation_entry (normal
+// table write), a raft_commitlog_entry, or a raft_commitlog_entry_with_commit_idx
+// (Raft log entries for strongly-consistent tables).
+//
+// NOTE: the variant alternative index is the on-disk discriminator, so new
+// alternatives must only ever be appended at the end. Reordering or inserting
+// in the middle would change the discriminator of existing alternatives and
+// corrupt the reading of previously written segments.
+using commitlog_entry_variant = std::variant<raft_commitlog_entry, mutation_entry, raft_commitlog_entry_with_commit_idx>;
 struct commitlog_entry {
     commitlog_entry_variant item;
 };
@@ -182,7 +197,7 @@ public:
 class commitlog_raft_log_entry_writer {
 public:
 protected:
-    raft_commitlog_entry _item;
+    std::variant<raft_commitlog_entry, raft_commitlog_entry_with_commit_idx> _item;
     std::size_t _size = std::numeric_limits<std::size_t>::max();
 
     template<typename Output>
@@ -192,6 +207,8 @@ protected:
 public:
     explicit commitlog_raft_log_entry_writer(raft_commitlog_entry item)
         : _item(std::move(item)) { compute_size(); }
+    explicit commitlog_raft_log_entry_writer(raft_commitlog_entry_with_commit_idx item)
+        : _item(std::move(item)) { compute_size(); }
 
     size_t size() const {
         SCYLLA_ASSERT(_size != std::numeric_limits<size_t>::max());
@@ -200,7 +217,19 @@ public:
 
     using ostream = typename seastar::memory_output_stream<detail::sector_split_iterator>;
     void write(ostream& out) const;
-    const raft_commitlog_entry& get_log_entry() const {
+    const raft::log_entry_ptr& entry() const {
+        return std::visit([] (const auto& item) -> const raft::log_entry_ptr& {
+            return item.entry;
+        }, _item);
+    }
+
+    raft::group_id group_id() const {
+        return std::visit([] (const auto& item) {
+            return item.group_id;
+        }, _item);
+    }
+
+    const auto& get_log_entry() const {
         return _item;
     }
 };

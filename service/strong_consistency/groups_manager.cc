@@ -124,7 +124,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     init_messaging_service();
 }
 
-future<> groups_manager::start_raft_group(global_tablet_id tablet,
+future<raft_groups_storage*> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
         token_metadata_ptr tm)
 {
@@ -160,6 +160,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     }
 
     auto& persistence_ref = *storage;
+    auto* storage_ptr = storage.get();
     auto config = raft::server::configuration {
         // Snapshotting is not implemented yet for strong consistency,
         // so effectively disable periodic snapshotting.
@@ -188,6 +189,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref
     });
+    co_return storage_ptr;
 }
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
@@ -217,6 +219,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         co_await std::move(state.leader_info_updater);
 
         _raft_gr.destroy_server(id);
+        state.storage = nullptr;
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
 
         // We need to erase the raft group state only if we are still the last operation on it.
@@ -413,7 +416,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             _starting_groups.push_back(state);
             state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm](this auto) -> future<> {
                 co_await state.server_control_op.get_future();
-                co_await start_raft_group(tablet, id, std::move(new_tm));
+                state.storage = co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
                 state.leader_info_updater = leader_info_updater(state, tablet, id);
 
@@ -481,6 +484,32 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
         return raft_server(state, std::move(h));
     });
+}
+
+future<> groups_manager::save_commit_log_index(table_id table_id, raft::group_id group_id) {
+    // The raft group may already be gone or in the middle of teardown by the
+    // time a flush reaches here (e.g. tablet migration or DROP TABLE racing
+    // with a flush). That's harmless: raft_groups_storage::abort() persists the
+    // final commit_idx before the storage is destroyed, and that value is >=
+    // any entry applied to a memtable, so the flush-time persist is redundant
+    // in this case. Skip it instead of treating absence as an error.
+    const auto it = _raft_groups.find(group_id);
+    if (it == _raft_groups.end()) {
+        logger.info("save_commit_log_index: raft group {} for table {} not found (already deleted); skipping", group_id, table_id);
+        co_return;
+    }
+    auto& state = it->second;
+    auto h = state.gate->try_hold();
+    if (!h) {
+        logger.info("save_commit_log_index: gate closed for group {} table {} (teardown in progress); skipping", group_id, table_id);
+        co_return;
+    }
+    co_await state.server_control_op.get_future();
+    if (!state.storage) {
+        logger.info("save_commit_log_index: storage missing for group {} table {} (teardown in progress); skipping", group_id, table_id);
+        co_return;
+    }
+    co_await state.storage->persist_commit_idx_on_flush();
 }
 
 void groups_manager::start() {

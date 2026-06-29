@@ -43,15 +43,20 @@ raft_commitlog::~raft_commitlog() {
     logger.debug("released {} replay position handles for group_id={}", _replay_positions.size(), _group_id);
 }
 
-seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries) {
+seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries, raft::index_t commit_idx) {
     logger.debug("store_log_entries: group_id={}, num_entries={}", _group_id, entries.size());
 
     utils::chunked_vector<commitlog_raft_log_entry_writer> writers;
     writers.reserve(entries.size());
 
-    for (const auto& log_entry_ptr : entries) {
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const auto& log_entry_ptr = entries[i];
         logger.debug("  storing log entry: idx={}, term={}", log_entry_ptr->idx, log_entry_ptr->term);
-        writers.emplace_back(raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr});
+        if (i + 1 == entries.size()) {
+            writers.emplace_back(raft_commitlog_entry_with_commit_idx{.group_id = _group_id, .entry = log_entry_ptr, .commit_idx = commit_idx});
+        } else {
+            writers.emplace_back(raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr});
+        }
     }
 
     auto replay_handles = co_await _commit_log.add_raft_entries(_table_id, std::move(writers));
