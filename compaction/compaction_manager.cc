@@ -186,6 +186,8 @@ static inline int calculate_weight(const compaction_descriptor& descriptor) {
     return calculate_weight(descriptor.sstables_size());
 }
 
+static future<std::vector<sstables::shared_sstable>> get_all_sstables(compaction_group_view& t);
+
 unsigned compaction_manager::current_compaction_fan_in_threshold() const {
     if (_tasks.empty()) {
         return 0;
@@ -1865,16 +1867,15 @@ protected:
 
     future<compaction_result> do_rewrite_sstable(const sstables::shared_sstable sst) {
         if (sstable_needs_split(sst)) {
-            return rewrite_sstables_compaction_task_executor::rewrite_sstable(std::move(sst));
+            co_return co_await rewrite_sstables_compaction_task_executor::rewrite_sstable(std::move(sst));
         }
         // SSTable that doesn't require split can bypass compaction and the table will be able to place
         // it into the correct compaction group. Similar approach is done in off-strategy compaction for
         // sstables that don't require reshape and are ready to be moved across sets.
         compaction_completion_desc desc { .old_sstables = {sst}, .new_sstables = {sst} };
-        return _compacting_table->on_compaction_completion(std::move(desc), sstables::offstrategy::no).then([] {
-            // It's fine to return empty results (zeroed stats) as compaction was bypassed.
-            return compaction_result{};
-        });
+        co_await _compacting_table->on_compaction_completion(std::move(desc), sstables::offstrategy::no);
+        // It's fine to return empty results (zeroed stats) as compaction was bypassed.
+        co_return compaction_result{};
     }
 
     future<compaction_result> rewrite_sstable(const sstables::shared_sstable sst) override {
