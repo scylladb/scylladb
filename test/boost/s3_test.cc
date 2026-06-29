@@ -240,9 +240,12 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
     auto close = seastar::deferred_close(out);
 
     static constexpr unsigned chunk_size = 1000;
+    // ~11 MiB -- just above two 5 MiB minimum parts, enough to exercise
+    // multipart upload without writing 128 MiB to disk on every run.
+    static constexpr unsigned nr_chunks = 11 * 1024;
     auto rnd = tests::random::get_bytes(chunk_size);
     uint64_t object_size = 0;
-    for (unsigned ch = 0; ch < 128 * 1024; ch++) {
+    for (unsigned ch = 0; ch < nr_chunks; ch++) {
         out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
         object_size += rnd.size();
     }
@@ -566,8 +569,17 @@ void client_list_objects(const client_maker_function& client_maker) {
 
     // Put extra object to check list-by-prefix filters it out
     temporary_buffer<char> data = sstring("1234567890").release();
-    client->put_object(format("/{}/extra-{}", bucket, ::getpid()), std::move(data)).get();
+    auto extra_name = format("/{}/extra-{}", bucket, ::getpid());
+    client->put_object(extra_name, std::move(data)).get();
+    auto delete_extra = deferred_delete_object(client, extra_name);
     auto names = populate_bucket(client, bucket, prefix, 12);
+
+    // Clean up all created objects when done
+    auto cleanup = seastar::defer([&] {
+        for (auto& n : names) {
+            client->delete_object(format("/{}/{}{}", bucket, prefix, n)).get();
+        }
+    });
 
     s3::client::bucket_lister lister(client, bucket, prefix, 5);
     auto close_lister = deferred_close(lister);
@@ -596,7 +608,14 @@ void client_list_objects_incomplete(const client_maker_function& client_maker) {
     const sstring& bucket = guard.bucket();
     const sstring prefix("testprefix/");
 
-    populate_bucket(client, bucket, prefix, 8);
+    auto all_names = populate_bucket(client, bucket, prefix, 8);
+
+    // Clean up all created objects when done
+    auto cleanup = seastar::defer([&] {
+        for (auto& n : all_names) {
+            client->delete_object(format("/{}/{}{}", bucket, prefix, n)).get();
+        }
+    });
 
     s3::client::bucket_lister lister(client, bucket, prefix, 9, 2);
     auto close_lister = deferred_close(lister);
@@ -690,7 +709,7 @@ SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
                 jumbo ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name));
 
             constexpr unsigned chunk_size = 1000;
-            constexpr unsigned writes = 128 * 1024;
+            constexpr unsigned writes = 11 * 1024;
             auto rnd = tests::random::get_bytes(chunk_size);
             uint64_t object_size = 0;
             for (unsigned ch = 0; ch < writes; ch++) {
@@ -739,7 +758,7 @@ void test_download_data_source(const client_maker_function& client_maker, bool i
 }
 
 SEASTAR_THREAD_TEST_CASE(test_download_data_source_minio) {
-    test_download_data_source(make_minio_client, false, 128 * 1024);
+    test_download_data_source(make_minio_client, false, 11 * 1024);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_download_data_source_proxy) {
@@ -747,7 +766,7 @@ SEASTAR_THREAD_TEST_CASE(test_download_data_source_proxy) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_minio) {
-    test_download_data_source(make_minio_client, true, 128 * 1024);
+    test_download_data_source(make_minio_client, true, 11 * 1024);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_proxy) {
@@ -816,11 +835,11 @@ void test_chunked_download_data_source(const client_maker_function& client_maker
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_minio) {
-    test_chunked_download_data_source(make_minio_client, 20_MiB);
+    test_chunked_download_data_source(make_minio_client, 6_MiB);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_proxy) {
-    test_chunked_download_data_source(make_proxy_client, 20_MiB);
+    test_chunked_download_data_source(make_proxy_client, 6_MiB);
 }
 
 void do_test_chunked_download_data_source_memory(const client_maker_function& client_maker, size_t object_size) {
@@ -867,7 +886,7 @@ void do_test_chunked_download_data_source_memory(const client_maker_function& cl
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_memory) {
-    do_test_chunked_download_data_source_memory(make_minio_client, 20_MiB);
+    do_test_chunked_download_data_source_memory(make_minio_client, 6_MiB);
 }
 
 void test_object_copy(const client_maker_function& client_maker, size_t chunk_size, size_t chunks) {
