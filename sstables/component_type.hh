@@ -12,6 +12,8 @@
 #include <seastar/core/sstring.hh>
 #include <fmt/format.h>
 
+#include "enum_set.hh"
+
 namespace sstables {
 
 enum class component_type {
@@ -34,6 +36,31 @@ enum class component_type {
 };
 
 constexpr size_t num_component_types = size_t(component_type::Unknown);
+
+// Type-safe set of recognized component types. Excludes Unknown, which is
+// not a real component (it marks entries kept in _unrecognized_components).
+using component_super_enum = super_enum<component_type,
+        component_type::Index,
+        component_type::CompressionInfo,
+        component_type::Data,
+        component_type::TOC,
+        component_type::Summary,
+        component_type::Digest,
+        component_type::CRC,
+        component_type::Filter,
+        component_type::Statistics,
+        component_type::TemporaryTOC,
+        component_type::TemporaryStatistics,
+        component_type::Scylla,
+        component_type::Rows,
+        component_type::Partitions,
+        component_type::TemporaryHashes>;
+using component_set = enum_set<component_super_enum>;
+
+// Ensure component_set covers exactly the component_type domain below Unknown.
+// The highest enumerator in the set must be the one just before Unknown.
+static_assert(component_super_enum::max_sequence == num_component_types - 1,
+        "component_set must cover every component_type below Unknown; update the list when adding a new component_type");
 
 struct sstable;
 struct component_name {
