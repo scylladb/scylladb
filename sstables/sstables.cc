@@ -3527,18 +3527,13 @@ future<> sstable::close_files() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         sstlog.debug("Deleting sstable that is {}marked for deletion", _marked_for_deletion == mark_for_deletion::implicit ? "implicitly " : "");
-        try {
-            close_futures.push_back(unlink().handle_exception(
-                        [me = shared_from_this()] (std::exception_ptr eptr) {
-                            try {
-                                std::rethrow_exception(eptr);
-                            } catch (...) {
-                                sstlog.warn("Exception when deleting sstable file: {}", eptr);
-                            }
-                        }));
-        } catch (...) {
-            sstlog.warn("Exception when deleting sstable file: {}", std::current_exception());
-        }
+        close_futures.push_back(unlink().handle_exception([me = shared_from_this()] (std::exception_ptr eptr) {
+            try {
+                std::rethrow_exception(eptr);
+            } catch (...) {
+                sstlog.warn("Exception when deleting sstable file: {}", eptr);
+            }
+        }));
     }
 
     _on_closed(*this);
