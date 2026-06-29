@@ -5,7 +5,6 @@
 #
 
 import os
-import random
 import subprocess
 import sys
 import time
@@ -18,7 +17,7 @@ import requests.exceptions
 from test import TOP_SRC_DIR, path_to
 from test.nodetool.rest_api_mock import set_expected_requests, expected_request, get_expected_requests, \
     get_unexpected_requests, expected_requests_manager
-from test.pylib.db.model import Test
+from test.pylib.host_registry import HostRegistry
 from test.pylib.skip_types import skip_env
 
 
@@ -41,7 +40,7 @@ class ServerAddress(NamedTuple):
 
 
 @pytest.fixture(scope="module")
-async def server_address(request, testpy_test: None|Test):
+async def server_address(request):
     # Each test module gets a unique IP, so a fixed port suffices and
     # avoids any port-collision or TOCTOU concerns. This mirrors the
     # approach used in test/cqlpy/run.py.
@@ -56,15 +55,15 @@ async def server_address(request, testpy_test: None|Test):
             args = "/sbin/ifconfig lo up".split()
             subprocess.run(args, check=True)
         # the network namespace isn't shared, so any IP works
-        ip = '127.0.0.1'
+        ip = "127.0.0.1"
     else:
-        if testpy_test is not None:
-            ip = await testpy_test.suite.hosts.lease_host()
-        else:
-            ip = f"127.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
+        hosts = HostRegistry()
+        ip = await hosts.lease_host()
+
     yield ServerAddress(ip, port)
-    if testpy_test is not None:
-        await testpy_test.suite.hosts.release_host(ip)
+
+    if ip != "127.0.0.1":
+        await hosts.release_host(ip)
 
 
 @pytest.fixture(scope="module")

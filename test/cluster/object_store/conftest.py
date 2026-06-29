@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from test.pylib.suite.python import add_s3_options
+from test.pylib.connect_options import add_s3_options
 from test.pylib.object_storage import (
     format_tuples,
     keyspace_options,

@@ -19,7 +19,7 @@ from test.conftest import dynamic_scope
 from test.cqlpy.conftest import host  # add required fixtures
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.skip_types import skip_env
-from test.pylib.suite.python import add_host_option
+from test.pylib.connect_options import add_host_option
 from urllib.parse import urlparse
 from functools import cache
 
@@ -134,7 +134,7 @@ def dynamodb(request, get_valid_alternator_role):
         if request.config.getoption('url') != None:
             local_url = request.config.getoption('url')
         elif address := request.getfixturevalue("host"):
-            # this argument needed for compatibility with PythonTestSuite without modifying the previous behavior
+            # derive the endpoint from the host fixture when running against a managed cluster
             local_url = f"http://{address}:8000"
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
@@ -179,7 +179,7 @@ def dynamodbstreams(request, get_valid_alternator_role):
         if request.config.getoption('url') != None:
             local_url = request.config.getoption('url')
         elif address := request.getfixturevalue("host"):
-            # this argument needed for compatibility with PythonTestSuite without modifying the previous behavior
+            # derive the endpoint from the host fixture when running against a managed cluster
             local_url = f"http://{address}:8000"
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'

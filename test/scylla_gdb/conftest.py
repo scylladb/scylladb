@@ -8,14 +8,14 @@ import subprocess
 
 import pytest
 
-from test.pylib.suite.python import PythonTest
+from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster
 
 
 @pytest.fixture(scope="module")
-async def scylla_server(testpy_test: PythonTest | None):
+async def scylla_server(scylla_cluster: ScyllaCluster) -> ScyllaServer:
     """Return a running Scylla server instance from the active test cluster."""
-    async with testpy_test.run_ctx() as cluster:
-        yield next(iter(cluster.running.values()))
+
+    return next(iter(scylla_cluster.running.values()))
 
 
 @pytest.fixture(scope="module")

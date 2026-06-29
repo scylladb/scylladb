@@ -37,11 +37,7 @@ import treelib
 from scripts import coverage
 from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to
 from test.pylib import coverage_utils
-from test.pylib.suite.base import (
-    TestSuite,
-    palette,
-)
-from test.pylib.util import LogPrefixAdapter, get_configured_modes
+from test.pylib.util import LogPrefixAdapter, get_configured_modes, palette
 
 launch_time = time.monotonic()
 
@@ -173,9 +169,6 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
                         help="Provide the URL to artifacts directory to generate the link to failed tests directory "
                              "with logs")
-    parser.add_argument("--cluster-pool-size", action="store", default=None, type=int,
-                        help="Set the pool_size for PythonTest and its descendants. Alternatively environment variable "
-                             "CLUSTER_POOL_SIZE can be used to achieve the same")
     parser.add_argument('--manual-execution', action='store_true', default=False,
                         help='Let me manually run the test executable at the moment this script would run it')
     parser.add_argument('--byte-limit', action="store", default=randint(0, 2000), type=int,

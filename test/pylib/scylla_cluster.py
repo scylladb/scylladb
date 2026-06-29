@@ -1120,11 +1120,12 @@ class ScyllaCluster:
         version: Optional[ScyllaVersionDescription]
         server_encryption: str
 
-    def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
-                 host_registry: HostRegistry, replicas: int,
+    def __init__(self,
+                 logger: Union[logging.Logger, logging.LoggerAdapter],
+                 replicas: int,
                  create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
         self.logger = logger
-        self.host_registry = host_registry
+        self.host_registry = HostRegistry()
         self.leased_ips = set[IPAddress]()
         self.name = str(uuid.uuid1())
         self.replicas = replicas
@@ -1413,13 +1414,14 @@ class ScyllaCluster:
         for server in self.running.values():
             server.write_log_marker(f"------ Starting test {name} ------\n")
 
-    def after_test(self, name: str, success: bool) -> None:
+    def after_test(self, name: str, success: bool | None = None) -> None:
         """Mark the cluster as dirty after a failed test.
         If the cluster is not dirty, check that it's still alive and the test
         hasn't left any garbage."""
         assert self.start_exception is None
         if not success:
-            self.logger.debug(f"Test failed using cluster {self.name}, marking the cluster as dirty")
+            if success is not None:
+                self.logger.debug(f"Test failed using cluster {self.name}, marking the cluster as dirty")
             self.is_dirty = True
         if self.is_dirty:
             self.logger.info(f"The cluster {self.name} is dirty, not checking"

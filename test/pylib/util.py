@@ -7,20 +7,20 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 import threading
 import time
 import asyncio
 import logging
 import os
-import universalasync
-from collections.abc import Awaitable, Callable, Coroutine
-from functools import cache
-
 import random
 import string
-
+from collections.abc import Awaitable, Callable, Coroutine
+from functools import cache
 from typing import Optional, TypeVar, Any, cast
 
+import colorama
+import universalasync
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
@@ -451,3 +451,37 @@ def execute_with_tracing(cql : Session, statement : str | Statement, log : bool 
 
 def universalasync_typed_wrap(cls: T) -> T:
     return cast(T, universalasync.wrap(cls))
+
+
+output_is_a_tty = sys.stdout.isatty()
+
+
+def create_formatter(*decorators) -> Callable[[Any], str]:
+    """Return a function which decorates its argument with the given
+    color/style if stdout is a tty, and leaves intact otherwise."""
+    def color(arg: Any) -> str:
+        return "".join(decorators) + str(arg) + colorama.Style.RESET_ALL
+
+    def nocolor(arg: Any) -> str:
+        return str(arg)
+
+    return color if output_is_a_tty else nocolor
+
+
+class palette:
+    """Color palette for formatting terminal output"""
+    ok = create_formatter(colorama.Fore.GREEN, colorama.Style.BRIGHT)
+    fail = create_formatter(colorama.Fore.RED, colorama.Style.BRIGHT)
+    new = create_formatter(colorama.Fore.BLUE)
+    skip = create_formatter(colorama.Style.DIM)
+    path = create_formatter(colorama.Style.BRIGHT)
+    diff_in = create_formatter(colorama.Fore.GREEN)
+    diff_out = create_formatter(colorama.Fore.RED)
+    diff_mark = create_formatter(colorama.Fore.MAGENTA)
+    warn = create_formatter(colorama.Fore.YELLOW)
+    crit = create_formatter(colorama.Fore.RED, colorama.Style.BRIGHT)
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+    @staticmethod
+    def nocolor(text: str) -> str:
+        return palette.ansi_escape.sub('', text)

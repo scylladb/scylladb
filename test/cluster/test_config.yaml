@@ -1,4 +1,3 @@
-type: Python
 pool_size: 4
 cluster:
   initial_size: 0

@@ -12,49 +12,56 @@ import os
 import pathlib
 import platform
 import random
+import shutil
 import sys
 import time
 from argparse import BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count
 from functools import cache, cached_property
-from pathlib import Path
 from random import randint
 from typing import TYPE_CHECKING, Callable
 from types import SimpleNamespace
 
 import pytest
+import universalasync
 import xdist
 import yaml
 from _pytest.junitxml import xml_key
 
 
-from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, HOST_ID
+from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
+from test.pylib.artifact_registry import ArtifactRegistry as artifacts
+from test.pylib.ldap_server import start_ldap
+from test.pylib.minio_server import MinioServer
+from test.pylib.pool import Pool
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
     SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
-from test.pylib.scylla_cluster import merge_cmdline_options
-from test.pylib.skip_reason_plugin import skip_marker
-from test.pylib.suite.base import (
-    PYTEST_TESTS_LOGS_FOLDER,
-    TestSuite,
-    get_testpy_test,
-    prepare_environment,
-    init_testsuite_globals,
+from test.pylib.host_registry import HostRegistry
+from test.pylib.s3_proxy import S3ProxyServer
+from test.pylib.s3_server_mock import MockS3Server
+from test.pylib.scylla_cluster import (
+    ScyllaCluster,
+    ScyllaServer,
+    get_current_version_description,
+    merge_cmdline_options,
 )
-from test.pylib.util import get_modes_to_run, scale_timeout_by_mode
+from test.pylib.skip_reason_plugin import skip_marker
+from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
+from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    import argparse
+    from collections.abc import Generator, AsyncGenerator
 
     import _pytest.nodes
     import _pytest.scope
 
-    from test.pylib.suite.base import Test
-
 
 TEST_CONFIG_FILENAME = "test_config.yaml"
 PYTEST_LOG_FOLDER = "pytest_log"
+PYTEST_TESTS_LOGS_FOLDER = "pytest_tests_logs"
 
 REPEATING_FILES = pytest.StashKey[set[pathlib.Path]]()
 BUILD_MODE = pytest.StashKey[str]()
@@ -68,7 +75,8 @@ logger = logging.getLogger(__name__)
 # Store pytest config globally so we can access it in hooks that only receive report
 _pytest_config: pytest.Config | None = None
 
-_system_resource_monitor: SystemResourceMonitor | None = None
+_cluster_pools: dict[str, Pool[ScyllaCluster]] = {}
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
@@ -103,9 +111,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                           "The lcov files can eventually be used for generating coverage reports")
     parser.addoption("--coverage-mode", action='append', type=str, dest="coverage_modes",
                      help="Collect and process coverage only for the modes specified. implies: --coverage, default: All built modes")
-    parser.addoption("--cluster-pool-size", type=int,
-                     help="Set the pool_size for PythonTest and its descendants.  Alternatively environment variable "
-                          "CLUSTER_POOL_SIZE can be used to achieve the same")
     parser.addoption("--extra-scylla-cmdline-options", default='',
                      help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
                           " '--logger-log-level raft=trace --default-log-level error'")
@@ -235,6 +240,20 @@ def build_mode(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="module")
+def testpy_shortname(request: pytest.FixtureRequest) -> str:
+    return str(request.path.relative_to(get_params_stash(node=request.node)[TEST_SUITE].path).with_suffix(""))
+
+
+@pytest.fixture(scope="module")
+def testpy_uname(request: pytest.FixtureRequest, testpy_shortname: str) -> str:
+    params_stash = get_params_stash(node=request.node)
+    uname = f"{params_stash[TEST_SUITE].name}.{testpy_shortname.replace("/", "_")}.{params_stash[RUN_ID]}"
+    if worker_id := get_xdist_worker_id():
+        uname = f"{worker_id}.{uname}"
+    return uname
+
+
+@pytest.fixture(scope="module")
 def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     def scale_timeout_inner(timeout: int | float) -> int | float:
         return scale_timeout_by_mode(build_mode, timeout)
@@ -243,16 +262,78 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
 
 
 @pytest.fixture(scope="module")
-async def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> Test | None:
-    """Create an instance of Test class for the current test.py test."""
+def testpy_suite_clusters(request: pytest.FixtureRequest,
+                          build_mode: str,
+                          suite_log_dir: pathlib.Path,
+                          scylla_binary: str) -> Pool[ScyllaCluster]:
+    suite_config = get_params_stash(node=request.node)[TEST_SUITE]
+    suite_key = os.path.join(suite_config.path, build_mode)
+    pool = _cluster_pools.get(suite_key)
+    if not pool:
+        _cluster_pools[suite_key] = pool = create_suite_pool(
+            suite_config=suite_config,
+            options=request.config.option,
+            mode=build_mode,
+            log_dir=suite_log_dir,
+            scylla_exe=scylla_binary,
+        )
+    return pool
 
-    if request.scope == "module":
-        return await get_testpy_test(path=request.path, options=request.config.option, mode=build_mode)
-    return None
 
-@pytest.fixture(scope="function")
-def scylla_binary(testpy_test) -> Path:
-    return testpy_test.suite.scylla_exe
+@pytest.fixture(scope="module")
+def suite_log_dir(request: pytest.FixtureRequest, build_mode: str) -> pathlib.Path:
+    return pathlib.Path(request.config.getoption("--tmpdir")).joinpath(build_mode).absolute()
+
+
+@pytest.fixture(scope="module")
+def scylla_binary(request: pytest.FixtureRequest, build_mode: str) -> str:
+    return request.config.getoption("--exe-path") or path_to(build_mode, "scylla")
+
+
+@pytest.fixture(scope="module")
+async def scylla_cluster(request: pytest.FixtureRequest,
+                         testpy_suite_clusters: Pool[ScyllaCluster],
+                         build_mode: str,
+                         testpy_shortname: str,
+                         testpy_uname: str) -> AsyncGenerator[ScyllaCluster]:
+    """Lease a ScyllaCluster from the pool for the tests in a module.
+
+    Gets a cluster from the suite's pool, runs the before-test hook and
+    yields it to the module's tests. Once the module is done the cluster is
+    always returned to the pool marked dirty, so it is recycled rather than
+    reused by a later module.
+    """
+    logger_prefix = f"{build_mode}/"
+    cluster_logger = LogPrefixAdapter(logging.getLogger(logger_prefix), {"prefix": logger_prefix})
+    cluster: ScyllaCluster | None = None
+    server_log_filename: pathlib.Path | None = None
+    testpy_name = os.path.join(get_params_stash(node=request.node)[TEST_SUITE].name, testpy_shortname.split('.')[0])
+    is_before_test_ok = False
+    is_after_test_ok = False
+    try:
+        cluster: ScyllaCluster = await testpy_suite_clusters.get(cluster_logger)
+        cluster.before_test(testpy_uname)
+        cluster_logger.info("Leasing Scylla cluster %s for test %s", cluster, testpy_uname)
+        server_log_filename = cluster.server_log_filename()
+        is_before_test_ok = True
+        cluster.take_log_savepoint()
+
+        yield cluster
+
+        cluster.after_test(testpy_uname)
+        is_after_test_ok = True
+    except Exception as exc:
+        if not is_before_test_ok:
+            logger.info("Test %s pre-check failed: %s\ncheck server logs: %s", testpy_name, exc, server_log_filename)
+            cluster_logger.info("Discarding cluster after failed start for test %s...", testpy_name)
+        elif not is_after_test_ok:
+            logger.info("Test %s post-check failed: %s\ncheck server logs: %s", testpy_name, exc, server_log_filename)
+            cluster_logger.info("Discarding cluster after failed test %s...", testpy_name)
+        raise
+    finally:
+        if cluster is not None:
+            cluster_logger.info("Test %s finished", testpy_uname)
+            await testpy_suite_clusters.put(cluster, is_dirty=True)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
@@ -270,33 +351,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Confi
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    # test.py starts S3 mock and create/cleanup testlog by itself. Also, if we run with --collect-only option,
-    # we don't need this stuff.
-    global _system_resource_monitor
-    gather_metrics = session.config.getoption("--gather-metrics")
-    temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
-    save_log_on_success = session.config.getoption("--save-log-on-success")
-    toxiproxy_byte_limit = session.config.getoption("--byte-limit")
-    collect_only = session.config.getoption("--collect-only")
-    if TEST_RUNNER != "pytest" or collect_only:
+    if session.config.getoption("--collect-only"):
         return
+
+    artifacts.init()
+    artifacts.add_exit_artifact(HostRegistry().cleanup)
 
     # Check if this is an xdist worker
     is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
 
-    init_testsuite_globals()
-    TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
+    gather_metrics = session.config.getoption("--gather-metrics")
+    temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
 
     # Run stuff just once for the main pytest process (not in xdist workers).
     if not is_xdist_worker:
-        temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
-
         prepare_environment(
             tempdir_base=temp_dir,
             modes=get_modes_to_run(session.config),
             gather_metrics=gather_metrics,
-            save_log_on_success=save_log_on_success,
-            toxiproxy_byte_limit=toxiproxy_byte_limit,
+            save_log_on_success=session.config.getoption("--save-log-on-success"),
+            toxiproxy_byte_limit= session.config.getoption("--byte-limit"),
         )
     if gather_metrics:
         # In the master process, set up the cgroup hierarchy if test.py hasn't done it already.
@@ -307,9 +381,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         # System-wide resource metrics (CPU%, memory) are identical from any process.
         # Only the master needs to record them.
         if not is_xdist_worker:
-            _system_resource_monitor = SystemResourceMonitor(temp_dir)
-            _system_resource_monitor.start()
-
+            system_resource_monitor = SystemResourceMonitor(temp_dir)
+            system_resource_monitor.start()
+            async def stop_resource_monitor() -> None:
+                system_resource_monitor.stop()
+            artifacts.add_exit_artifact(stop_resource_monitor)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -356,28 +432,20 @@ def pytest_runtest_logreport(report):
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
-    global _system_resource_monitor
-    if _system_resource_monitor:
-        _system_resource_monitor.stop()
+    if session.config.getoption("--collect-only"):
+        return
 
-    is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
     # If all tests passed, remove the log file to save space and avoid confusion with logs from failed runs.
     # We check this at the end of the session to ensure that we have the complete log available for any failed tests.
-
     if session.testsfailed == 0 and not session.config.getoption("--save-log-on-success"):
         # Use missing_ok=True because the log file is only created on first write,
         # so it may never have been written if nothing was logged.
         pathlib.Path(_pytest_config.stash[PYTEST_LOG_FILE]).unlink(missing_ok=True)
 
+    asyncio.run(artifacts.cleanup_before_exit())
 
-    # Check if this is an xdist worker - workers should not clean up (only the main process should)
-    # Check if test.py has already prepared the environment, so it should clean up
-
-    if is_xdist_worker:
+    if xdist.is_xdist_worker(request_or_session=session):
         return
-    # we only clean up when running with pure pytest
-    if getattr(TestSuite, "artifacts", None) is not None:
-        asyncio.run(TestSuite.artifacts.cleanup_before_exit())
 
     # Modify exit code to reflect the number of failed tests for easier detection in CI.
     maxfail = session.config.getoption("maxfail")
@@ -424,13 +492,15 @@ def pytest_configure(config: pytest.Config) -> None:
     root_logger.addHandler(file_handler)
     root_logger.setLevel(log_file_level)
 
-    if config.getoption("--exe-url") and config.getoption("--exe-path"):
-        raise RuntimeError("Can't use --exe-url and exe-path simultaneously.")
+    if exe_url := config.getoption("--exe-url"):
+        if config.getoption("--exe-path"):
+            raise RuntimeError("Can't use --exe-url and exe-path simultaneously.")
+        config.option.exe_path = fetch_and_install_scylla_version(url=exe_url)
 
-    if  config.getoption("--exe-path") or config.getoption("--exe-url"):
-            if config.getoption("--mode"):
-                raise RuntimeError("Can't use --mode with --exe-path or --exe-url.")
-            config.option.modes = ["custom_exe"]
+    if config.getoption("--exe-path"):
+        if config.getoption("--mode"):
+            raise RuntimeError("Can't use --mode with --exe-path or --exe-url.")
+        config.option.modes = ["custom_exe"]
 
     os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)
@@ -517,7 +587,7 @@ def pytest_runtest_makereport(item, call):
 class TestSuiteConfig:
     def __init__(self, config_file: pathlib.Path):
         self.path = config_file.parent
-        self.cfg = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        self.cfg = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
 
     @cached_property
     def name(self) -> str:
@@ -563,7 +633,7 @@ class TestSuiteConfig:
 
 TEST_SUITE = pytest.StashKey[TestSuiteConfig | None]()
 
-_STASH_KEYS_TO_COPY = BUILD_MODE, TEST_SUITE
+_STASH_KEYS_TO_COPY = BUILD_MODE, TEST_SUITE, RUN_ID
 
 
 def get_params_stash(node: _pytest.nodes.Node) -> pytest.Stash | None:
@@ -576,9 +646,10 @@ def get_params_stash(node: _pytest.nodes.Node) -> pytest.Stash | None:
 def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], count]) -> None:
     params_stash = get_params_stash(node=item)
 
+    if RUN_ID not in params_stash:
+        params_stash[RUN_ID] = next(run_ids[(params_stash[BUILD_MODE], item.parent._nodeid)])
     for key in _STASH_KEYS_TO_COPY:
         item.stash[key] = params_stash[key]
-    item.stash[RUN_ID] = next(run_ids[(item.stash[BUILD_MODE], item._nodeid)])
 
     suffix = f".{item.stash[BUILD_MODE]}.{item.stash[RUN_ID]}"
 
@@ -609,3 +680,214 @@ def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], 
     if (any(mark.name in ("perf", "manual", "unstable") for mark in item.iter_markers())
             and not any(mark.name == "non_gating" for mark in item.iter_markers("non_gating"))):
         item.add_marker(pytest.mark.non_gating)
+
+
+def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) -> None:
+    # Ensure the dir exists.
+    dirname.mkdir(parents=True, exist_ok=True)
+
+    if not save_log_on_success:
+        # Remove old artifacts.
+        if pattern == '*':
+            shutil.rmtree(dirname, ignore_errors=True)
+        else:
+            for p in dirname.glob(pattern):
+                p.unlink()
+
+
+def prepare_dirs(tempdir_base: pathlib.Path,
+                 modes: list[str],
+                 gather_metrics: bool,
+                 save_log_on_success: bool = False) -> None:
+    setup_cgroup(gather_metrics)
+    prepare_dir(tempdir_base, "*.log", save_log_on_success)
+    prepare_dir(tempdir_base/ PYTEST_TESTS_LOGS_FOLDER, "*.log", save_log_on_success)
+    for directory in ['report', 'ldap_instances']:
+        full_path_directory = tempdir_base / directory
+        prepare_dir(full_path_directory, '*', save_log_on_success)
+    for mode in modes:
+        prepare_dir(tempdir_base / mode, "*.log", save_log_on_success)
+        prepare_dir(tempdir_base / mode, "*.reject", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "failed_test", "*", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
+
+
+def _make_service_logger(logger_name: str, log_file: pathlib.Path) -> logging.Logger:
+    """Return a logger that writes exclusively to *log_file*.
+
+    Disables propagation to the root logger so service start/stop messages
+    never appear on the console.
+    """
+    svc_logger = logging.getLogger(logger_name)
+    svc_logger.propagate = False
+    svc_logger.setLevel(logging.DEBUG)
+    if not svc_logger.handlers:
+        handler = logging.FileHandler(log_file)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        svc_logger.addHandler(handler)
+    return svc_logger
+
+
+@universalasync.async_to_sync_wraps
+async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_limit: int):
+    hosts = HostRegistry()
+
+    finalize = start_ldap(
+        host=await hosts.lease_host(),
+        port=5000,
+        instance_root=tempdir_base / 'ldap_instances',
+        toxiproxy_byte_limit=toxiproxy_byte_limit)
+    async def make_async_finalize():
+        finalize()
+
+    artifacts.add_exit_artifact(make_async_finalize)
+    ms = MinioServer(
+        tempdir_base=str(tempdir_base),
+        address=await hosts.lease_host(),
+        logger=LogPrefixAdapter(
+            logger=_make_service_logger("minio", tempdir_base / "minio.log"),
+            extra={"prefix": "minio"},
+        ),
+    )
+    await ms.start()
+    artifacts.add_exit_artifact(ms.stop)
+
+    mock_s3_server = MockS3Server(
+        host=await hosts.lease_host(),
+        port=2012,
+        logger=LogPrefixAdapter(
+            logger=_make_service_logger("s3_mock", tempdir_base / "s3_mock.log"),
+            extra={"prefix": "s3_mock"},
+        ),
+    )
+    await mock_s3_server.start()
+    artifacts.add_exit_artifact(mock_s3_server.stop)
+
+    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
+    proxy_s3_server = S3ProxyServer(
+        host=await hosts.lease_host(),
+        port=9002,
+        minio_uri=minio_uri,
+        max_retries=3,
+        seed=int(time.time()),
+        logger=LogPrefixAdapter(
+            logger=_make_service_logger("s3_proxy", tempdir_base / "s3_proxy.log"),
+            extra={"prefix": "s3_proxy"},
+        ),
+    )
+    await proxy_s3_server.start()
+    artifacts.add_exit_artifact(proxy_s3_server.stop)
+
+
+def prepare_environment(tempdir_base: pathlib.Path,
+                        modes: list[str],
+                        gather_metrics: bool,
+                        save_log_on_success: bool,
+                        toxiproxy_byte_limit: int) -> None:
+    prepare_dirs(tempdir_base, modes, gather_metrics, save_log_on_success=save_log_on_success)
+    start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
+
+
+def create_suite_pool(suite_config: TestSuiteConfig,
+                      options: argparse.Namespace,
+                      mode: str,
+                      log_dir: pathlib.Path,
+                      scylla_exe: str) -> Pool[ScyllaCluster]:
+    # environment variables that should be the base of all processes running in this suit
+    base_env = {}
+
+    if options.coverage and (mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
+        # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
+        # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
+        # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
+        # thousands of tests it can easily reach 10 of GBs)
+        # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
+        base_env["LLVM_PROFILE_FILE"] = str(log_dir / "coverage" / suite_config.name / "%m.profraw")
+
+    cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
+    pool_size = suite_config.cfg.get("pool_size", int(os.getenv("CLUSTER_POOL_SIZE", 2)))
+
+    def create_server(create_cfg: ScyllaCluster.CreateServerParams):
+        cmdline_options = suite_config.cfg.get("extra_scylla_cmdline_options", [])
+        if type(cmdline_options) == str:
+            cmdline_options = [cmdline_options]
+        cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
+        cmdline_options = merge_cmdline_options(cmdline_options, options.extra_scylla_cmdline_options.split())
+        # There are multiple sources of config options, with increasing priority
+        # (if two sources provide the same config option, the higher priority one wins):
+        # 1. the defaults
+        # 2. suite-specific config options (in "extra_scylla_config_options")
+        # 3. config options from tests (when servers are added during a test)
+        config_options = {
+            "authenticator": "PasswordAuthenticator",
+            "authorizer": "CassandraAuthorizer",
+            "tablets_initial_scale_factor": 4 if mode == "release" else 2,
+            **suite_config.cfg.get("extra_scylla_config_options", {}),
+            **create_cfg.config_from_test,
+        }
+        server = ScyllaServer(
+            mode=mode,
+            version=(create_cfg.version or get_current_version_description(scylla_exe)),
+            vardir=log_dir,
+            logger=create_cfg.logger,
+            cluster_name=create_cfg.cluster_name,
+            ip_addr=create_cfg.ip_addr,
+            seeds=create_cfg.seeds,
+            cmdline_options=cmdline_options,
+            config_options=config_options,
+            property_file=create_cfg.property_file,
+            append_env=base_env,
+            server_encryption=create_cfg.server_encryption)
+
+        return server
+
+    async def create_cluster(logger: logging.Logger | logging.LoggerAdapter) -> ScyllaCluster:
+        cluster = ScyllaCluster(logger, cluster_size, create_server)
+
+        async def stop() -> None:
+            await cluster.stop()
+
+        artifacts.add_exit_artifact(stop)
+
+        if not options.save_log_on_success:
+            # If a test fails, we might want to keep the data dirs.
+            async def uninstall() -> None:
+                await cluster.uninstall()
+
+            artifacts.add_exit_artifact(uninstall)
+
+        await cluster.install_and_start()
+        # If cluster failed to start, raise the exception immediately
+        # so the pool doesn't return a broken cluster to tests
+        if cluster.start_exception is not None:
+            # Clean up the broken cluster before raising
+            try:
+                await cluster.stop()
+                if cluster.api is not None:
+                    cluster.api.close()
+                    cluster.api = None
+                await cluster.release_ips()
+            except:
+                pass  # Ignore cleanup errors
+            raise cluster.start_exception
+        return cluster
+
+    async def recycle_cluster(cluster: ScyllaCluster) -> None:
+        """When a dirty cluster is returned to the cluster pool,
+           stop it and release the used IPs. We don't necessarily uninstall() it yet,
+           which would delete the log file and directory - we might want to preserve
+           these if it came from a failed test.
+        """
+        await cluster.stop()
+        for srv in cluster.servers.values():
+            if srv.log_file is not None:
+                srv.log_file.close()
+            srv.maintenance_socket_dir.cleanup()
+        # Close API client to release connector resources
+        if cluster.api is not None:
+            cluster.api.close()
+            cluster.api = None
+        await cluster.release_ips()
+
+    return Pool(pool_size, create_cluster, recycle_cluster)
