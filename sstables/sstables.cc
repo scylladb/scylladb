@@ -1976,12 +1976,15 @@ void seal_statistics(sstable_version_types v, statistics& s, metadata_collector&
 void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
         uint64_t index_offset, index_sampling_state& state) {
     state.partition_count++;
-    // generates a summary entry when possible (= keep summary / data size ratio within reasonable limits)
-    if (data_offset >= state.next_data_offset_to_write_summary) {
-        auto entry_size = 8 + 2 + key.size();  // offset + key_size.size + key.size
-        state.next_data_offset_to_write_summary += state.summary_byte_cost * entry_size;
+    state.partitions_since_last_summary_entry++;
+    auto entry_size = 8 + 2 + key.size();  // offset + key_size.size + key.size
+    if (s.entries.empty()
+            || data_offset - state.last_data_offset_in_summary >= state.summary_byte_cost * entry_size
+            || state.partitions_since_last_summary_entry >= state.max_partitions_per_page) {
         auto key_data = s.add_summary_data(key);
         s.entries.push_back(summary_entry{ token, key_data, index_offset });
+        state.last_data_offset_in_summary = data_offset;
+        state.partitions_since_last_summary_entry = 0;
     }
 }
 
@@ -2276,8 +2279,9 @@ future<> sstable::generate_summary() {
     public:
         std::optional<key> first_key, last_key;
 
-        summary_generator(const dht::i_partitioner& p, summary& s, double summary_ratio) : _partitioner(p), _summary(s) {
+        summary_generator(const dht::i_partitioner& p, summary& s, double summary_ratio, uint64_t max_partitions_per_page) : _partitioner(p), _summary(s) {
             _state.summary_byte_cost = summary_byte_cost(summary_ratio);
+            _state.max_partitions_per_page = max_partitions_per_page;
         }
         bool should_continue() {
             return true;
@@ -2311,7 +2315,7 @@ future<> sstable::generate_summary() {
         file_input_stream_options options;
         options.buffer_size = sstable_buffer_size;
 
-        auto s = summary_generator(_schema->get_partitioner(), _components->summary, _manager.get_config().sstable_summary_ratio);
+        auto s = summary_generator(_schema->get_partitioner(), _components->summary, _manager.get_config().sstable_summary_ratio, _manager.get_config().sstable_summary_max_partitions_per_page());
             auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                     *this, sem.make_tracking_only_permit(_schema, "generate-summary", db::no_timeout, {}), s, trust_promoted_index::yes,
                     make_file_input_stream(index_file, 0, index_size, std::move(options)), 0, index_size,
