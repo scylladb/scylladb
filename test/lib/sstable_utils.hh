@@ -110,7 +110,7 @@ public:
     }
 
     auto get_components() const {
-        return _sst->_recognized_components;
+        return _sst->_recognized_components.mask();
     }
 
     void set_data_file_size(uint64_t size) {
