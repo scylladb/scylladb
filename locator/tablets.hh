@@ -116,7 +116,7 @@ using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
 /// Used by TABLETS_ROUTING_V2 to detect when a driver's cached routing is stale.
 ///
 /// Tablet version is computed differently for eventually-consistent and
-/// strongly-consistent tablets.
+/// strongly-consistent tablets. For more details, see: docs/dev/tablets-routing-v2.md.
 using tablet_version = utils::tagged_integer<struct tablet_version_tag, uint64_t>;
 
 /// A single-byte encoding of one 4-bit block of a tablet_version.
@@ -124,6 +124,7 @@ using tablet_version = utils::tagged_integer<struct tablet_version_tag, uint64_t
 /// Used in EXECUTE requests to minimize network usage.
 ///
 /// Blocks are indexed from the least significant bits to the most significant ones.
+/// For more details, see: docs/dev/tablets-routing-v2.md.
 using tablet_version_block = utils::tagged_integer<struct tablet_version_block_tag, uint8_t>;
 
 inline bool compare_tablet_version_block(tablet_version hash, tablet_version_block block) noexcept {
