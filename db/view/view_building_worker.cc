@@ -436,6 +436,8 @@ future<> view_building_worker::run_view_building_state_observer() {
         bool sleep = false;
         try {
             vbw_logger.trace("view_building_state_observer() iteration");
+            co_await utils::get_local_injector().inject("view_building_worker_pause_state_observer",
+                    utils::wait_for_message(std::chrono::minutes(5)));
             auto read_apply_mutex_holder = co_await _group0.client().hold_read_apply_mutex(_as);
 
             co_await update_built_views();
@@ -612,9 +614,12 @@ future<> view_building_worker::state::flush_base_table(replica::database& db, ta
     vbw_logger.debug("Awaiting penging writes and streams on base table {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
     co_await when_all(cf->await_pending_writes(), cf->await_pending_streams());
     vbw_logger.debug("Flushing base table {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
+    auto views_to_flush = get_ids_of_all_views(db, base_table_id);
     co_await flush_base(cf, as);
+    co_await utils::get_local_injector().inject("view_building_worker_pause_after_flush_before_recording_flushed_views",
+            utils::wait_for_message(std::chrono::minutes(5)));
     processing_base_table = base_table_id;
-    flushed_views = get_ids_of_all_views(db, base_table_id);
+    flushed_views = std::move(views_to_flush);
     vbw_logger.debug("Flushed base table {}.{} for views: {}", cf->schema()->ks_name(), cf->schema()->cf_name(), flushed_views);
 }
 
