@@ -347,6 +347,7 @@ seastar::data_source create_ranged_source(data_source src, uint64_t offset, std:
                 co_return temporary_buffer<char>{};
             }
             if (auto skip = std::exchange(_offset, 0); (skip + n) > 0) {
+                _read += std::min(_len - _read, n);
                 co_return trim(co_await _src.skip(skip + n));
             }
             co_return trim(co_await _src.get());

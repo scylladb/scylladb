@@ -11,8 +11,10 @@
 #include "message/messaging_service.hh"
 #include "test/lib/log.hh"
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/random_utils.hh"
 
 #include <boost/lexical_cast.hpp>
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/seastar.hh>
@@ -530,4 +532,37 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_compressed) {
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_uncompressed) {
     test_sstable_stream(compress_sstable::no, corrupt_digest_component, "Digest mismatch");
+}
+
+// tests that a ranged_source counts any skipped data into
+// remaining "len" (available data)
+SEASTAR_TEST_CASE(test_ranged_data_source_skip) {
+
+    constexpr size_t n_bufs = 30;
+    constexpr size_t buf_len = 4096;
+
+    std::vector<temporary_buffer<char>> src;
+    src.reserve(n_bufs);
+
+    for (size_t i = 0; i < n_bufs; ++i) {
+        auto rnd = tests::random::get_bytes(buf_len);
+        temporary_buffer<char> buf(reinterpret_cast<char*>(rnd.data()), rnd.size());
+        src.emplace_back(std::move(buf));
+    }
+
+    auto size = n_bufs * buf_len;
+    auto off = 1756u;
+    auto len = size - 2*off;
+
+    auto wrapped = create_ranged_source(create_memory_source(std::move(src)), off, len);
+
+    input_stream<char> in(std::move(wrapped));
+    co_await in.skip(off);
+
+    auto buf = co_await in.read_exactly(len); 
+
+    // ensure we did in fact only get (len - off) bytes from the read.
+    // i.e. ranged_source limited the available bytes correctly
+    BOOST_REQUIRE_LT(buf.size(), len);
+    BOOST_REQUIRE_EQUAL(buf.size(), len - off);
 }
