@@ -7,6 +7,7 @@
  */
 #include "fsm.hh"
 #include <random>
+#include <ranges>
 #include <seastar/core/coroutine.hh>
 #include "raft/raft.hh"
 #include "utils/assert.hh"
@@ -20,10 +21,11 @@ leader::~leader() {
     }
 }
 
-fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
+fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, log log,
         index_t commit_idx, failure_detector& failure_detector, fsm_config config,
         seastar::condition_variable& sm_events) :
-        _my_id(id), _current_term(current_term), _voted_for(voted_for),
+        _my_id(id), _tag(std::move(tag)),
+        _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)), _failure_detector(failure_detector), _config(config), _sm_events(sm_events) {
     if (id == raft::server_id{}) {
         throw std::invalid_argument("raft::fsm: raft instance cannot have id zero");
@@ -34,11 +36,37 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     // After we observed the state advance commit_idx to persisted one (if provided)
     // so that the log can be replayed
     _commit_idx = std::max(_commit_idx, commit_idx);
-    logger.trace("fsm[{}]: starting, current term {}, log length {}, commit index {}", _my_id, _current_term, _log.last_idx(), _commit_idx);
 
-    // Init timeout settings
-    if (_log.get_configuration().current.size() == 1 && _log.get_configuration().can_vote(_my_id)) {
-        become_candidate(_config.enable_prevoting);
+    // A node that "starts as a candidate" calls an election immediately on
+    // startup instead of waiting for the randomized election timeout. There is
+    // no existing leader to disrupt in these cases, so prevoting is skipped too
+    // -- the extra round-trip would be pure overhead. We start as a candidate:
+    //  - as the (voting) member of a single-node group: it is the only possible
+    //    leader, so it should take over right away;
+    //  - as the smallest-id voting member of a fresh multi-node group (empty
+    //    log, i.e. last_idx() == 0), but only when fast bootstrap is enabled.
+    //    Restricting it to a single, deterministically-chosen node avoids all
+    //    nodes racing to call an election simultaneously (which wastes a term
+    //    and risks split votes). Fast bootstrap is gated by a config flag so
+    //    that a bare fsm (e.g. in unit tests) keeps the classic behaviour of
+    //    starting as a follower; raft::server enables it.
+    // Any node with a non-empty log has already participated in the group and
+    // must go through the normal timeout path.
+    const auto& cfg = _log.get_configuration();
+    const bool start_as_candidate = cfg.can_vote(_my_id) && (
+        cfg.current.size() == 1 || (
+            _config.enable_fast_bootstrap &&
+            _log.last_idx() == index_t{0} &&
+            std::ranges::none_of(cfg.current, [this](const auto& m) {
+                return m.can_vote && m.addr.id < _my_id;
+            })
+        )
+    );
+    logger.trace("fsm[{}]: starting, current term {}, log length {}, commit index {}, start_as_candidate {}",
+            _tag, _current_term, _log.last_idx(), _commit_idx, start_as_candidate);
+
+    if (start_as_candidate) {
+        become_candidate(false);
     } else {
         reset_election_timeout();
     }
@@ -82,7 +110,7 @@ const log_entry& fsm::add_entry(T command) {
             // the old cluster has moved to operating under the
             // rules of C_new.
             logger.trace("[{}] A{}configuration change at index {} is not yet committed (config {}) (commit_idx: {})",
-                _my_id, _log.get_configuration().is_joint() ? " joint " : " ",
+                _tag, _log.get_configuration().is_joint() ? " joint " : " ",
                 _log.last_conf_idx(), _log.get_configuration(), _commit_idx);
             throw conf_change_in_progress();
         }
@@ -97,7 +125,7 @@ const log_entry& fsm::add_entry(T command) {
         tmp.enter_joint(command.current);
         command = std::move(tmp);
 
-        logger.trace("[{}] appending joint config entry at {}: {}", _my_id, _log.next_idx(), command);
+        logger.trace("[{}] appending joint config entry at {}: {}", _tag, _log.next_idx(), command);
     }
 
     utils::get_local_injector().inject("fsm::add_entry/test-failure",
@@ -129,13 +157,13 @@ void fsm::advance_commit_idx(index_t leader_commit_idx) {
     auto new_commit_idx = std::min(leader_commit_idx, _log.last_idx());
 
     logger.trace("advance_commit_idx[{}]: leader_commit_idx={}, new_commit_idx={}",
-        _my_id, leader_commit_idx, new_commit_idx);
+        _tag, leader_commit_idx, new_commit_idx);
 
     if (new_commit_idx > _commit_idx) {
         _commit_idx = new_commit_idx;
         _sm_events.signal();
         logger.trace("advance_commit_idx[{}]: signal apply_entries: committed: {}",
-            _my_id, _commit_idx);
+            _tag, _commit_idx);
     }
 }
 
@@ -186,7 +214,7 @@ void fsm::become_leader() {
     // in the log.
     leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
     logger.trace("fsm::become_leader() {} stable index: {} last index: {}",
-        _my_id, _log.stable_idx(), _log.last_idx());
+        _tag, _log.stable_idx(), _log.last_idx());
 }
 
 void fsm::become_follower(server_id leader) {
@@ -290,7 +318,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
             continue;
         }
         logger.trace("{} [term: {}, index: {}, last log term: {}{}{}] sent vote request to {}",
-            _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "",
+            _tag, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "",
             is_leadership_transfer ? ", force" : "", server.id);
 
         send_to(server.id, vote_request{term, _log.last_idx(), _log.last_term(), is_prevote, is_leadership_transfer});
@@ -298,18 +326,37 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     if (votes.tally_votes() == vote_result::WON) {
         // A single node cluster.
         if (is_prevote) {
-            logger.trace("become_candidate[{}] won prevote", _my_id);
+            logger.trace("become_candidate[{}] won prevote", _tag);
             become_candidate(false);
         } else {
-            logger.trace("become_candidate[{}] won vote", _my_id);
+            logger.trace("become_candidate[{}] won vote", _tag);
             become_leader();
+        }
+    }
+}
+
+void fsm::send_ping_messages() {
+    // We are a follower but a leader is not known. It will not be known
+    // until a communication from a leader which (for an idle leader) may
+    // not happen any time soon since we use external failure detector and
+    // our leader does not send periodic empty append messages. By sending
+    // a special append message reject we solicit a reply from a leader
+    // (or trigger a vote request re-send from a candidate).
+    auto& cfg = get_configuration();
+    // If conf is joint it means a leader will send us a non joint one eventually
+    if (!cfg.is_joint() && cfg.current.contains(_my_id)) {
+        for (auto s : cfg.current) {
+            if (s.can_vote && s.addr.id != _my_id && _failure_detector.is_alive(s.addr.id)) {
+                logger.trace("[{}]: searching for a leader. Pinging {}", _tag, s.addr.id);
+                send_to(s.addr.id, append_reply{_current_term, _commit_idx, append_reply::rejected{index_t{0}, index_t{0}}});
+            }
         }
     }
 }
 
 bool fsm::has_output() const {
     logger.trace("fsm::has_output() {} stable index: {} last index: {}",
-        _my_id, _log.stable_idx(), _log.last_idx());
+        _tag, _log.stable_idx(), _log.last_idx());
 
     auto diff = _log.last_idx() - _log.stable_idx();
 
@@ -409,7 +456,7 @@ fsm_output fsm::get_output() {
 void fsm::advance_stable_idx(index_t idx) {
     index_t prev_stable_idx = _log.stable_idx();
     _log.stable_to(idx);
-    logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
+    logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _tag, prev_stable_idx, idx);
     if (is_leader()) {
         auto leader_progress = leader_state().tracker.find(_my_id);
         if (leader_progress) {
@@ -442,10 +489,10 @@ void fsm::maybe_commit() {
         // this way, then all prior entries are committed
         // indirectly because of the Log Matching Property.
         logger.trace("maybe_commit[{}]: cannot commit because of term {} != {}",
-            _my_id, _log[new_commit_idx.value()]->term, _current_term);
+            _tag, _log[new_commit_idx.value()]->term, _current_term);
         return;
     }
-    logger.trace("maybe_commit[{}]: commit {}", _my_id, new_commit_idx);
+    logger.trace("maybe_commit[{}]: commit {}", _tag, new_commit_idx);
 
     _commit_idx = new_commit_idx;
     // We have a quorum of servers with match_idx greater than the
@@ -453,7 +500,7 @@ void fsm::maybe_commit() {
     _sm_events.signal();
 
     if (committed_conf_change) {
-        logger.trace("maybe_commit[{}]: committed conf change at idx {} (config: {})", _my_id, _log.last_conf_idx(), _log.get_configuration());
+        logger.trace("maybe_commit[{}]: committed conf change at idx {} (config: {})", _tag, _log.last_conf_idx(), _log.get_configuration());
         if (_log.get_configuration().is_joint()) {
             // 4.3. Arbitrary configuration changes using joint consensus
             //
@@ -461,7 +508,7 @@ void fsm::maybe_commit() {
             // system then transitions to the new configuration.
             configuration cfg(_log.get_configuration());
             cfg.leave_joint();
-            logger.trace("[{}] appending non-joint config entry at {}: {}", _my_id, _log.next_idx(), cfg);
+            logger.trace("[{}] appending non-joint config entry at {}: {}", _tag, _log.next_idx(), cfg);
             _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
             leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
             // Leaving joint configuration may commit more entries
@@ -483,7 +530,7 @@ void fsm::maybe_commit() {
         } else {
             auto lp = leader_state().tracker.find(_my_id);
             if (lp == nullptr || !lp->can_vote) {
-                logger.trace("maybe_commit[{}]: stepping down as leader", _my_id);
+                logger.trace("maybe_commit[{}]: stepping down as leader", _tag);
                 // 4.2.2 Removing the current leader
                 //
                 // The leader temporarily manages a configuration
@@ -543,7 +590,7 @@ void fsm::tick_leader() {
             if (progress.match_idx < _log.last_idx() || progress.commit_idx < _commit_idx) {
                 logger.trace("tick[{}]: replicate to {} because match={} < last_idx={} || "
                     "follower commit_idx={} < commit_idx={}",
-                    _my_id, progress.id, progress.match_idx, _log.last_idx(),
+                    _tag, progress.id, progress.match_idx, _log.last_idx(),
                     progress.commit_idx, _commit_idx);
 
                 replicate_to(progress, true);
@@ -561,15 +608,15 @@ void fsm::tick_leader() {
     }
 
     if (state.stepdown) {
-        logger.trace("tick[{}]: stepdown is active", _my_id);
+        logger.trace("tick[{}]: stepdown is active", _tag);
         auto me = leader_state().tracker.find(_my_id);
         if (me == nullptr || !me->can_vote) {
-            logger.trace("tick[{}]: not aborting stepdown because we have been removed from the configuration", _my_id);
+            logger.trace("tick[{}]: not aborting stepdown because we have been removed from the configuration", _tag);
             // Do not abort stepdown if not part of the current
             // config or non voting member since the node cannot
             // be a leader any longer
         } else if (*state.stepdown <= _clock.now()) {
-            logger.trace("tick[{}]: cancel stepdown", _my_id);
+            logger.trace("tick[{}]: cancel stepdown", _tag);
             // Cancel stepdown (only if the leader is part of the cluster)
             leader_state().log_limiter_semaphore->signal(_config.max_log_size);
             state.stepdown.reset();
@@ -577,7 +624,7 @@ void fsm::tick_leader() {
             _abort_leadership_transfer = true;
             _sm_events.signal(); // signal to handle aborting of leadership transfer
         } else if (state.timeout_now_sent) {
-            logger.trace("tick[{}]: resend timeout_now", _my_id);
+            logger.trace("tick[{}]: resend timeout_now", _tag);
             // resend timeout now in case it was lost
             send_to(*state.timeout_now_sent, timeout_now{_current_term});
         }
@@ -605,34 +652,19 @@ void fsm::tick() {
         // simply because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
-        logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _my_id,
+        logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _tag,
             _current_term, _last_election_time, _clock.now());
         become_candidate(_config.enable_prevoting);
     }
 
     if (is_follower() && !current_leader() && _ping_leader) {
-        // We are a follower but a leader is not known. It will not be known
-        // until a communication from a leader which (for an idle leader) may
-        // not happen any time soon since we use external failure detector and
-        // our leader does not send periodic empty append messages. By sending
-        // a special append message reject we solicit a reply from a leader.
-        // Non leaders will ignore the append reply.
-        auto& cfg = get_configuration();
-        // If conf is joint it means a leader will send us a non joint one eventually
-        if (!cfg.is_joint() && cfg.current.contains(_my_id)) {
-            for (auto s : cfg.current) {
-                if (s.can_vote && s.addr.id != _my_id && _failure_detector.is_alive(s.addr.id)) {
-                    logger.trace("tick[{}]: searching for a leader. Pinging {}", _my_id, s.addr.id);
-                    send_to(s.addr.id, append_reply{_current_term, _commit_idx, append_reply::rejected{index_t{0}, index_t{0}}});
-                }
-            }
-        }
+        send_ping_messages();
     }
 }
 
 void fsm::append_entries(server_id from, append_request&& request) {
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={} num entries={}",
-            _my_id, request.current_term, request.prev_log_idx, request.prev_log_term,
+            _tag, request.current_term, request.prev_log_idx, request.prev_log_term,
             request.leader_commit_idx, request.entries.size() ? request.entries[0]->idx : index_t(0), request.entries.size());
 
     SCYLLA_ASSERT(is_follower());
@@ -646,7 +678,7 @@ void fsm::append_entries(server_id from, append_request&& request) {
     auto [match, term] = _log.match_term(request.prev_log_idx, request.prev_log_term);
     if (!match) {
         logger.trace("append_entries[{}]: no matching term at position {}: expected {}, found {}",
-                _my_id, request.prev_log_idx, request.prev_log_term, term);
+                _tag, request.prev_log_idx, request.prev_log_term, term);
         // Reply false if log doesn't contain an entry at
         // prevLogIndex whose term matches prevLogTerm (§5.3).
         send_to(from, append_reply{_current_term, _commit_idx, append_reply::rejected{request.prev_log_idx, _log.last_idx()}});
@@ -688,7 +720,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
     }
 
     if (progress.state == follower_progress::state::SNAPSHOT) {
-        logger.trace("append_entries_reply[{}->{}]: ignored in snapshot state", _my_id, from);
+        logger.trace("append_entries_reply[{}->{}]: ignored in snapshot state", _tag, from);
         return;
     }
 
@@ -699,7 +731,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         index_t last_idx = std::get<append_reply::accepted>(reply.result).last_new_idx;
 
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}",
-            _my_id, from, progress.match_idx, last_idx);
+            _tag, from, progress.match_idx, last_idx);
 
         progress.accepted(last_idx);
 
@@ -730,20 +762,20 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
 
         logger.trace("append_entries_reply[{}->{}]: rejected match={} index={}",
-            _my_id, from, progress.match_idx, rejected.non_matching_idx);
+            _tag, from, progress.match_idx, rejected.non_matching_idx);
 
         // If non_matching_idx and last_idx are zero it means that a follower is looking for a leader
         // as such message cannot be a result of real mismatch.
         // Send an empty append message to notify it that we are the leader
         if (rejected.non_matching_idx == index_t{0} && rejected.last_idx == index_t{0}) {
-            logger.trace("append_entries_reply[{}->{}]: send empty append message", _my_id, from);
+            logger.trace("append_entries_reply[{}->{}]: send empty append message", _tag, from);
             replicate_to(progress, true);
             return;
         }
 
         // check reply validity
         if (progress.is_stray_reject(rejected)) {
-            logger.trace("append_entries_reply[{}->{}]: drop stray append reject", _my_id, from);
+            logger.trace("append_entries_reply[{}->{}]: drop stray append reject", _tag, from);
             return;
         }
 
@@ -769,7 +801,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
     opt_progress = leader_state().tracker.find(from);
     if (opt_progress != nullptr) {
         logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}",
-            _my_id, from, opt_progress->next_idx, opt_progress->match_idx);
+            _tag, from, opt_progress->next_idx, opt_progress->match_idx);
 
         replicate_to(*opt_progress, false);
     }
@@ -797,7 +829,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 
         logger.trace("{} [term: {}, index: {}, last log term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
-            _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
+            _tag, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
             from, request.last_log_term, request.last_log_idx);
         if (!request.is_prevote) { // Only record real votes
             // If a server grants a vote, it must reset its election
@@ -823,7 +855,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // candidates.
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]",
-            _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
+            _tag, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
             from, request.current_term, request.last_log_term, request.last_log_idx, request.is_prevote);
 
         send_to(from, vote_reply{_current_term, false, request.is_prevote});
@@ -833,12 +865,12 @@ void fsm::request_vote(server_id from, vote_request&& request) {
 void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     SCYLLA_ASSERT(is_candidate());
 
-    logger.trace("request_vote_reply[{}] received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
+    logger.trace("request_vote_reply[{}] received a {} vote from {}", _tag, reply.vote_granted ? "yes" : "no", from);
 
     auto& state = std::get<candidate>(_state);
     // Should not register a reply to prevote as a real vote
     if (state.is_prevote != reply.is_prevote) {
-        logger.trace("request_vote_reply[{}] ignoring prevote from {} as state is vote", _my_id, from);
+        logger.trace("request_vote_reply[{}] ignoring prevote from {} as state is vote", _tag, from);
         return;
     }
     state.votes.register_vote(from, reply.vote_granted);
@@ -848,10 +880,10 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
         break;
     case vote_result::WON:
         if (state.is_prevote) {
-            logger.trace("request_vote_reply[{}] won prevote", _my_id);
+            logger.trace("request_vote_reply[{}] won prevote", _tag);
             become_candidate(false);
         } else {
-            logger.trace("request_vote_reply[{}] won vote", _my_id);
+            logger.trace("request_vote_reply[{}] won vote", _tag);
             become_leader();
         }
         break;
@@ -861,17 +893,26 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     }
 }
 
+void fsm::maybe_resend_vote_request(server_id to) {
+    if (auto& state = candidate_state(); !state.votes.has_responded(to)) {
+        logger.trace("{} [term: {}] re-sending vote request to {} after receiving a ping_leader request",
+                _tag, _current_term, to);
+        send_to(to, vote_request{_current_term, _log.last_idx(), _log.last_term(),
+                state.is_prevote, false});
+    }
+}
+
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
-        _my_id, progress.id, progress.next_idx, progress.match_idx);
+        _tag, progress.id, progress.next_idx, progress.match_idx);
 
     while (progress.can_send_to()) {
         index_t next_idx = progress.next_idx;
         if (progress.next_idx > _log.last_idx()) {
             next_idx = index_t(0);
             logger.trace("replicate_to[{}->{}]: next past last next={} stable={}, empty={}",
-                    _my_id, progress.id, progress.next_idx, _log.last_idx(), allow_empty);
+                    _tag, progress.id, progress.next_idx, _log.last_idx(), allow_empty);
             if (!allow_empty) {
                 // Send out only persisted entries.
                 return;
@@ -901,7 +942,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             progress.become_snapshot(snapshot.idx);
             send_to(progress.id, install_snapshot{_current_term, snapshot});
             logger.trace("replicate_to[{}->{}]: send snapshot next={} snapshot={}",
-                    _my_id, progress.id, progress.next_idx,  snapshot.idx);
+                    _tag, progress.id, progress.next_idx,  snapshot.idx);
             return;
         }
 
@@ -919,7 +960,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
                 const auto& entry = _log[next_idx.value()];
                 req.entries.push_back(entry);
                 logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
-                             _my_id, progress.id, entry->idx, entry->term);
+                             _tag, progress.id, entry->idx, entry->term);
                 size += entry->get_size();
                 next_idx++;
                 if (progress.state == follower_progress::state::PROBE) {
@@ -935,7 +976,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
                 progress.next_idx = next_idx;
             }
         } else {
-            logger.trace("replicate_to[{}->{}]: send empty", _my_id, progress.id);
+            logger.trace("replicate_to[{}->{}]: send empty", _tag, progress.id);
         }
 
         send_to(progress.id, std::move(req));
@@ -964,7 +1005,7 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
     follower_progress& progress = *opt_progress;
 
     if (progress.state != follower_progress::state::SNAPSHOT) {
-        logger.trace("install_snapshot_reply[{}]: called not in snapshot state", _my_id);
+        logger.trace("install_snapshot_reply[{}]: called not in snapshot state", _tag);
         return;
     }
 
@@ -981,7 +1022,7 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
 
 bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, size_t max_trailing_bytes, bool local) {
     logger.trace("apply_snapshot[{}]: current term: {}, term: {}, idx: {}, id: {}, local: {}",
-            _my_id, _current_term, snp.term, snp.idx, snp.id, local);
+            _tag, _current_term, snp.term, snp.idx, snp.id, local);
     // If the snapshot is locally generated, all entries up to its index must have been locally applied,
     // so in particular they must have been observed as committed.
     // Remote snapshots are only applied if we're a follower.
@@ -994,7 +1035,7 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
     const auto& current_snp = _log.get_snapshot();
     if (snp.idx <= current_snp.idx || (!local && snp.idx <= _commit_idx)) {
         logger.error("apply_snapshot[{}]: ignore outdated snapshot {}/{} current one is {}/{}, commit_idx={}",
-                        _my_id, snp.id, snp.idx, current_snp.id, current_snp.idx, _commit_idx);
+                        _tag, snp.id, snp.idx, current_snp.id, current_snp.idx, _commit_idx);
         _output.snps_to_drop.push_back(snp.id);
         return false;
     }
@@ -1010,7 +1051,7 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
         .is_local = local,
         .preserved_log_entries = _log.get_snapshot().idx.value() + 1 - new_first_index.value()});
     if (is_leader()) {
-        logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
+        logger.trace("apply_snapshot[{}]: signal {} available units", _tag, units);
         leader_state().log_limiter_semaphore->signal(units);
     }
     _sm_events.signal();
@@ -1039,18 +1080,18 @@ void fsm::transfer_leadership(logical_clock::duration timeout) {
 }
 
 void fsm::send_timeout_now(server_id id) {
-    logger.trace("send_timeout_now[{}] send timeout_now to {}", _my_id, id);
+    logger.trace("send_timeout_now[{}] send timeout_now to {}", _tag, id);
     send_to(id, timeout_now{_current_term});
     leader_state().timeout_now_sent = id;
     auto me = leader_state().tracker.find(_my_id);
     if (me == nullptr || !me->can_vote) {
-        logger.trace("send_timeout_now[{}] become follower", _my_id);
+        logger.trace("send_timeout_now[{}] become follower", _tag);
         become_follower({});
     }
 }
 
 void fsm::broadcast_read_quorum(read_id id) {
-    logger.trace("broadcast_read_quorum[{}] send read id {}", _my_id, id);
+    logger.trace("broadcast_read_quorum[{}] send read id {}", _tag, id);
     for (auto&& [_, p] : leader_state().tracker) {
         if (p.can_vote) {
             if (p.id == _my_id) {
@@ -1064,7 +1105,7 @@ void fsm::broadcast_read_quorum(read_id id) {
 
 void fsm::handle_read_quorum_reply(server_id from, const read_quorum_reply& reply) {
     SCYLLA_ASSERT(is_leader());
-    logger.trace("handle_read_quorum_reply[{}] got reply from {} for id {}", _my_id, from, reply.id);
+    logger.trace("handle_read_quorum_reply[{}] got reply from {} for id {}", _tag, from, reply.id);
     auto& state = leader_state();
     follower_progress* progress = state.tracker.find(from);
     if (progress == nullptr) {
@@ -1088,7 +1129,7 @@ void fsm::handle_read_quorum_reply(server_id from, const read_quorum_reply& repl
 
     _output.max_read_id_with_quorum = state.max_read_id_with_quorum = new_committed_read;
 
-    logger.trace("handle_read_quorum_reply[{}] new commit read {}", _my_id, new_committed_read);
+    logger.trace("handle_read_quorum_reply[{}] new commit read {}", _tag, new_committed_read);
 
     _sm_events.signal();
 }
@@ -1117,13 +1158,13 @@ std::optional<std::pair<read_id, index_t>> fsm::start_read_barrier(server_id req
             && !opt_progress->can_vote) {
         logger.trace("start_read_barrier[{}]: replicate to {} because follower commit_idx={} < commit_idx={}, "
                      "follower match_idx={} == last_idx={}, and follower can_vote={}",
-                     _my_id, requester, opt_progress->commit_idx, _commit_idx, opt_progress->match_idx,
+                     _tag, requester, opt_progress->commit_idx, _commit_idx, opt_progress->match_idx,
                      _log.last_idx(), opt_progress->can_vote);
         replicate_to(*opt_progress, true);
     }
 
     read_id id = next_read_id();
-    logger.trace("start_read_barrier[{}] starting read barrier with id {}", _my_id, id);
+    logger.trace("start_read_barrier[{}] starting read barrier with id {}", _tag, id);
     return std::make_pair(id, _commit_idx);
 }
 

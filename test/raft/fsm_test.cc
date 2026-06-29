@@ -2398,3 +2398,205 @@ BOOST_AUTO_TEST_CASE(test_state_change_notifications) {
     BOOST_CHECK(output.state_changed);
     BOOST_CHECK(fsm.is_leader());
 }
+
+// Test that ping_leader() sends ping messages immediately (not waiting for
+// the next tick).
+BOOST_AUTO_TEST_CASE(test_ping_leader_sends_immediately) {
+    server_id A_id = id(), B_id = id();
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    auto A = create_follower(A_id, log);
+
+    // A is a follower with no known leader. Calling ping_leader() should
+    // immediately produce append_reply messages without waiting for a tick.
+    A.ping_leader();
+    auto output = A.get_output();
+    BOOST_CHECK_GE(output.messages.size(), 1);
+    // The message should be an append_reply (rejected) sent to B
+    auto& msg = output.messages[0];
+    BOOST_CHECK_EQUAL(msg.first, B_id);
+    BOOST_CHECK(std::holds_alternative<raft::append_reply>(msg.second));
+    auto& reply = std::get<raft::append_reply>(msg.second);
+    BOOST_CHECK(std::holds_alternative<raft::append_reply::rejected>(reply.result));
+}
+
+
+// Test that with fast bootstrap enabled, a fresh multi-node group (empty log)
+// makes the smallest-id voter immediately become a candidate at construction
+// time and send a vote request without prevoting. A non-voter with an even
+// smaller id is present to verify that non-voters are never selected to start
+// the election.
+BOOST_AUTO_TEST_CASE(test_start_as_candidate) {
+    server_id N_id = id(), A_id = id(), B_id = id();
+    // N_id is allocated first, so it has the smallest id overall, but it is a
+    // non-voter and must be ignored. A_id is the smallest voter.
+    BOOST_CHECK(N_id < A_id);
+    BOOST_CHECK(A_id < B_id);
+    raft::configuration cfg(raft::config_member_set{
+            raft::config_member{server_addr_from_id(N_id), is_voter::no},
+            raft::config_member{server_addr_from_id(A_id), is_voter::yes},
+            raft::config_member{server_addr_from_id(B_id), is_voter::yes}});
+
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .enable_fast_bootstrap = true};
+
+    {
+        raft::log log(raft::snapshot_descriptor{.config = cfg});
+        fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+
+        // Smallest-id voter on a fresh group: immediately a candidate (not a
+        // prevote candidate — prevoting is skipped on a fresh group). The
+        // smaller-id non-voter N is ignored.
+        BOOST_CHECK(A.is_candidate());
+        BOOST_CHECK(!A.is_prevote_candidate());
+        // Term should have been bumped to 1
+        BOOST_CHECK_EQUAL(A.get_current_term(), term_t{1});
+
+        // The output should contain a vote request (not prevote) to B only;
+        // the non-voter N is not asked to vote.
+        auto output = A.get_output();
+        BOOST_CHECK_EQUAL(output.messages.size(), 1);
+        BOOST_CHECK_EQUAL(output.messages[0].first, B_id);
+        auto& vr = std::get<raft::vote_request>(output.messages[0].second);
+        BOOST_CHECK(!vr.is_prevote);
+        BOOST_CHECK_EQUAL(vr.current_term, term_t{1});
+    }
+
+    {
+        // The larger-id voter must NOT start an election; it stays a
+        // follower and waits for the election timeout.
+        raft::log log(raft::snapshot_descriptor{.config = cfg});
+        fsm_debug B(B_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+        BOOST_CHECK(B.is_follower());
+    }
+
+    {
+        // The non-voter has the smallest id but is not eligible to start an
+        // election; it stays a follower.
+        raft::log log(raft::snapshot_descriptor{.config = cfg});
+        fsm_debug N(N_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+        BOOST_CHECK(N.is_follower());
+    }
+}
+
+// Test that fast bootstrap is gated by enable_fast_bootstrap: with the flag
+// off (the default), even the smallest-id voter on a fresh group stays a
+// follower. This is what keeps the bare fsm usable in tests.
+BOOST_AUTO_TEST_CASE(test_no_start_as_candidate_without_fast_bootstrap) {
+    server_id A_id = id(), B_id = id();
+    BOOST_CHECK(A_id < B_id);
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true};
+    fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+
+    BOOST_CHECK(A.is_follower());
+}
+
+// Test that a non-empty log (a restarted server, not a fresh group) does not
+// trigger immediate candidacy even for the smallest-id voter with fast
+// bootstrap enabled.
+BOOST_AUTO_TEST_CASE(test_no_start_as_candidate_with_nonempty_log) {
+    server_id A_id = id(), B_id = id();
+    BOOST_CHECK(A_id < B_id);
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+
+    // Snapshot at index 1 => non-empty log.
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{1}, .config = cfg});
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .enable_fast_bootstrap = true};
+    fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+
+    BOOST_CHECK(A.is_follower());
+}
+// Test that when a candidate's initial vote request is lost (peer not
+// available initially), it resends the vote request when the peer pings us
+// with a stale-term message.
+BOOST_AUTO_TEST_CASE(test_start_as_candidate_resend_on_peer_ping) {
+    server_id A_id = id(), B_id = id();
+    BOOST_CHECK(A_id < B_id);
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .enable_fast_bootstrap = true};
+    fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
+
+    BOOST_CHECK(A.is_candidate());
+    BOOST_CHECK_EQUAL(A.get_current_term(), term_t{1});
+
+    // Consume the initial vote request (simulating it being lost)
+    auto output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+
+    // Simulate the peer starting later and pinging us with a stale-term
+    // append_reply (this is what ping_leader() sends at term 0)
+    A.step(B_id, raft::append_reply{term_t{0}, index_t{0},
+            raft::append_reply::rejected{index_t{0}, index_t{0}}});
+
+    // The candidate should resend its vote request to B
+    output = A.get_output();
+    BOOST_CHECK_GE(output.messages.size(), 1);
+    bool found_vote_request = false;
+    for (auto& [to, msg] : output.messages) {
+        if (auto* vr = std::get_if<raft::vote_request>(&msg)) {
+            BOOST_CHECK_EQUAL(to, B_id);
+            BOOST_CHECK(!vr->is_prevote);
+            BOOST_CHECK_EQUAL(vr->current_term, term_t{1});
+            found_vote_request = true;
+        }
+    }
+    BOOST_CHECK(found_vote_request);
+
+    // Now B grants the vote — A should become leader
+    A.step(B_id, raft::vote_reply{term_t{1}, true});
+    BOOST_CHECK(A.is_leader());
+}
+
+// Test that a candidate does NOT resend its vote request to a peer that has
+// already responded (voted) in the current term, even if that peer sends a
+// stale-term message.
+BOOST_AUTO_TEST_CASE(test_no_resend_to_responded_peer) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    auto A = create_follower(A_id, log);
+    BOOST_CHECK(A.is_follower());
+
+    // Become a candidate via the normal election timeout.
+    election_timeout(A);
+    BOOST_CHECK(A.is_candidate());
+    auto output = A.get_output();
+    BOOST_CHECK(output.term_and_vote);
+    auto term = output.term_and_vote->first;
+
+    // B responds to our vote request (rejects it). A stays a candidate since
+    // there is no granting quorum (self-vote + rejection), but B has now
+    // responded for this term.
+    A.step(B_id, raft::vote_reply{term, false});
+    BOOST_CHECK(A.is_candidate());
+    (void)A.get_output();
+
+    // B (having responded) sends a stale-term ping — no resend to B.
+    A.step(B_id, raft::append_reply{term_t{0}, index_t{0},
+            raft::append_reply::rejected{index_t{0}, index_t{0}}});
+    output = A.get_output();
+    for (auto& [to, msg] : output.messages) {
+        BOOST_CHECK(to != B_id || !std::holds_alternative<raft::vote_request>(msg));
+    }
+
+    // C (which hasn't responded) sends a stale-term ping — we resend to C.
+    A.step(C_id, raft::append_reply{term_t{0}, index_t{0},
+            raft::append_reply::rejected{index_t{0}, index_t{0}}});
+    output = A.get_output();
+    bool resent_to_c = false;
+    for (auto& [to, msg] : output.messages) {
+        if (to == C_id && std::holds_alternative<raft::vote_request>(msg)) {
+            resent_to_c = true;
+        }
+    }
+    BOOST_CHECK(resent_to_c);
+}

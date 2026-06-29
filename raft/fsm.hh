@@ -59,6 +59,12 @@ struct fsm_config {
     size_t max_log_size;
     // If set to true will enable prevoting stage during election
     bool enable_prevoting;
+    // If set to true, on a fresh multi-node group (empty log) the smallest-id
+    // voting member starts an election immediately on construction instead of
+    // waiting for the election timeout, which speeds up the initial leader
+    // election. Disabled by default so that a bare fsm starts as a follower;
+    // raft::server enables it.
+    bool enable_fast_bootstrap = false;
 };
 
 class fsm;
@@ -152,6 +158,8 @@ struct leader {
 class fsm {
     // id of this node
     server_id _my_id;
+    // Human-readable tag for log messages (distinguishes raft instances)
+    sstring _tag;
     // What state the server is in. The default is follower.
     std::variant<follower, candidate, leader> _state;
     // _current_term, _voted_for && _log are persisted in persistence
@@ -264,6 +272,9 @@ private:
     void become_leader();
 
     void become_candidate(bool is_prevote, bool is_leadership_transfer = false);
+    // Send ping messages (append_reply rejected) to all peers to solicit
+    // a response from the leader. Called from ping_leader() and tick().
+    void send_ping_messages();
 
     // Controls whether the follower has been responsive recently,
     // so it makes sense to send more data to it.
@@ -279,6 +290,7 @@ private:
 
     void request_vote(server_id from, vote_request&& vote_request);
     void request_vote_reply(server_id from, vote_reply&& vote_reply);
+    void maybe_resend_vote_request(server_id to);
 
     void install_snapshot_reply(server_id from, snapshot_reply&& reply);
 
@@ -343,7 +355,7 @@ protected: // For testing
     }
 
 public:
-    explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
+    explicit fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, log log,
             index_t commit_idx, failure_detector& failure_detector, fsm_config conf,
             seastar::condition_variable& sm_events);
 
@@ -407,9 +419,12 @@ public:
     }
 
     // Ask to search for a leader if one is not known.
+    // Immediately sends ping messages to all peers and keeps pinging
+    // on subsequent ticks until a leader is found.
     void ping_leader() {
         SCYLLA_ASSERT(!current_leader());
         _ping_leader = true;
+        send_ping_messages();
     }
 
     // Call this function to wait for the total size in bytes of log entries to
@@ -524,6 +539,8 @@ void fsm::step(server_id from, const candidate& c, Message&& msg) {
     } else if constexpr (std::is_same_v<Message, install_snapshot>) {
         send_to(from, snapshot_reply{.current_term = _current_term,
                      .success = false });
+    } else if constexpr (std::is_same_v<Message, append_reply>) {
+        maybe_resend_vote_request(from);
     }
 }
 
@@ -542,7 +559,7 @@ void fsm::step(server_id from, const follower& c, Message&& msg) {
         // extra round trip.
         become_candidate(false, true);
     } else if constexpr (std::is_same_v<Message, read_quorum>) {
-        logger.trace("[{}] receive read_quorum from {} for read id {}", _my_id, from, msg.id);
+        logger.trace("[{}] receive read_quorum from {} for read id {}", _tag, from, msg.id);
         advance_commit_idx(msg.leader_commit_idx);
         send_to(from, read_quorum_reply{_current_term, _commit_idx, msg.id});
     }
@@ -571,7 +588,7 @@ void fsm::step(server_id from, Message&& msg) {
         server_id leader{};
 
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
-            _my_id, _current_term, from, msg.current_term);
+            _tag, _current_term, from, msg.current_term);
 
         if constexpr (std::is_same_v<Message, append_request> ||
                       std::is_same_v<Message, install_snapshot> ||
@@ -581,7 +598,7 @@ void fsm::step(server_id from, Message&& msg) {
             // Got a reply to read barrier with higher term. This should not happen.
             // Log and ignore
             logger.error("{} [term: {}] ignoring read barrier reply with higher term {}",
-                _my_id, _current_term, msg.current_term);
+                _tag, _current_term, msg.current_term);
             return;
         }
 
@@ -614,10 +631,23 @@ void fsm::step(server_id from, Message&& msg) {
             if (msg.is_prevote) {
                 send_to(from, vote_reply{_current_term, false, true});
             }
+        } else if constexpr (std::is_same_v<Message, append_reply>) {
+            // A peer that is looking for a leader pings us with a stale-term
+            // append_reply (see ping_leader()/send_ping_messages()). If we are a
+            // candidate and that peer hasn't responded to our vote request yet,
+            // re-send it: the peer is clearly alive now and our original request
+            // may have been lost (e.g. the peer's raft server wasn't ready when we
+            // first became a candidate). We skip peers that already responded for
+            // this term -- re-sending to them would be pointless (a vote is final
+            // for a term), though it would be harmless since the receiver is
+            // idempotent.
+            if (is_candidate()) {
+                maybe_resend_vote_request(from);
+            }
         } else {
             // Ignore other cases
             logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
-                _my_id, _current_term, from, msg.current_term);
+                _tag, _current_term, from, msg.current_term);
         }
         return;
 

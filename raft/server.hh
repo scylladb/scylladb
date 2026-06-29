@@ -63,6 +63,10 @@ public:
         // A callback to invoke if one of internal server
         // background activities has stopped because of an error.
         std::function<void(std::exception_ptr e)> on_background_error;
+        // Human-readable tag used in log messages instead of server_id.
+        // Helps distinguish raft instances when multiple groups share the
+        // same server_id. If empty, server_id is used as the default.
+        sstring tag;
     };
 
     virtual ~server() {}

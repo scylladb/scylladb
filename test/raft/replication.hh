@@ -41,7 +41,7 @@
 //      .nodes                       number of nodes
 //      .total_values                how many entries to append to leader nodes (default 100)
 //      .initial_term                initial term # for setup
-//      .initial_leader              what server is leader
+//      .initial_leader              what server is leader (always 0, required by fast bootstrap)
 //      .initial_states              initial logs of servers
 //          .le                      log entries
 //      .initial_snapshots           snapshots present at initial state for servers
@@ -271,7 +271,10 @@ struct test_case {
     const size_t nodes;
     const size_t total_values = 100;
     uint64_t initial_term = 1;
-    const size_t initial_leader = 0;
+    // The initial leader is always node 0 (smallest server_id). With fast
+    // bootstrap the smallest-id node starts an election immediately, so
+    // start_all() relies on this being 0.
+    static constexpr size_t initial_leader = 0;
     const std::vector<struct initial_log> initial_states;
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<raft::server::configuration> config;
@@ -594,9 +597,14 @@ public:
             , _rpc_config(rpc_config)
             , _delays(rpc_config.network_delay > 0ms)
     {
-        _net[_id] = this;
         // Rounds to next power of 2
         _same_node_prefix = (1 << std::bit_width(_rpc_config.local_nodes)) - 1;
+    }
+    void publish() {
+        _net[_id] = this;
+    }
+    void unpublish() {
+        _net.erase(_id);
     }
     bool drop_packet() {
         return _rpc_config.drops && !(rand() % 5);
@@ -645,8 +653,8 @@ public:
                 return with_gate(_gate, [&, this] () mutable -> future<> {
                     return seastar::sleep(get_delay(id) + rand_extra_delay()).then(
                             [this, id = std::move(id), append_request = std::move(append_request)] {
-                        if ((*_connected)(id, _id)) {
-                            _net[id]->_client->append_entries(_id, append_request);
+                        if (auto it = _net.find(id); it != _net.end() && (*_connected)(id, _id)) {
+                            it->second->_client->append_entries(_id, append_request);
                         }
                     });
                 });
@@ -668,8 +676,8 @@ public:
                 (void)with_gate(_gate, [&, this] () mutable -> future<> {
                     return seastar::sleep(get_delay(id) + rand_extra_delay()).then(
                             [this, id = std::move(id), reply = std::move(reply)] {
-                        if ((*_connected)(id, _id)) {
-                            _net[id]->_client->append_entries_reply(rpc::_id, std::move(reply));
+                        if (auto it = _net.find(id); it != _net.end() && (*_connected)(id, _id)) {
+                            it->second->_client->append_entries_reply(rpc::_id, std::move(reply));
                         }
                     });
                 });
@@ -689,8 +697,8 @@ public:
             (void)with_gate(_gate, [&, this] () mutable -> future<> {
                 return seastar::sleep(get_delay(id) + rand_extra_delay()).then(
                         [this, id = std::move(id), vote_request = std::move(vote_request)] {
-                    if ((*_connected)(id, _id)) {
-                        _net[id]->_client->request_vote(rpc::_id, std::move(vote_request));
+                    if (auto it = _net.find(id); it != _net.end() && (*_connected)(id, _id)) {
+                        it->second->_client->request_vote(rpc::_id, std::move(vote_request));
                     }
                 });
             });
@@ -708,8 +716,8 @@ public:
         if (_delays) {
             (void)with_gate(_gate, [&, this] () mutable -> future<> {
                 return seastar::sleep(get_delay(id) + rand_extra_delay()).then([=, this] {
-                    if ((*_connected)(id, _id)) {
-                        _net[id]->_client->request_vote_reply(rpc::_id, vote_reply);
+                    if (auto it = _net.find(id); it != _net.end() && (*_connected)(id, _id)) {
+                        it->second->_client->request_vote_reply(rpc::_id, vote_reply);
                     }
                 });
             });
@@ -843,7 +851,7 @@ raft_cluster<Clock>::raft_cluster(test_case test,
         , _rpc_config(rpc_config)
         , _prevote(prevote)
         , _apply(apply)
-        , _leader(first_leader)
+        , _leader(test_case::initial_leader)
         , _tick_delta(tick_delta)
         , _verify_persisted_snapshots(test.verify_persisted_snapshots) {
 
@@ -888,6 +896,7 @@ raft::server& raft_cluster<Clock>::get_server(size_t id) {
 template <typename Clock>
 future<> raft_cluster<Clock>::stop_server(size_t id, sstring reason) {
     cancel_ticker(id);
+    _servers[id].rpc->unpublish();
     co_await _servers[id].server->abort(std::move(reason));
     if (_snapshots->contains(to_raft_id(id))) {
         BOOST_CHECK_LE((*_snapshots)[to_raft_id(id)].size(), 2);
@@ -901,18 +910,30 @@ template <typename Clock>
 future<> raft_cluster<Clock>::reset_server(size_t id, initial_state state) {
     _servers[id] = create_server(id, state);
     co_await _servers[id].server->start();
+    _servers[id].rpc->publish();
     set_ticker_callback(id);
 }
 
 template <typename Clock>
 future<> raft_cluster<Clock>::start_all() {
-    co_await coroutine::parallel_for_each(_servers, [] (auto& r) {
-        return r.server->start();
+    // Start the leader (node 0) last. With fast bootstrap the smallest-id
+    // node becomes a candidate during start(), sending a vote_request to all
+    // peers. All peers must be started and published by that point, otherwise
+    // the request is dropped and node 0 loses its advantage: it is already a
+    // candidate so wait_until_candidate() won't tick it, and all nodes race
+    // equally once tickers start — the winner is non-deterministic.
+    BOOST_REQUIRE(_leader == 0);
+    co_await coroutine::parallel_for_each(std::views::iota(size_t{1}, _servers.size()), [this] (size_t i) -> future<> {
+        co_await _servers[i].server->start();
+        _servers[i].rpc->publish();
     });
+    co_await _servers[0].server->start();
+    _servers[0].rpc->publish();
     co_await init_raft_tickers();
     BOOST_TEST_MESSAGE("Electing first leader " << _leader);
     _servers[_leader].server->wait_until_candidate();
     co_await _servers[_leader].server->wait_election_done();
+    BOOST_REQUIRE(_servers[_leader].server->is_leader());
 }
 
 template <typename Clock>
@@ -1415,9 +1436,7 @@ template <typename Clock>
 std::vector<initial_state> raft_cluster<Clock>::get_states(test_case test, bool prevote) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
-    size_t leader = test.initial_leader;
-
-    states[leader].term = raft::term_t{test.initial_term};
+    states[test.initial_leader].term = raft::term_t{test.initial_term};
 
     // Server initial logs, etc
     for (size_t i = 0; i < states.size(); ++i) {
