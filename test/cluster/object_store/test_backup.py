@@ -891,6 +891,12 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Ma
             await manager.server_stop(servers[1].server_id, convict=True)
             with pytest.raises(aiohttp.client_exceptions.ClientConnectorError):
                 await manager.api.wait_task(servers[1].ip_addr, tid)
+            # The restore is still in flight on the coordinator. Re-issue it from
+            # another node, which should join the in-flight restore rather than
+            # fail or duplicate it. Release the pause and just make sure it finishes.
+            tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            await manager.api.message_injection(servers[2].ip_addr, "pause_tablet_restore")
+            await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=60)
         else:
             if target == 'coordinator':
                 await manager.server_stop(servers[0].server_id, convict=True)
