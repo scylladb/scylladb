@@ -228,8 +228,7 @@ private:
         sstables::sstable_open_config cfg {
             .unsealed_sstable = true,
         };
-        auto erm = table.get_effective_replication_map();
-        co_await sst->load(erm->get_sharder(*table.schema()), cfg);
+        co_await sst->load(_erm->get_sharder(*table.schema()), cfg);
         co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
             if (loading_sst == sst) {
                 auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
