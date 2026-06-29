@@ -8,6 +8,7 @@
 
 #include "io-wrappers.hh"
 #include "seekable_source.hh"
+#include <seastar/core/semaphore.hh>
 #include <seastar/util/internal/iovec_utils.hh>
 #include <seastar/util/memory-data-sink.hh>
 #include <seastar/util/memory-data-source.hh>
@@ -186,12 +187,14 @@ seastar::file create_file_for_seekable_source(seekable_data_source src, seekable
     class seekable_data_source_file_impl : public noop_file_impl {
         seekable_data_source _source;
         seekable_data_source_shard_src _src_func;
+        semaphore _read_sem{1};
     public:
         seekable_data_source_file_impl(seekable_data_source source, seekable_data_source_shard_src src_func)
             : _source(std::move(source))
             , _src_func(std::move(src_func))
         {}
         future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
+            auto units = co_await get_units(_read_sem, 1);
             co_await _source.seek(pos);
             size_t res = 0;
             auto dst = reinterpret_cast<char*>(buffer);

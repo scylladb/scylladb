@@ -86,7 +86,8 @@ make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state
         m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
         mt->apply(std::move(m));
     }
-    auto sst = table.get_sstables_manager().make_sstable(s, table.get_storage_options(), generation, state);
+    auto sid = sstables::sstable_id(generation.as_uuid());
+    auto sst = table.get_sstables_manager().make_sstable(s, table.get_storage_options(), generation, sid, state);
     write_memtable_to_sstable(*mt, sst).get();
     mt->clear_gently().get();
     // We can't write an SSTable with bad sharding, so pretend
@@ -99,7 +100,8 @@ make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state
 
 sstables::shared_sstable new_sstable(sstables::test_env& env, sstables::generation_type gen) {
     testlog.debug("new_sstable: dir={} gen={}", env.tempdir().path(), gen);
-    return env.make_sstable(test_table_schema(), gen);
+    auto sid = gen.is_uuid_based() ? sstables::sstable_id(gen.as_uuid()) : sstables::sstable_id{utils::UUID_gen::get_time_UUID()};
+    return env.make_sstable(test_table_schema(), gen, sid);
 }
 
 sstables::shared_sstable new_env_sstable(sstables::test_env& env) {
@@ -582,8 +584,9 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
             auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
                 return gen();
             }).get();
+            auto sid = sstable_id(generation.as_uuid());
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
+            return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sid, sstables::sstable_state::upload);
         };
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
         verify_that_all_sstables_are_local(sstdir, this_smp_shard_count() * this_smp_shard_count()).get();
@@ -632,8 +635,9 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
             auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
                 return gen();
             }).get();
+            auto sid = sstables::sstable_id(generation.as_uuid());
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
+            return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sid, sstables::sstable_state::upload);
         };
         const auto& erm = e.db().local().find_keyspace("ks").get_static_effective_replication_map();
         auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(e.db().local().get_keyspace_local_ranges(erm).get());
@@ -685,7 +689,8 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
                 return gen();
             }).get();
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
+            auto sid = sstables::sstable_id(generation.as_uuid());
+            return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sid, sstables::sstable_state::upload);
         };
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
         verify_that_all_sstables_are_local(sstdir, this_smp_shard_count() * this_smp_shard_count()).get();
@@ -734,7 +739,8 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
                 return gen();
             }).get();
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
+            auto sid = sstables::sstable_id(generation.as_uuid());
+            return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sid, sstables::sstable_state::upload);
         };
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
         verify_that_all_sstables_are_local(sstdir, 2 * this_smp_shard_count() * this_smp_shard_count()).get();
@@ -949,8 +955,9 @@ SEASTAR_TEST_CASE(sstable_directory_test_reshard_vnodes) {
                 auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
                     return gen();
                 }).get();
+                auto sid = sstables::sstable_id(generation.as_uuid());
                 auto& cf = e.local_db().find_column_family("ks", "cf");
-                return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
+                return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sid, sstables::sstable_state::upload);
             };
 
             const auto& erm = e.local_db().find_keyspace("ks").get_static_effective_replication_map();

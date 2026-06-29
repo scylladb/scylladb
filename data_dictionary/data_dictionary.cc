@@ -435,9 +435,8 @@ storage_options storage_options::append_to_object_storage_prefix(const sstring& 
     }
 
     object_storage options = std::get<object_storage>(value);
-    SCYLLA_ASSERT(std::holds_alternative<sstring>(options.location));
-    sstring prefix = std::get<sstring>(options.location);
-    options.location = seastar::format("{}/{}", prefix, s);
+    SCYLLA_ASSERT(options.location);
+    options.location = seastar::format("{}/{}", *options.location, s);
     ret.value = std::move(options);
     return ret;
 }
@@ -673,14 +672,10 @@ auto fmt::formatter<data_dictionary::storage_options>::format(const data_diction
             return fmt::format_to(ctx.out(), "{}", so.dir);
         },
         [&ctx, &type] (const data_dictionary::storage_options::object_storage& so) -> decltype(ctx.out()) {
-            return std::visit(overloaded_functor {
-                [&] (const sstring& prefix) -> decltype(ctx.out()) {
-                    return fmt::format_to(ctx.out(), "{}://{}/{}", type, so.bucket, prefix);
-                },
-                [&] (const table_id& owner) -> decltype(ctx.out()) {
-                    return fmt::format_to(ctx.out(), "{}://{} (owner {})", type, so.bucket, owner);
-                }
-            }, so.location);
+            if (so.location) {
+                return fmt::format_to(ctx.out(), "{}://{}/{}", type, so.bucket, *so.location);
+            }
+            return fmt::format_to(ctx.out(), "{}://{}", type, so.bucket);
         }
     }, so.value);
 }

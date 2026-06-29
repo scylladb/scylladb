@@ -989,8 +989,7 @@ future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_
 }
 
 future<entry_descriptor> sstable::clone(generation_type new_generation, bool leave_unsealed) const {
-    co_await _storage->clone(*this, new_generation, leave_unsealed);
-    co_return entry_descriptor(new_generation, _version, _format, component_type::TOC, _state);
+    co_return co_await _storage->clone(*this, new_generation, leave_unsealed);
 }
 
 file_writer::~file_writer() {
@@ -1607,6 +1606,11 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
     }
 
+    if (_storage->is_object_storage()) {
+        // Always update the sstable_id for object storage, since sstables may be shared globally
+        update_sstable_id = true;
+    }
+
     return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_sstable_id] {
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
@@ -1621,7 +1625,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         scylla_metadata metadata;
         read_simple<component_type::Scylla>(metadata).get();
         if (update_sstable_id) {
-            metadata.set_sstable_identifier();
+            metadata.set_sstable_identifier(sstable_id(generation.as_uuid()));
         }
 
         new_sst->write_component_with_metadata(component, std::move(metadata));
@@ -1795,6 +1799,13 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     if (cfg.load_first_and_last_position_metadata) {
         co_await load_first_and_last_position_in_partition();
     }
+}
+
+sstable_id sstable::get_sstable_identifier() const {
+    if (_sstable_identifier) {
+        return *_sstable_identifier;
+    }
+    return sstable_id(_generation.as_uuid());
 }
 
 future<> sstable::create_data() noexcept {
@@ -2129,7 +2140,7 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
 }
 
 entry_descriptor sstable::get_descriptor(component_type c) const {
-    return entry_descriptor(_generation, _version, _format, c);
+    return entry_descriptor(_generation, _sstable_identifier, _version, _format, c);
 }
 
 future<>
@@ -2413,7 +2424,9 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
 
     sstable_id sid;
-    if (generation().is_uuid_based()) {
+    if (_sstable_identifier) {
+        sid = *_sstable_identifier;
+    } else if (generation().is_uuid_based()) {
         sid = sstable_id(generation().as_uuid());
     } else {
         sid = sstable_id(utils::UUID_gen::get_time_UUID());
@@ -3015,7 +3028,7 @@ static std::expected<std::tuple<entry_descriptor, sstring, sstring>, sstring> ma
         return std::unexpected{seastar::format("invalid version for file {}. Name doesn't match any known version.", fname)};
     }
     try {
-        return std::make_tuple(entry_descriptor(generation_type::from_string(generation), version, format_from_string(format), sstable::component_from_sstring(version, component)), ks, cf);
+        return std::make_tuple(entry_descriptor(generation_type::from_string(generation), std::nullopt, version, format_from_string(format), sstable::component_from_sstring(version, component)), ks, cf);
     } catch (const std::exception& e) {
         return std::unexpected{seastar::format("failed to parse sstable filename {}: {}", fname, e.what())};
     }
@@ -3960,6 +3973,7 @@ mutation_source sstable::as_mutation_source() {
 sstable::sstable(schema_ptr schema,
         const data_dictionary::storage_options& storage,
         generation_type generation,
+        optimized_optional<sstable_id> sstable_identifier,
         sstable_state state,
         version_types v,
         format_types f,
@@ -3973,7 +3987,7 @@ sstable::sstable(schema_ptr schema,
     , _schema(std::move(schema))
     , _generation(generation)
     , _state(state)
-    , _storage(make_storage(manager, storage, _state))
+    , _storage(make_storage(manager, _schema, storage, _state))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
@@ -3984,6 +3998,7 @@ sstable::sstable(schema_ptr schema,
     , _large_data_handler(large_data_handler)
     , _corrupt_data_handler(corrupt_data_handler)
     , _manager(manager)
+    , _sstable_identifier(std::move(sstable_identifier))
     , _ignore_component_digest_mismatch(_manager.get_config().ignore_component_digest_mismatch)
 {
     manager.add(this);
@@ -4375,13 +4390,13 @@ public:
     }
 };
 
-std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, std::string_view component_filename, sstable_stream_sink_cfg cfg) {
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, std::string_view component_filename, optimized_optional<sstable_id> sid, sstable_stream_sink_cfg cfg) {
     auto desc_result = parse_path(component_filename, schema->ks_name(), schema->cf_name());
     if (!desc_result) {
         throw_malformed_sstable_exception(desc_result.error());
     }
     auto desc = std::move(*desc_result);
-    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, state, desc.version, desc.format);
+    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, sid, state, desc.version, desc.format);
 
     auto type = desc.component;
     // Don't write actual TOC. Write temp, if successful, storage::seal will rename this to actual
@@ -4423,7 +4438,7 @@ generation_type::from_string(const std::string& s) {
 }
 
 sstring component_name::format() const {
-    return sst._storage->prefix() + "/" + sst.component_basename(component);
+    return fmt::format("{}/{}", sst._storage->prefix(), sst.component_basename(component));
 }
 
 future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_type c, data_sink sink) {

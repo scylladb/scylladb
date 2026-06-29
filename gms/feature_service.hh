@@ -154,6 +154,7 @@ public:
     gms::feature cdc_block_tablet_merges_for_alternator_streams { *this, "CDC_BLOCK_TABLET_MERGES_FOR_ALTERNATOR_STREAMS"sv };
     gms::feature counters_with_tablets { *this, "COUNTERS_WITH_TABLETS"sv };
     gms::feature file_stream { *this, "FILE_STREAM"sv };
+    gms::feature sstable_reference_sharing { *this, "SSTABLE_REFERENCE_SHARING"sv };
     gms::feature compression_dicts { *this, "COMPRESSION_DICTS"sv };
     gms::feature tablet_options { *this, "TABLET_OPTIONS"sv };
     gms::feature tablet_load_stats_v2 { *this, "TABLET_LOAD_STATS_V2"sv };

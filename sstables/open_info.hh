@@ -18,6 +18,7 @@
 #include "sstables/component_type.hh"
 #include "sstables/shareable_components.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/types.hh"
 #include <seastar/core/shared_ptr.hh>
 
 namespace sstables {
@@ -31,15 +32,16 @@ enum class sstable_state {
 
 struct entry_descriptor {
     generation_type generation;
+    optimized_optional<sstable_id> sid;
     sstable_version_types version;
     sstable_format_types format;
     component_type component;
     std::optional<sstable_state> state;
 
-    entry_descriptor(generation_type generation,
+    entry_descriptor(generation_type generation, optimized_optional<sstable_id> sid,
                      sstable_version_types version, sstable_format_types format,
                      component_type component, std::optional<sstable_state> state = {})
-        : generation(generation), version(version), format(format), component(component), state(state) {}
+        : generation(generation), sid(sid), version(version), format(format), component(component), state(state) {}
 };
 
 // Parses sstable file path extracting entry_descriptor from it. Returns the descriptor

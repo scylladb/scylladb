@@ -804,6 +804,20 @@ BOOST_AUTO_TEST_CASE(test_empty_key_view_comparison) {
     BOOST_CHECK(lf.begin() == lf.end());
 }
 
+static sstables::entry_descriptor make_entry_descriptor(sstables::generation_type gen, sstables::sstable_version_types version, sstables::sstable_format_types format, sstables::component_type component) {
+    optimized_optional<sstables::sstable_id> sid;
+    if (gen.is_uuid_based()) {
+        sid = sstables::sstable_id(gen.as_uuid());
+    }
+    return entry_descriptor{
+        gen,
+        sid,
+        version,
+        format,
+        component
+    };
+}
+
 // Test that sstables::parse_path is able to parse the paths of sstables
 BOOST_AUTO_TEST_CASE(test_parse_path_good) {
     struct sstable_case {
@@ -817,56 +831,56 @@ BOOST_AUTO_TEST_CASE(test_parse_path_good) {
             "/scylla/system/truncated-38c19fd0fb863310a4b70d0cc66628aa/mc-2-big-Data.db",
             "system",
             "truncated",
-            entry_descriptor{
+            make_entry_descriptor(
                 generation_type{2},
                 sstable_version_types::mc,
                 sstable_format_types::big,
                 component_type::Data
-            }
+            )
         },
         {
             "/scylla/system/scylla_local-2972ec7ffb2038ddaac1d876f2e3fcbd/mc-3-big-Summary.db",
             "system",
             "scylla_local",
-            entry_descriptor{
+            make_entry_descriptor(
                 generation_type{3},
                 sstable_version_types::mc,
                 sstable_format_types::big,
                 component_type::Summary
-            }
+            )
         },
         {
             "/scylla/system_distributed/cdc_generation_timestamps-fdf455c4cfec3e009719d7a45436c89d/me-3g9p_0938_0ecz429c6f019i7yuf-big-Index.db",
             "system_distributed",
             "cdc_generation_timestamps",
-            entry_descriptor{
+            make_entry_descriptor(
                 generation_type::from_string("3g9p_0938_0ecz429c6f019i7yuf"),
                 sstable_version_types::me,
                 sstable_format_types::big,
                 component_type::Index
-            }
+            )
          },
          {
             "/system_schema/columns-24101c25a2ae3af787c1b40ee1aca33f/md-3g9r_04ux_4be4w2d7t8bg6u7nok-big-Statistics.db",
             "system_schema",
             "columns",
-            entry_descriptor{
+            make_entry_descriptor(
                 generation_type::from_string("3g9r_04ux_4be4w2d7t8bg6u7nok"),
                 sstable_version_types::md,
                 sstable_format_types::big,
                 component_type::Statistics
-            }
+            )
         },
         {
             "/system_schema/columns-24101c25a2ae3af787c1b40ee1aca33f/md-3g9r_04ux_4be4w2d7t8bg6u7nok-big-ReallyBigData.db",
             "system_schema",
             "columns",
-            entry_descriptor{
+            make_entry_descriptor(
                 generation_type::from_string("3g9r_04ux_4be4w2d7t8bg6u7nok"),
                 sstable_version_types::md,
                 sstable_format_types::big,
                 component_type::Unknown
-            }
+            )
         }
     };
     for (auto& [path, expected_ks, expected_cf, expected_desc] : sstables) {
@@ -949,7 +963,7 @@ static future<> test_component_digest_persistence(component_type component, ssta
 
         sst_original = nullptr;
 
-        auto sst_reopened = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        auto sst_reopened = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.sid, entry_desc.version, entry_desc.format);
         sst_reopened->load(schema->get_sharder()).get();
 
         auto loaded_digest = sst_reopened->get_component_digest(component);
@@ -1060,7 +1074,7 @@ static future<> test_component_digest_validation(component_type component, sstab
         corrupt_sstable(sst, component);
 
         // Loading the sstable should detect the digest mismatch
-        auto sst_corrupted = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        auto sst_corrupted = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.sid, entry_desc.version, entry_desc.format);
         BOOST_REQUIRE_EXCEPTION(sst_corrupted->load(schema->get_sharder()).get(), malformed_sstable_exception,
             exception_predicate::message_contains(expected_message));
     });

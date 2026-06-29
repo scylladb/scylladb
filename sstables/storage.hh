@@ -18,13 +18,12 @@
 #include <seastar/core/reactor.hh>
 
 #include "data_dictionary/storage_options.hh"
+#include "schema/schema_fwd.hh"
 #include "seastarx.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
 #include "utils/disk-error-handler.hh"
-
-class schema;
 
 namespace data_dictionary {
 class storage_options;
@@ -103,15 +102,18 @@ public:
 
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
 
+    virtual bool is_object_storage() const noexcept {
+        return false;
+    }
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring name) const = 0;
-    virtual future<> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const = 0;
+    virtual future<entry_descriptor> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const = 0;
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
     // Must never return an exceptional future: implementations are expected
     // to catch and log any errors internally.
-    virtual future<> wipe(const sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept = 0;
+    virtual future<> wipe(sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept = 0;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) = 0;
     virtual future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
@@ -125,11 +127,11 @@ public:
     virtual future<uint64_t> free_space() const = 0;
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
 
-    virtual sstring prefix() const  = 0;
+    virtual std::string_view prefix() const  = 0;
     virtual future<bool> exists(const sstable& sst, component_type type) const = 0;
 };
 
-std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstable_state state);
+std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);

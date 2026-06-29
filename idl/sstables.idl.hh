@@ -7,6 +7,9 @@
  */
 
 
+#include "sstables/types.hh"
+#include "sstables/version.hh"
+
 namespace sstables {
 
 enum class sstable_state : uint8_t {
@@ -14,6 +17,24 @@ enum class sstable_state : uint8_t {
     staging,
     quarantine,
     upload,
+};
+
+class sstable_id final {
+    utils::UUID uuid();
+};
+
+enum class sstable_version_types : int {
+    ka,
+    la,
+    mc,
+    md,
+    me,
+    ms,
+    mt,
+};
+
+enum class sstable_format_types : int {
+    big,
 };
 
 }

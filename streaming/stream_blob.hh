@@ -45,6 +45,7 @@ enum class file_ops : uint16_t {
     stream_sstables,
     load_sstables,
     stream_logstor_segments,
+    reference_sstable,
 };
 
 // For STREAM_BLOB verb
@@ -53,6 +54,7 @@ enum class stream_blob_cmd : uint8_t {
     error,
     data,
     end_of_stream,
+    reference,
 };
 
 class stream_blob_data {
@@ -90,6 +92,12 @@ public:
 
 };
 
+struct stream_sstable_meta {
+    sstables::sstable_id id;
+    sstables::sstable_version_types version;
+    sstables::sstable_format_types format;
+};
+
 class stream_blob_meta {
 public:
     file_stream_id ops_id;
@@ -99,6 +107,7 @@ public:
     streaming::file_ops fops;
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<stream_sstable_meta> sstable_meta;
     // We can extend this verb to send arbitrary blob of data
 };
 
@@ -108,13 +117,14 @@ enum class store_result {
 
 using stream_blob_source_fn = noncopyable_function<future<input_stream<char>>(const file_input_stream_options&)>;
 using stream_blob_finish_fn = noncopyable_function<future<>(store_result)>;
-using output_result = std::tuple<stream_blob_finish_fn, output_stream<char>>;
+using output_result = std::tuple<stream_blob_finish_fn, std::optional<output_stream<char>>>;
 using stream_blob_create_output_fn = noncopyable_function<future<output_result>(replica::database&, const streaming::stream_blob_meta&)>;
 
 struct stream_blob_info {
     sstring filename;
     streaming::file_ops fops;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<stream_sstable_meta> sstable_meta;
     stream_blob_source_fn source;
 
     friend inline std::ostream& operator<<(std::ostream& os, const stream_blob_info& x) {
@@ -163,6 +173,7 @@ public:
     dht::token_range range;
     std::vector<streaming::node_and_shard> targets;
     service::frozen_topology_guard topo_guard;
+    bool use_reference_sharing = false;
 };
 
 class stream_files_response {
@@ -175,7 +186,7 @@ public:
 future<stream_files_response> tablet_stream_files_handler(replica::database& db, netw::messaging_service& ms, streaming::stream_files_request req);
 
 // Ask the src node to stream sstables to dst node for table in the given token range using TABLET_STREAM_FILES verb.
-future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id, replica::table& table, const dht::token_range& range, const locator::host_id& src, const locator::host_id& dst, seastar::shard_id dst_shard_id, netw::messaging_service& ms, abort_source& as, service::frozen_topology_guard topo_guard);
+future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id, replica::table& table, const dht::token_range& range, const locator::host_id& src, const locator::host_id& dst, seastar::shard_id dst_shard_id, netw::messaging_service& ms, abort_source& as, service::frozen_topology_guard topo_guard, bool use_reference_sharing = false);
 
 // Exposed for testability
 future<size_t> tablet_stream_files(netw::messaging_service& ms,

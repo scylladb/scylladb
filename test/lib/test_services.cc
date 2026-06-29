@@ -242,6 +242,11 @@ struct test_env::impl {
     sstables::generation_type new_generation() noexcept {
         return gen();
     }
+    std::pair<sstables::generation_type, sstables::sstable_id> new_generation_and_sid() noexcept {
+        auto generation = gen();
+        auto sid = sstables::sstable_id(generation.as_uuid());
+        return {generation, sid};
+    }
 };
 
 test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, sstables::storage_manager* sstm, tmpdir* tdir)
@@ -394,8 +399,14 @@ test_env::new_generation() noexcept {
     return _impl->new_generation();
 }
 
+std::pair<sstables::generation_type, sstables::sstable_id>
+test_env::new_generation_and_sid() noexcept {
+    return _impl->new_generation_and_sid();
+}
+
 shared_sstable
 test_env::make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
+        optimized_optional<sstables::sstable_id> sid,
         sstable::version_types v, sstable::format_types f,
         size_t buffer_size, db_clock::time_point now) {
     // FIXME -- most of the callers work with _impl->dir's path, so
@@ -415,46 +426,51 @@ test_env::make_sstable(schema_ptr schema, sstring dir, sstables::generation_type
     auto storage = _impl->storage;
     std::visit(overloaded_functor {
         [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
-        [&schema] (data_dictionary::storage_options::object_storage& o) { o.location = schema->id(); },
+        [] (data_dictionary::storage_options::object_storage& o) { o.location = std::nullopt; },
     }, storage.value);
-    return _impl->mgr.make_sstable(std::move(schema), storage, generation, state, v, f, now, default_io_error_handler_gen(), buffer_size);
+    return _impl->mgr.make_sstable(std::move(schema), storage, generation, sid, state, v, f, now, default_io_error_handler_gen(), buffer_size);
 }
 
 shared_sstable
 test_env::make_sstable(schema_ptr schema, sstring dir, sstable::version_types v) {
-    return make_sstable(std::move(schema), std::move(dir), new_generation(), std::move(v));
+    auto [gen, sid] = new_generation_and_sid();
+    return make_sstable(std::move(schema), std::move(dir), gen, sid, std::move(v));
 }
 
 shared_sstable
 test_env::make_sstable(schema_ptr schema, sstables::generation_type generation,
+        optimized_optional<sstables::sstable_id> sid,
         sstable::version_types v, sstable::format_types f,
         size_t buffer_size, db_clock::time_point now) {
-    return make_sstable(std::move(schema), _impl->dir.path().native(), generation, std::move(v), std::move(f), buffer_size, now);
+    return make_sstable(std::move(schema), _impl->dir.path().native(), generation, std::move(sid), std::move(v), std::move(f), buffer_size, now);
 }
 
 shared_sstable
 test_env::make_sstable(schema_ptr schema, sstable::version_types v) {
-    return make_sstable(std::move(schema), _impl->dir.path().native(), std::move(v));
+    auto [gen, sid] = new_generation_and_sid();
+    return make_sstable(std::move(schema), _impl->dir.path().native(), gen, sid, std::move(v));
 }
 
 std::function<shared_sstable()>
 test_env::make_sst_factory(schema_ptr s) {
     return [this, s = std::move(s)] {
-        return make_sstable(s, new_generation());
+        auto [gen, sid] = new_generation_and_sid();
+        return make_sstable(s, gen, sid);
     };
 }
 
 std::function<shared_sstable()>
 test_env::make_sst_factory(schema_ptr s, sstable::version_types version) {
     return [this, s = std::move(s), version] {
-        return make_sstable(s, new_generation(), version);
+        auto [gen, sid] = new_generation_and_sid();
+        return make_sstable(s, gen, sid, version);
     };
 }
 
 future<shared_sstable>
 test_env::reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation,
         sstable::version_types version, sstable::format_types f, sstable_open_config cfg) {
-    auto sst = make_sstable(std::move(schema), dir, generation, version, f);
+    auto sst = make_sstable(std::move(schema), dir, generation, std::nullopt, version, f);
     return sst->load(sst->get_schema()->get_sharder(), cfg).then([sst = std::move(sst)] {
         return make_ready_future<shared_sstable>(std::move(sst));
     });
@@ -474,7 +490,7 @@ test_env::reusable_sst(schema_ptr schema, sstables::generation_type generation,
 
 future<shared_sstable>
 test_env::reusable_sst(schema_ptr schema, shared_sstable sst) {
-    return reusable_sst(std::move(schema), sst->get_storage().prefix(), sst->generation(), sst->get_version());
+    return reusable_sst(std::move(schema), sstring(sst->get_storage().prefix()), sst->generation(), sst->get_version());
 }
 
 future<shared_sstable>
@@ -552,7 +568,7 @@ test_env::make_table_for_tests(schema_ptr s, sstring dir) {
     auto storage = _impl->storage;
     std::visit(overloaded_functor {
         [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
-        [&s] (data_dictionary::storage_options::object_storage& o) { o.location = s->id(); },
+        [] (data_dictionary::storage_options::object_storage& o) { o.location = std::nullopt; },
     }, storage.value);
     return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), std::move(storage));
 }

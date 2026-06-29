@@ -15,6 +15,7 @@
 #include "sstables/generation_type.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/version.hh"
+#include "sstables/types.hh"
 #include "utils/log.hh"
 
 #include <vector>
@@ -27,6 +28,7 @@ class database;
 struct minimal_sst_info {
     shard_id shard;
     sstables::generation_type generation;
+    optimized_optional<sstables::sstable_id> sid;
     sstables::sstable_version_types version;
     sstables::sstable_format_types format;
 };

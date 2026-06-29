@@ -79,11 +79,14 @@ enum class stream_blob_cmd : uint8_t {
     error,
     data,
     end_of_stream,
+    reference,
 };
 
 enum class file_ops : uint16_t {
     stream_sstables,
     load_sstables,
+    stream_logstor_segments,
+    reference_sstable,
 };
 
 class stream_blob_data {
@@ -95,6 +98,12 @@ class stream_blob_cmd_data {
     std::optional<streaming::stream_blob_data> data;
 };
 
+class stream_sstable_meta {
+    sstables::sstable_id id;
+    sstables::sstable_version_types version;
+    sstables::sstable_format_types format;
+};
+
 class stream_blob_meta {
     streaming::file_stream_id ops_id;
     table_id table;
@@ -103,6 +112,7 @@ class stream_blob_meta {
     streaming::file_ops fops;
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<streaming::stream_sstable_meta> sstable_meta;
 };
 
 class node_and_shard {
@@ -118,8 +128,8 @@ class stream_files_request {
     dht::token_range range;
     std::vector<streaming::node_and_shard> targets;
     service::frozen_topology_guard topo_guard;
+    bool use_reference_sharing;
 };
-
 class stream_files_response {
     size_t stream_bytes;
 };

@@ -469,12 +469,8 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
 
 static future<> check_compacted_sstables(test_env& env, compact_sstables_result res) {
     return seastar::async([&env, res = std::move(res)] {
-        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
-                .with_column("p1", utf8_type, column_kind::partition_key)
-                .with_column("c1", utf8_type, column_kind::clustering_key)
-                .with_column("r1", utf8_type)
-                .build();
         BOOST_REQUIRE_EQUAL(res.output_sstables.size(), 1);
+        auto s = res.output_sstables[0]->get_schema();
         auto sst = env.reusable_sst(s, res.output_sstables[0]).get();
         auto reader = sstable_reader(sst, s, env.make_reader_permit()); // reader holds sst and s alive.
         auto close_reader = deferred_close(reader);
@@ -7350,6 +7346,7 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
     auto mut1 = mutation(s, pk);
     mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
     auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
+    sst->change_state(sstable_state::staging).get();
 
     auto table = env.make_table_for_tests(s);
     auto close_table = deferred_stop(table);
@@ -7358,16 +7355,18 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
 
     bool leave_unsealed = true;
     auto d = sst->clone(gen_generator(), leave_unsealed).get();
+    BOOST_REQUIRE(d.state == sst->state());
 
-    auto sst2 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst2 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.sid, d.state.value(), d.version, d.format);
     sst2->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::TOC).get());
     BOOST_REQUIRE(sst2->get_storage().exists(*sst2, sstables::component_type::TemporaryTOC).get());
 
     leave_unsealed = false;
     d = sst->clone(gen_generator(), leave_unsealed).get();
+    BOOST_REQUIRE(d.state == sst->state());
 
-    auto sst3 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst3 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.sid, d.state.value(), d.version, d.format);
     sst3->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(sst3->get_storage().exists(*sst3, sstables::component_type::TOC).get());
     BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::TemporaryTOC).get());
@@ -7394,7 +7393,7 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
     bool leave_unsealed = true;
     auto d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst2 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst2 = env.make_sstable(s, d.generation, d.sid, d.version, d.format);
     {
         bool checked = false;
         env.manager()
@@ -7416,7 +7415,7 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
     leave_unsealed = false;
     d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst3 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst3 = env.make_sstable(s, d.generation, d.sid, d.version, d.format);
     {
         bool checked = false;
         env.manager()
@@ -7461,16 +7460,57 @@ void failure_when_adding_new_sstable_fn(test_env& env) {
     auto on_add = [] (sstables::shared_sstable) { throw std::runtime_error("fail to seal"); return make_ready_future<>(); };
     BOOST_REQUIRE_THROW(table->add_new_sstable_and_update_cache(sst, on_add).get(), std::runtime_error);
 
-    // Verify new sstable was unlinked on failure.
-    BOOST_REQUIRE(!sst->get_storage().exists(*sst, sstables::component_type::Data).get());
+    if (env.get_storage_options().is_local_type()) {
+        // Verify new sstable was unlinked on failure.
+        BOOST_REQUIRE(!sst->get_storage().exists(*sst, sstables::component_type::Data).get());
+    } else {
+        // wipe() transitions the registry entry to "removing"; verify it is
+        // present with that status (not "sealed").  The entry will be cleaned
+        // by garbage_collect() on next startup.
+        sstring sst_status;
+        env.manager()
+            .sstables_registry()
+            .sstables_registry_list(table.schema()->id(), env.manager().get_local_host_id(),
+                                    [&sst_status, sst_desc = sst->get_descriptor(component_type::Data)](sstring status, sstable_state, entry_descriptor desc) {
+                                        if (desc.generation == sst_desc.generation) {
+                                            sst_status = std::move(status);
+                                        }
+                                        return make_ready_future();
+                                    })
+            .get();
+        BOOST_REQUIRE_EQUAL(sst_status, "removing");
+    }
 
     auto sst2 = make_sstable_containing(env.make_sstable(s), {mut1}).get();
     auto sst3 = make_sstable_containing(env.make_sstable(s), {mut1}).get();
     BOOST_REQUIRE_THROW(table->add_new_sstables_and_update_cache({sst2, sst3}, on_add).get(), std::runtime_error);
 
-    // Verify both sstables are unlinked on failure.
-    BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::Data).get());
-    BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::Data).get());
+    if (env.get_storage_options().is_local_type()) {
+        // Verify both sstables are unlinked on failure.
+        BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::Data).get());
+        BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::Data).get());
+    } else {
+        // wipe() transitions registry entries to "removing"; verify both are
+        // present with that status (not "sealed").
+        sstring sst2_status, sst3_status;
+        env.manager()
+            .sstables_registry()
+            .sstables_registry_list(table.schema()->id(), env.manager().get_local_host_id(),
+                                    [&sst2_status, &sst3_status,
+                                     sst2_desc = sst2->get_descriptor(component_type::Data),
+                                     sst3_desc = sst3->get_descriptor(component_type::Data)](sstring status, sstable_state, entry_descriptor desc) {
+                                        if (desc.generation == sst2_desc.generation) {
+                                            sst2_status = status;
+                                        }
+                                        if (desc.generation == sst3_desc.generation) {
+                                            sst3_status = status;
+                                        }
+                                        return make_ready_future();
+                                    })
+            .get();
+        BOOST_REQUIRE_EQUAL(sst2_status, "removing");
+        BOOST_REQUIRE_EQUAL(sst3_status, "removing");
+    }
 }
 
 SEASTAR_TEST_CASE(failure_when_adding_new_sstable_test) {

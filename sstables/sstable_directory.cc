@@ -79,20 +79,10 @@ sstable_directory::make_components_lister() {
             return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(loc.dir.native(), _state));
         },
         [this] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            return std::visit(overloaded_functor {
-                [this, &os] (const sstring& prefix) -> std::unique_ptr<sstable_directory::components_lister> {
-                    if (prefix.empty()) {
-                        on_internal_error(sstlog, fmt::format("{} storage options is missing 'prefix'", os.type));
-                    }
-                    return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(prefix), _manager, os);
-                },
-                [this, &os] (const table_id& owner) -> std::unique_ptr<sstable_directory::components_lister> {
-                    if (owner.id.is_null()) {
-                        on_internal_error(sstlog, fmt::format("{} storage options is missing 'owner'", os.type));
-                    }
-                    return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), owner, _manager.get_local_host_id());
-                }
-            }, os.location);
+            if (os.location) {
+                return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(*os.location), _manager, os);
+            }
+            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _schema->id(), _manager.get_local_host_id());
         }
     }, _storage_opts->value);
 }
@@ -133,7 +123,7 @@ sstable_directory::sstable_directory(replica::table& table,
     , _storage_opts(std::move(storage_opts))
     , _state(sstable_state::upload)
     , _error_handler_gen(error_handler_gen)
-    , _storage(make_storage(_manager, *_storage_opts, _state))
+    , _storage(make_storage(_manager, _schema, *_storage_opts, _state))
     , _lister(std::make_unique<sstable_directory::restore_components_lister>(_storage_opts->value,
                                                                              std::move(sstables)))
     , _sharder_ptr(std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()))
@@ -170,7 +160,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _storage_opts(std::move(storage_opts))
     , _state(state)
     , _error_handler_gen(error_handler_gen)
-    , _storage(make_storage(_manager, *_storage_opts, _state))
+    , _storage(make_storage(_manager, _schema, *_storage_opts, _state))
     , _lister(make_components_lister())
     , _sharder_ptr(std::holds_alternative<unique_sharder_ptr>(sharder) ? std::move(std::get<unique_sharder_ptr>(sharder)) : nullptr)
     , _sharder(_sharder_ptr ? *_sharder_ptr : *std::get<const dht::sharder*>(sharder))
@@ -239,7 +229,7 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc,
         const data_dictionary::storage_options& storage_opts, sstables::sstable_open_config cfg) const {
-    shared_sstable sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+    shared_sstable sst = _manager.make_sstable(_schema, storage_opts, desc.generation, desc.sid, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
     co_await sst->load(_sharder, cfg);
     co_return sst;
 }
@@ -273,7 +263,9 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
             new_sst.mutate_sstable_level(0);
         };
         auto sst_creator = [&](shared_sstable) {
-            return _manager.make_sstable(_schema, storage_opts, sstables::sstable_generation_generator{}(), _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+            auto gen = sstable_generation_generator{}();
+            auto sid = storage_opts.is_object_storage_type() ? sstable_id(gen.as_uuid()) : sst->get_sstable_identifier();
+            return _manager.make_sstable(_schema, storage_opts, gen, sid, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
         };
         auto new_sst = co_await sst->link_with_rewritten_component(std::move(sst_creator), component_type::Statistics, std::move(modifier), false);
         co_await sst->unlink();
@@ -520,7 +512,8 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 }
 
 future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_open_info& info) {
-    auto sst = _manager.make_sstable(_schema, *_storage_opts, info.generation, _state, info.version, info.format, db_clock::now(), _error_handler_gen);
+    auto sid = sstable_id{utils::UUID_gen::get_time_UUID()};
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, info.generation, sid, _state, info.version, info.format, db_clock::now(), _error_handler_gen);
     co_await sst->load(std::move(info));
     co_return sst;
 }
@@ -537,7 +530,7 @@ sstable_directory::load_foreign_sstables(sstable_entry_descriptor_vector info_ve
 
 future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(
         const sstables::entry_descriptor& desc, const data_dictionary::storage_options& storage_opts, process_flags flags) const {
-    auto sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, storage_opts, desc.generation, std::nullopt, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
     co_await sst->load_owner_shards(_sharder);
     validate(sst, flags);
     co_return sst->get_shards_for_this_sstable();
@@ -631,7 +624,7 @@ sstable_directory::retrieve_shared_sstables() {
     return std::exchange(_shared_sstable_info, {});
 }
 
-bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, const sstring& prefix_b) noexcept {
+bool sstable_directory::compare_sstable_storage_prefix(std::string_view prefix_a, std::string_view prefix_b) noexcept {
     size_t size_a = prefix_a.size();
     if (prefix_a.back() == '/') {
         size_a--;

@@ -21,6 +21,8 @@
 #include "test/lib/gcs_fixture.hh"
 
 #include <boost/lexical_cast.hpp>
+#include <algorithm>
+#include <array>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/test_fixture.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -30,10 +32,12 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
+#include <seastar/core/iostream.hh>
 #include <cstdio>
 #include <sstream>
 #include <cryptopp/sha.h>
 #include "utils/io-wrappers.hh"
+#include "utils/seekable_source.hh"
 
 future<sstring> generate_file_hash(sstring filename) {
     auto f = co_await seastar::open_file_dma(filename, seastar::open_flags::ro);
@@ -511,6 +515,67 @@ SEASTAR_THREAD_TEST_CASE(test_sink_wrapper_iovec) {
     BOOST_REQUIRE(std::equal(lin.begin(), lin.begin() + final_len, src.begin()));
 }
 
+SEASTAR_TEST_CASE(test_seekable_source_wrapper_concurrent_reads) {
+    class yielding_seekable_source : public seekable_data_source_impl {
+        temporary_buffer<char> _data;
+        uint64_t _pos = 0;
+    public:
+        explicit yielding_seekable_source(temporary_buffer<char> data)
+            : _data(std::move(data))
+        {}
+
+        future<temporary_buffer<char>> get(size_t limit) override {
+            co_await yield();
+
+            auto size = std::min<size_t>(limit, _data.size() - _pos);
+            auto buf = _data.share(_pos, size);
+            _pos += size;
+            co_return buf;
+        }
+
+        future<temporary_buffer<char>> get() override {
+            return get(_data.size());
+        }
+
+        future<> seek(uint64_t pos) override {
+            _pos = pos;
+            co_return;
+        }
+
+        future<uint64_t> size() override {
+            co_return _data.size();
+        }
+    };
+
+    constexpr size_t block_size = 4096;
+    constexpr size_t blocks = 4;
+    auto data = temporary_buffer<char>(block_size * blocks);
+    for (size_t i = 0; i < data.size(); ++i) {
+        data.get_write()[i] = char(i / block_size);
+    }
+
+    auto f = create_file_for_seekable_source(seekable_data_source(std::make_unique<yielding_seekable_source>(data.share())));
+
+    std::array<temporary_buffer<char>, blocks> bufs = {
+        temporary_buffer<char>(block_size),
+        temporary_buffer<char>(block_size),
+        temporary_buffer<char>(block_size),
+        temporary_buffer<char>(block_size),
+    };
+
+    std::vector<future<size_t>> reads;
+    for (size_t i = 0; i < blocks; ++i) {
+        reads.emplace_back(f.dma_read(i * block_size, bufs[i].get_write(), bufs[i].size()));
+    }
+    co_await when_all_succeed(reads.begin(), reads.end());
+
+    for (size_t i = 0; i < blocks; ++i) {
+        BOOST_REQUIRE(std::all_of(bufs[i].begin(), bufs[i].end(), [i] (char c) {
+            return c == char(i);
+        }));
+    }
+}
+
 static void test_sstable_stream(compress_sstable compress, std::function<future<>(shared_sstable)> corruption_fn = nullptr, const sstring& expected_error_msg = "") {
     cql_test_config cfg;
     cfg.ms_listen = true;
@@ -558,19 +623,19 @@ static future<> test_stream_sink_write(sstables::test_env_config cfg) {
 
         auto version = get_highest_sstable_version();
         auto format = sstable::format_types::big;
-        auto generation = env.new_generation();
+        auto [generation, sid] = env.new_generation_and_sid();
         auto& mgr = env.manager();
         auto s_opts = env.get_storage_options();
 
         std::visit(overloaded_functor {
             [&env] (data_dictionary::storage_options::local& o) { o.dir = env.tempdir().path().native(); },
-            [&s] (data_dictionary::storage_options::object_storage& o) { o.location = s->id(); },
+            [] (data_dictionary::storage_options::object_storage& o) { o.location = std::nullopt; },
         }, s_opts.value);
 
         auto toc_basename = sstable::component_basename(
                 s->ks_name(), s->cf_name(), version, generation, format, component_type::TOC);
 
-        auto sink = create_stream_sink(s, mgr, s_opts, sstable_state::normal, toc_basename, {});
+        auto sink = create_stream_sink(s, mgr, s_opts, sstable_state::normal, toc_basename, sid, {});
 
         // output() would succeed before the fix (wrapping the read-only file into a stream),
         // but the write below would throw std::logic_error("unsupported operation on s3 readable file").

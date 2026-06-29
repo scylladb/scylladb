@@ -1155,6 +1155,7 @@ schema_ptr system_keyspace::sstables_registry() {
             .with_column("node_owner", uuid_type, column_kind::partition_key)
             .with_column("generation", timeuuid_type, column_kind::clustering_key)
             .with_column("status", utf8_type)
+            .with_column("sstable_id", uuid_type)
             .with_column("state", utf8_type)
             .with_column("version", utf8_type)
             .with_column("format", utf8_type)
@@ -3489,9 +3490,9 @@ system_keyspace::read_cdc_generation_opt(utils::UUID id) {
 }
 
 future<> system_keyspace::sstables_registry_create_entry(table_id tid, locator::host_id node_owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {
-    static const auto req = format("INSERT INTO system.{} (table_id, node_owner, generation, status, state, version, format) VALUES (?, ?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
+    static const auto req = format("INSERT INTO system.{} (table_id, node_owner, generation, status, sstable_id, state, version, format) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
     slogger.trace("Inserting {}.{}.{} into {}", tid, node_owner, desc.generation, SSTABLES_REGISTRY);
-    co_await execute_cql(req, tid.id, node_owner.uuid(), desc.generation, status, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
+    co_await execute_cql(req, tid.id, node_owner.uuid(), desc.generation, status, desc.sid ? std::optional(desc.sid->id) : std::nullopt, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
 }
 
 future<> system_keyspace::sstables_registry_update_entry_status(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstring status) {
@@ -3533,16 +3534,19 @@ future<> system_keyspace::sstables_registry_delete_entry(table_id tid, locator::
 }
 
 future<> system_keyspace::sstables_registry_list(table_id tid, locator::host_id node_owner, sstable_registry_entry_consumer consumer) {
-    static const auto req = format("SELECT status, state, generation, version, format FROM system.{} WHERE table_id = ? AND node_owner = ?", SSTABLES_REGISTRY);
+    static const auto req = format("SELECT status, sstable_id, state, generation, version, format FROM system.{} WHERE table_id = ? AND node_owner = ?", SSTABLES_REGISTRY);
     slogger.trace("Listing {}.{} entries from {}", tid, node_owner, SSTABLES_REGISTRY);
 
     co_await _qp.query_internal(req, db::consistency_level::ONE, { tid.id, node_owner.uuid() }, 1000, [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto status = row.get_as<sstring>("status");
         auto state = sstables::state_from_dir(row.get_as<sstring>("state"));
         auto gen = sstables::generation_type(row.get_as<utils::UUID>("generation"));
+        auto sid = row.has("sstable_id")
+            ? sstables::sstable_id(row.get_as<utils::UUID>("sstable_id"))
+            : sstables::sstable_id(gen.as_uuid());
         auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
         auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
-        sstables::entry_descriptor desc(gen, ver, fmt, sstables::component_type::TOC);
+        sstables::entry_descriptor desc(gen, sid, ver, fmt, sstables::component_type::TOC);
         co_await consumer(std::move(status), std::move(state), std::move(desc));
         co_return stop_iteration::no;
     });

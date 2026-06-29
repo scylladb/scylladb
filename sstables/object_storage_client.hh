@@ -18,6 +18,7 @@
 
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
+#include "sstables/types.hh"
 
 namespace seastar {
 class abort_source;
@@ -42,15 +43,13 @@ class abstract_lister;
 
 namespace sstables {
 
-class generation_type;
-
 class object_name {
     std::string _name;
 public:
     object_name(const object_name&);
     object_name(object_name&&);
     object_name(std::string_view bucket, std::string_view prefix, std::string_view type);
-    object_name(std::string_view bucket, const generation_type&, std::string_view type);
+    object_name(std::string_view bucket, std::string_view prefix, const sstable_id&, std::string_view type);
     object_name(std::string_view bucket, std::string_view object);
 
     std::string_view bucket() const;
