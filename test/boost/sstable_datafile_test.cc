@@ -2372,6 +2372,42 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
     });
 }
 
+SEASTAR_TEST_CASE(sstable_summary_max_partitions_per_page_test) {
+    // Verifies that the hard limit on the number of partitions per index page
+    // (sstable_summary_max_partitions_per_page) forces summary entries even when
+    // the partitions are tiny enough that the summary/data ratio alone would
+    // place them all in a single page.
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr uint32_t max_partitions_per_page = 100;
+        constexpr int total_partitions = 1000;
+        env.db_config().sstable_summary_max_partitions_per_page(max_partitions_per_page);
+        env.db_config().sstable_summary_ratio(std::numeric_limits<double>::max());
+
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "test")
+                .with_column("id", utf8_type, column_kind::partition_key);
+        builder.set_compressor_params(compression_parameters::no_compression());
+        auto s = builder.build(schema_builder::compact_storage::no);
+
+        utils::chunked_vector<mutation> mutations;
+        for (int i = 0; i < total_partitions; i++) {
+            auto key = to_bytes("key" + to_sstring(i));
+            mutation m(s, partition_key::from_exploded(*s, {std::move(key)}));
+            mutations.push_back(std::move(m));
+        }
+        // The summary/index pair only exists in the legacy ("me") format; the
+        // newer BTI format uses a trie partition index instead.
+        auto sst = make_sstable_containing(env.make_sstable(s, sstable_version_types::me), std::move(mutations)).get();
+
+        const summary& sum = sst->get_summary();
+        // The first partition always gets an entry, then one is forced for every
+        // max_partitions_per_page partitions. Without the hard limit this would
+        // be a single entry, so checking against total/limit confirms it kicked in.
+        const size_t expected = total_partitions / max_partitions_per_page;
+        BOOST_REQUIRE_GE(sum.entries.size(), expected);
+        BOOST_REQUIRE_LE(sum.entries.size(), expected + 2);
+    });
+}
+
 SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
     BOOST_REQUIRE(this_smp_shard_count() == 1);
     return test_env::do_with_async([] (test_env& env) {
