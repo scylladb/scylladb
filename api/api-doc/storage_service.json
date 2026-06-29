@@ -3891,6 +3891,10 @@
         "properties":{
             "tablet_task_id":{
                 "type":"string"
+            },
+            "num_tablets":{
+                "type":"string",
+                "description":"Number of tablets are requested to be repaired"
             }
         }
       },
