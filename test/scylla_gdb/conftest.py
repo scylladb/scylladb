@@ -41,6 +41,8 @@ def gdb_cmd(scylla_server, request):
         scylla_gdb_py,
         "-x",
         script_py,
+        "-ex",
+        "python gdb.execute('scylla run-all-shards-until-poll')",
     ]
     return cmd
 
