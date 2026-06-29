@@ -122,6 +122,7 @@ struct sstable_writer_config {
     write_monitor* monitor = &default_write_monitor();
     run_id run_identifier = run_id::create_random_id();
     size_t summary_byte_cost;
+    uint64_t summary_max_partitions_per_page;
     sstring origin;
     bool correct_pi_block_width = true;
     uint32_t large_data_records_per_sstable = 10;
@@ -1233,11 +1234,16 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;
+    static constexpr uint64_t default_max_partitions_per_page = 10000;
 
-    uint64_t next_data_offset_to_write_summary = 0;
+    uint64_t last_data_offset_in_summary = 0;
     uint64_t partition_count = 0;
+    // Number of partitions added since the last summary entry was emitted.
+    uint64_t partitions_since_last_summary_entry = 0;
     // Enforces ratio of summary to data of 1 to N.
     size_t summary_byte_cost = default_summary_byte_cost;
+    // Hard limit on the number of partitions per index page.
+    uint64_t max_partitions_per_page = default_max_partitions_per_page;
 };
 
 future<> init_metrics();
