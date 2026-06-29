@@ -253,6 +253,7 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             sstables::sstables_manager::config{
                 .available_memory = cfg.available_memory,
                 .enable_sstable_key_validation = db_config->enable_sstable_key_validation(),
+                .sstable_summary_max_partitions_per_page = db_config->sstable_summary_max_partitions_per_page,
                 .memory_reclaim_threshold = db_config->components_memory_reclaim_threshold,
                 .data_file_directories = db_config->data_file_directories(),
                 .format = db_config->sstable_format,
