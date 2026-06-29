@@ -435,7 +435,7 @@ public:
     using repair_history_consumer = noncopyable_function<future<>(const repair_history_entry&)>;
     future<> get_repair_history(table_id, repair_history_consumer f);
 
-    future<utils::chunked_vector<canonical_mutation>> get_update_repair_task_mutations(const repair_task_entry& entry, api::timestamp_type ts);
+    future<mutation> get_update_repair_task_mutation(const repair_task_entry& entry, api::timestamp_type ts);
     using repair_task_consumer = noncopyable_function<future<>(const repair_task_entry&)>;
     future<> get_repair_task(tasks::task_id task_uuid, repair_task_consumer f);
 
