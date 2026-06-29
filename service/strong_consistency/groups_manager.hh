@@ -126,6 +126,17 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
+
+        // Set by the config-change fiber when it's waiting for the config
+        // change to be applied, so that rpc_impl::on_configuration_change can
+        // abort the wait early and let the fiber re-evaluate the config.
+        abort_source* config_change_waiting = nullptr;
+
+        // update() can be called repeatedly while the tablet remains in the
+        // same migration stage. Remember the stage for which we already queued
+        // a migration action on server_control_op so we don't enqueue the same
+        // stage action multiple times. Reset when the tablet leaves the stage.
+        std::optional<locator::tablet_transition_stage> migration_action_stage = std::nullopt;
     };
 
     netw::messaging_service& _ms;
@@ -147,7 +158,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
-        locator::token_metadata_ptr tm);
+        locator::token_metadata_ptr tm,
+        raft_group_state& state);
 
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
@@ -157,6 +169,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     void init_messaging_service();
     future<> uninit_messaging_service();
+
+    // Launches a background fiber to synchronize the raft group configuration
+    // with the current tablet replica set during tablet migration: adds the
+    // pending replica host and removes the leaving replica host when the
+    // migration reaches the corresponding stages.
+    void maybe_update_group_configuration(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id group_id, const locator::token_metadata& tm);
 
 public:
     groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
@@ -183,6 +201,8 @@ public:
     future<> stop();
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
+
+    future<> wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id);
 
     // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
     // until the raft groups for those tablets are started and ready to serve queries.

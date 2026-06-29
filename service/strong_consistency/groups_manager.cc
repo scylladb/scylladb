@@ -20,8 +20,12 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include "locator/tablet_metadata_guard.hh"
+#include "utils/composite_abort_source.hh"
+#include "utils/exponential_backoff_retry.hh"
 
 #include <seastar/core/abort_source.hh>
 
@@ -36,15 +40,23 @@ static raft::server_id to_server_id(host_id host_id) {
 };
 
 class groups_manager::rpc_impl: public service::raft_rpc {
+    raft_group_state& _group_state;
 public:
     rpc_impl(raft_state_machine& sm, netw::messaging_service& ms,
              shared_ptr<raft::failure_detector> failure_detector,
-             raft::group_id gid, raft::server_id my_id)
+             raft::group_id gid, raft::server_id my_id,
+             raft_group_state& group_state)
         : service::raft_rpc(sm, ms, std::move(failure_detector), gid, my_id)
+        , _group_state(group_state)
+
     {
     }
 
     void on_configuration_change(raft::server_address_set add, raft::server_address_set del) override {
+        // Wake the non-leader config-change fiber so it can re-evaluate the config.
+        if (_group_state.config_change_waiting && !_group_state.config_change_waiting->abort_requested()) {
+            _group_state.config_change_waiting->request_abort();
+        }
     }
 };
 
@@ -126,9 +138,14 @@ groups_manager::groups_manager(netw::messaging_service& ms,
 
 future<> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
-        token_metadata_ptr tm)
+        token_metadata_ptr tm,
+        raft_group_state& state)
 {
     const auto my_id = to_server_id(tm->get_my_id());
+    const auto this_replica = locator::tablet_replica{
+        .host = tm->get_my_id(),
+        .shard = this_shard_id(),
+    };
 
 
     auto* commitlog = _db.commitlog();
@@ -139,7 +156,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
 
     auto& state_machine_ref = *state_machine;
-    auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
+    auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id, state);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
 
@@ -149,14 +166,27 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     if (!snapshot.id) {
         const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
         const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
+        const auto* trinfo = tablet_map.get_tablet_transition_info(tablet.tablet);
 
+        const bool joining_replica = trinfo
+            && locator::contains(trinfo->next, this_replica)
+            && !locator::contains(tablet_info.replicas, this_replica);
+
+        // for joining nodes use an empty configuration.
+        // for now set nontrivial_snapshot to true because snapshot transfer is not implemented yet.
         raft::configuration configuration;
-        configuration.current.reserve(tablet_info.replicas.size());
-        for (const auto& r: tablet_info.replicas) {
-            configuration.current.emplace(raft::server_address{to_server_id(r.host), {}},
-                raft::is_voter::yes);
+        bool nontrivial_snapshot = true;
+
+        if (!joining_replica) {
+            configuration.current.reserve(tablet_info.replicas.size());
+            for (const auto& r: tablet_info.replicas) {
+                configuration.current.emplace(raft::server_address{to_server_id(r.host), {}},
+                    raft::is_voter::yes);
+            }
+            nontrivial_snapshot = true;
         }
-        co_await storage->bootstrap(std::move(configuration), false);
+
+        co_await storage->bootstrap(std::move(configuration), nontrivial_snapshot);
     }
 
     auto& persistence_ref = *storage;
@@ -246,6 +276,52 @@ future<> groups_manager::wait_for_groups_to_start(lowres_clock::time_point timeo
     }
 }
 
+future<> groups_manager::wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id) {
+    auto timeout = lowres_clock::now() + std::chrono::minutes(5);
+
+    co_await wait_for_groups_to_start(timeout);
+
+    auto it = _raft_groups.find(group_id);
+    if (it == _raft_groups.end()) {
+        throw std::runtime_error(format("No raft group {} on this host", group_id));
+    }
+    auto& state = it->second;
+    co_await state.server_control_op.get_future(timeout);
+
+    auto schema = _db.find_schema(tablet.table);
+    if (!schema) {
+        throw replica::no_such_column_family(tablet.table);
+    }
+    auto& table_ref = _db.find_column_family(tablet.table);
+    locator::tablet_metadata_guard guard(table_ref, tablet);
+    auto& tmap = guard.get_tablet_map();
+    auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+    if (!trinfo) {
+        throw std::runtime_error(fmt::format("No transition info for group {}", group_id));
+    }
+    if (trinfo->stage != locator::tablet_transition_stage::sc_snapshot_transfer) {
+        throw std::runtime_error(fmt::format("Tablet {} stage is not at sc_snapshot_transfer", tablet));
+    }
+    if (trinfo->session_id != session_id) {
+        throw std::runtime_error(fmt::format("Tablet {} session mismatch: expected {}, got {}", tablet, session_id, trinfo->session_id));
+    }
+    if (!trinfo->pending_replica) {
+        throw std::runtime_error(fmt::format("Tablet {} has no pending replica", tablet));
+    }
+    const auto this_replica = locator::tablet_replica{
+        .host = guard.get_token_metadata()->get_my_id(),
+        .shard = this_shard_id(),
+    };
+    if (*trinfo->pending_replica != this_replica) {
+        throw std::runtime_error(fmt::format("Tablet {} pending replica {} is not local replica {}", tablet, *trinfo->pending_replica, this_replica));
+    }
+
+    co_await utils::get_local_injector().inject("sc_wait_for_snapshot_transfer", utils::wait_for_message(20min));
+
+    abort_on_expiry aoe(timeout);
+    co_await state.server->read_barrier(&aoe.abort_source());
+}
+
 void groups_manager::init_messaging_service() {
     ser::groups_manager_rpc_verbs::register_wait_for_raft_groups_to_start(&_ms,
         [this] (rpc::opt_time_point timeout, raft::server_id dst_id, table_id table) -> future<> {
@@ -255,6 +331,44 @@ void groups_manager::init_messaging_service() {
             co_await _mm.get_group0_barrier().trigger();
             co_await container().invoke_on_all([timeout] (groups_manager& gm) {
                 return gm.wait_for_groups_to_start(*timeout);
+            });
+        }
+    );
+    ser::groups_manager_rpc_verbs::register_wait_for_snapshot_transfer(&_ms,
+        [this] (raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id group_id, utils::UUID session_id) -> future<> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            co_await _mm.get_group0_barrier().trigger();
+
+            auto schema = _db.find_schema(tablet.table);
+            if (!schema) {
+                throw replica::no_such_column_family(tablet.table);
+            }
+            auto& table_ref = _db.find_column_family(tablet.table);
+            locator::tablet_metadata_guard guard(table_ref, tablet);
+            auto& tmap = guard.get_tablet_map();
+            auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+            if (!trinfo) {
+                throw std::runtime_error(fmt::format("No transition info for group {}", group_id));
+            }
+            if (trinfo->stage != locator::tablet_transition_stage::sc_snapshot_transfer) {
+                throw std::runtime_error(fmt::format("Tablet {} stage is not at sc_snapshot_transfer", tablet));
+            }
+            const auto sid = service::session_id(session_id);
+            if (trinfo->session_id != sid) {
+                throw std::runtime_error(fmt::format("Tablet {} session mismatch: expected {}, got {}", tablet, sid, trinfo->session_id));
+            }
+            if (!trinfo->pending_replica) {
+                throw std::runtime_error(fmt::format("Tablet {} has no pending replica", tablet));
+            }
+            if (trinfo->pending_replica->host != guard.get_token_metadata()->get_my_id()) {
+                throw std::runtime_error(fmt::format("Tablet {} pending replica {} is not on this host", tablet, *trinfo->pending_replica));
+            }
+            const auto dst_shard = trinfo->pending_replica->shard;
+
+            co_await container().invoke_on(dst_shard, [tablet, group_id, sid] (groups_manager& gm) {
+                return gm.wait_for_snapshot_transfer(tablet, group_id, sid);
             });
         }
     );
@@ -367,6 +481,204 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
     }
 }
 
+void groups_manager::maybe_update_group_configuration(raft_group_state& state, global_tablet_id tablet, raft::group_id id, const token_metadata& tm) {
+    const auto& tablet_map = tm.tablets().get_tablet_map(tablet.table);
+    const auto& tinfo = tablet_map.get_tablet_info(tablet.tablet);
+    const auto* trinfo = tablet_map.get_tablet_transition_info(tablet.tablet);
+
+    const auto current_stage = trinfo ? std::optional(trinfo->stage) : std::nullopt;
+    if (state.migration_action_stage != current_stage) {
+        state.migration_action_stage.reset();
+    } else {
+        // action is already running for this stage.
+        return;
+    }
+
+    if (!trinfo) {
+        return;
+    }
+
+    std::vector<raft::config_member> to_add;
+    std::vector<raft::server_id> to_del;
+
+    switch (trinfo->stage) {
+        case tablet_transition_stage::start_migration:
+            break;
+        case tablet_transition_stage::sc_add_nonvoter:
+            // Add the pending replica as nonvoter.
+            if (trinfo->pending_replica) {
+                const auto pending_id = to_server_id(trinfo->pending_replica->host);
+                to_add.push_back(raft::config_member{raft::server_address{pending_id, {}}, raft::is_voter::no});
+            }
+            break;
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
+            break;
+        case tablet_transition_stage::streaming:
+            break;
+        case tablet_transition_stage::sc_snapshot_transfer:
+             break;
+        case tablet_transition_stage::rebuild_repair:
+            break;
+        case tablet_transition_stage::sc_become_voter:
+            // The pending replica becomes a voter.
+            if (trinfo->pending_replica) {
+                const auto pending_id = to_server_id(trinfo->pending_replica->host);
+                to_add.push_back(raft::config_member{raft::server_address{pending_id, {}}, raft::is_voter::yes});
+            }
+            // Remove the leaving replica from the raft group.
+            if (auto leaving = locator::get_leaving_replica(tinfo, *trinfo)) {
+                if (!locator::contains(trinfo->next, leaving->host)) {
+                    auto leaving_id = to_server_id(leaving->host);
+                    to_del.push_back(leaving_id);
+                }
+            }
+            break;
+        case tablet_transition_stage::use_new:
+            break;
+        case tablet_transition_stage::cleanup:
+            break;
+        case tablet_transition_stage::sc_cleanup_target:
+            // Remove the pending replica from the raft group.
+            if (trinfo->pending_replica && !locator::contains(tinfo.replicas, trinfo->pending_replica->host)) {
+                auto pending_id = to_server_id(trinfo->pending_replica->host);
+                to_del.push_back(pending_id);
+            }
+            break;
+        case tablet_transition_stage::cleanup_target:
+            break;
+        case tablet_transition_stage::revert_migration:
+            break;
+        case tablet_transition_stage::end_migration:
+            break;
+        case tablet_transition_stage::repair:
+            break;
+        case tablet_transition_stage::end_repair:
+            break;
+        case tablet_transition_stage::restore:
+            break;
+    }
+
+    if (to_add.empty() && to_del.empty()) {
+        return;
+    }
+
+    state.migration_action_stage = trinfo->stage;
+
+    logger.debug("maybe_update_group_configuration(): "
+        "starting config change fiber for raft group {} tablet {}: to_add={}, to_del={}",
+        id, tablet, to_add, to_del);
+
+    // Every replica (not just the leader) runs this fiber. The fiber loops until the
+    // configuration matches the expected state or the raft server stops:
+    //  1. Recheck which changes are still needed against the current raft config.
+    //  2. If nothing remains, exit.
+    //  3. Wait until a leader is known.
+    //  4. If this replica is the leader, call modify_config with the pending changes.
+    //  5. On transient errors loop back to step 1. Exit only if the raft server stops.
+    state.server_control_op = futurize_invoke([this, &state, id, to_add = std::move(to_add), to_del = std::move(to_del), tablet](this auto) -> future<> {
+        locator::tablet_metadata_guard guard(_db.find_column_family(tablet.table), tablet);
+        auto retry = exponential_backoff_retry(10ms, 10s);
+        co_await state.server_control_op.get_future();
+
+        while (true) {
+            auto retry_needed = false;
+
+            // Wait for a leader to be elected.
+            try {
+                co_await state.server->wait_for_leader(nullptr);
+            } catch (const raft::stopped_error&) {
+                co_return;
+            } catch (const raft::request_aborted&) {
+                logger.warn("maybe_update_group_configuration(): waiting for leader aborted for group {} tablet {}, retrying",
+                    id, tablet);
+                retry_needed = true;
+            }
+            if (retry_needed) {
+                co_await retry.retry();
+                continue;
+            }
+
+            // Recheck which changes are still pending against the live raft config.
+            const auto& current_config = state.server->get_configuration().current;
+            std::vector<raft::config_member> add;
+            for (const auto& member : to_add) {
+                auto it = current_config.find(member.addr.id);
+                if (it == current_config.end() || it->can_vote != member.can_vote) {
+                    add.push_back(member);
+                }
+            }
+            std::vector<raft::server_id> del;
+            for (const auto& host : to_del) {
+                if (current_config.contains(host)) {
+                    del.push_back(host);
+                }
+            }
+
+            if (add.empty() && del.empty()) {
+                logger.debug("maybe_update_group_configuration(): raft group {} tablet {} config change completed, current config: {}",
+                    id, tablet, current_config);
+                break;
+            }
+
+            logger.debug("maybe_update_group_configuration(): raft group {} tablet {} pending config change: to_add={}, to_del={}, current config: {}",
+                id, tablet, add, del, current_config);
+
+            if (!state.server->current_leader()) {
+                continue;
+            }
+
+            if (state.server->current_leader() != state.server->id()) {
+                // We are not the leader; wait for either a role change (which
+                // might make us the leader) or a configuration change (which
+                // means the current leader already applied the pending change).
+                //
+                // wait_for_state_change() only fires on Raft FSM role transitions
+                // (follower/candidate/leader), NOT on configuration commits. We
+                // therefore use an abort_source that rpc_impl::on_configuration_change
+                // signals whenever a new configuration entry is received by this
+                // replica, so we re-evaluate the config in either case.
+                abort_source config_changed_as;
+                state.config_change_waiting = &config_changed_as;
+                auto clear_config_change_waiting = defer([&state] {
+                    state.config_change_waiting = nullptr;
+                });
+                try {
+                    co_await state.server->wait_for_state_change(&config_changed_as);
+                } catch (const raft::stopped_error&) {
+                    co_return;
+                } catch (const raft::request_aborted&) {
+                    // Woken by on_configuration_change (config entry received) or
+                    // by the abort_source from the server itself.  Re-check the
+                    // config at the top of the loop.
+                }
+                continue;
+            }
+
+            // We are the leader — apply the config change.
+            try {
+                logger.debug("maybe_update_group_configuration(): applying config change for group {} tablet {}: to_add={}, to_del={}", id, tablet, add, del);
+                co_await state.server->modify_config(std::move(add), std::move(del), nullptr);
+                break;
+            } catch (const raft::stopped_error&) {
+                co_return;
+            } catch (const raft::request_aborted&) {
+                logger.warn("maybe_update_group_configuration(): config change attempt aborted for group {} tablet {}, retrying",
+                    id, tablet);
+            } catch (...) {
+                logger.warn("maybe_update_group_configuration(): "
+                    "error updating config for group {} tablet {}: {}",
+                    id, tablet, std::current_exception());
+            }
+
+            co_await retry.retry();
+        }
+    }).handle_exception([&state, id, tablet] (std::exception_ptr ep) {
+        logger.warn("maybe_update_group_configuration(): action failed for group {} tablet {}: {}",
+            id, tablet, ep);
+        state.migration_action_stage.reset();
+    });
+}
+
 void groups_manager::update(token_metadata_ptr new_tm) {
     if (!_features.strongly_consistent_tables) {
         return;
@@ -405,6 +717,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
             // Don't start the raft server if it is already (started or starting) and not stopping.
             if (state.gate && !state.gate->is_closed()) {
+                maybe_update_group_configuration(state, tablet, id, *new_tm);
                 continue;
             }
 
@@ -413,7 +726,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             _starting_groups.push_back(state);
             state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm](this auto) -> future<> {
                 co_await state.server_control_op.get_future();
-                co_await start_raft_group(tablet, id, std::move(new_tm));
+                co_await start_raft_group(tablet, id, std::move(new_tm), state);
                 state.server = &_raft_gr.get_server(id);
                 state.leader_info_updater = leader_info_updater(state, tablet, id);
 

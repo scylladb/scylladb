@@ -1014,6 +1014,8 @@ private:
                 return false;
             case tablet_transition_stage::streaming:
                 return true;
+            case tablet_transition_stage::sc_snapshot_transfer:
+                return true;
             case tablet_transition_stage::rebuild_repair:
                 return true;
             case tablet_transition_stage::repair:
@@ -1027,6 +1029,8 @@ private:
             case tablet_transition_stage::use_new:
                 return false;
             case tablet_transition_stage::cleanup:
+                return false;
+            case tablet_transition_stage::sc_cleanup_target:
                 return false;
             case tablet_transition_stage::cleanup_target:
                 return false;
