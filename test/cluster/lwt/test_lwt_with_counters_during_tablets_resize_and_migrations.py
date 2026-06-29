@@ -15,9 +15,10 @@ from test.cluster.lwt.lwt_common import (
     DEFAULT_NUM_KEYS,
     wait_for_tablet_count
 )
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, make_cfg, make_ks_opts
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError
+from test.pylib.skip_types import skip_env
 from test.pylib.tablets import get_tablet_count
 from test.pylib.tablets import get_tablet_replicas
 
@@ -294,13 +295,13 @@ async def run_random_resizes(
 
 
 @pytest.mark.skip_mode("debug", "debug mode is too slow for this test")
-async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClient, scale_timeout):
-
-    cfg = {
-        "enable_tablets": True,
+async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClient, scale_timeout, storage_layer):
+    if storage_layer is not None and storage_layer.type == 'S3':
+        skip_env('S3 flavor of this test is extremely slow (9m+), deeper investigation is needed')
+    cfg = make_cfg(storage_layer, extra={
         "tablet_load_stats_refresh_interval_in_seconds": 1,
         "target-tablet-size-in-bytes": 1024 * 16,
-    }
+    })
 
     properties = [
         {"dc": "dc1", "rack": "r1"},
@@ -319,8 +320,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClien
     
     async with new_test_keyspace(
         manager,
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
-        "AND tablets = {'initial': 1}",
+        make_ks_opts(storage_layer, rf=3, initial_tablets=1),
     ) as ks:
         stop_event_ = asyncio.Event()
         table = "lwt_split_merge_table"

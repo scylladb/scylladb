@@ -5,7 +5,7 @@
 #
 
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, make_cfg, make_ks_opts
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.rest_client import read_barrier
 
@@ -18,7 +18,7 @@ import pytest
 logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize("migration_type", ["internode", "intranode"])
-async def test_counter_updates_during_tablet_migration(manager: ManagerClient, migration_type: str):
+async def test_counter_updates_during_tablet_migration(manager: ManagerClient, migration_type: str, storage_layer):
     """
     Test that counter updates remain consistent during tablet migrations.
 
@@ -38,11 +38,12 @@ async def test_counter_updates_during_tablet_migration(manager: ManagerClient, m
 
     cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'storage_service=debug']
 
-    servers = await manager.servers_add(node_count, cmdline=cmdline)
+    cfg = make_cfg(storage_layer)
+    servers = await manager.servers_add(node_count, config=cfg, cmdline=cmdline)
     cql = manager.get_cql()
     await manager.disable_tablet_balancing()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
+    async with new_test_keyspace(manager, make_ks_opts(storage_layer, rf=1, initial_tablets=1)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.counters (pk int PRIMARY KEY, c counter)")
 
         stop_event = asyncio.Event()

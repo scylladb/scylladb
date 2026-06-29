@@ -14,10 +14,12 @@ import os
 import logging
 import re
 import uuid
+from contextlib import asynccontextmanager
 
 from test.pylib.minio_server import MinioServer
 from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.host_registry import HostRegistry
+from test.pylib.manager_client import ManagerClient
 from operator import attrgetter
 
 import pytest
@@ -108,10 +110,6 @@ class S3Server:
 
     async def stop(self):
         pass
-
-
-# Keep the old name as an alias for backward compatibility
-S3_Server = S3Server
 
 
 class MinioWrapper(S3Server):
@@ -285,10 +283,6 @@ class GSServerImpl(GSFront):
         self.unpublish()
 
 
-# Keep the old name as an alias for backward compatibility (conftest.py imports it)
-GSServer = GSServerImpl
-
-
 def create_s3_server(pytestconfig, tmpdir):
     server = None
     s3_server_address = pytestconfig.getoption('--s3-server-address')
@@ -340,17 +334,53 @@ def create_gs_server(tmpdir):
     return GSServerImpl(tmpdir)
 
 
-@pytest.fixture(scope="function")
-async def s3_server(request, pytestconfig, tmpdir):
-    server = create_s3_server(pytestconfig, tmpdir)
-    await server.start()
+@asynccontextmanager
+async def make_object_storage(kind, pytestconfig, tmpdir, test_name, manager: ManagerClient | None = None):
+    """Start an object-storage (S3/MinIO or GCS) server, create a test bucket and
+    yield the server handle.
+
+    For S3 we reuse the MinIO instance that test.py starts globally (its
+    coordinates are published through command-line options / environment
+    variables).  For GCS we use a real endpoint when configured via environment,
+    otherwise a local fake-gcs-server.
+
+    Pass ``manager`` so that, on teardown, all running Scylla servers are stopped
+    before the bucket is destroyed.  Without this, in-flight operations
+    (compaction, tablet migration) may still reference objects in the bucket,
+    causing S3 404s that abort the node (see SCYLLADB-2471).
+    """
+    if kind == 'gs':
+        server = create_gs_server(tmpdir)
+    else:
+        server = create_s3_server(pytestconfig, tmpdir)
+
     bucket_created = False
     try:
-        server.create_test_bucket(request.node.name)
+        await server.start()
+        server.create_test_bucket(test_name)
         bucket_created = True
         yield server
     finally:
+        # Stop all running Scylla servers before destroying the bucket.
+        # Without this, in-flight operations (compaction, tablet migration) may
+        # still reference objects in the bucket, causing S3 404s that abort the
+        # node.  See SCYLLADB-2471.
+        # Hard stop (not graceful): graceful drain could hang if a migration
+        # is in progress, and we don’t need data integrity — the test is over.
+        # convict=False: no live peers left to notify.
+        if manager is not None:
+            try:
+                for srv in await manager.running_servers():
+                    await manager.server_stop(srv.server_id, convict=False)
+            except Exception:
+                pass  # Best effort — servers may already be stopped
         if bucket_created:
             server.destroy_test_bucket()
         await server.stop()
+
+
+@pytest.fixture(scope="function")
+async def s3_server(request, pytestconfig, tmpdir):
+    async with make_object_storage('s3', pytestconfig, tmpdir, request.node.name) as server:
+        yield server
 

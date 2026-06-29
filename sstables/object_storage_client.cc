@@ -28,7 +28,6 @@
 #include "utils/s3/creds.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/lister.hh"
-#include "utils/io-wrappers.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -175,10 +174,10 @@ public:
         return _client->delete_object(name.bucket(), name.object(), as);
     }
     file make_readable_file(object_name name, abort_source* as) override {
-        auto src = _client->create_download_source(name.bucket(), name.object(), as);
-        return create_file_for_seekable_source(std::move(src), [scf = _shard_client, name] {
-            return scf()->create_download_source(name.bucket(), name.object());
-        });
+        return _client->make_readable_file(name.bucket(), name.object(),
+                [scf = _shard_client, name] {
+                    return scf();
+                }, as);
     }
     data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece, abort_source* as) override {
         return make_upload_sink(std::move(name), as);

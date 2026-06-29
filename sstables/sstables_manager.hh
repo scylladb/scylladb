@@ -259,6 +259,13 @@ public:
     void plug_sstables_registry(std::unique_ptr<sstables_registry>) noexcept;
     void unplug_sstables_registry() noexcept;
 
+    // Whether a sstables_registry is currently plugged. Background work that may
+    // race with shutdown (e.g. fire-and-forget object-storage sstable deletion)
+    // can use this to avoid touching the registry after it has been unplugged.
+    bool has_sstables_registry() const noexcept {
+        return bool(_sstables_registry);
+    }
+
     // Only for sstable::storage usage
     sstables::sstables_registry& sstables_registry() const noexcept {
         SCYLLA_ASSERT(_sstables_registry && "sstables_registry is not plugged");

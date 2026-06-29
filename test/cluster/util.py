@@ -612,3 +612,36 @@ def get_replica_count(rf: ReplicationOption) -> int:
         get_replica_count(["2"]) == 2
     """
     return len(rf) if type(rf) is list else int(rf)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for parametrizing tablet tests over local / S3 / GCS storage.
+# ---------------------------------------------------------------------------
+
+def _format_storage_opts(**kwargs):
+    body = ', '.join(f"'{key}': '{value}'" for key, value in kwargs.items())
+    return f'{{ {body} }}'
+
+
+def make_cfg(storage_layer, extra=None):
+    """Build a server config dict, adding object-storage options when needed."""
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+    if storage_layer:
+        cfg['object_storage_endpoints'] = storage_layer.create_endpoint_conf()
+        cfg['experimental_features'] = ['keyspace-storage-options']
+    if extra:
+        cfg.update(extra)
+    return cfg
+
+
+def make_ks_opts(storage_layer, rf, initial_tablets):
+    """Build keyspace CQL options, adding STORAGE clause for object storage."""
+    ks_opts = (f"WITH replication = {{'class': 'NetworkTopologyStrategy', "
+               f"'replication_factor': {rf}}} AND tablets = {{'initial': {initial_tablets}}}")
+    if storage_layer:
+        storage = _format_storage_opts(type=storage_layer.type,
+                                       endpoint=storage_layer.address,
+                                       bucket=storage_layer.bucket_name)
+        ks_opts += f" AND STORAGE = {storage}"
+    return ks_opts
+

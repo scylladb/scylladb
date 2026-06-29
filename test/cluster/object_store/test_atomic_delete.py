@@ -10,9 +10,9 @@ import logging
 import pytest
 
 from test.pylib.manager_client import ManagerClient
+from test.pylib.object_storage import keyspace_options
 from test.pylib.rest_client import inject_error_one_shot, inject_error
 from test.cluster.util import reconnect_driver, new_test_keyspace
-from test.cluster.object_store.conftest import keyspace_options
 
 logger = logging.getLogger(__name__)
 
@@ -196,15 +196,14 @@ async def test_crash_before_batch_mutation_commits(manager: ManagerClient, objec
         # The injection throws before apply_mutation, so the batch mutation
         # marking entries as 'removing' is never committed. Compaction handles
         # the error internally — the REST API does not propagate it.
-        await inject_error_one_shot(manager.api, server.ip_addr, "batch_update_entry_status_before_apply")
-        await manager.api.keyspace_compaction(server.ip_addr, ks)
-
-        # Verify: no entries should be in 'removing' state since the mutation
-        # was never committed.
-        entries = await get_registry_entries(cql, table_id)
-        removing = {gen for status, gen in entries if status == 'removing'}
-        assert len(removing) == 0, f"Mutation should not have been committed, but found 'removing' entries: {removing}"
-        logger.info("After failed compaction: %d entries, none in 'removing' state", len(entries))
+        async with inject_error(manager.api, server.ip_addr, "batch_update_entry_status_before_apply"):
+            await manager.api.keyspace_compaction(server.ip_addr, ks)
+            # Verify: no entries should be in 'removing' state since the mutation
+            # was never committed.
+            entries = await get_registry_entries(cql, table_id)
+            removing = {gen for status, gen in entries if status == 'removing'}
+            assert len(removing) == 0, f"Mutation should not have been committed, but found 'removing' entries: {removing}"
+            logger.info("After failed compaction: %d entries, none in 'removing' state", len(entries))
 
         # All data should be readable.
         res = cql.execute(f"SELECT count(*) FROM {ks}.test;")
