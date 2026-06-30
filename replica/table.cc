@@ -2567,8 +2567,10 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
             // The group that triggered compaction is the only one to have sstables removed from it.
             _cg_desc[&_cg].desc.old_sstables = _desc.old_sstables;
             for (auto& [cg, d] : _cg_desc) {
+                size_t removed_sstables = 0;
                 d.main_sstable_set_builder_result = co_await _builder.build_new_list(*cg->main_sstables(), cg->make_main_sstable_set(),
                                                                   d.desc.new_sstables, d.desc.old_sstables);
+                removed_sstables += d.main_sstable_set_builder_result.removed_sstables.size();
 
                 if (!d.desc.old_sstables.empty()
                         && d.main_sstable_set_builder_result.removed_sstables.size() != d.desc.old_sstables.size()) {
@@ -2580,6 +2582,19 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
                     auto builder_result = co_await _builder.build_new_list(
                             *cg->maintenance_sstables(), std::move(*cg->make_maintenance_sstable_set()), {}, d.desc.old_sstables);
                     d.new_maintenance_sstables = std::move(builder_result.new_sstable_set);
+                    removed_sstables += builder_result.removed_sstables.size();
+                }
+
+                // All input sstables must be removed from the underlying group's sstable set on compaction completion.
+                // Otherwise, it means some synchronization mechanism failed and sstable was moved across groups while
+                // compaction was running. Merge should stop compaction first before merging sstables across groups.
+                // Split exhausts main group before finalization, and left and right groups should only be copied into
+                // new group layout post finalization. Any compaction should make sure that a compaction uses exactly
+                // the group at which the sstable belongs to.
+                if (removed_sstables != d.desc.old_sstables.size()) {
+                    auto compaction_type = d.desc.new_sstables.size() ? d.desc.new_sstables.front()->get_origin() : "unknown";
+                    on_internal_error(tlogger, fmt::format("Unable to remove input SSTable {} that belongs to group id {} for compaction of type {}",
+                                                           d.desc.old_sstables, cg->group_id(), compaction_type));
                 }
             }
         }
