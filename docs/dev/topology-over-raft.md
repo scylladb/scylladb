@@ -226,17 +226,22 @@ the load balancer will not be invoked to allow for current migrations to drain,
 after which the state machine will exit the tablet migration track and allow pending topology
 operation to start.
 
-The tablet migration track excludes with other topology changes, so node operations
-will have to wait for tablet migration track to finish before they can take over
-the state machine.
+The exception is a pending join request. Bootstrap can preempt the tablet migration
+track and take over the state machine before all active tablet transitions finish.
+The tablet transitions remain recorded in tablet metadata and the state machine
+returns to the tablet migration track after bootstrap if any tablet transitions are still pending.
+Other node operations still wait for the tablet migration track to finish before they
+can take over the state machine.
 
 The reason why the load balancer is part of the main state machine and excludes with other topology
 changes is that we want to share the infrastructure for fencing between vnode-based topology
 changes and tablet migration. This calls for some way to mutually exclude the two so that they
 don't interfere with each other. The simplest is to make them part of the same state machine.
 
-When the topology state machine is not in the tablet_migration track, it is guaranteed
-that there are no tablet transitions in the system.
+When the topology state machine is not in the tablet_migration track and no bootstrap
+preemption is in progress, it is guaranteed that there are no tablet transitions in the system.
+During bootstrap preemption, tablet transitions may exist outside the tablet_migration track,
+but they are not removed or rolled back and will be resumed by returning to tablet_migration.
 
 Tablets are migrated in parallel and independently.
 
