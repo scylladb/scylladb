@@ -183,7 +183,8 @@ future<> write_buffer::abort_writes(std::exception_ptr ex) {
     // Mixed buffers keep per-record futures for separator rewriting. When the
     // flush fails there is no separator pass to consume them, so drain them here
     // before reset() clears the vector and would otherwise abandon failed futures.
-    for (auto& record : _records_copy) {
+    auto records = std::exchange(_records_copy, {});
+    for (auto& record : records) {
         auto f = co_await coroutine::as_future(std::move(record.loc));
         f.ignore_ready_future();
     }
