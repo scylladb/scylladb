@@ -265,7 +265,8 @@ private:
     [[nodiscard]] mutation_reader detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
     void evict(reader_permit::impl&, evict_reason reason) noexcept;
 
-    bool has_available_units(const resources& r) const;
+    enum class reason { all_ok = 0, ready_list, need_cpu_permits, memory_resources, count_resources };
+    reason has_available_units(const resources& r) const;
 
     bool cpu_concurrency_limit_reached() const;
 
@@ -284,7 +285,6 @@ private:
     // A return value of can_admit::maybe means admission might be possible if
     // some of the inactive readers are evicted.
     enum class can_admit { no, maybe, yes };
-    enum class reason { all_ok = 0, ready_list, need_cpu_permits, memory_resources, count_resources };
     struct admit_result { can_admit decision; reason why; };
     admit_result can_admit_read(const reader_permit::impl& permit) const noexcept;
 

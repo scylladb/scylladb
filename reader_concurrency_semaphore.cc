@@ -1350,10 +1350,22 @@ void reader_concurrency_semaphore::close_reader(mutation_reader reader) {
     });
 }
 
-bool reader_concurrency_semaphore::has_available_units(const resources& r) const {
+reader_concurrency_semaphore::reason reader_concurrency_semaphore::has_available_units(const resources& r) const {
+    if (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) {
+        return reason::all_ok;
+    }
+
     // Special case: when there is no active reader (based on count) admit one
     // regardless of availability of memory.
-    return (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) || _resources.count == _initial_resources.count;
+    if (_resources.count == _initial_resources.count) {
+        return reason::all_ok;
+    }
+
+    if (_resources.count < r.count) {
+        return reason::count_resources;
+    }
+
+    return reason::memory_resources;
 }
 
 bool reader_concurrency_semaphore::cpu_concurrency_limit_reached() const {
@@ -1444,8 +1456,8 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
         return {can_admit::no, reason::need_cpu_permits};
     }
 
-    if (!has_available_units(permit.base_resources())) {
-        auto reason = _resources.memory >= permit.base_resources().memory ? reason::count_resources : reason::memory_resources;
+    const auto reason = has_available_units(permit.base_resources());
+    if (reason != reason::all_ok) {
         if (_inactive_reads.empty()) {
             return {can_admit::no, reason};
         } else {
