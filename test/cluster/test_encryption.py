@@ -280,7 +280,7 @@ async def test_encryption_table_compression(manager, tmpdir, compression, scylla
                           ciphers={"AES/CBC/PKCS5Padding": [128]},
                           compression=compression)
 
-
+@pytest.mark.slow
 async def test_reboot(manager, key_provider):
     """Tests SIGKILL restart of 3-node cluster"""
     async def restart(manager: ManagerClient, servers: list[ServerInfo], table_names: list[str]):

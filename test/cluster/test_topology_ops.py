@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.parametrize("tablets_enabled", [True, False])
+@pytest.mark.slow
 async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bool):
     """Test basic topology operations using the topology coordinator."""
     rf_rack_cfg = {'rf_rack_valid_keyspaces': False}

@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # remote view updates.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='node replace needs to wait for tablet rebuild, which takes a lot of time in debug mode')
+@pytest.mark.slow
 async def test_mv_tablets_empty_ip(manager: ManagerClient):
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = await manager.servers_add(4, config = cfg, property_file=[

@@ -294,6 +294,7 @@ async def run_random_resizes(
 
 
 @pytest.mark.skip_mode("debug", "debug mode is too slow for this test")
+@pytest.mark.slow
 async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClient, scale_timeout):
 
     cfg = {

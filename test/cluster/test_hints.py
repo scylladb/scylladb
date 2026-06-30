@@ -432,6 +432,7 @@ async def test_hint_to_pending(manager: ManagerClient):
         assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_hint_to_leaving_when_reducing_rf(manager: ManagerClient):
     '''
     This test checks if hint_sender sends a mutation to a leaving replica if the mutation

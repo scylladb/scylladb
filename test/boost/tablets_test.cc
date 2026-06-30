@@ -4532,7 +4532,7 @@ allocate_replicas_in_racks(const std::vector<endpoint_dc_rack>& racks, int rf,
     return replica_hosts;
 }
 
-SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load, *boost::unit_test::label("slow")) {
   auto do_test_case = [] (const shard_id rf) {
     cql_test_config cfg;
     cfg.need_remote_proxy = true;
@@ -5293,7 +5293,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
     }, cfg).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) {
+SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata, *boost::unit_test::label("slow")) {
     auto cfg = tablet_cql_test_config();
     cfg.db_config->tablets_initial_scale_factor(10.0);
     cfg.db_config->tablets_per_shard_goal(100);
@@ -5731,7 +5731,7 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
     e.execute_cql(fmt::format("drop keyspace {}", ks_name)).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_random_load) {
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_random_load, *boost::unit_test::label("slow")) {
     cql_test_config cfg;
     cfg.need_remote_proxy = true;
     do_with_cql_env_thread([] (auto& e) {

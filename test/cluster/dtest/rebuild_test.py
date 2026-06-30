@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 class TestRebuildStreamingAbortRepro(Tester):
     @pytest.mark.cluster_options(allowed_repair_based_node_ops="")
+    @pytest.mark.slow
     def test_rebuild_stream_abort_repro(self):
         """2-DC cluster parallel non-RBNO rebuild failure when expanding RF in DC2 (#27804.)
 

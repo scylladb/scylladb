@@ -17,7 +17,7 @@
 
 BOOST_AUTO_TEST_SUITE(index_with_paging_test)
 
-SEASTAR_TEST_CASE(test_index_with_paging) {
+SEASTAR_TEST_CASE(test_index_with_paging, *boost::unit_test::label("slow")) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("CREATE TABLE tab (pk int, ck text, v int, v2 int, v3 text, PRIMARY KEY (pk, ck))").get();
         e.execute_cql("CREATE INDEX ON tab (v)").get();
