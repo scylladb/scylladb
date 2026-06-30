@@ -39,8 +39,8 @@ SEASTAR_TEST_CASE(test_secondary_index_regular_column_query) {
 
         shared_ptr<cql_transport::messages::result_message> msg = co_await e.execute_cql("SELECT email FROM users WHERE country = 'France';");
         assert_that(msg).is_rows().with_rows({
-            { utf8_type->decompose(sstring("dcurrorw@techcrunch.com")) },
-            { utf8_type->decompose(sstring("beassebyv@house.gov")) },
+            { utf8_type->decompose(sstring("dcurrorw@techcrunch.com")), utf8_type->decompose(sstring("France")) },
+            { utf8_type->decompose(sstring("beassebyv@house.gov")), utf8_type->decompose(sstring("France")) },
         });
     });
 }
@@ -640,49 +640,61 @@ SEASTAR_TEST_CASE(test_secondary_index_collections) {
         e.execute_cql(insert_into + "(2, {2},    {3: 'three', 7: 'five'},             [3, 4, 5], {2}, {3: 'three'},            [3, 4, 5])").get();
         e.execute_cql(insert_into + "(3, {2, 3}, {3: 'three', 5: 'five', 7: 'seven'}, [2, 8, 9], {3}, {5: 'five', 7: 'seven'}, [7, 8, 9])").get();
 
+        auto set_of = [&] (std::vector<data_value> v) { return set_type->decompose(make_set_value(set_type, std::move(v))); };
+        auto map_of = [&] (map_type_impl::native_type v) { return map_type->decompose(make_map_value(map_type, std::move(v))); };
+        auto list_of = [&] (std::vector<data_value> v) { return list_type->decompose(make_list_value(list_type, std::move(v))); };
+        auto p = [] (int32_t v) { return int32_type->decompose(v); };
+        const auto s1_2 = set_of({data_value(2)}), s1_3 = set_of({data_value(2), data_value(3)});
+        const auto m1_2 = map_of({{data_value(3), data_value(sstring("three"))}, {data_value(7), data_value(sstring("five"))}});
+        const auto m1_3 = map_of({{data_value(3), data_value(sstring("three"))}, {data_value(5), data_value(sstring("five"))}, {data_value(7), data_value(sstring("seven"))}});
+        const auto l1_1 = list_of({data_value(2)}), l1_3 = list_of({data_value(2), data_value(8), data_value(9)});
+        const auto s2_2 = set_of({data_value(2)});
+        const auto m2_3 = map_of({{data_value(5), data_value(sstring("five"))}, {data_value(7), data_value(sstring("seven"))}});
+        const auto l2_1 = list_of({data_value(2)});
+
         auto res = e.execute_cql("SELECT p from t where s1 CONTAINS 2").get();
-        assert_that(res).is_rows().with_rows_ignore_order({{{{int32_type->decompose(2)}}}, {{{int32_type->decompose(3)}}}});
+        assert_that(res).is_rows().with_rows_ignore_order({{p(2), s1_2}, {p(3), s1_3}});
         res = e.execute_cql("SELECT p from t where s1 CONTAINS 4").get();
         assert_that(res).is_rows().with_size(0);
 
         res = e.execute_cql("SELECT p from t where m1 CONTAINS 'three'").get();
-        assert_that(res).is_rows().with_rows_ignore_order({{{{int32_type->decompose(2)}}}, {{{int32_type->decompose(3)}}}});
+        assert_that(res).is_rows().with_rows_ignore_order({{p(2), m1_2}, {p(3), m1_3}});
         res = e.execute_cql("SELECT p from t where m1 CONTAINS 'seven'").get();
-        assert_that(res).is_rows().with_rows({{{{int32_type->decompose(3)}}}});
+        assert_that(res).is_rows().with_rows({{p(3), m1_3}});
         res = e.execute_cql("SELECT p from t where m1 CONTAINS 'ten'").get();
         assert_that(res).is_rows().with_size(0);
 
         res = e.execute_cql("SELECT p from t where m1 CONTAINS KEY 3").get();
-        assert_that(res).is_rows().with_rows_ignore_order({{{{int32_type->decompose(2)}}}, {{{int32_type->decompose(3)}}}});
+        assert_that(res).is_rows().with_rows_ignore_order({{p(2), m1_2}, {p(3), m1_3}});
         res = e.execute_cql("SELECT p from t where m1 CONTAINS KEY 5").get();
-        assert_that(res).is_rows().with_rows({{{{int32_type->decompose(3)}}}});
+        assert_that(res).is_rows().with_rows({{p(3), m1_3}});
         res = e.execute_cql("SELECT p from t where m1 CONTAINS KEY 10").get();
         assert_that(res).is_rows().with_size(0);
 
         res = e.execute_cql("SELECT p from t where m1[3] = 'three'").get();
-        assert_that(res).is_rows().with_rows_ignore_order({{{{int32_type->decompose(3)}}}, {{{int32_type->decompose(2)}}}});
+        assert_that(res).is_rows().with_rows_ignore_order({{p(3), m1_3}, {p(2), m1_2}});
         res = e.execute_cql("SELECT p from t where m1[7] = 'seven'").get();
-        assert_that(res).is_rows().with_rows({{{{int32_type->decompose(3)}}}});
+        assert_that(res).is_rows().with_rows({{p(3), m1_3}});
         res = e.execute_cql("SELECT p from t where m1[3] = 'five'").get();
         assert_that(res).is_rows().with_size(0);
 
         res = e.execute_cql("SELECT p from t where l1 CONTAINS 2").get();
-        assert_that(res).is_rows().with_rows_ignore_order({{{{int32_type->decompose(1)}}}, {{{int32_type->decompose(3)}}}});
+        assert_that(res).is_rows().with_rows_ignore_order({{p(1), l1_1}, {p(3), l1_3}});
         res = e.execute_cql("SELECT p from t where l1 CONTAINS 1").get();
         assert_that(res).is_rows().with_size(0);
 
         res = e.execute_cql("SELECT p from t where s2 = {2}").get();
-        assert_that(res).is_rows().with_rows({{{int32_type->decompose(2)}}});
+        assert_that(res).is_rows().with_rows({{p(2), s2_2}});
         res = e.execute_cql("SELECT p from t where s2 = {}").get();
         assert_that(res).is_rows().with_size(0);
 
         res = e.execute_cql("SELECT p from t where m2 = {5: 'five', 7: 'seven'}").get();
-        assert_that(res).is_rows().with_rows({{{int32_type->decompose(3)}}});
+        assert_that(res).is_rows().with_rows({{p(3), m2_3}});
         res = e.execute_cql("SELECT p from t where m2 = {1: 'one', 2: 'three'}").get();
         assert_that(res).is_rows().with_size(0);
 
         res = e.execute_cql("SELECT p from t where l2 = [2]").get();
-        assert_that(res).is_rows().with_rows({{{int32_type->decompose(1)}}});
+        assert_that(res).is_rows().with_rows({{p(1), l2_1}});
         res = e.execute_cql("SELECT p from t where l2 = [3]").get();
         assert_that(res).is_rows().with_size(0);
     });
@@ -1198,13 +1210,14 @@ SEASTAR_TEST_CASE(test_secondary_index_on_partition_key_with_filtering) {
 // Verifies that both "SELECT * [rest_of_query]" and "SELECT count(*) [rest_of_query]" 
 // return expected count of rows.
 void assert_select_count_and_select_rows_has_size(
-        cql_test_env& e, 
-        const sstring& rest_of_query, int64_t expected_count, 
+        cql_test_env& e,
+        const sstring& rest_of_query, int64_t expected_count,
+        std::vector<bytes_opt> appended_filtering_columns = {},
         const std::source_location& loc = std::source_location::current()) {
-    eventually([&] { 
-        require_rows(e, "SELECT count(*) " + rest_of_query, {
-            { long_type->decompose(expected_count) }
-        }, loc);
+    std::vector<bytes_opt> expected_row = { long_type->decompose(expected_count) };
+    expected_row.insert(expected_row.end(), appended_filtering_columns.begin(), appended_filtering_columns.end());
+    eventually([&] {
+        require_rows(e, "SELECT count(*) " + rest_of_query, { expected_row }, loc);
         auto res = cquery_nofail(e, "SELECT * " + rest_of_query, nullptr, loc);
         try {
             assert_that(res).is_rows().with_size(expected_count);
@@ -1427,12 +1440,12 @@ SEASTAR_TEST_CASE(test_secondary_index_on_non_pk_ck_column_and_aggregation) {
             cquery_nofail(e, format("INSERT INTO t(pk, ck, v) VALUES ({}, {}, 1)", 
                 current_row, current_row % 20).c_str());
         }, [&](int rows_inserted) {
-            assert_select_count_and_select_rows_has_size(e, "FROM t WHERE v = 1", rows_inserted);
+            assert_select_count_and_select_rows_has_size(e, "FROM t WHERE v = 1", rows_inserted, { int32_type->decompose(1) });
           eventually([&] { 
             auto res = cquery_nofail(e, "SELECT pk FROM t WHERE v = 1 GROUP BY pk");
             assert_that(res).is_rows().with_size(rows_inserted);
             require_rows(e, "SELECT sum(v) FROM t WHERE v = 1", {
-                { int32_type->decompose(int32_t(rows_inserted)) }
+                { int32_type->decompose(int32_t(rows_inserted)), int32_type->decompose(1) }
             });
           });
         });
@@ -1445,12 +1458,12 @@ SEASTAR_TEST_CASE(test_secondary_index_on_non_pk_ck_column_and_aggregation) {
         test_with_different_page_scenarios([&](int current_row) {
             cquery_nofail(e, format("INSERT INTO t2(pk, v) VALUES ({}, 1)", current_row).c_str());
         }, [&](int rows_inserted) {
-            assert_select_count_and_select_rows_has_size(e, "FROM t2 WHERE v = 1", rows_inserted);
+            assert_select_count_and_select_rows_has_size(e, "FROM t2 WHERE v = 1", rows_inserted, { int32_type->decompose(1) });
           eventually([&] { 
             auto res = cquery_nofail(e, "SELECT pk FROM t2 WHERE v = 1 GROUP BY pk");
             assert_that(res).is_rows().with_size(rows_inserted);
             require_rows(e, "SELECT sum(pk) FROM t2 WHERE v = 1", {
-                { int32_type->decompose(int32_t(rows_inserted * (rows_inserted - 1) / 2)) }
+                { int32_type->decompose(int32_t(rows_inserted * (rows_inserted - 1) / 2)), int32_type->decompose(1) }
             });
           });
         });
@@ -1462,14 +1475,14 @@ SEASTAR_TEST_CASE(test_secondary_index_on_non_pk_ck_column_and_aggregation) {
         test_with_different_page_scenarios([&](int current_row) {
             cquery_nofail(e, format("INSERT INTO t3(pk, ck, v) VALUES (1, {}, 1)", current_row).c_str());
         }, [&](int rows_inserted) {
-            assert_select_count_and_select_rows_has_size(e, "FROM t3 WHERE v = 1", rows_inserted);
+            assert_select_count_and_select_rows_has_size(e, "FROM t3 WHERE v = 1", rows_inserted, { int32_type->decompose(1) });
           eventually([&] { 
             auto res = cquery_nofail(e, "SELECT pk FROM t3 WHERE v = 1 GROUP BY pk");
             assert_that(res).is_rows().with_size(1);
             res = cquery_nofail(e, "SELECT pk, ck FROM t3 WHERE v = 1 GROUP BY pk, ck");
             assert_that(res).is_rows().with_size(rows_inserted);
             require_rows(e, "SELECT max(ck) FROM t3 WHERE v = 1", {
-                { int32_type->decompose(int32_t(rows_inserted - 1)) }
+                { int32_type->decompose(int32_t(rows_inserted - 1)), int32_type->decompose(1) }
             });
           });
         });
@@ -1541,7 +1554,11 @@ SEASTAR_TEST_CASE(test_token_order) {
             auto index_order = cquery_nofail(e, "SELECT pk FROM t WHERE v = 1");
 
             assert_that(nonindex_order).is_rows().with_rows(testset_pks);
-            assert_that(index_order).is_rows().with_rows(testset_pks);
+            auto pks_with_v = testset_pks;
+            for (auto& row : pks_with_v) {
+                row.push_back(int32_type->decompose(1));
+            }
+            assert_that(index_order).is_rows().with_rows(pks_with_v);
         });
     });
 }
@@ -1782,7 +1799,7 @@ SEASTAR_TEST_CASE(test_filtering_indexed_column) {
         eventually([&] {
             auto msg = cquery_nofail(e, "select c,e from ks.test_index where d = 44 ALLOW FILTERING;");
             assert_that(msg).is_rows().with_rows({
-                {int32_type->decompose(33), int32_type->decompose(55)}
+                {int32_type->decompose(33), int32_type->decompose(55), int32_type->decompose(44)}
             });
         });
         eventually([&] {

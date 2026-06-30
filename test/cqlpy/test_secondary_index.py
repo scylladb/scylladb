@@ -2410,7 +2410,8 @@ def test_regular_row_update_with_static_set_index(cql, test_keyspace):
 #  4. Query (correct), release the builder: the stale v=3 -> (1,1,1,1)
 #     posting lands, pointing at a base row that has v=5.
 #  5. Query again: the stale posting must not produce a v=5 row for "v = 3".
-@pytest.mark.xfail(reason="SCYLLADB-2817: the index read does not re-validate the indexed column against the base row", strict=True)
+#     The read path re-validates the indexed column against the base row, so
+#     the stale posting stays in the view but is filtered out of the result.
 def test_index_query_with_stale_index_entry(cql, test_keyspace, scylla_only):
     def inj_enable(err, one_shot=False):
         rest_api.post_request(cql, f'v2/error_injection/injection/{err}?one_shot={one_shot}')
