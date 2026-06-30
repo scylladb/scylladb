@@ -505,24 +505,5 @@ For Intel Xeon processors, each OCPU corresponds to two hardware execution threa
      - 8 - 48
      - 96 - 576
      - 6.8 - 40.8
-   * - VM.DenseIO2.8
-     - 8
-     - 120
-     - 6.4 TB
-   * - VM.DenseIO2.16
-     - 16
-     - 240
-     - 12.8 TB
-   * - VM.DenseIO2.24
-     - 24
-     - 320 
-     - 25.6 TB
-   * - BM.DenseIO2.52 
-     - 52 
-     - 768 
-     - 51.2 TB
-   * - BM.HPC2.36 
-     - 36 
-     - 384 
-     - 6.7 TB
+
 
