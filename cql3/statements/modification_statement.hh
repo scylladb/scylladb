@@ -143,6 +143,8 @@ public:
 
     bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
+    bool should_reclassify_control_connection() const override;
+
     void add_operation(std::unique_ptr<operation> op);
 
     void inc_cql_stats(bool is_internal) const;

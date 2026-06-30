@@ -55,6 +55,11 @@ protected:
 
     virtual audit::statement_category category() const override;
 
+    // DDL manages schema objects, it is not a user load reclassification target.
+    bool should_reclassify_control_connection() const override {
+        return false;
+    }
+
 public:
     /**
      * When a new data_dictionary::database object (keyspace, table) is created, the creator needs to be granted all applicable
