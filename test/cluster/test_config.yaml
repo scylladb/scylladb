@@ -23,7 +23,6 @@ skip_in_release:
   - test_raft_cluster_features
   - test_cluster_features
   - dtest/limits_test
-  - dtest/schema_management_test
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
@@ -47,5 +46,6 @@ run_in_dev:
   - dtest/commitlog_test
   - dtest/cfid_test
   - dtest/rebuild_test
+  - dtest/schema_management_test
 run_in_debug:
   - random_failures/test_random_failures
