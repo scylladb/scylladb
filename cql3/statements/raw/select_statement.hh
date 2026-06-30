@@ -108,10 +108,10 @@ public:
             std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
             std::unique_ptr<cql3::attributes::raw> attrs);
 
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override {
-        return prepare(db, stats, cfg, false);
+    virtual std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override {
+        return prepare_for_view(db, stats, cfg, false);
     }
-    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg, bool for_view);
+    std::unique_ptr<prepared_statement> prepare_for_view(data_dictionary::database db, cql_stats& stats, const cql_config& cfg, bool for_view);
 private:
     std::vector<selection::prepared_selector> maybe_jsonize_select_clause(std::vector<selection::prepared_selector> select, data_dictionary::database db, schema_ptr schema);
     ::shared_ptr<const restrictions::statement_restrictions> prepare_restrictions(

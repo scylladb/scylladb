@@ -35,7 +35,7 @@ truncate_statement::truncate_statement(cf_name name, std::unique_ptr<attributes:
     throwing_assert(!_attrs->time_to_live.has_value());
 }
 
-std::unique_ptr<prepared_statement> truncate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+std::unique_ptr<prepared_statement> truncate_statement::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     auto ctx = get_prepare_context();

@@ -22,7 +22,7 @@ class grant_statement : public permission_altering_statement {
 public:
     using permission_altering_statement::permission_altering_statement;
 
-    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor&
                     , service::query_state&

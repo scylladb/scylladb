@@ -14,12 +14,14 @@
 #include "db/consistency_level_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include <seastar/core/execution_stage.hh>
+#include <seastar/core/memory.hh>
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "db/large_data_handler.hh"
 #include "tracing/trace_state.hh"
 #include "utils/unique_view.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -455,44 +457,55 @@ void batch_statement::build_cas_result_set_metadata() {
 
 namespace raw {
 
-std::unique_ptr<prepared_statement>
-batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    auto&& meta = get_prepare_context();
+future<std::pair<std::unique_ptr<prepared_statement>, uint64_t>>
+batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config&) {
+    auto& meta = get_prepare_context();
 
     std::optional<sstring> first_ks;
     std::optional<sstring> first_cf;
     bool have_multiple_cfs = false;
-
     std::vector<cql3::statements::batch_statement::single_statement> statements;
     statements.reserve(_parsed_statements.size());
 
+    // Each prepared sub-statement owns its schema through modification_statement::s.
+    // A schema change while we yield can invalidate caches, but it cannot make an
+    // already prepared sub-statement refer to freed schema state; cache invalidation
+    // after this returns is handled by the prepared-cache caller.
+    uint64_t prepare_bytes = 0;
     for (auto&& parsed : _parsed_statements) {
+        auto bytes_before = seastar::memory::stats().total_bytes_allocated();
+        auto statement = parsed->make_prepared_modification_statement(db, meta, stats);
         if (!first_ks) {
-            first_ks = parsed->keyspace();
-            first_cf = parsed->column_family();
+            first_ks = statement->keyspace();
+            first_cf = statement->column_family();
         } else {
-            have_multiple_cfs |= first_ks.value() != parsed->keyspace();
-            have_multiple_cfs |= first_cf.value() != parsed->column_family();
+            have_multiple_cfs |= first_ks.value() != statement->keyspace() || first_cf.value() != statement->column_family();
         }
-        statements.emplace_back(parsed->prepare(db, meta, stats));
+        statements.emplace_back(std::move(statement));
         auto audit_info = statements.back().statement->get_audit_info();
         if (audit_info) {
             audit_info->set_query_string(parsed->get_raw_cql());
         }
+        prepare_bytes += seastar::memory::stats().total_bytes_allocated() - bytes_before;
+        co_await coroutine::maybe_yield();
     }
 
+    auto bytes_before = seastar::memory::stats().total_bytes_allocated();
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
     prep_attrs->fill_prepare_context(meta);
 
     cql3::statements::batch_statement batch_statement_(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
 
     std::vector<uint16_t> partition_key_bind_indices;
-    if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
+    if (!have_multiple_cfs && !batch_statement_.get_statements().empty()) {
         partition_key_bind_indices = meta.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
     }
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
-                                                     meta.get_variable_specifications(),
-                                                     std::move(partition_key_bind_indices));
+    auto p = std::make_unique<prepared_statement>(audit_info(), make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
+                                                  meta.get_variable_specifications(),
+                                                  std::move(partition_key_bind_indices));
+    prepare_bytes += seastar::memory::stats().total_bytes_allocated() - bytes_before;
+
+    co_return std::pair(std::move(p), prepare_bytes);
 }
 
 audit::statement_category batch_statement::category() const {
@@ -501,9 +514,6 @@ audit::statement_category batch_statement::category() const {
 
 }
 
-
 }
 
 }
-
-

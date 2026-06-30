@@ -14,7 +14,7 @@
 #include "service/query_state.hh"
 #include "service/raft/raft_group0_client.hh"
 
-std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::grant_statement::prepare(
+std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::grant_statement::make_prepared_statement(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     return std::make_unique<prepared_statement>(audit_info(), ::make_shared<grant_statement>(*this));
 }

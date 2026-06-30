@@ -31,7 +31,7 @@ public:
      */
     truncate_statement(cf_name name, std::unique_ptr<attributes::raw> attrs);
 
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    virtual std::unique_ptr<prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
     virtual audit::statement_category category() const override;
 };

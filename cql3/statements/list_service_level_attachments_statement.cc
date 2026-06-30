@@ -34,7 +34,7 @@ list_service_level_attachments_statement::list_service_level_attachments_stateme
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-cql3::statements::list_service_level_attachments_statement::prepare(
+cql3::statements::list_service_level_attachments_statement::make_prepared_statement(
         data_dictionary::database db, cql_stats &stats, const cql_config& cfg) {
     return std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_service_level_attachments_statement>(*this));
 }

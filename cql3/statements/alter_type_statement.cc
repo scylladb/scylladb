@@ -209,12 +209,12 @@ user_type alter_type_statement::renames::make_updated_type(data_dictionary::data
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-alter_type_statement::add_or_alter::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+alter_type_statement::add_or_alter::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     return std::make_unique<prepared_statement>(audit_info(), make_shared<alter_type_statement::add_or_alter>(*this));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-alter_type_statement::renames::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+alter_type_statement::renames::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     return std::make_unique<prepared_statement>(audit_info(), make_shared<alter_type_statement::renames>(*this));
 }
 

@@ -309,12 +309,12 @@ public:
     inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_direct(
-            utils::chunked_string_view query_string,
+            utils::chunked_string query_string,
             service::query_state& query_state,
             dialect d,
             query_options& options) {
         return execute_direct_without_checking_exception_message(
-                query_string,
+                std::move(query_string),
                 query_state,
                 d,
                 options)
@@ -325,7 +325,7 @@ public:
     // The result_message::exception must be explicitly handled.
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_direct_without_checking_exception_message(
-            utils::chunked_string_view query_string,
+            utils::chunked_string query_string,
             service::query_state& query_state,
             dialect d,
             query_options& options);
@@ -338,7 +338,7 @@ public:
             std::optional<service::group0_guard> guard,
             cql3::cql_warnings_vec warnings);
 
-    statements::prepared_statement::checked_weak_ptr prepare_internal(const sstring& query);
+    future<statements::prepared_statement::checked_weak_ptr> prepare_internal(const sstring& query);
 
     /*!
      * \brief iterate over all cql results using paging
@@ -409,13 +409,13 @@ public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
-            const data_value_list&,
+            std::vector<data_value_or_unset>,
             cache_internal cache);
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
             service::query_state& query_state,
-            const data_value_list& values,
+            std::vector<data_value_or_unset> values,
             cache_internal cache);
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
@@ -431,8 +431,8 @@ public:
         return execute_internal(query_string, cl, query_state, {}, cache);
     }
     future<::shared_ptr<untyped_result_set>>
-    execute_internal(const sstring& query_string, const data_value_list& values, cache_internal cache) {
-        return execute_internal(query_string, db::consistency_level::ONE, values, cache);
+    execute_internal(const sstring& query_string, std::vector<data_value_or_unset> values, cache_internal cache) {
+        return execute_internal(query_string, db::consistency_level::ONE, std::move(values), cache);
     }
     future<::shared_ptr<untyped_result_set>>
     execute_internal(const sstring& query_string, cache_internal cache) {
@@ -454,7 +454,7 @@ public:
             statements::prepared_statement::checked_weak_ptr p,
             db::consistency_level,
             service::query_state& query_state,
-            const data_value_list& values = { });
+            const std::vector<data_value_or_unset>& values);
 
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute_with_params(
             service::query_state& query_state,
@@ -513,8 +513,8 @@ public:
     // For the local node, waits directly without an RPC.
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
-    std::unique_ptr<statements::prepared_statement> get_statement(
-            utils::chunked_string_view query,
+    future<std::unique_ptr<statements::prepared_statement>> get_statement(
+            utils::chunked_string query,
             const service::client_state& client_state,
             dialect d);
 
@@ -569,10 +569,10 @@ private:
      *
      * When using paging internally a state object is needed.
      */
-    internal_query_state create_paged_state(
+    future<internal_query_state> create_paged_state(
             const sstring& query_string,
             db::consistency_level,
-            const data_value_list& values,
+            std::vector<data_value_or_unset> values,
             int32_t page_size,
             std::optional<service::query_state> qs = std::nullopt);
 

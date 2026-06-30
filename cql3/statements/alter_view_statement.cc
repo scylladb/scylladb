@@ -98,7 +98,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-alter_view_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+alter_view_statement::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     return std::make_unique<prepared_statement>(audit_info(), make_shared<alter_view_statement>(*this));
 }
 

@@ -593,12 +593,12 @@ modification_statement::prepare_for_broadcast_tables() const {
 namespace raw {
 
 std::unique_ptr<prepared_statement>
-modification_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+modification_statement::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
 
     auto statement = std::invoke([&] -> shared_ptr<cql_statement> {
-        auto result = prepare(db, meta, stats);
+        auto result = make_prepared_modification_statement(db, meta, stats);
 
         if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
             return ::make_shared<strong_consistency::modification_statement>(std::move(result));
@@ -616,7 +616,7 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats, 
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
-modification_statement::prepare(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) const {
+modification_statement::make_prepared_modification_statement(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) const {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());

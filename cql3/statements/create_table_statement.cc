@@ -151,7 +151,7 @@ void create_table_statement::add_column_metadata_from_aliases(schema_builder& bu
 }
 
 std::unique_ptr<prepared_statement>
-create_table_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+create_table_statement::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     // Cannot happen; create_table_statement is never instantiated as a raw statement
     // (instead we instantiate create_table_statement::raw_statement)
     throwing_assert(0 && "create_table_statement::prepare");
@@ -175,7 +175,7 @@ create_table_statement::raw_statement::raw_statement(cf_name name, bool if_not_e
     , _if_not_exists{if_not_exists}
 { }
 
-std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+std::unique_ptr<prepared_statement> create_table_statement::raw_statement::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     // Column family name
     const sstring& cf_name = _cf_name->get_column_family();
     boost::regex name_regex("\\w+");

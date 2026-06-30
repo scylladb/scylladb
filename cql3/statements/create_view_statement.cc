@@ -208,7 +208,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     raw_select.set_bound_variables({});
 
     cql_stats ignored;
-    auto prepared = raw_select.prepare(db, ignored, default_cql_config, true);
+    auto prepared = raw_select.prepare_for_view(db, ignored, default_cql_config, true);
     auto restrictions = static_pointer_cast<statements::select_statement>(prepared->statement)->get_restrictions();
 
     auto base_primary_key_cols =
@@ -422,7 +422,7 @@ create_view_statement::prepare_schema_mutations(query_processor& qp, const query
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
-create_view_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+create_view_statement::make_prepared_statement(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     if (!_prepare_ctx.get_variable_specifications().empty()) {
         throw exceptions::invalid_request_exception(format("Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
     }

@@ -24,7 +24,7 @@ class create_service_level_statement final : public service_level_statement {
 
 public:
     create_service_level_statement(sstring service_level, shared_ptr<sl_prop_defs> attrs, bool if_not_exists);
-    std::unique_ptr<cql3::statements::prepared_statement> prepare(data_dictionary::database db, cql_stats &stats, const cql_config& cfg) override;
+    std::unique_ptr<cql3::statements::prepared_statement> make_prepared_statement(data_dictionary::database db, cql_stats &stats, const cql_config& cfg) override;
     virtual future<> check_access(query_processor& qp, const service::client_state&) const override;
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(query_processor&, service::query_state&, const query_options&, std::optional<service::group0_guard> guard) const override;
