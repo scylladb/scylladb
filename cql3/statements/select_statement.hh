@@ -221,6 +221,18 @@ public:
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
             service::query_state& state, const query_options& options) const override;
+<<<<<<< HEAD
+||||||| parent of e5afc5eb8f (cql3: re-validate the indexed predicate on base rows read via an index)
+            
+    future<::shared_ptr<cql_transport::messages::result_message>> actually_do_execute(query_processor& qp,
+            service::query_state& state, const query_options& options) const;
+=======
+
+    bool needs_post_filtering() const override;
+
+    future<::shared_ptr<cql_transport::messages::result_message>> actually_do_execute(query_processor& qp,
+            service::query_state& state, const query_options& options) const;
+>>>>>>> e5afc5eb8f (cql3: re-validate the indexed predicate on base rows read via an index)
 
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
             const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const;
