@@ -1538,29 +1538,6 @@ static inline cql_server::result_with_foreign_response_ptr convert_error_message
     return std::move(*dynamic_cast<messages::result_message::exception*>(msg)).get_exception();
 }
 
-<<<<<<< HEAD
-||||||| parent of 925f7db24b (transport: reclassify control connection on user load)
-static void record_client_timestamp_drift(cql_sg_stats& sg_stats, bool init_trace, api::timestamp_type server_ts, api::timestamp_type client_ts) {
-    // record the metric only when timestamp is provided and
-    // it's initial node and shard (forwarding and bouncing are excluded)
-    if (!init_trace || client_ts == api::missing_timestamp) {
-        return;
-    }
-    auto drift = std::abs(server_ts - client_ts);
-    sg_stats._client_timestamp_drift.add_micro(drift);
-}
-
-=======
-static void record_client_timestamp_drift(cql_sg_stats& sg_stats, bool init_trace, api::timestamp_type server_ts, api::timestamp_type client_ts) {
-    // record the metric only when timestamp is provided and
-    // it's initial node and shard (forwarding and bouncing are excluded)
-    if (!init_trace || client_ts == api::missing_timestamp) {
-        return;
-    }
-    auto drift = std::abs(server_ts - client_ts);
-    sg_stats._client_timestamp_drift.add_micro(drift);
-}
-
 // Runs user statements under the user service level. The connection's scheduling
 // group is only re-evaluated after the request finishes, and the connection loop
 // may already be waiting for the next frame under the old tenant. Keep wrapping
@@ -1579,8 +1556,6 @@ static bool reclassifying_control_connection_needs_user_service_level(
     const auto driver_sg = query_state.get_service_level_controller().get_driver_scheduling_group();
     return driver_sg && driver_sg->active();
 }
-
->>>>>>> 925f7db24b (transport: reclassify control connection on user load)
 static future<cql_server::process_fn_return_type>
 process_query_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,

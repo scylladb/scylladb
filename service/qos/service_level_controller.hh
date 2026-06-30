@@ -209,13 +209,7 @@ private:
     std::set<sstring> _effectively_dropped_sls;
     std::pair<const sstring*, service_level*> _sl_lookup[max_scheduling_groups()];
     service_level _default_service_level;
-<<<<<<< HEAD
-||||||| parent of d5e2f5850b (service_level: add get_driver_scheduling_group())
-    seastar::metrics::metric_groups _metrics;
-=======
-    seastar::metrics::metric_groups _metrics;
     std::optional<scheduling_group> _driver_scheduling_group = std::nullopt;
->>>>>>> d5e2f5850b (service_level: add get_driver_scheduling_group())
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
     locator::shared_token_metadata& _token_metadata;

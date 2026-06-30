@@ -509,15 +509,9 @@ future<>  service_level_controller::notify_service_level_added(sstring name, ser
             unsigned sl_idx = internal::scheduling_group_index(sl_data.sg);
             _sl_lookup[sl_idx].first = &(result.first->first);
             _sl_lookup[sl_idx].second = &(result.first->second);
-<<<<<<< HEAD
-||||||| parent of d5e2f5850b (service_level: add get_driver_scheduling_group())
-            register_metrics();
-=======
             if (name == driver_service_level_name) {
                 _driver_scheduling_group = sl_data.sg;
             }
-            register_metrics();
->>>>>>> d5e2f5850b (service_level: add get_driver_scheduling_group())
         }
     });
 
@@ -570,15 +564,9 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
             .sg = sl_it->second.sg,
         };
         _service_levels_db.erase(sl_it);
-<<<<<<< HEAD
-||||||| parent of d5e2f5850b (service_level: add get_driver_scheduling_group())
-        register_metrics();
-=======
         if (name == driver_service_level_name) {
             _driver_scheduling_group = std::nullopt;
         }
-        register_metrics();
->>>>>>> d5e2f5850b (service_level: add get_driver_scheduling_group())
         co_return co_await seastar::async( [this, name, sl_info] {
             _subscribers.thread_for_each([name, sl_info] (qos_configuration_change_subscriber* subscriber) {
                 try {
