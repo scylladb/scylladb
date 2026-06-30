@@ -126,6 +126,10 @@ public:
      * `toc_name`, and `prefix`. Uses consistency level `LOCAL_QUORUM` by default. */
     future<utils::chunked_vector<snapshot_sstable_entry>> get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM, std::optional<dht::token> start_token = std::nullopt, std::optional<dht::token> end_token = std::nullopt) const;
 
+    /* Retrieves all SSTable entries for a given snapshot, keyspace, table, datacenter, and rack.
+     * Calls the `fn` for every record met */
+    future<> get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, std::function<void(snapshot_sstable_entry)> fn, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM) const;
+
     future<> update_sstable_download_status(sstring snapshot_name,
                                             sstring ks,
                                             sstring table,
