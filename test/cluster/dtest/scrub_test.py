@@ -8,18 +8,17 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import argparse
 import glob
 import logging
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import time
 import uuid
 
 import pytest
-from ccmlib import common
 
 from dtest_class import Tester, create_cf, create_ks
 
@@ -135,13 +134,32 @@ class TestHelper(Tester):
 
         return sstables
 
-    def launch_nodetool_cmd(self, cmd):
+    def launch_nodetool_cmd_via_api(self, cmd: str) -> None:
         """
-        Launch a nodetool command and check the result is empty (no error)
+        Launch a nodetool command via REST API.
+
+        Supports commands in format:
+            flush [keyspace] [table]
+            scrub [keyspace] [table]
+            compact [keyspace] [table]
         """
-        node1 = self.cluster.nodelist()[0]
-        response = node1.nodetool(cmd, capture_output=True)[0]
-        assert len(response) == 0, response  # nodetool does not print anything unless there is an error
+        node = self.cluster.nodelist()[0]
+
+        parser = argparse.ArgumentParser(description="Parse nodetool command")
+        parser.add_argument("operation", choices=["flush", "scrub", "compact"],
+                            help="nodetool operation to perform")
+        parser.add_argument("keyspace", nargs="?", default="", help="keyspace name")
+        parser.add_argument("table", nargs="?", default=None, help="table name")
+
+        args = parser.parse_args(cmd.split())
+
+        handlers = {
+            "flush": lambda: node.flush(ks=args.keyspace, table=args.table),
+            "scrub": lambda: node.scrub(keyspace=args.keyspace, table=args.table),
+            "compact": lambda: node.compact(keyspace=args.keyspace, tables=[args.table] if args.table else ()),
+        }
+
+        handlers[args.operation]()
 
     def launch_standalone_scrub(self, ks, cf):
         """
@@ -161,9 +179,9 @@ class TestHelper(Tester):
         """
         Perform a nodetool command on a table and the indexes specified
         """
-        self.launch_nodetool_cmd(f"{cmd} {KEYSPACE} {table}")
+        self.launch_nodetool_cmd_via_api(f"{cmd} {KEYSPACE} {table}")
         for index in indexes:
-            self.launch_nodetool_cmd(f"{cmd} {KEYSPACE} {index}_index")
+            self.launch_nodetool_cmd_via_api(f"{cmd} {KEYSPACE} {index}_index")
 
     def flush(self, table, *indexes):
         """
@@ -474,7 +492,7 @@ class TestScrub(TestHelper):
         session.execute("use test;")
         session.execute("CREATE TYPE point_t (x double, y double);")
 
-        node1.nodetool("scrub")
+        node1.scrub(keyspace="test")
         time.sleep(2)
         match = node1.grep_log("org.apache.cassandra.serializers.MarshalException: Not enough bytes to read a set")
         assert len(match) == 0, f"{len(match)} is not equal 0"
