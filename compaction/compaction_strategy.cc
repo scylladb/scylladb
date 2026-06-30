@@ -227,7 +227,7 @@ size_tiered_backlog_tracker::compacted_backlog(const compaction_backlog_tracker:
         }
         auto compacted = crp.second->compacted();
         in.total_bytes += compacted;
-        in.contribution += compacted * log4(crp.first->data_size());
+        in.contribution += compacted * log4(effective_backlog_size(crp.first->data_size()));
     }
     return in;
 }
@@ -253,7 +253,11 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
             continue;
         }
         contrib.value += std::ranges::fold_left(bucket | std::views::transform([] (const sstables::shared_sstable& sst) -> double {
-            return sst->data_size() * log4(sst->data_size());
+            // See effective_backlog_size in compaction_backlog_manager.hh: tiny SSTables (e.g. from
+            // early commitlog-driven flushes) are taxed with a minimum size so they still contribute
+            // meaningfully to the backlog.
+            auto size = effective_backlog_size(sst->data_size());
+            return size * log4(size);
         }), double(0.0f), std::plus{});
         // Controller is disabled if exception is caught during add / remove calls, so not making any effort to make this exception safe
         contrib.sstables.insert(bucket.begin(), bucket.end());
@@ -265,7 +269,9 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
 double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
     inflight_component compacted = compacted_backlog(oc);
 
-    auto total_backlog_bytes = std::ranges::fold_left(_contrib.sstables | std::views::transform(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0), std::plus{});
+    auto total_backlog_bytes = std::ranges::fold_left(_contrib.sstables | std::views::transform([] (const sstables::shared_sstable& sst) {
+        return effective_backlog_size(sst->data_size());
+    }), uint64_t(0), std::plus{});
 
     // Bail out if effective backlog is zero, which happens in a small window where ongoing compaction exhausted
     // input files but is still sealing output files or doing managerial stuff like updating history table
@@ -298,7 +304,9 @@ void size_tiered_backlog_tracker::replace_sstables(const std::vector<sstables::s
         if (sst->data_size() > 0) {
             auto erased = tmp_all.erase(sst);
             if (erased) {
-                tmp_total_bytes -= sst->data_size();
+                // Mirror the taxation applied when this SSTable was added, so that _total_bytes
+                // stays consistent with the per-sstable sizes used in the backlog formula.
+                tmp_total_bytes -= effective_backlog_size(sst->data_size());
             }
         }
     }
@@ -306,7 +314,7 @@ void size_tiered_backlog_tracker::replace_sstables(const std::vector<sstables::s
         if (sst->data_size() > 0) {
             auto [_, inserted] = tmp_all.insert(sst);
             if (inserted) {
-                tmp_total_bytes += sst->data_size();
+                tmp_total_bytes += effective_backlog_size(sst->data_size());
             }
         }
     }
