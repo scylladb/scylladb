@@ -71,9 +71,9 @@ class TestRebuildStreamingAbortRepro(Tester):
 
         logger.debug("Start rebuild on 2 nodes in dc2 in parallel.")
         with ThreadPoolExecutor(max_workers=2) as executor:
-            node2_rebuild = executor.submit(node2.nodetool, "rebuild --source-dc dc1")
+            node2_rebuild = executor.submit(node2.rebuild, source_dc="dc1")
             node2.watch_log_for("Executing streaming plan for Rebuild-keyspace1-index-0")
-            node3_rebuild = executor.submit(node3.nodetool, "rebuild --source-dc dc1")
+            node3_rebuild = executor.submit(node3.rebuild, source_dc="dc1")
 
         logger.debug("Waiting for rebuild operations to complete.")
         node2_rebuild.result()
