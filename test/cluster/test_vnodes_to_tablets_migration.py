@@ -895,7 +895,6 @@ async def test_migration_multiple_keyspaces(manager: ManagerClient):
                     f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
 
 
-@pytest.mark.asyncio
 async def test_migration_multiple_tables(manager: ManagerClient):
     """Verify vnodes-to-tablets migration on keyspace with multiple tables.
 
@@ -949,7 +948,6 @@ async def test_migration_multiple_tables(manager: ManagerClient):
         await wait_for_pow2_convergence(manager, server, ks, 't2')
 
 
-@pytest.mark.asyncio
 async def test_tablet_status_in_migration_api(manager: ManagerClient):
     """"Verify the ?include=tablet_status query parameter in the migration API.
 
@@ -1061,7 +1059,6 @@ async def test_tablet_status_in_migration_api(manager: ManagerClient):
                 f"Tablet count {tablet_count} for table {t['table']} is not a power of two"
 
 
-@pytest.mark.asyncio
 async def test_pow2_convergence_virtual_task(manager: ManagerClient):
     """Verify that pow2 convergence is tracked via a virtual task.
 
