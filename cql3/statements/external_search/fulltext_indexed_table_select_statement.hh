@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "cql3/statements/select_statement.hh"
+#include "external_index_select_statement.hh"
 
 #include <optional>
 
@@ -16,6 +16,7 @@ namespace cql3::statements {
 
 struct bm25_ordering_info {
     secondary_index::index index;
+    expr::expression search_term;
 };
 
 /// Resolves BM25 ordering metadata from the query's ORDER BY clause.
@@ -26,10 +27,11 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         lw_shared_ptr<const raw::select_statement::parameters> parameters,
         prepare_context& ctx);
 
-class fulltext_indexed_table_select_statement : public select_statement {
-    secondary_index::index _index;
+class fulltext_indexed_table_select_statement : public external_index_select_statement {
+    expr::expression _search_term;
 
 public:
+    static constexpr size_t max_fts_query_limit = 1000;
     static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db,
             schema_ptr schema,
             uint32_t bound_terms,
@@ -57,16 +59,16 @@ public:
             std::optional<expr::expression> per_partition_limit,
             cql_stats& stats,
             const secondary_index::index& index,
+            expr::expression search_term,
             std::unique_ptr<cql3::attributes> attrs);
 
 private:
-    future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
-            query_processor& qp, service::query_state& state, const query_options& options) const override;
-
-    void update_stats_rows_read(int64_t rows_read) const override {
-        _stats.rows_read += rows_read;
-        _stats.secondary_index_rows_read += rows_read;
+    std::string_view index_search_type_name() const override {
+        return "Full-Text Search";
     }
+
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_search(
+            query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const override;
 };
 
 } // namespace cql3::statements

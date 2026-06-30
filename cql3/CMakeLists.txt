@@ -82,6 +82,7 @@ target_sources(cql3
     statements/prune_materialized_view_statement.cc
     statements/batch_statement.cc
     statements/select_statement.cc
+    statements/external_search/external_index_select_statement.cc
     statements/external_search/fulltext_indexed_table_select_statement.cc
     statements/external_search/vector_indexed_table_select_statement.cc
     statements/external_search/filter.cc
