@@ -1,0 +1,9 @@
+type: Python
+extra_scylla_cmdline_options:
+  - --authenticator=AllowAllAuthenticator
+  - --authorizer=AllowAllAuthorizer
+  - --client-encryption-options=enabled=true
+  - --client-encryption-options=keyfile=conf/scylla.key
+  - --client-encryption-options=certificate=conf/scylla.crt
+  - --native-transport-port=9042
+  - --native-transport-port-ssl=9142
