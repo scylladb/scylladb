@@ -74,7 +74,12 @@ public:
             , _preemptive_abort_factor(std::move(preemptive_abort_factor))
             , _shared_pool(0)
             , _operations_serializer(1)
-            , _name_prefix(std::move(name_prefix)) { }
+            , _name_prefix(std::move(name_prefix))
+    {
+        if (shared_pool_fraction > 0) {
+            _shared_pool.register_metrics(_name_prefix.value_or("unnamed"));
+        }
+    }
 
     ~reader_concurrency_semaphore_group() {
         assert(_semaphores.empty());
@@ -86,6 +91,7 @@ public:
     reader_concurrency_semaphore& get(scheduling_group sg);
     reader_concurrency_semaphore* get_or_null(scheduling_group sg);
     reader_concurrency_semaphore& add_or_update(scheduling_group sg, size_t shares);
+    reader_concurrency_semaphore_shared_pool& get_shared_pool() noexcept { return _shared_pool; }
     future<> remove(scheduling_group sg);
     size_t size();
     void foreach_semaphore(std::function<void(scheduling_group, reader_concurrency_semaphore&)> func);

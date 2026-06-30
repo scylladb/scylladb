@@ -53,6 +53,7 @@ class reader_concurrency_semaphore;
 class reader_concurrency_semaphore_shared_pool {
     ssize_t _available_memory;
     ssize_t _total_memory;
+    seastar::metrics::metric_groups _metrics;
     std::deque<std::reference_wrapper<reader_concurrency_semaphore>> _notify_list;
 public:
     explicit reader_concurrency_semaphore_shared_pool(ssize_t memory) noexcept
@@ -108,6 +109,8 @@ public:
     ssize_t total_memory() const noexcept {
         return _total_memory;
     }
+
+    void register_metrics(const seastar::sstring& name);
 
     // Resize the pool, applying the change to the available memory too. If the
     // pool shrinks below the amount currently borrowed, _available_memory goes
@@ -229,6 +232,8 @@ public:
         uint64_t sstables_read = 0;
         // Permits waiting on something: admission, memory or execution
         uint64_t waiters = 0;
+        // Current amount of memory borrowed from the shared pool.
+        ssize_t reads_memory_borrowed_from_shared_pool = 0;
 
         friend auto operator<=>(const stats&, const stats&) = default;
     };
@@ -270,7 +275,6 @@ private:
     resources _resources;
     reader_concurrency_semaphore_shared_pool& _shared_pool;
     bool _on_shared_pool_notify_list = false;
-    ssize_t _borrowed_from_shared = 0;
     utils::observer<int> _count_observer;
 
     struct wait_queue {
@@ -392,7 +396,6 @@ private:
     void consume(reader_permit::impl& permit, resources r);
     void signal(const resources& r) noexcept;
 
-    void borrow_from_shared_pool(resources r) noexcept;
     resources repay_shared_pool(const resources& r) noexcept;
 
     future<> with_ready_permit(reader_permit::impl& permit);

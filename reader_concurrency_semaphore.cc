@@ -875,7 +875,8 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             "need_cpu_permits: {}\n"
             "awaits_permits: {}\n"
             "disk_reads: {}\n"
-            "sstables_read: {}",
+            "sstables_read: {}\n"
+            "reads_memory_borrowed_from_shared_pool: {}",
             stats.permit_based_evictions,
             stats.time_based_evictions,
             stats.inactive_reads,
@@ -897,7 +898,8 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             stats.need_cpu_permits,
             stats.awaits_permits,
             stats.disk_reads,
-            stats.sstables_read);
+            stats.sstables_read,
+            stats.reads_memory_borrowed_from_shared_pool);
 }
 
 void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, std::string_view problem, reader_permit::impl* permit) noexcept {
@@ -1036,14 +1038,6 @@ ssize_t reader_concurrency_semaphore::oom_protection_consumed_memory() const noe
     return consumed_resources().memory - _shared_pool.available_memory();
 }
 
-void reader_concurrency_semaphore::borrow_from_shared_pool(resources r) noexcept {
-    const ssize_t needed_from_shared = r.memory - _resources.memory;
-    const ssize_t from_pool = std::min(needed_from_shared, _shared_pool.available_memory());
-    _shared_pool.borrow(from_pool);
-    _borrowed_from_shared += from_pool;
-    _resources.memory += from_pool;
-}
-
 void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resources r) {
     // We check whether we even reached the memory limit first.
     // This is a cheap check and should be false most of the time, providing a
@@ -1060,7 +1054,11 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
     }
 
     if (_resources.memory < r.memory && _shared_pool.available_memory() > 0) {
-        borrow_from_shared_pool(r);
+        const ssize_t needed_from_shared = r.memory - _resources.memory;
+        const ssize_t from_pool = std::min(needed_from_shared, _shared_pool.available_memory());
+        _shared_pool.borrow(from_pool);
+        _stats.reads_memory_borrowed_from_shared_pool += from_pool;
+        _resources.memory += from_pool;
     }
 
     _resources -= r;
@@ -1076,10 +1074,10 @@ reader_concurrency_semaphore::resources reader_concurrency_semaphore::repay_shar
     const ssize_t remaining = r.memory - deficit_recovery;
 
     // Then repay the shared pool from the remaining freed memory.
-    const ssize_t memory_return = std::min(remaining, _borrowed_from_shared);
+    const ssize_t memory_return = std::min(remaining, _stats.reads_memory_borrowed_from_shared_pool);
     if (memory_return > 0) {
         _shared_pool.repay(memory_return);
-        _borrowed_from_shared -= memory_return;
+        _stats.reads_memory_borrowed_from_shared_pool -= memory_return;
     }
 
     return {r.count, r.memory - memory_return};
@@ -1087,7 +1085,7 @@ reader_concurrency_semaphore::resources reader_concurrency_semaphore::repay_shar
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     resources returned = r;
-    if (_borrowed_from_shared > 0) {
+    if (_stats.reads_memory_borrowed_from_shared_pool > 0) {
         returned = repay_shared_pool(r);
     }
 
@@ -1179,6 +1177,10 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(
                 sm::make_counter("total_reads_failed", _stats.total_failed_reads,
                                sm::description("Counts the total number of failed user read operations. "
                                                "Add the total_reads to this value to get the total amount of reads issued on this shard."),
+                               {class_label(_name)}),
+
+                sm::make_gauge("reads_memory_borrowed_from_shared_pool", [this] { return _stats.reads_memory_borrowed_from_shared_pool; },
+                               sm::description("Holds the current amount of memory borrowed from the shared pool."),
                                {class_label(_name)}),
                 });
     }
@@ -1584,7 +1586,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
 }
 
 void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
-    const auto borrowed_before = _borrowed_from_shared;
+    const auto borrowed_before = _stats.reads_memory_borrowed_from_shared_pool;
     auto admit = can_admit::no;
     while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front()).decision) == can_admit::yes) {
         auto& permit = _wait_list.front();
@@ -1644,7 +1646,7 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
         // Evicting readers will trigger another call to `maybe_admit_waiters()` from `signal()`.
         evict_readers_in_background();
     }
-    if (_borrowed_from_shared > borrowed_before) {
+    if (_stats.reads_memory_borrowed_from_shared_pool > borrowed_before) {
         // We took some memory from the shared pool while admitting. If memory
         // still remains in the pool, hand the wakeup off to the next waiting
         // semaphore so a single large return can satisfy several waiters in
