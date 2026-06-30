@@ -981,6 +981,41 @@ BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
     BOOST_REQUIRE_EQUAL(object_name, "prefix1/prefix2/foo.bar");
 }
 
+// Regression test for a SEGV in s3::parse_multipart_copy_upload_etag.
+// When an UploadPartCopy request returns a well-formed XML body that is not a
+// <CopyPartResult> (typically an S3 <Error> document), the parser used to
+// dereference the nullptr returned by first_node("CopyPartResult"), crashing
+// the node. It must instead throw so the caller can handle the error.
+// Reproduces: https://scylladb.atlassian.net/browse/SCYLLADB-2965
+// Observed in Argus runs a0272423-d456-4a57-83d9-37bd0a558602 and
+// c8c78e05-4e70-4934-b964-29aed04d58e3.
+BOOST_AUTO_TEST_CASE(parse_multipart_copy_upload_etag_test) {
+    // Happy path: a real <CopyPartResult> with an <ETag>.
+    {
+        sstring body = R"(<?xml version="1.0" encoding="UTF-8"?><CopyPartResult><ETag>"abc123"</ETag></CopyPartResult>)";
+        BOOST_REQUIRE_EQUAL(s3::parse_multipart_copy_upload_etag(body), "\"abc123\"");
+    }
+
+    // Well-formed XML but an <Error> document (missing <CopyPartResult>):
+    // must throw, not crash.
+    {
+        sstring body = R"(<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>)";
+        BOOST_REQUIRE_THROW(s3::parse_multipart_copy_upload_etag(body), std::runtime_error);
+    }
+
+    // <CopyPartResult> present but no <ETag> child: must throw, not crash.
+    {
+        sstring body = R"(<?xml version="1.0" encoding="UTF-8"?><CopyPartResult></CopyPartResult>)";
+        BOOST_REQUIRE_THROW(s3::parse_multipart_copy_upload_etag(body), std::runtime_error);
+    }
+
+    // Non-XML body: parse error path, returns empty (caller treats as failure).
+    {
+        sstring body = "this is not xml";
+        BOOST_REQUIRE_EQUAL(s3::parse_multipart_copy_upload_etag(body), "");
+    }
+}
+
 BOOST_AUTO_TEST_CASE(part_size_calculation_test) {
     {
         BOOST_REQUIRE_EXCEPTION(s3::calc_part_size(490_GiB, 5_MiB), std::runtime_error, [](const std::runtime_error& e) {
