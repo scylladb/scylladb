@@ -1394,7 +1394,21 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
     return _column_defs_for_filtering;
 }
 
+<<<<<<< HEAD
 void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(data_dictionary::database db) {
+||||||| parent of e6225acd0c (cql3: re-validate the indexed predicate on base rows read via an index)
+void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(
+        data_dictionary::database db,
+        const single_column_predicate_vectors& sc_pk_pred_vectors,
+        const single_column_predicate_vectors& sc_ck_pred_vectors,
+        const single_column_predicate_vectors& sc_nonpk_pred_vectors) {
+=======
+void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(
+        data_dictionary::database db,
+        const single_column_predicate_vectors& sc_pk_pred_vectors,
+        const single_column_predicate_vectors& sc_ck_pred_vectors,
+        const single_column_predicate_vectors& /* sc_nonpk_pred_vectors */) {
+>>>>>>> e6225acd0c (cql3: re-validate the indexed predicate on base rows read via an index)
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         std::optional<secondary_index::index> opt_idx;
@@ -1437,6 +1451,7 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
                 }
             }
         }
+<<<<<<< HEAD
         for (auto it = _single_column_nonprimary_key_restrictions.begin(); it != _single_column_nonprimary_key_restrictions.end();) {
             auto&& [cdef, cur_restr] = *it;
             if (!column_uses_indexing(cdef, &cur_restr)) {
@@ -1444,6 +1459,26 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
                 ++it;
             } else {
                 it = _single_column_nonprimary_key_restrictions.erase(it);
+||||||| parent of e6225acd0c (cql3: re-validate the indexed predicate on base rows read via an index)
+        for (auto it = _single_column_nonprimary_key_restrictions.begin(); it != _single_column_nonprimary_key_restrictions.end();) {
+            auto&& [cdef, cur_restr] = *it;
+            if (!column_uses_indexing(sc_nonpk_pred_vectors, cdef)) {
+                column_defs_for_filtering.emplace_back(cdef);
+                ++it;
+            } else {
+                it = _single_column_nonprimary_key_restrictions.erase(it);
+=======
+        for (const column_definition* cdef : _single_column_nonprimary_key_restrictions | std::ranges::views::keys) {
+            column_defs_for_filtering.emplace_back(cdef);
+        }
+    }
+    // Fetch the indexed column for its re-validation against the base row (SCYLLADB-2817).
+    if (_uses_secondary_indexing && _idx_opt) {
+        const column_definition* idx_col = _schema->get_column_definition(to_bytes(_idx_opt->target_column()));
+        if (idx_col && (idx_col->is_regular() || idx_col->is_static())) {
+            if (!std::ranges::contains(column_defs_for_filtering, idx_col)) {
+                column_defs_for_filtering.push_back(idx_col);
+>>>>>>> e6225acd0c (cql3: re-validate the indexed predicate on base rows read via an index)
             }
         }
     }
