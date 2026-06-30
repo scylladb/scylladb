@@ -138,6 +138,7 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_pinned_cl_segment_doesnt_resurrect_data_but_repair_ensures_tombstone_gc(manager: ManagerClient):
     """
     """

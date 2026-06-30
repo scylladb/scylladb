@@ -30,6 +30,7 @@ pytestmark = [
         "schema (const schema *)",  # `schema` requires type-casted pointer
     ],
 )
+@pytest.mark.slow
 def test_schema(gdb_cmd, command):
     result = execute_gdb_command(gdb_cmd, f"{command} $get_schema()")
     assert result.returncode == 0, (
@@ -37,6 +38,7 @@ def test_schema(gdb_cmd, command):
     )
 
 
+@pytest.mark.slow
 def test_generate_object_graph(gdb_cmd, request):
     tmpdir = request.config.getoption("--tmpdir")
     result = execute_gdb_command(

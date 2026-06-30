@@ -30,6 +30,7 @@ async def get_local_schema_version(cql: Session, h: Host) -> UUID:
     assert(rs)
     return rs[0].schema_version
 
+@pytest.mark.slow
 async def test_raft_recovery_entry_loss(manager: ManagerClient):
     """
     Test that the Raft-based recovery procedure works correctly if some committed group 0 entry has been permanently

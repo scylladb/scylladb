@@ -19,6 +19,7 @@ def verify_data(response, expected_data):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_reversed_queries_during_upgrade(manager: ManagerClient) -> None:
     """
     Use `suppress_features` error injection to simulate cluster upgrade process

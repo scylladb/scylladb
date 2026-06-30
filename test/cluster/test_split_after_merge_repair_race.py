@@ -119,6 +119,7 @@ async def _wait_for_pattern_any(logs, marks, pattern, timeout):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_split_bypass_race_with_repair_after_merge(manager: ManagerClient):
     """
     Deterministic reproducer of the unlinked-sstable abort in the split

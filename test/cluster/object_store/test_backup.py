@@ -657,6 +657,7 @@ class SSTablesOnObjectStorage:
         topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
         topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
     ])
+@pytest.mark.slow
 async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerClient, object_storage, topology):
     '''Check that restoring of a cluster with stream scopes works'''
     await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnObjectStorage(object_storage))
@@ -735,6 +736,7 @@ async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topo
             await cql.run_async(f"DROP TABLE {ks}.test")
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("topology", [
         topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
         topo(rf = 2, nodes = 2, racks = 2, dcs = 1),
@@ -912,6 +914,7 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Ma
     (1, 1, 2, 2),
     (4, 4, 2, 2),
 ])
+@pytest.mark.slow
 async def test_restore_tablets_with_different_tablet_hints(build_mode: str, manager: ManagerClient, object_storage,
                                                            min_tablet_count_before_backup, max_tablet_count_before_backup,
                                                            min_tablet_count_before_restore, max_tablet_count_before_restore):

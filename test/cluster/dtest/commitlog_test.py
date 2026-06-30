@@ -723,6 +723,7 @@ class TestCommitLog(Tester):
         assert not node1.grep_log(f"large_data - Writing large row {self.ks}/{self.cf}")
         assert in_table == []
 
+    @pytest.mark.slow
     def test_pinned_cl_segment_doesnt_resurrect_data(self):
         """
         The tested scenario is as follows:

@@ -152,6 +152,7 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
     check_nodes_have_data(True, True)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_repair_succeeds_with_unitialized_bm(manager):
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()

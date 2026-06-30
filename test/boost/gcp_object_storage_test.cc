@@ -304,7 +304,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_merge_objects, local_gcs_wrapper, *check_gcp_stor
 }
 
 
-SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_large_object_iov, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_large_object_iov, local_gcs_wrapper, *check_gcp_storage_test_enabled() * boost::unit_test::label("slow")) {
     auto& c = client();
     auto name = make_name();
     std::vector<temporary_buffer<char>> written;

@@ -24,6 +24,7 @@ pytestmark = [
 ]
 
 
+@pytest.mark.slow
 def test_coroutine_frame(gdb_cmd):
     """
     Offsets the pointer by two words to shift from the outer coroutine frame

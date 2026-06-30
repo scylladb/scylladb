@@ -527,6 +527,7 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
     assert repl['dc2'][0] == 'rack2a'
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     async def get_replication_options(ks: str, host, ip_addr):
         await read_barrier(manager.api, ip_addr)
@@ -637,6 +638,7 @@ async def check_system_schema_keyspaces(manager, keyspace, replication, next_rep
     else:
         assert res[0].next_replication is None
 
+@pytest.mark.slow
 async def test_multi_rf_change_multi_dc_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """Test RF changes where each DC transitions only between 0 and N replicas."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -916,6 +918,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
             assert rep[0] in dc1_host_ids
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """Test concurrent 0->N RF changes across multiple keyspaces."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}

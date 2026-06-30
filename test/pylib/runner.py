@@ -125,6 +125,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--exe-url', default=False,
                      dest="exe_url", action="store",
                      help="URL to download the relocatable executable. Not working with `mode`")
+    parser.addoption('--test-timeout-soft', action='store', default=None, type=int,
+                     help='Default per-test timeout in seconds for tests without slow/nightly marker')
+    parser.addoption('--test-timeout-hard', action='store', default=None, type=int,
+                     help='Per-test timeout in seconds for tests marked as slow or nightly')
+    parser.addoption('--disable-auto-test-timeout', action='store_true', default=False,
+                     help='Disable automatic timeout marker injection for collected tests')
+    parser.addini('test_timeout_soft', 'Default timeout in seconds for tests without slow/nightly marker', default='300')
+    parser.addini('test_timeout_hard', 'Timeout in seconds for tests marked as slow/nightly', default='1800')
 
 # Stores the per-phase test reports so that fixtures and hooks can inspect the
 # outcome of each phase (setup / call / teardown) independently.
@@ -340,6 +348,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Confi
     run_ids = defaultdict(lambda: count(start=int(config.getoption("--run_id") or 1)))
     for item in items:
         modify_pytest_item(item=item, run_ids=run_ids)
+        _add_auto_timeout_marker(item=item, config=config)
 
     suites_order = defaultdict(count().__next__)  # number suites in order of appearance
 
@@ -348,6 +357,40 @@ def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Confi
         return suites_order[suite], suite and item.path.stem not in suite.cfg.get("run_first", [])
 
     items.sort(key=sort_key)
+
+
+def _get_test_timeout_seconds(config: pytest.Config, option_name: str, ini_name: str) -> int:
+    option_value = config.getoption(option_name)
+    if option_value is not None:
+        timeout = option_value
+    else:
+        timeout = int(config.getini(ini_name))
+    if timeout <= 0:
+        raise pytest.UsageError(f"{option_name} / {ini_name} must be > 0, got {timeout}")
+    return timeout
+
+
+def _get_timeout_scale_factor(item: pytest.Item) -> int:
+    build_mode = item.stash.get(BUILD_MODE, item.config.build_modes[0])
+    return 3 if build_mode == "debug" else 1
+
+
+def _add_auto_timeout_marker(item: pytest.Item, config: pytest.Config) -> None:
+    if config.getoption("--disable-auto-test-timeout"):
+        return
+    if not (config.pluginmanager.hasplugin("timeout") or config.pluginmanager.hasplugin("pytest_timeout")):
+        return
+    if any(mark.name == "timeout" for mark in item.iter_markers("timeout")):
+        return
+
+    is_hard_timeout = any(mark.name in ("slow", "nightly") for mark in item.iter_markers())
+    timeout = _get_test_timeout_seconds(
+        config=config,
+        option_name="--test-timeout-hard" if is_hard_timeout else "--test-timeout-soft",
+        ini_name="test_timeout_hard" if is_hard_timeout else "test_timeout_soft",
+    )
+
+    item.add_marker(pytest.mark.timeout(timeout * _get_timeout_scale_factor(item)))
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

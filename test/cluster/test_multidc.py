@@ -399,6 +399,7 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
         for task in [*valid_keyspaces, *invalid_keyspaces]:
             _ = tg.create_task(task)
 
+@pytest.mark.slow
 async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager: ManagerClient):
     """
     This test verifies that starting a Scylla node fails when there's an RF-rack-invalid keyspace.
