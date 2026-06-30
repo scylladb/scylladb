@@ -43,6 +43,8 @@
 #include <seastar/util/memory-data-source.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include "replica/logstor/write_buffer.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/serialized_action.hh"
@@ -559,8 +561,10 @@ private:
         uint64_t compaction_segments_out{0};
         uint64_t compaction_records_skipped{0};
         uint64_t compaction_records_rewritten{0};
+        uint64_t compaction_failures{0};
         uint64_t separator_buffer_flushed{0};
         uint64_t separator_segments_freed{0};
+        uint64_t separator_flush_failures{0};
     } _stats;
 
     logstor_compaction_controller _shares_controller;
@@ -795,6 +799,7 @@ class segment_manager_impl {
     struct stats {
         std::array<uint64_t, write_source_count> bytes_written{0};
         std::array<uint64_t, write_source_count> data_bytes_written{0};
+        uint64_t write_failures{0};
         uint64_t bytes_read{0};
         uint64_t bytes_freed{0};
         uint64_t segments_allocated{0};
@@ -805,6 +810,8 @@ class segment_manager_impl {
         uint64_t separator_data_bytes_written{0};
         uint64_t live_record_bytes{0};
         uint64_t live_record_count{0};
+        uint64_t separator_task_failures{0};
+        uint64_t segment_free_failures{0};
     };
 
     file_manager _file_mgr;
@@ -987,7 +994,8 @@ private:
                     return free_segment(seg_id);
                 }
             },
-            [seg_id] {
+            [this, seg_id] {
+                ++_stats.segment_free_failures;
                 logstor_logger.warn("Segment {} can't be freed", seg_id);
             }
         );
@@ -1110,6 +1118,14 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
         throw exceptions::configuration_exception(fmt::format("Segment size {} must be less than or equal to file size {}", config.segment_size, config.file_size));
     }
 
+    // The free space of a segment is bucketed by segment_descriptor_hist, which indexes a
+    // fixed-size bucket array without checking its bounds. A segment larger than the histogram's
+    // maximum would compute an out of range bucket for a fully free segment.
+    if (config.segment_size > segment_descriptor_hist_options.max_size) {
+        throw exceptions::configuration_exception(fmt::format("Segment size {} must be less than or equal to {}",
+                config.segment_size, segment_descriptor_hist_options.max_size));
+    }
+
     if (_max_segments.configured == 0) {
         throw exceptions::configuration_exception(fmt::format("Disk size {} must be greater than or equal to file size {}", config.disk_size, config.file_size));
     }
@@ -1143,6 +1159,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of bytes written to the disk.")),
         sm::make_counter("data_bytes_written", _stats.data_bytes_written[static_cast<size_t>(write_source::normal_write)],
                        sm::description("Counts number of data bytes written to the disk.")),
+        sm::make_counter("write_failures", _stats.write_failures,
+                       sm::description("Counts number of write failures when appending to a logstor segment.")),
         sm::make_counter("bytes_read", _stats.bytes_read,
                        sm::description("Counts number of bytes read from the disk.")),
         sm::make_counter("bytes_freed", _stats.bytes_freed,
@@ -1171,6 +1189,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of times a compaction had to wait for a write buffer to become available.")),
         sm::make_counter("compaction_buffers_dropped", _compaction_buffer_pool.get_stats().buffers_dropped,
                        sm::description("Counts number of write buffers permanently removed from the pool after they could not be reclaimed.")),
+        sm::make_counter("compaction_failures", _compaction_mgr.get_stats().compaction_failures,
+                       sm::description("Counts number of logstor compaction failures.")),
         sm::make_counter("separator_bytes_written", _stats.bytes_written[static_cast<size_t>(write_source::separator)],
                        sm::description("Counts number of bytes written to the separator.")),
         sm::make_counter("separator_data_bytes_written", _stats.data_bytes_written[static_cast<size_t>(write_source::separator)],
@@ -1179,6 +1199,12 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of times the separator buffer has been flushed.")),
         sm::make_counter("separator_segments_freed", _compaction_mgr.get_stats().separator_segments_freed,
                        sm::description("Counts number of segments freed by the separator.")),
+        sm::make_counter("separator_flush_failures", _compaction_mgr.get_stats().separator_flush_failures,
+                       sm::description("Counts number of logstor separator flush failures.")),
+        sm::make_counter("separator_task_failures", _stats.separator_task_failures,
+                       sm::description("Counts number of logstor separator task failures.")),
+        sm::make_counter("segment_free_failures", _stats.segment_free_failures,
+                       sm::description("Counts number of logstor segment references that failed to free the segment.")),
         sm::make_gauge("separator_task_queue_size", [this]() { return _separator_task_queue.size(); },
                        sm::description("Current number of pending tasks in the separator task queue.")),
     });
@@ -1217,9 +1243,8 @@ future<> segment_manager_impl::stop() {
     }
 
     if (_switch_segment_fut) {
-        try {
-            co_await _switch_segment_fut->get_future();
-        } catch (...) {}
+        auto f = co_await coroutine::as_future(_switch_segment_fut->get_future());
+        f.ignore_ready_future();
     }
 
     co_await _segment_pool.stop();
@@ -1253,7 +1278,8 @@ future<> segment_manager_impl::run_separator_fiber() {
             co_await write_to_separator(task.records, std::move(task.seg_ref), task.seq_num);
             write_to_separator_failed.cancel();
         } catch (...) {
-            logstor_logger.warn("Writing to separator failed: {}", std::current_exception());
+            ++_stats.separator_task_failures;
+            logstor_logger.debug("logstor separator task failure in separator fiber: {}", std::current_exception());
         }
     }
 }
@@ -1298,7 +1324,14 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
 
         bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.serialized_size());
-        auto loc = co_await seg->write_reserved(std::move(*reservation), data);
+        auto append_result = co_await coroutine::as_future(seg->write_reserved(std::move(*reservation), data));
+        if (append_result.failed()) {
+            auto ex = append_result.get_exception();
+            ++_stats.write_failures;
+            co_await wb.abort_writes(ex);
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+        auto loc = append_result.get();
 
         _stats.bytes_written[static_cast<size_t>(source)] += data.size();
         _stats.data_bytes_written[static_cast<size_t>(source)] += wb.net_data_size();
@@ -1338,10 +1371,27 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
     wb.seal(seg->seq_num(), cg.table_id(), block_alignment);
     bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.serialized_size());
 
-    auto loc = co_await seg->append(data);
+    auto append_result = co_await coroutine::as_future(seg->append(data));
+    if (append_result.failed()) {
+        auto ex = append_result.get_exception();
+        ++_stats.write_failures;
+        co_await wb.abort_writes(ex);
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    auto loc = append_result.get();
 
     _stats.bytes_written[static_cast<size_t>(source)] += data.size();
     _stats.data_bytes_written[static_cast<size_t>(source)] += wb.net_data_size();
+
+    // The records are on disk and the index already points into this segment, so if adding it to
+    // the compaction group fails, the segment must not be freed when the reference below is
+    // released. Marking the reference as failed leaves it allocated instead, so the records stay
+    // readable, at the cost of the segment never being reclaimed.
+    auto seg_ref = seg->ref();
+    auto add_to_group_failed = defer([seg_ref] mutable noexcept {
+        seg_ref.set_flush_failure();
+        logstor_logger.warn("Failed to add segment {} to a compaction group, it will not be reclaimed", seg_ref.id());
+    });
 
     co_await wb.complete_writes(loc);
     co_await seg->stop();
@@ -1349,6 +1399,7 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
     // add the segment after all index updates are completed.
     auto& desc = get_segment_descriptor(seg->id());
     cg.add_logstor_segment(desc);
+    add_to_group_failed.cancel();
 }
 
 void segment_manager_impl::on_add_record(log_location location) noexcept {
@@ -1408,7 +1459,7 @@ future<> segment_manager_impl::switch_active_segment() {
         // close old segment in background
         (void)with_gate(_async_gate, [old_seg] {
             return old_seg->stop();
-        }).then([old_seg] {});
+        }).finally([old_seg] {}).handle_exception([] (std::exception_ptr) {});
     }
 
     // trigger separator flush for separator buffers that hold old segments
@@ -1548,9 +1599,12 @@ future<std::optional<segment_header>> segment_manager_impl::read_segment_header(
         .buffer_size = block_alignment,
         .read_ahead = 0,
     });
-    auto result = co_await ::replica::logstor::read_segment_header(in);
+    auto result = co_await coroutine::as_future(::replica::logstor::read_segment_header(in));
     co_await in.close();
-    co_return result;
+    if (result.failed()) {
+        co_return coroutine::exception(result.get_exception());
+    }
+    co_return result.get();
 }
 
 future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
@@ -1561,9 +1615,12 @@ future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
         .buffer_size = std::min<size_t>(_cfg.segment_size, 128 * 1024),
         .read_ahead = 1,
     });
-    co_await ::replica::logstor::scan_segment(in, segment_id, _cfg.segment_size,
-            std::move(header_callback), std::move(on_header), std::move(on_record));
+    auto scan_result = co_await coroutine::as_future(::replica::logstor::scan_segment(in, segment_id, _cfg.segment_size,
+            std::move(header_callback), std::move(on_header), std::move(on_record)));
     co_await in.close();
+    if (scan_result.failed()) {
+        co_await coroutine::return_exception_ptr(scan_result.get_exception());
+    }
 }
 
 future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std::function<future<>(group_compaction_state&)> op) {
@@ -1587,7 +1644,8 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
         state->as = {};
         state->completion = shared_future(with_scheduling_group(_cfg.compaction_sg, [state, op = std::move(op)] {
             return op(*state);
-        }).handle_exception([] (std::exception_ptr ep) {
+        }).handle_exception([this] (std::exception_ptr ep) {
+            ++_stats.compaction_failures;
             logstor_logger.warn("logstor compaction failed: {}", ep);
             return make_exception_future<>(std::move(ep));
         }));
@@ -1611,7 +1669,7 @@ future<> compaction_manager_impl::submit_split_compaction(replica::table& t, log
 
 void compaction_manager_impl::submit(logstor_group& cg) {
     (void)submit_normal_compaction(cg).handle_exception([table_id = cg.table_id()] (std::exception_ptr ep) {
-        logstor_logger.warn("logstor compaction for table {} failed: {}. Ignored", table_id, ep);
+        logstor_logger.debug("logstor compaction for table {} failed: {}. Ignored", table_id, ep);
     });
 }
 
@@ -2174,6 +2232,7 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
 
     if (flush_result.failed()) {
         auto ep = flush_result.get_exception();
+        ++_stats.separator_flush_failures;
         logstor_logger.debug("logstor separator flush failure: {}", ep);
 
         auto abort_result = co_await coroutine::as_future(buf.abort(ep));
@@ -2576,7 +2635,7 @@ public:
         co_await _sm.load_segment(_db, _seg->id());
     }
     future<> abort() override {
-        co_return;
+        co_await _seg->stop();
     }
 };
 
