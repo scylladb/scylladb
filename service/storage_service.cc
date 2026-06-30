@@ -5926,6 +5926,28 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
     utils::UUID request_id;
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        // If a restore for the same table is already in flight (e.g. started
+        // by a node that has since died), join it instead of starting a new
+        // one. Reject a mismatched snapshot for the same table.
+        std::optional<utils::UUID> ongoing;
+        for (auto req : _topology_state_machine._topology.ongoing_restore_requests) {
+            auto entry = co_await _sys_ks.local().get_topology_request_entry(req);
+            if (entry.restore_table_id == table) {
+                if (entry.restore_snapshot_name != snap_name) {
+                    throw std::runtime_error(fmt::format("Table {} is already being restored from a different snapshot {}", table, *entry.restore_snapshot_name));
+                }
+                ongoing = req;
+                break;
+            }
+        }
+        if (ongoing) {
+            release_guard(std::move(guard));
+            request_id = *ongoing;
+            slogger.info("Restore for {} already in flight, waiting for it", table);
+            break;
+        }
+
         request_id = guard.new_group0_state_id();
 
         topology_mutation_builder builder(guard.write_timestamp());
