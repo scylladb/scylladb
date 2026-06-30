@@ -287,7 +287,7 @@ SEASTAR_TEST_CASE(test_groups_store_load_snapshot) {
 }
 
 // Test that load_log returns entries from the replayed data provided at construction
-SEASTAR_TEST_CASE(test_groups_store_load_log_entries) {
+SEASTAR_TEST_CASE(test_groups_load_log_from_replayed_data) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
