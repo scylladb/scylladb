@@ -77,8 +77,15 @@ future<> controller::start_server() {
 }
 
 static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol = false) {
-    co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol] (cql_server& server) {
-        return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol, [&c = server.container()]() -> auto& { return c.local(); });
+    // Non-shard-aware ports use round-robin to avoid the feedback loop
+    // between the conntrack load balancer and shard-aware driver retry
+    // logic (SCYLLADB-1618). Shard-aware ports use source-port-based
+    // routing.
+    auto lba = is_shard_aware
+        ? std::optional{server_socket::load_balancing_algorithm::port}
+        : std::optional{server_socket::load_balancing_algorithm::round_robin};
+    co_await cserver.invoke_on_all([addr, creds, keepalive, unix_domain_socket_permissions, proxy_protocol, lba] (cql_server& server) {
+        return server.listen(addr, creds, keepalive, unix_domain_socket_permissions, proxy_protocol, [&c = server.container()]() -> auto& { return c.local(); }, lba);
     });
 }
 
