@@ -898,6 +898,8 @@ query_options query_processor::make_internal_options(
             }, [&] (const unset_value&) {
                 bound_values.values.emplace_back(cql3::raw_value::make_null());
                 bound_values.unset[std::distance(p->bound_names.begin(), ni)] = true;
+            }, [&] (const managed_bytes& mb) {
+                bound_values.values.emplace_back(cql3::raw_value::make_value(mb));
             }
         }, var);
         ++ni;

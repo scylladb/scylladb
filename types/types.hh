@@ -1124,7 +1124,7 @@ struct unset_value {
     bool operator==(const unset_value&) const noexcept { return true; }
 };
 
-using data_value_or_unset = std::variant<data_value, unset_value>;
+using data_value_or_unset = std::variant<data_value, unset_value, managed_bytes>;
 
 template <>
 struct fmt::formatter<unset_value> : fmt::formatter<string_view> {
@@ -1144,6 +1144,9 @@ struct fmt::formatter<data_value_or_unset> : fmt::formatter<string_view> {
             },
             [&ctx] (const unset_value& u) {
                 return fmt::format_to(ctx.out(), "{}", u);
+            },
+            [&ctx] (const managed_bytes& mb) {
+                return fmt::format_to(ctx.out(), "{}", mb);
             }
         }, var);
     }
