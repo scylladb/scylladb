@@ -661,6 +661,10 @@ void audit::on_role_dropped(const sstring& role) {
     logger.debug("Audit: known role removed: {}", role);
 }
 
+bool audit::wants_eager_known_tables(size_t table_count) const noexcept {
+    return _preprocessed_rules.wants_eager_known_tables(table_count);
+}
+
 future<> audit::set_known_entities(std::unordered_set<sstring> roles,
                                     preprocessed_audit_rules::known_table_set tables) {
     logger.info("Audit: loading {} known roles and {} known tables into preprocessed rules cache",

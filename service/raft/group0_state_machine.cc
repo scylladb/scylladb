@@ -492,9 +492,17 @@ future<> group0_state_machine::sync_audit_known_entities() {
         });
 
         audit::preprocessed_audit_rules::known_table_set known_tables;
-        _ss.get_database().get_tables_metadata().for_each_table_id([&known_tables](const std::pair<sstring, sstring>& ks_cf, table_id) {
-            known_tables.emplace(ks_cf.first, ks_cf.second);
-        });
+        const auto table_count = _ss.get_database().get_tables_metadata().size();
+        if (audit::audit::local_audit_instance().wants_eager_known_tables(table_count)) {
+            known_tables.reserve(table_count);
+            _ss.get_database().get_tables_metadata().for_each_table_id([&known_tables](const std::pair<sstring, sstring>& ks_cf, table_id) {
+                known_tables.emplace(ks_cf.first, ks_cf.second);
+            });
+        } else {
+            slogger.info("Skipping eager audit known-table cache for {} tables; cap is {}; matching remains exact via per-request rule evaluation",
+                    table_count,
+                    audit::preprocessed_audit_rules::max_preprocessed_known_tables);
+        }
 
         co_await audit::audit::audit_instance().invoke_on_all(
             [&known_roles, &known_tables] (auto& a) -> future<> {

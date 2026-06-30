@@ -2721,6 +2721,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             db.invoke_on_all(&replica::database::revert_initial_system_read_concurrency_boost).get();
+            cm.invoke_on_all(&compaction::compaction_manager::disable_startup_regular_compaction_backlog_limit).get();
             notify_set.notify_all(configurable::system_state::started).get();
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();

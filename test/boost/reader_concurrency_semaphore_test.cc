@@ -7,8 +7,10 @@
  */
 
 #include "utils/assert.hh"
+#include "replica/schema_boot.hh"
 #include <seastar/util/closeable.hh>
 #include <seastar/core/file.hh>
+#include <seastar/core/semaphore.hh>
 #include "reader_concurrency_semaphore.hh"
 #include "sstables/sstables_manager.hh"
 #include "reader_concurrency_semaphore_group.hh"
@@ -35,6 +37,10 @@
 #include "readers/from_mutations.hh"
 #include "replica/database.hh" // new_reader_base_cost is there :(
 #include "db/config.hh"
+
+#include <algorithm>
+#include <numeric>
+#include <utility>
 
 // Provides access to private members of reader_concurrency_semaphore for testing.
 struct reader_concurrency_semaphore_tester {
@@ -587,6 +593,53 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
 
         REQUIRE_EVENTUALLY_EQUAL<ssize_t>([&] { return semaphore.available_resources().memory; }, replica::new_reader_base_cost);
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_boot_schema_fanout_helpers_throttle_work_without_dropping_items) {
+    auto check_limit = [] (const char* name, auto&& run, size_t limit) {
+        BOOST_TEST_CONTEXT(name) {
+            std::vector<size_t> items(limit * 4);
+            std::iota(items.begin(), items.end(), 0);
+
+            seastar::semaphore release(0);
+            size_t in_flight = 0;
+            size_t max_in_flight = 0;
+            size_t completed = 0;
+
+            auto done = run(items, [&] (size_t) -> future<> {
+                ++in_flight;
+                max_in_flight = std::max(max_in_flight, in_flight);
+                co_await release.wait(1);
+                --in_flight;
+                ++completed;
+            });
+
+            BOOST_REQUIRE(eventually_true([&] { return in_flight == limit; }));
+            BOOST_REQUIRE_EQUAL(in_flight, limit);
+            BOOST_REQUIRE_EQUAL(completed, 0);
+            BOOST_REQUIRE_LE(max_in_flight, limit);
+
+            release.signal(items.size());
+            done.get();
+
+            BOOST_REQUIRE_EQUAL(completed, items.size());
+            BOOST_REQUIRE_EQUAL(in_flight, 0);
+            BOOST_REQUIRE_LE(max_in_flight, limit);
+        }
+    };
+
+    check_limit("keyspace schema partitions", [] (auto& items, auto&& func) {
+        return replica::schema_boot::for_each_keyspace_schema_partition(items, std::forward<decltype(func)>(func));
+    }, replica::schema_boot::max_concurrent_keyspace_schema_partitions);
+    check_limit("keyspace population", [] (auto& items, auto&& func) {
+        return replica::schema_boot::for_each_keyspace_population(items, std::forward<decltype(func)>(func));
+    }, replica::schema_boot::max_concurrent_keyspace_population);
+    check_limit("tables per keyspace", [] (auto& items, auto&& func) {
+        return replica::schema_boot::for_each_table_in_keyspace(items, std::forward<decltype(func)>(func));
+    }, replica::schema_boot::max_concurrent_tables_per_keyspace);
+    check_limit("views per keyspace", [] (auto& items, auto&& func) {
+        return replica::schema_boot::for_each_view_in_keyspace(items, std::forward<decltype(func)>(func));
+    }, replica::schema_boot::max_concurrent_views_per_keyspace);
 }
 
 SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
