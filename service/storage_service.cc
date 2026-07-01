@@ -4313,7 +4313,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // To maintain atomicity against concurrent migration requests
         // (e.g., finalization) and prevent failures from group0 conflicts, we
         // should turn this into a topology request.
-        utils::chunked_vector<canonical_mutation> updates;
+        group0_update_collector updates;
 
         auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
             slogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
@@ -4347,7 +4347,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             }
         }
 
-        topology_change change{std::move(updates)};
+        topology_change change{co_await updates.collect()};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
             fmt::format("migrate keyspace {} to tablets", ks_name));
 
@@ -5612,8 +5612,9 @@ future<service::group0_guard> storage_service::get_guard_for_tablet_update() {
     co_return guard;
 }
 
-future<bool> storage_service::exec_tablet_update(service::group0_guard guard, utils::chunked_vector<canonical_mutation> updates, sstring reason) {
+future<bool> storage_service::exec_tablet_update(service::group0_guard guard, group0_update_collector uc, sstring reason) {
     rtlogger.info("{}", reason);
+    auto updates = co_await uc.collect();
     rtlogger.trace("do update {} reason {}", updates, reason);
     updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
             .set_version(_topology_state_machine._topology.version + 1)
@@ -5684,7 +5685,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        utils::chunked_vector<canonical_mutation> updates;
+        group0_update_collector updates;
 
         if (all_tokens) {
             tokens.clear();
@@ -5697,7 +5698,6 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
 
         auto ts = db_clock::now();
         auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
-        std::optional<mutation> repair_task_update;
         for (const auto& token : tokens) {
             auto tid = tmap.get_tablet_id(token);
             auto& tinfo = tmap.get_tablet_info(tid);
@@ -5718,22 +5718,10 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
             };
             if (_feature_service.tablet_repair_tasks_table) {
                 auto m = co_await _sys_ks.local().get_update_repair_task_mutation(entry, guard.write_timestamp());
-                if (repair_task_update) {
-                    if (!m.decorated_key().equal(*m.schema(), repair_task_update->decorated_key())) {
-                        on_internal_error(rtlogger, "add_repair_tablet_request(): repair task mutations have different partition keys");
-                    }
-                    repair_task_update->apply(std::move(m));
-                } else {
-                    repair_task_update = std::move(m);
-                }
+                updates.add_small(std::move(m));
             }
         }
-        if (repair_task_update) {
-            updates.emplace_back(std::move(*repair_task_update));
-        }
-        if (!tokens.empty()) {
-            updates.emplace_back(builder.build());
-        }
+        updates.add_large(builder.build());
 
         sstring reason = format("Repair tablet by API request tokens={} tablet_task_id={}", tokens, repair_task_info.tablet_task_id);
         if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
@@ -5796,7 +5784,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        utils::chunked_vector<canonical_mutation> updates;
+        group0_update_collector updates;
 
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
             auto& tinfo = tmap.get_tablet_info(tid);
@@ -5810,7 +5798,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
                 update.del_session(last_token);
             }
-            updates.emplace_back(update.build());
+            updates.add_small(update.build());
         });
 
         sstring reason = format("Deleting tablet repair request by API request tablet_id={} tablet_task_id={}", table, tablet_task_id);
@@ -6002,8 +5990,8 @@ future<> storage_service::abort_restore_tablets(table_id table) {
         auto guard = co_await get_guard_for_tablet_update();
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        utils::chunked_vector<canonical_mutation> updates;
-
+        group0_update_collector updates;
+        auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
             auto* trinfo = tmap.get_tablet_transition_info(tid);
             if (!trinfo || trinfo->transition != locator::tablet_transition_kind::restore || !trinfo->session_id) {
@@ -6012,10 +6000,10 @@ future<> storage_service::abort_restore_tablets(table_id table) {
             auto last_token = tmap.get_last_token(tid);
             // Deleting the session aborts the restore: see the restore handling in the
             // topology coordinator.
-            updates.emplace_back(tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                .del_session(last_token)
-                .build());
+            builder.del_session(last_token);
         });
+
+        co_await updates.add(builder.build());
 
         if (updates.empty()) {
             break;

@@ -16,6 +16,10 @@ namespace db {
 class system_keyspace;
 }
 
+namespace service {
+class group0_update_collector;
+}
+
 namespace locator {
 class tablet_map;
 class token_metadata;
@@ -63,7 +67,7 @@ public:
     future<> query_cdc_timestamps(table_id table, bool ascending, noncopyable_function<future<>(db_clock::time_point)> f);
     future<> query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const utils::chunked_vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f);
 
-    future<> generate_tablet_resize_update(utils::chunked_vector<canonical_mutation>& muts, table_id table, const locator::tablet_map& new_tablet_map, api::timestamp_type ts);
+    future<> generate_tablet_resize_update(service::group0_update_collector& muts, table_id table, const locator::tablet_map& new_tablet_map, api::timestamp_type ts);
 
     // Check for tables with enable_requested CDC option and finalize their
     // stream enablement if no in-progress tablet merges remain.
