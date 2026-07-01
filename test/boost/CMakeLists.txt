@@ -52,8 +52,6 @@ add_scylla_test(cell_locker_test
   KIND SEASTAR)
 add_scylla_test(checksum_utils_test
   KIND BOOST)
-add_scylla_test(chunked_managed_vector_test
-  KIND SEASTAR)
 add_scylla_test(chunked_vector_test
   KIND BOOST)
 add_scylla_test(clustering_ranges_walker_test
@@ -149,6 +147,8 @@ add_scylla_test(json_test
 add_scylla_test(keys_test
   KIND BOOST
   LIBRARIES idl schema)
+add_scylla_test(leveled_managed_vector_test
+  KIND SEASTAR)
 add_scylla_test(like_matcher_test
   KIND BOOST
   LIBRARIES utils)
@@ -175,8 +175,6 @@ add_scylla_test(lru_string_map_test
 add_scylla_test(managed_bytes_test
   KIND BOOST
   LIBRARIES Seastar::seastar_testing)
-add_scylla_test(managed_vector_test
-  KIND SEASTAR)
 add_scylla_test(map_difference_test
   KIND BOOST)
 add_scylla_test(murmur_hash_test

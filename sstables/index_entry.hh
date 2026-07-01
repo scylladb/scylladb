@@ -10,8 +10,8 @@
 #include <functional>
 #include <variant>
 #include "mutation/position_in_partition.hh"
+#include "utils/lsa/leveled_managed_vector.hh"
 #include "utils/overloaded_functor.hh"
-#include "utils/lsa/chunked_managed_vector.hh"
 #include "reader_permit.hh"
 #include "sstables/types.hh"
 #include "sstables/shared_sstable.hh"
@@ -19,8 +19,8 @@
 #include "utils/allocation_strategy.hh"
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
-#include "utils/managed_vector.hh"
 #include "dht/i_partitioner.hh"
+#include "utils/logalloc.hh"
 
 #include <seastar/core/fstream.hh>
 
@@ -232,7 +232,7 @@ static_assert(std::is_trivially_move_assignable_v<parsed_promoted_index_entry>);
 // So the shallow part is in the standard allocator but all indirect objects are inside LSA.
 class partition_index_page {
 public:
-    lsa::chunked_managed_vector<index_entry> _entries;
+    lsa::leveled_managed_vector<index_entry, logalloc::max_managed_object_size> _entries;
     managed_bytes _key_storage;
 
     // Stores promoted index information of index entries.
@@ -241,7 +241,7 @@ public:
     // that entry doesn't have a promoted index.
     // Kept separately to avoid paying for storage cost in pages where no entry has a promoted index,
     // which is typical in workloads with small partitions.
-    lsa::chunked_managed_vector<promoted_index> _promoted_indexes;
+    lsa::leveled_managed_vector<promoted_index, logalloc::max_managed_object_size> _promoted_indexes;
 public:
     partition_index_page() = default;
     partition_index_page(partition_index_page&&) noexcept = default;
@@ -253,10 +253,6 @@ public:
     stop_iteration clear_gently() {
         // Vectors have trivial storage, so are fast to destroy.
         return stop_iteration::yes;
-    }
-
-    void clear_one_entry() {
-        _entries.pop_back();
     }
 
     bool has_promoted_index(size_t i) const {

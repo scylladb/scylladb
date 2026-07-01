@@ -878,44 +878,6 @@ class std_list:
         deref = std_list._make_dereference_func(it.type.strip_typedefs().template_argument(0))
         return deref(it['_M_node'])
 
-
-class managed_vector:
-    def __init__(self, ref):
-        self._ref = ref
-
-    def __len__(self):
-        return int(self._ref['_size'])
-
-    def __nonzero__(self):
-        return self.__len__() > 0
-
-    def __bool__(self):
-        return self.__len__() > 0
-
-    def __iter__(self):
-        for i in range(len(self)):
-            yield self._ref['_data'][i]
-
-
-class chunked_managed_vector:
-    def __init__(self, ref):
-        self._ref = ref
-
-    def __len__(self):
-        return int(self._ref['_size'])
-
-    def __nonzero__(self):
-        return self.__len__() > 0
-
-    def __bool__(self):
-        return self.__len__() > 0
-
-    def __iter__(self):
-        for chunk in managed_vector(self._ref['_chunks']):
-            for e in managed_vector(chunk):
-                yield e
-
-
 class chunked_fifo:
     class chunk:
         def __init__(self, ref):
@@ -1219,22 +1181,6 @@ class row_printer(gdb.printing.PrettyPrinter):
     def display_hint(self):
         return 'row'
 
-
-class managed_vector_printer(gdb.printing.PrettyPrinter):
-    def __init__(self, val):
-        self.val = val
-
-    def to_string(self):
-        size = int(self.val['_size'])
-        items = list()
-        for i in range(size):
-            items.append(str(self.val['_data'][i]))
-        return '{size=%d, items=[%s]}' % (size, ', '.join(items))
-
-    def display_hint(self):
-        return 'managed_vector'
-
-
 class uuid_printer(gdb.printing.PrettyPrinter):
     'print a uuid'
 
@@ -1387,7 +1333,6 @@ def build_pretty_printer():
     pp.add_printer('partition_entry', r'^partition_entry$', partition_entry_printer)
     pp.add_printer('mutation_partition', r'^mutation_partition$', mutation_partition_printer)
     pp.add_printer('row', r'^row$', row_printer)
-    pp.add_printer('managed_vector', r'^managed_vector<.*>$', managed_vector_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     pp.add_printer('sstable_generation', r'^sstables::generation_type$', sstable_generation_printer)
     pp.add_printer('boost_intrusive_list', r'^boost::intrusive::list<.*>$', boost_intrusive_list_printer)
@@ -5836,17 +5781,7 @@ class scylla_sstable_index_cache(gdb.Command):
             loaded_pages += 1
             page = page.get_with_type(partition_index_page_type)
             gdb.write("[{}]: [\n".format(int(n['_key'])))
-            for entry in chunked_managed_vector(page['_entries']):
-                entry = entry['_ptr'].dereference()['_value']
-                key = entry['_key']
-                token = std_optional(entry['_token'])
-                if token:
-                    token = str(int(token.get()['_data']))
-                else:
-                    token = 'null'
-                position = int(entry['_position'])
-
-                gdb.write("  {{ key: {}, token: {}, position: {} }}\n".format(key, token, position))
+            gdb.write("UNIMPLEMENTED")
             gdb.write(']\n')
 
         gdb.write("Total: {} page(s) ({} loaded, {} loading)\n".format(loaded_pages + loading_pages, loaded_pages, loading_pages))

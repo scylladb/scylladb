@@ -81,7 +81,7 @@ public:
             _alloc_section(_region, [&] {
                 with_allocator(_region.allocator(), [&] {
                     result._entries.reserve(_parsed_entries.size());
-                    result._promoted_indexes.resize(_max_promoted_index_entry_plus_one);
+                    result._promoted_indexes.grow_to(_max_promoted_index_entry_plus_one);
                     if (result._key_storage.empty()) {
                         result._key_storage = managed_bytes(managed_bytes::initialized_later(), _key_storage_size);
                     }
@@ -689,11 +689,11 @@ private:
                 auto it = std::ranges::partition_point(r, [&] (int idx) {
                     return index_entry_tri_cmp(s, page, idx, pos) < 0;
                 });
-                return page._entries.begin() + bound.current_index_idx + std::ranges::distance(r.begin(), it);
+                return bound.current_index_idx + std::ranges::distance(r.begin(), it);
             });
             // i is valid until next allocation point
             auto& entries = bound.current_list->_entries;
-            if (i == std::end(entries)) {
+            if (i == entries.size()) {
                 if (_single_page_read) {
                     sstlog.trace("index {}: not found in index page {}, returning eof because this is a single-partition read", summary_idx, fmt::ptr(this));
                     return advance_to_end(bound);
@@ -702,9 +702,9 @@ private:
                     return advance_to_page(bound, summary_idx + 1);
                 }
             }
-            bound.current_index_idx = std::distance(std::begin(entries), i);
+            bound.current_index_idx = i;
             bound.current_pi_idx = 0;
-            bound.data_file_position = (*i).position();
+            bound.data_file_position = entries[i].position();
             bound.element = indexable_element::partition;
             bound.end_open_marker.reset();
             sstlog.trace("index {}: new page index = {}, pos={}", fmt::ptr(this), bound.current_index_idx, bound.data_file_position);
