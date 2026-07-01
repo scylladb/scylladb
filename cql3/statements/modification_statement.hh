@@ -142,6 +142,8 @@ public:
     void validate(query_processor&, const service::client_state& state) const override;
 
     bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    size_t object_size() const override { return sizeof(*this); }
+    size_t external_memory_usage() const override;
 
     bool should_reclassify_control_connection() const override;
 

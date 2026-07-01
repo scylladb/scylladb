@@ -521,6 +521,9 @@ public:
     void validate_primary_key(const query_options& options) const;
 
     bool is_empty() const;
+
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    size_t external_memory_usage() const;
 };
 
 shared_ptr<const statement_restrictions> analyze_statement_restrictions(

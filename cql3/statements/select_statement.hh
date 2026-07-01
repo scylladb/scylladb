@@ -124,6 +124,8 @@ public:
     virtual uint32_t get_bound_terms() const override;
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    size_t object_size() const override { return sizeof(*this); }
+    size_t external_memory_usage() const override;
 
     virtual bool should_reclassify_control_connection() const override;
 
@@ -228,6 +230,8 @@ public:
                                    const secondary_index::index& index,
                                    schema_ptr view_schema,
                                    std::unique_ptr<cql3::attributes> attrs);
+
+    size_t object_size() const override { return sizeof(*this); }
 
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
@@ -362,8 +366,9 @@ private:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
             service::query_state& state, const query_options& options) const override;
-};
 
+    size_t object_size() const override { return sizeof(*this); }
+};
 
 }
 }

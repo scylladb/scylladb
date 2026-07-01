@@ -6311,4 +6311,74 @@ SEASTAR_TEST_CASE(test_sstable_load_mixed_generation_type) {
     });
 }
 
+SEASTAR_TEST_CASE(test_prepared_statement_memory_sizing) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.sizing_test (pk int, ck text, v1 text, v2 int, PRIMARY KEY (pk, ck))").get();
+
+        // Sane envelope for a prepared statement over a tiny 4-column table: the
+        // external (heap) footprint must be well above a trivial allocation yet
+        // far below an absurd value. These bounds intentionally bracket the
+        // expected few-hundred-bytes-to-few-KB range without hard-coding exact
+        // sizes (which depend on layout/allocator).
+        constexpr size_t min_reasonable = 128;
+        constexpr size_t max_reasonable = 256 * 1024;
+
+        auto sized = [&] (const sstring& cql) {
+            auto key = e.prepare(cql).get();
+            auto stmt_ptr = e.local_qp().get_prepared(key);
+            BOOST_REQUIRE(stmt_ptr);
+            return stmt_ptr->external_memory_usage();
+        };
+
+        auto select_mem = sized("SELECT * FROM ks.sizing_test WHERE pk = ? AND ck = ?");
+        testlog.info("SELECT prepared statement external_memory_usage: {}", select_mem);
+        BOOST_REQUIRE_GT(select_mem, min_reasonable);
+        BOOST_REQUIRE_LT(select_mem, max_reasonable);
+
+        auto insert_mem = sized("INSERT INTO ks.sizing_test (pk, ck, v1, v2) VALUES (?, ?, ?, ?)");
+        testlog.info("INSERT prepared statement external_memory_usage: {}", insert_mem);
+        BOOST_REQUIRE_GT(insert_mem, min_reasonable);
+        BOOST_REQUIRE_LT(insert_mem, max_reasonable);
+
+        auto update_mem = sized("UPDATE ks.sizing_test SET v1 = ?, v2 = ? WHERE pk = ? AND ck = ?");
+        testlog.info("UPDATE prepared statement external_memory_usage: {}", update_mem);
+        BOOST_REQUIRE_GT(update_mem, min_reasonable);
+        BOOST_REQUIRE_LT(update_mem, max_reasonable);
+
+        auto delete_mem = sized("DELETE FROM ks.sizing_test WHERE pk = ? AND ck = ?");
+        testlog.info("DELETE prepared statement external_memory_usage: {}", delete_mem);
+        BOOST_REQUIRE_GT(delete_mem, min_reasonable);
+        BOOST_REQUIRE_LT(delete_mem, max_reasonable);
+
+        // A batch of two INSERTs must cost more than a single INSERT.
+        auto single_insert_mem = sized("INSERT INTO ks.sizing_test (pk, ck, v1) VALUES (?, ?, ?)");
+        auto batch_mem = sized("BEGIN BATCH "
+                "INSERT INTO ks.sizing_test (pk, ck, v1) VALUES (?, ?, ?); "
+                "INSERT INTO ks.sizing_test (pk, ck, v2) VALUES (?, ?, ?); "
+                "APPLY BATCH");
+        testlog.info("single INSERT: {}, BATCH(2): {}", single_insert_mem, batch_mem);
+        BOOST_REQUIRE_GT(batch_mem, single_insert_mem);
+        BOOST_REQUIRE_LT(batch_mem, max_reasonable);
+
+        // A statement with more selectors and more restrictions must cost more
+        // than a minimal one over the same table.
+        auto simple_mem = sized("SELECT pk FROM ks.sizing_test WHERE pk = ?");
+        auto complex_mem = sized("SELECT pk, ck, v1, v2 FROM ks.sizing_test WHERE pk = ? AND ck > ? AND ck < ? ALLOW FILTERING");
+        testlog.info("Simple SELECT: {}, Complex SELECT: {}", simple_mem, complex_mem);
+        BOOST_REQUIRE_GT(complex_mem, simple_mem);
+
+        // Verify the cache-entry sizing arithmetic (the actual integration
+        // point): the cache charges sizeof(prepared_statement) +
+        // external_memory_usage(), which must exceed the fixed object size.
+        {
+            auto key = e.prepare("SELECT * FROM ks.sizing_test WHERE pk = ?").get();
+            auto stmt_ptr = e.local_qp().get_prepared(key);
+            BOOST_REQUIRE(stmt_ptr);
+            const size_t charged = sizeof(cql3::statements::prepared_statement) + stmt_ptr->external_memory_usage();
+            BOOST_REQUIRE_GT(charged, sizeof(cql3::statements::prepared_statement));
+            BOOST_REQUIRE_LT(charged, max_reasonable);
+        }
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

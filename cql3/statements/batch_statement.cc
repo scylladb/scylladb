@@ -8,6 +8,7 @@
  */
 
 #include "batch_statement.hh"
+#include "cql3/attributes.hh"
 #include "cql3/util.hh"
 #include "raw/batch_statement.hh"
 #include "cql3/cql_config.hh"
@@ -451,6 +452,23 @@ void batch_statement::build_cas_result_set_metadata() {
         }
     }
     _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
+}
+
+size_t batch_statement::external_memory_usage() const {
+    size_t s = cql_statement::external_memory_usage();
+
+    s += _statements.capacity() * sizeof(single_statement);
+    for (const auto& ss : _statements) {
+        if (ss.statement) {
+            s += ss.statement->object_size() + ss.statement->external_memory_usage();
+        }
+    }
+
+    if (_attrs) {
+        s += sizeof(attributes) + _attrs->external_memory_usage();
+    }
+
+    return s;
 }
 
 namespace raw {
