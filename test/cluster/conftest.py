@@ -393,3 +393,24 @@ async def storage(request, pytestconfig, tmpdir):
 
     async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name) as server:
         yield server
+
+@pytest.fixture(scope="function")
+async def heavy(request: pytest.FixtureRequest, build_mode: str):
+    """Serialize execution with other heavy tests in debug/sanitize modes.
+
+    Tests that consume significant resources (e.g., large clusters) should
+    request this fixture to prevent OOM when multiple such tests run in
+    parallel on CI. In dev/release modes this is a no-op.
+
+    Usage:
+        async def test_big_cluster(manager, ..., heavy):
+            ...
+    """
+    if build_mode not in ('debug', 'sanitize'):
+        yield
+        return
+
+    from test.pylib.heavy_test import heavy_test_semaphore
+    lock_dir = Path(request.config.getoption("--tmpdir")).absolute()
+    async with heavy_test_semaphore(lock_dir):
+        yield
