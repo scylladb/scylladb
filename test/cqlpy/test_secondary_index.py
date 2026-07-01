@@ -98,6 +98,37 @@ def test_order_of_indexes(scylla_only, cql, test_keyspace):
         index_used(f"SELECT * FROM {table} WHERE p = 1 and v1 = 1 and v3 = 2 and v2 = 2 allow filtering", "my_v2_idx")
         index_used(f"SELECT * FROM {table} WHERE p = 1 and v2 = 1 and v1 = 2 allow filtering", "my_v2_idx")
 
+# When a query restricts several indexed columns, only one index is used and the
+# remaining restrictions are applied by reading matching rows from the base table
+# and filtering them. Reading fewer base rows is better, so when the candidate
+# indexes are otherwise tied we should prefer the one whose restriction is more
+# selective. A scalar equality (v = ...) matches a single value and is more
+# selective than collection membership (s CONTAINS ...), where one element value
+# can appear in arbitrarily many rows. This is a first, statistics-free step
+# towards the multi-indexing requested in CUSTOMER-303.
+# The choice must remain a pure function of the query (consistent across
+# coordinators and time) so that paged index queries keep working (see #7969).
+def test_index_selection_prefers_more_selective_restriction(scylla_only, cql, test_keyspace):
+    schema = 'p int primary key, v int, s set<int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX my_v_idx ON {table}(v)")
+        cql.execute(f"CREATE INDEX my_s_idx ON {table}(s)")
+        # A few rows so the traced query actually consults an index.
+        for p in range(5):
+            cql.execute(f"INSERT INTO {table}(p, v, s) VALUES ({p}, {p % 2}, {{1, 2}})")
+        def index_used(query, index_name):
+            assert any([index_name in event.description for event in cql.execute(query, trace=True).get_query_trace().events])
+        # The scalar-equality index on v is preferred over the collection-membership
+        # index on s regardless of the order the columns appear in the WHERE clause.
+        index_used(f"SELECT * FROM {table} WHERE s CONTAINS 1 AND v = 1 ALLOW FILTERING", "my_v_idx")
+        index_used(f"SELECT * FROM {table} WHERE v = 1 AND s CONTAINS 1 ALLOW FILTERING", "my_v_idx")
+        # Whichever index is used, the result set must be identical: v = 1 selects
+        # the odd-p rows, and every row's set contains 1.
+        expected = sorted([p for p in range(5) if p % 2 == 1])
+        for query in [f"SELECT p FROM {table} WHERE s CONTAINS 1 AND v = 1 ALLOW FILTERING",
+                      f"SELECT p FROM {table} WHERE v = 1 AND s CONTAINS 1 ALLOW FILTERING"]:
+            assert sorted([row.p for row in cql.execute(query)]) == expected
+
 # Indexes can be created without an explicit name, in which case a default name is chosen.
 # However, due to #8620 it was possible to break the index creation mechanism by creating
 # a properly named regular table, which conflicts with the generated index name.
