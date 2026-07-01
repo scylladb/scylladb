@@ -435,6 +435,7 @@ future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_
     utils::chunked_vector<sstable_snapshot_metadata> sstables_metadata;
 
     co_await _dir_semaphore.parallel_for_each(ssts, [&] (sstables::shared_sstable sstable) {
+        auto& sst_stats = sstable->get_stats_metadata();
         sstable_snapshot_metadata md = {
             .id = sstable->sstable_identifier()->uuid(),
             .toc_name = sstable->component_basename(sstables::component_type::TOC),
@@ -442,6 +443,7 @@ future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_
             .index_size = sstable->index_size(),
             .first_token = dht::token::to_int64(sstable->get_first_decorated_key().token()),
             .last_token = dht::token::to_int64(sstable->get_last_decorated_key().token()),
+            .repaired_at = sst_stats.repaired_at, 
         };
         sstables_metadata.push_back(std::move(md));
         return io_check([sstable, &name] {
