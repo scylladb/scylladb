@@ -140,6 +140,19 @@ mutation::upgrade(const schema_ptr& new_schema) {
     }
 }
 
+future<> mutation::apply_gently(mutation&& m) {
+    if (m.schema()->version() != schema()->version()) {
+        // FIXME: this is not gentle
+        m.partition().upgrade(*m.schema(), *schema());
+    }
+    apply_resume res;
+    mutation_application_stats app_stats;
+    while (partition().apply_monotonically(*schema(), std::move(m.partition()), nullptr, app_stats,
+                                           is_preemptible::yes, res) == stop_iteration::no) {
+        co_await coroutine::maybe_yield();
+    }
+}
+
 void mutation::apply(mutation&& m) {
     mutation_application_stats app_stats;
     partition().apply(*schema(), std::move(m.partition()), *m.schema(), app_stats);
