@@ -80,7 +80,7 @@ utils::chunked_vector<mutation> make_ring(schema_ptr s, int n_mutations) {
 SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
     return seastar::async([] {
         run_mutation_source_tests([](schema_ptr s, const utils::chunked_vector<mutation>& partitions) {
-            auto mt = make_memtable(s, partitions);
+            auto mt = make_memtable(s, partitions).get();
             logalloc::shard_tracker().full_compaction();
             return mt->as_data_source();
         });
@@ -481,8 +481,8 @@ SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         utils::chunked_vector<mutation> ring = make_ring(s, 5);
-        auto mt = make_memtable(s, ring);
-        auto mt2 = make_memtable(s, ring);
+        auto mt = make_memtable(s, ring).get();
+        auto mt2 = make_memtable(s, ring).get();
 
         auto rd = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
         rd.produces(ring[0]);
@@ -501,7 +501,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_range_reads) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         utils::chunked_vector<mutation> ms = gen(2);
 
-        auto mt = make_memtable(s, ms);
+        auto mt = make_memtable(s, ms).get();
         memory::with_allocation_failures([&] {
             assert_that(mt->make_mutation_reader(s, semaphore.make_permit(), query::full_partition_range))
                 .produces(ms);
@@ -516,7 +516,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         utils::chunked_vector<mutation> ms = gen(2);
 
-        auto mt = make_memtable(s, ms);
+        auto mt = make_memtable(s, ms).get();
         memory::with_allocation_failures([&] {
             auto revert = defer([&] {
                 mt->revert_flushed_memory();
@@ -534,7 +534,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         utils::chunked_vector<mutation> ms = gen(2);
 
-        auto mt = make_memtable(s, ms);
+        auto mt = make_memtable(s, ms).get();
         memory::with_allocation_failures([&] {
             assert_that(mt->make_mutation_reader(s, semaphore.make_permit(), dht::partition_range::make_singular(ms[1].decorated_key())))
                 .produces(ms[1]);

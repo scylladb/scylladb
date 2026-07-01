@@ -32,7 +32,7 @@ custom_args:
     sstable_datafile_test:
         - '-c1 -m2G'
     sstable_compaction_test:
-        - '-c1 -m2G --logger-log-level compaction=debug --logger-log-level compaction_manager=debug --logger-log-level s3=debug --logger-log-level gcp_storage=debug'
+        - '-c1 -m2G --logger-log-level compaction=debug --logger-log-level compaction_manager=debug --logger-log-level s3=trace --logger-log-level gcp_storage=trace --logger-log-level http=trace --logger-log-level default_http_retry_strategy=trace'
     sstable_3_x_test:
         - '-c1 -m2G'
     cql_query_test:

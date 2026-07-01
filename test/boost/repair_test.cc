@@ -93,7 +93,7 @@ repair_rows_on_wire make_random_repair_rows_on_wire(random_mutation_generator& g
 
     for (mutation& mut : muts) {
         partition_key pk = mut.key();
-        auto m2 = make_memtable(s, {mut});
+        auto m2 = make_memtable(s, {mut}).get();
         m->apply(mut);
         auto reader = mutation_fragment_v1_stream(m2->make_mutation_reader(s, permit));
         auto close_reader = deferred_close(reader);
