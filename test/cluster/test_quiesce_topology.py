@@ -16,7 +16,7 @@ The enhanced API ensures that after quiesce_topology returns:
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_replica_count_by_host
-from test.cluster.util import new_test_keyspace, get_topology_coordinator, find_server_by_host_id
+from test.cluster.util import new_test_keyspace, get_topology_coordinator
 import pytest
 import asyncio
 import logging
@@ -94,7 +94,7 @@ async def test_quiesce_blocks_until_refresh_completes(manager: ManagerClient):
 
         # Wait for initial stats refresh to complete (triggered on coordinator start).
         leader_host = await get_topology_coordinator(manager)
-        leader = await find_server_by_host_id(manager, servers, leader_host)
+        leader = await manager.find_server_by_host_id(servers, leader_host)
         log = await manager.server_open_log(leader.server_id)
         await log.wait_for("Refreshed table load stats for all DC", timeout=30)
 
@@ -154,7 +154,7 @@ async def test_quiesce_retries_until_balance_plan_is_empty(manager: ManagerClien
         # quiesce request run before the balancer can start migrations, so it
         # must observe a non-empty plan and retry.
         leader_host = await get_topology_coordinator(manager)
-        leader = await find_server_by_host_id(manager, servers, leader_host)
+        leader = await manager.find_server_by_host_id(servers, leader_host)
         leader_log = await manager.server_open_log(leader.server_id)
         leader_mark = await leader_log.mark()
         await manager.api.enable_injection(leader.ip_addr,

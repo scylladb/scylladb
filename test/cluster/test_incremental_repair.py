@@ -8,7 +8,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import load_tablet_sstables_repaired_at, load_tablet_repair_time, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import reconnect_driver, find_server_by_host_id, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace
+from test.cluster.util import reconnect_driver, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace
 from test.pylib.util import wait_for_cql_and_get_hosts
 
 from cassandra.query import ConsistencyLevel, SimpleStatement
@@ -666,7 +666,7 @@ async def do_test_tablet_incremental_repair_merge_error(manager, error):
     scylla_path = await manager.server_get_exe(server.server_id)
 
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
     coord_log = await manager.server_open_log(coord_serv.server_id)
 
     # Trigger merge and error in merge
@@ -760,7 +760,7 @@ async def test_incremental_repair_finishes_when_tablet_skips_end_repair_stage(ma
             table = cf.split('.')[-1]
 
             coord = await get_topology_coordinator(manager)
-            coord_serv = await find_server_by_host_id(manager, servers, coord)
+            coord_serv = await manager.find_server_by_host_id(servers, coord)
             coord_log = await manager.server_open_log(coord_serv.server_id)
             coord_mark = await coord_log.mark()
 
@@ -786,7 +786,7 @@ async def test_incremental_repair_rejoin_do_tablet_operation(manager):
 
             async def get_coord():
                 coord = await get_topology_coordinator(manager)
-                coord_serv = await find_server_by_host_id(manager, servers, coord)
+                coord_serv = await manager.find_server_by_host_id(servers, coord)
                 coord_log = await manager.server_open_log(coord_serv.server_id)
                 return coord, coord_serv, coord_log
 
@@ -833,7 +833,7 @@ async def test_incremental_retry_end_repair_stage(manager):
 
             async def get_coord():
                 coord = await get_topology_coordinator(manager)
-                coord_serv = await find_server_by_host_id(manager, servers, coord)
+                coord_serv = await manager.find_server_by_host_id(servers, coord)
                 coord_log = await manager.server_open_log(coord_serv.server_id)
                 return coord, coord_serv, coord_log
 
@@ -923,7 +923,7 @@ async def test_tablet_incremental_repair_table_drop_compaction_group_gone(manage
     servers, cql, hosts, ks, table_id, logs, _, _, _, _ = await prepare_cluster_for_incremental_repair(manager, cmdline=cmdline)
 
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
     coord_log = await manager.server_open_log(coord_serv.server_id)
 
     # Trigger merge and wait until the merge fiber starts
@@ -1025,12 +1025,12 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     # and marking post-repair data as repaired.  That legitimate re-repair masks
     # the compaction-merge bug this test detects.
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
     if coord_serv == servers[1]:
         other = next(s for s in servers if s != servers[1])
         await ensure_group0_leader_on(manager, other)
         coord = await get_topology_coordinator(manager)
-        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        coord_serv = await manager.find_server_by_host_id(servers, coord)
     coord_log = await manager.server_open_log(coord_serv.server_id)
     coord_mark = await coord_log.mark()
 
