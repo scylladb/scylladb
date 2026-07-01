@@ -471,7 +471,7 @@ class BaseAlternator(Tester):
     def create_snapshot(self, table_name: str, snapshot_folder: str, node: ScyllaNode) -> None:
         keyspace = self.keyspace_name_template.format(table_name)
         logger.debug(f"Making Alternator snapshot for node '{node.name}'..")
-        logger.debug(node.nodetool(f"snapshot {keyspace} -t {table_name} "))
+        node.take_snapshot(keyspace=keyspace, tag=table_name)
         node_table_folder_path = self.get_table_folder(table_name=table_name, node=node)
         node_snapshot_folder_path = os.path.join(node_table_folder_path, "snapshots", table_name)
 
@@ -494,9 +494,9 @@ class BaseAlternator(Tester):
         logger.debug(f"Loading snapshot files from folder '{snapshot_folder}' to '{upload_folder}'..")
         for file_name in os.listdir(snapshot_folder):
             shutil.copyfile(src=os.path.join(snapshot_folder, file_name), dst=os.path.join(upload_folder, file_name))
-        refresh_cmd = f"refresh -- {self.keyspace_name_template.format(table_name)} {table_name}"
-        logger.debug(f"Running following refresh cmd '{refresh_cmd}'..")
-        node.nodetool(refresh_cmd)
+        keyspace = self.keyspace_name_template.format(table_name)
+        logger.debug(f"Running refresh for {keyspace}.{table_name} via REST API..")
+        node.load_new_sstables(keyspace=keyspace, table=table_name)
         node.repair()
 
     def compare_table_data(  # noqa: PLR0913

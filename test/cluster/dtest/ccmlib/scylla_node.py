@@ -584,27 +584,122 @@ class ScyllaNode:
         else:
             self.cluster.manager.api.flush_all_keyspaces(node_ip=self.address())
 
-    def compact(self, keyspace: str = "", tables: str | None = ()) -> None:
-        compact_cmd = ["compact"]
+    def compact(self, keyspace: str = "", tables: tuple | list = ()) -> None:
+        """Compact via the REST API."""
+        node_ip = self.address()
+        if keyspace and tables:
+            for table in tables:
+                self.cluster.manager.api.keyspace_compaction(
+                    node_ip=node_ip,
+                    keyspace=keyspace,
+                    table=table,
+                )
+            return
+
         if keyspace:
-            compact_cmd.append(keyspace)
-        compact_cmd += tables
-        self.nodetool(" ".join(compact_cmd))
+            self.cluster.manager.api.keyspace_compaction(
+                node_ip=node_ip,
+                keyspace=keyspace,
+            )
+        else:
+            # Compact all keyspaces
+            self.cluster.manager.api.client.post(
+                "/storage_service/compact", host=node_ip)
 
     def drain(self, block_on_log: bool = False) -> None:
+        """Drain the node via the REST API."""
         mark = self.mark_log()
-        self.nodetool("drain")
+        self.cluster.manager.api.drain(node_ip=self.address())
         if block_on_log:
             self.watch_log_for("DRAINED", from_mark=mark)
 
-    def repair(self, options: list[str] | None = None, **kwargs) -> tuple[str, str]:
-        cmd = ["repair"]
-        if options:
-            cmd.extend(options)
-        return self.nodetool(" ".join(cmd), **kwargs)
+    def repair(self, options: list[str] | None = None, **kwargs) -> None:
+        """Repair via the REST API.
+
+        Supports: repair [keyspace] [table]
+        Flags: --source-dc/-dc mapped to dataCenters parameter.
+        """
+        keyspace, table, data_centers = self._parse_repair_options(options or [])
+
+        params: dict[str, str] = {}
+        if table:
+            params["columnFamilies"] = table
+        if data_centers:
+            params["dataCenters"] = data_centers
+
+        endpoint = (
+            f"/storage_service/repair_async/{keyspace}"
+            if keyspace
+            else "/storage_service/repair_async/"
+        )
+
+        self.cluster.manager.api.client.post(
+            endpoint,
+            host=self.address(),
+            params=params or None,
+        )
+
+    @staticmethod
+    def _parse_repair_options(options: list[str]) -> tuple[str, str, str]:
+        keyspace = ""
+        table = ""
+        data_centers = ""
+
+        i = 0
+        while i < len(options):
+            option = options[i]
+
+            if option in ("--source-dc", "-dc"):
+                i += 1
+                if i >= len(options):
+                    raise ValueError(f"Missing value for {option}")
+                data_centers = options[i]
+
+            elif option.startswith("-"):
+                raise ValueError(f"Unsupported repair option: {option}")
+
+            elif not keyspace:
+                keyspace = option
+
+            elif not table:
+                table = option
+
+            else:
+                raise ValueError(f"Unexpected repair argument: {option}")
+
+            i += 1
+
+        return keyspace, table, data_centers
 
     def decommission(self) -> None:
         self.cluster.manager.decommission_node(server_id=self.server_id)
+
+    def take_snapshot(self, keyspace: str, tag: str, tables: list[str] | None = None) -> None:
+        """Take a snapshot via the REST API."""
+        self.cluster.manager.api.take_snapshot(node_ip=self.address(), ks=keyspace, tag=tag, tables=tables)
+
+    def clear_snapshot(self, tag: str, keyspace: str = "") -> None:
+        """Delete a snapshot by tag via the REST API."""
+        self.cluster.manager.api.delete_snapshot(node_ip=self.address(), tag=tag, keyspace=keyspace)
+
+    def load_new_sstables(self, keyspace: str, table: str, load_and_stream: bool = False) -> None:
+        """Load new sstables (refresh) via the REST API."""
+        self.cluster.manager.api.load_new_sstables(
+            node_ip=self.address(), keyspace=keyspace, table=table,
+            load_and_stream=load_and_stream)
+
+    def rebuild(self, source_dc: str | None = None, timeout: float = 300) -> None:
+        """Rebuild node via the REST API."""
+        self.cluster.manager.api.rebuild_node(host_ip=self.address(), timeout=timeout, source_dc=source_dc)
+
+    def scrub(self, keyspace: str = "", table: str | None = None, scrub_mode: str = "ABORT") -> None:
+        """Scrub via the REST API."""
+        self.cluster.manager.api.keyspace_scrub_sstables(
+            node_ip=self.address(), ks=keyspace, scrub_mode=scrub_mode, table=table)
+
+    def get_endpoints(self, keyspace: str, table: str, key: str) -> list:
+        """Get natural endpoints for a key via the REST API."""
+        return self.cluster.manager.api.natural_endpoints(node_ip=self.address(), keyspace=keyspace, table=table, key=key)
 
     def get_sstables(self, keyspace, column_family, ignore_unsealed=True, cleanup_unsealed=False):
         keyspace_dir = os.path.join(self.get_path(), 'data', keyspace)
@@ -711,9 +806,8 @@ class ScyllaNode:
 
         if datafiles is None and keyspace is not None and self.is_running():
             tag = "sstable-dump-{}".format(uuid.uuid1())
-            kts = ",".join(f"{keyspace}.{column_family}" for column_family in column_families)
             self.debug(f"run_scylla_sstable(): creating snapshot with tag {tag} to be used for sstable dumping")
-            self.nodetool(f"snapshot -t {tag} {kts}")
+            self.take_snapshot(keyspace=keyspace, tag=tag, tables=list(column_families))
             sstables = []
             for column_family in column_families:
                 sstables.extend(glob.glob(os.path.join(self.get_path(), 'data', keyspace, f"{column_family}-*/snapshots/{tag}/*-Data.db")))
@@ -753,7 +847,7 @@ class ScyllaNode:
         # above failed, leave the snapshot with the sstables around for
         # post-mortem analysis.
         if tag is not None:
-            self.nodetool(f"clearsnapshot -t {tag} {keyspace}")
+            self.clear_snapshot(tag=tag, keyspace=keyspace)
 
         return ret
 

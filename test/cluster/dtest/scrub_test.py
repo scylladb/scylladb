@@ -135,13 +135,33 @@ class TestHelper(Tester):
 
         return sstables
 
-    def launch_nodetool_cmd(self, cmd):
+    def launch_nodetool_cmd(self, cmd: str) -> None:
         """
-        Launch a nodetool command and check the result is empty (no error)
+        Launch a nodetool command via REST API.
+
+        Supports commands in format:
+            flush [keyspace] [table]
+            scrub [keyspace] [table]
+            compact [keyspace] [table]
         """
-        node1 = self.cluster.nodelist()[0]
-        response = node1.nodetool(cmd, capture_output=True)[0]
-        assert len(response) == 0, response  # nodetool does not print anything unless there is an error
+        node = self.cluster.nodelist()[0]
+
+        parts = cmd.split()
+        if not parts:
+            raise ValueError("Nodetool command must not be empty")
+
+        operation = parts[0]
+        keyspace = parts[1] if len(parts) > 1 else ""
+        table = parts[2] if len(parts) > 2 else None
+
+        handlers = {
+            "flush": lambda: node.flush(ks=keyspace, table=table),
+            "scrub": lambda: node.scrub(keyspace=keyspace, table=table),
+            "compact": lambda: node.compact(keyspace=keyspace, tables=[table] if table else ()),
+        }
+
+        handler = handlers.get(operation)
+        handler()
 
     def launch_standalone_scrub(self, ks, cf):
         """
@@ -474,7 +494,7 @@ class TestScrub(TestHelper):
         session.execute("use test;")
         session.execute("CREATE TYPE point_t (x double, y double);")
 
-        node1.nodetool("scrub")
+        node1.scrub(keyspace="test")
         time.sleep(2)
         match = node1.grep_log("org.apache.cassandra.serializers.MarshalException: Not enough bytes to read a set")
         assert len(match) == 0, f"{len(match)} is not equal 0"

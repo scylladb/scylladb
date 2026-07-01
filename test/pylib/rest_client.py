@@ -221,11 +221,14 @@ class ScyllaRESTAPIClient:
                                timeout = timeout)
         logger.debug("decommission_node %s finished", host_ip)
 
-    async def rebuild_node(self, host_ip: str, timeout: float) -> None:
+    async def rebuild_node(self, host_ip: str, timeout: float, source_dc: str | None = None) -> None:
         """Initiate rebuild of a node with host_ip"""
-        logger.debug("rebuild_node %s", host_ip)
+        logger.debug("rebuild_node %s source_dc=%s", host_ip, source_dc)
+        params = {}
+        if source_dc:
+            params["source_dc"] = source_dc
         await self.client.post("/storage_service/rebuild", host = host_ip,
-                               timeout = timeout)
+                               timeout = timeout, params=params if params else None)
         logger.debug("rebuild_node %s finished", host_ip)
 
     async def get_gossip_generation_number(self, node_ip: str, target_ip: str) -> int:
@@ -354,8 +357,11 @@ class ScyllaRESTAPIClient:
     async def keyspace_upgrade_sstables(self, node_ip: str, ks: str) -> None:
         await self.client.get(f"/storage_service/keyspace_upgrade_sstables/{ks}", host=node_ip)
 
-    async def keyspace_scrub_sstables(self, node_ip: str, ks: str, scrub_mode: str) -> None:
-        await self.client.get(f"/storage_service/keyspace_scrub/{ks}", host=node_ip,  params={"scrub_mode": scrub_mode})
+    async def keyspace_scrub_sstables(self, node_ip: str, ks: str, scrub_mode: str, table: str | None = None) -> None:
+        params = {"scrub_mode": scrub_mode}
+        if table:
+            params["cf"] = table
+        await self.client.get(f"/storage_service/keyspace_scrub/{ks}", host=node_ip, params=params)
 
     async def disable_injection(self, node_ip: str, injection: str) -> None:
         await self.client.delete(f"/v2/error_injection/injection/{quote(injection, safe='')}", host=node_ip)
@@ -404,6 +410,10 @@ class ScyllaRESTAPIClient:
     async def flush_all_keyspaces(self, node_ip: str) -> None:
         """Flush all keyspaces"""
         await self.client.post(f"/storage_service/flush", host=node_ip)
+
+    async def drain(self, node_ip: str) -> None:
+        """Drain the node (flush + stop listening for connections)"""
+        await self.client.post("/storage_service/drain", host=node_ip)
 
     async def backup(self, node_ip: str, ks: str, table: str, tag: str, dest: str, bucket: str, prefix: str, **kwargs) -> str:
         """Backup keyspace's snapshot"""
@@ -466,6 +476,13 @@ class ScyllaRESTAPIClient:
         if tables:
             params['table'] = ','.join(tables)
         await self.client.post(f"/storage_service/tablets/snapshots", host=node_ip, params=params)
+
+    async def delete_snapshot(self, node_ip: str, tag: str, keyspace: str = "") -> None:
+        """Delete a snapshot by tag, optionally filtered by keyspace"""
+        params = {"tag": tag}
+        if keyspace:
+            params["kn"] = keyspace
+        await self.client.delete("/storage_service/snapshots", host=node_ip, params=params)
 
     async def cleanup_keyspace(self, node_ip: str, ks: str) -> None:
         """Cleanup keyspace"""
