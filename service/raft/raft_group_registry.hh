@@ -187,8 +187,9 @@ public:
     raft_server_with_timeouts group0_with_timeouts();
 
     // Start raft server instance, store in the map of raft servers and
-    // arm the associated timer to tick the server.
-    future<> start_server_for_group(raft_server_for_group grp);
+    // arm the associated timer to tick the server. The ticker fires
+    // raft::server::tick() every tick_interval (defaults to raft_tick_interval).
+    future<> start_server_for_group(raft_server_for_group grp, raft_ticker_type::duration tick_interval = raft_tick_interval);
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }

@@ -366,7 +366,7 @@ future<> raft_group_registry::send_raft_read_barrier(raft::group_id gid, raft::s
     co_await ser::raft_util_rpc_verbs::send_raft_read_barrier(&_ms, locator::host_id{dst.uuid()}, timeout, gid, _my_id, dst);
 }
 
-future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp) {
+future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp, raft_ticker_type::duration tick_interval) {
     auto gid = new_grp.gid;
 
     const auto is_group0 = this_shard_id() == 0 && !_group0_id;
@@ -399,7 +399,7 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
             _group0_id = gid;
         }
 
-        it->second.ticker->arm_periodic(raft_tick_interval);
+        it->second.ticker->arm_periodic(tick_interval);
     } catch (...) {
         ex = std::current_exception();
     }
