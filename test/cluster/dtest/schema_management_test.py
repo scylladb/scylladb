@@ -267,6 +267,12 @@ class TestSchemaManagement(Tester):
             try:
                 logger.debug("Creating table")
                 create_c1c2_table(session)
+
+                # When create_c1c2_table() completes, only node1 is guaranteed to see the new table.  But node3 can
+                # handle requests before it sees the latest schema.  To fix this we need to add a read barrier for
+                # this node.
+                read_barrier(node3)
+
                 logger.debug("Populating")
                 insert_c1c2(session, n=10)
             except AlreadyExists:
