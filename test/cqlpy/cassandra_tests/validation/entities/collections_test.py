@@ -9,10 +9,11 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import  *
-from cassandra.query import UNSET_VALUE
+from cassandra.query import UNSET_VALUE, BoundStatement
 
 from uuid import UUID
 import random
+import struct
 import time
 import string
 import collections
@@ -745,45 +746,80 @@ def testRemovalThroughUpdate(cql, test_keyspace):
          execute(cql, table, "UPDATE %s SET l[0] = null WHERE k=0")
          assert_rows(execute(cql, table, "SELECT * FROM %s"), [0, [2, 3]])
 
-# FIXME: the following tests are skipped out because the Python driver
-# checks the validity of the prepared-statement binding before passing it
-# to the server, so the following tests fail in the client library, not
-# in the server.
-@pytest.mark.skip_not_implemented(reason="Python driver checks this before reaching server")
+# The following tests send invalid bytes for collection columns by bypassing the
+# Python driver's type checking: instead of using the bind() method (which rejects
+# wrong types before they reach the server), we create a BoundStatement and set
+# its .values field directly with raw bytes. This lets us test that the server
+# itself rejects malformed collection data.
+
 def testInvalidInputForList(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, l list<text>)") as table:
-        assert_invalid_message(cql, table, "Not enough bytes to read a list",
-                             "INSERT INTO %s (pk, l) VALUES (?, ?)", 1, "test")
-        assert_invalid_message(cql, table, "Not enough bytes to read a list",
-                             "INSERT INTO %s (pk, l) VALUES (?, ?)", 1, Long.MAX_VALUE);
-        assert_invalid_message(cql, table, "Not enough bytes to read a list",
-                             "INSERT INTO %s (pk, l) VALUES (?, ?)", 1, "");
-        assert_invalid_message(cql, table, "The data cannot be deserialized as a list",
-                             "INSERT INTO %s (pk, l) VALUES (?, ?)", 1, -1);
+        prepared = cql.prepare(subs_table("INSERT INTO %s (pk, l) VALUES (?, ?)", table))
+        pk_bytes = struct.pack('>i', 1)
 
-@pytest.mark.skip_not_implemented(reason="Python driver checks this before reaching server")
+        def execute_with_raw(raw_bytes):
+            bound = BoundStatement(prepared)
+            bound.values = [pk_bytes, raw_bytes]
+            cql.execute(bound)
+
+        # 4 bytes of ASCII text: not a valid list header (size field reads as huge number)
+        with pytest.raises(InvalidRequest, match=re.compile(r"Not enough bytes to read a list|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(b'test')
+        # Long.MAX_VALUE as big-endian int64
+        with pytest.raises(InvalidRequest, match=re.compile(r"Not enough bytes to read a list|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(struct.pack('>q', 2**63 - 1))
+        # empty bytes: not enough for even the 4-byte size field
+        with pytest.raises(InvalidRequest, match=re.compile(r"Not enough bytes to read a list|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(b'')
+        # -1 as int32
+        with pytest.raises(InvalidRequest, match=re.compile(r"The data cannot be deserialized as a list|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(struct.pack('>i', -1))
+
 def testInvalidInputForSet(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, s set<text>)") as table:
-        assert_invalid_message(cql, table, "Not enough bytes to read a set",
-                             "INSERT INTO %s (pk, s) VALUES (?, ?)", 1, "test");
-        assert_invalid_message(cql, table, "String didn't validate.",
-                             "INSERT INTO %s (pk, s) VALUES (?, ?)", 1, Long.MAX_VALUE);
-        assert_invalid_message(cql, table, "Not enough bytes to read a set",
-                             "INSERT INTO %s (pk, s) VALUES (?, ?)", 1, "");
-        assert_invalid_message(cql, table, "The data cannot be deserialized as a set",
-                             "INSERT INTO %s (pk, s) VALUES (?, ?)", 1, -1);
+        prepared = cql.prepare(subs_table("INSERT INTO %s (pk, s) VALUES (?, ?)", table))
+        pk_bytes = struct.pack('>i', 1)
 
-@pytest.mark.skip_not_implemented(reason="Python driver checks this before reaching server")
+        def execute_with_raw(raw_bytes):
+            bound = BoundStatement(prepared)
+            bound.values = [pk_bytes, raw_bytes]
+            cql.execute(bound)
+
+        # 4 bytes of ASCII text: not a valid set header
+        with pytest.raises(InvalidRequest, match=re.compile(r"Not enough bytes to read a set|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(b'test')
+        # Long.MAX_VALUE as big-endian int64
+        with pytest.raises(InvalidRequest, match=re.compile(r"String didn't validate|null is not supported|not enough bytes|Null value read when not allowed", re.IGNORECASE)):
+            execute_with_raw(struct.pack('>q', 2**63 - 1))
+        # empty bytes: not enough for the 4-byte size field
+        with pytest.raises(InvalidRequest, match=re.compile(r"Not enough bytes to read a set|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(b'')
+        # -1 as int32
+        with pytest.raises(InvalidRequest, match=re.compile(r"The data cannot be deserialized as a set|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(struct.pack('>i', -1))
+
 def testInvalidInputForMap(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, m set<text, text>)") as table:
-        assert_invalid_message(cql, table, "Not enough bytes to read a map",
-                             "INSERT INTO %s (pk, m) VALUES (?, ?)", 1, "test");
-        assert_invalid_message(cql, table, "String didn't validate.",
-                             "INSERT INTO %s (pk, m) VALUES (?, ?)", 1, Long.MAX_VALUE);
-        assert_invalid_message(cql, table, "Not enough bytes to read a map",
-                             "INSERT INTO %s (pk, m) VALUES (?, ?)", 1, "");
-        assert_invalid_message(cql, table, "The data cannot be deserialized as a map",
-                             "INSERT INTO %s (pk, m) VALUES (?, ?)", 1, -1);
+    with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, m map<text, text>)") as table:
+        prepared = cql.prepare(subs_table("INSERT INTO %s (pk, m) VALUES (?, ?)", table))
+        pk_bytes = struct.pack('>i', 1)
+
+        def execute_with_raw(raw_bytes):
+            bound = BoundStatement(prepared)
+            bound.values = [pk_bytes, raw_bytes]
+            cql.execute(bound)
+
+        # 4 bytes of ASCII text: not a valid map header
+        with pytest.raises(InvalidRequest, match=re.compile(r"Not enough bytes to read a map|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(b'test')
+        # Long.MAX_VALUE as big-endian int64
+        with pytest.raises(InvalidRequest, match=re.compile(r"String didn't validate|null.*is not supported|not enough bytes|Null value read when not allowed", re.IGNORECASE)):
+            execute_with_raw(struct.pack('>q', 2**63 - 1))
+        # empty bytes: not enough for the 4-byte size field
+        with pytest.raises(InvalidRequest, match=re.compile(r"Not enough bytes to read a map|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(b'')
+        # -1 as int32
+        with pytest.raises(InvalidRequest, match=re.compile(r"The data cannot be deserialized as a map|not enough bytes", re.IGNORECASE)):
+            execute_with_raw(struct.pack('>i', -1))
 
 @pytest.mark.xfail(reason="Handing of multiple list operation in same request changed in Cassandra. Issue #7747")
 def testMultipleOperationOnListWithinTheSameQuery(cql, test_keyspace):
