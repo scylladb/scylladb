@@ -61,7 +61,6 @@ modification_statement::modification_statement(statement_type type_, uint32_t bo
     : cql_statement_opt_metadata(modification_statement_timeout(*schema_))
     , type{type_}
     , _bound_terms{bound_terms}
-    , _columns_to_read(schema_->all_columns_count())
     , s{schema_}
     , attrs{std::move(attrs_)}
     , _column_operations{}
@@ -519,7 +518,10 @@ void modification_statement::build_cas_result_set_metadata() {
     }
     // Ensure we prefetch all of the columns of the result set. This is also
     // necessary to check conditions.
-    _columns_to_read.union_with(*_columns_of_cas_result_set);
+    if (!_columns_to_read) {
+        _columns_to_read = std::make_unique<column_set>(s->all_columns_count());
+    }
+    _columns_to_read->union_with(*_columns_of_cas_result_set);
     _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
 }
 
@@ -774,7 +776,10 @@ void modification_statement::add_operation(std::unique_ptr<operation> op) {
     }
     if (op->requires_read()) {
         _requires_read = true;
-        _columns_to_read.set(op->column.ordinal_id);
+        if (!_columns_to_read) {
+            _columns_to_read = std::make_unique<column_set>(s->all_columns_count());
+        }
+        _columns_to_read->set(op->column.ordinal_id);
         if (op->column.type->is_collection() ) {
             auto ctype = static_pointer_cast<const collection_type_impl>(op->column.type);
             if (!ctype->is_multi_cell()) {
