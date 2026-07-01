@@ -17,6 +17,8 @@
 #include "schema/schema.hh"
 #include <unordered_map>
 #include "data_dictionary/user_types_metadata.hh"
+#include "utils/result.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 
@@ -28,6 +30,8 @@ namespace functions {
 
     using declared_t = std::unordered_multimap<function_name, shared_ptr<function>>;
     void add_agg_functions(declared_t& funcs);
+
+using function_resolution = utils::result_with_exception<shared_ptr<function>, exceptions::invalid_request_exception>;
 
 class functions {
     friend class change_batch;
@@ -45,6 +49,13 @@ public:
     functions() : _declared(init()) {}
 
     shared_ptr<function> get(data_dictionary::database db,
+                                    const sstring& keyspace,
+                                    const function_name& name,
+                                    const std::vector<shared_ptr<assignment_testable>>& provided_args,
+                                    const sstring& receiver_ks,
+                                    std::optional<const std::string_view> receiver_cf,
+                                    const column_specification* receiver = nullptr) const;
+    function_resolution try_get(data_dictionary::database db,
                                     const sstring& keyspace,
                                     const function_name& name,
                                     const std::vector<shared_ptr<assignment_testable>>& provided_args,
@@ -88,6 +99,13 @@ private:
                               const std::vector<shared_ptr<assignment_testable>>& provided_args,
                               const sstring& receiver_ks,
                               std::optional<const std::string_view> receiver_cf) const;
+    std::optional<sstring> check_types(data_dictionary::database db,
+                                       const sstring& keyspace,
+                                       const schema* schema_opt,
+                                       shared_ptr<function> fun,
+                                       const std::vector<shared_ptr<assignment_testable>>& provided_args,
+                                       const sstring& receiver_ks,
+                                       std::optional<const std::string_view> receiver_cf) const;
     assignment_testable::test_result match_arguments(data_dictionary::database db, const sstring& keyspace,
             const schema* schema_opt,
             shared_ptr<function> fun,

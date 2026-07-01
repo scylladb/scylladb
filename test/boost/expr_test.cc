@@ -1,6 +1,7 @@
 // Copyright (C) 2023-present ScyllaDB
 // SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
+#include "build_mode.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -28,6 +29,10 @@
 #include "cql3/expr/expr-utils.hh"
 #include "utils/big_decimal.hh"
 #include "utils/multiprecision_int.hh"
+#include "cql3/functions/functions.hh"
+#include "cql3/functions/native_scalar_function.hh"
+#include "exceptions/exceptions.hh"
+#include <seastar/util/defer.hh>
 
 using namespace cql3;
 using namespace cql3::expr;
@@ -1273,6 +1278,251 @@ BOOST_AUTO_TEST_CASE(prepare_static_column_unresolved_identifier) {
     BOOST_REQUIRE_EQUAL(prepared, expected);
 }
 
+namespace cql3::expr {
+extern uint64_t prepare_function_call_count();
+extern void reset_prepare_function_call_count();
+extern uint64_t test_assignment_function_call_count();
+extern void reset_test_assignment_function_call_count();
+extern void set_prepare_memo_enabled(bool enabled);
+}
+
+// Builds intasblob(blobasint(intasblob(... r ...))) of the given nesting depth.
+// Both are single-overload native functions, so every level resolves
+// unambiguously and bottom-up from a concrete (int) column reference.
+static expression make_nested_blob_conversions(const schema& s, unsigned depth) {
+    expression e = column_value(s.get_column_definition("r")); // int column
+    bool current_is_int = true;
+    for (unsigned i = 0; i < depth; ++i) {
+        const char* fname = current_is_int ? "intasblob" : "blobasint";
+        e = function_call{
+            .func = functions::function_name::native_function(fname),
+            .args = {std::move(e)},
+        };
+        current_is_int = !current_is_int;
+    }
+    return e;
+}
+
+// Preparing a chain of N nested function calls must invoke prepare_function_call
+// O(N) times, not O(2^N). Before the pass-A reuse fix this count doubles with each
+// extra level (exponential); after it the count is linear.
+BOOST_AUTO_TEST_CASE(prepare_nested_function_calls_is_not_exponential) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    for (unsigned depth : {1u, 2u, 4u, 8u, 12u, 16u}) {
+        cql3::expr::reset_prepare_function_call_count();
+        expression nested = make_nested_blob_conversions(*table_schema, depth);
+        prepare_expression(nested, db, "test_ks", table_schema.get(), nullptr);
+        uint64_t count = cql3::expr::prepare_function_call_count();
+        BOOST_TEST_MESSAGE(seastar::format("nested function depth={} prepare_function_call_count={}", depth, count));
+        // Linear bound: each level should cost a small constant number of
+        // prepare_function_call invocations. A generous ceiling of 8*depth still
+        // fails loudly for any exponential (2^depth) regression.
+        BOOST_CHECK_LE(count, uint64_t(8) * depth + 8);
+    }
+}
+
+// Builds f(f(f(... ? ...))) of the given depth, where f is a function with both
+// f(int) and f(bigint) overloads. A bind marker is assignable to both and never gets a
+// default type, so every nested call stays ambiguous - an unresolved "hole" - and
+// overload resolution must probe it against both candidate parameter types at each level.
+static expression make_nested_overloaded_calls(const char* fname, unsigned depth) {
+    expression e = bind_variable{
+        .bind_index = 0,
+        .receiver = nullptr,
+    };
+    for (unsigned i = 0; i < depth; ++i) {
+        e = function_call{
+            .func = functions::function_name::native_function(fname),
+            .args = {std::move(e)},
+        };
+    }
+    return e;
+}
+
+// Probing a nested hole under a multi-overload function is recursive: without
+// memoization it re-resolves each nested hole once per candidate parameter type at
+// every level, which is exponential in the nesting depth. The per-prepare memo
+// collapses that to linear. This test measures both, to confirm the difference.
+BOOST_AUTO_TEST_CASE(prepare_nested_overloaded_function_probing_is_not_exponential) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    const char* overloaded_test_fn = "expr_test_overloaded_identity";
+    auto make_overload = [&] (data_type t) {
+        return functions::make_native_scalar_function<true>(
+                overloaded_test_fn, t, std::vector<data_type>{t},
+                [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+    };
+    // Snapshot the original registry, then install our two overloads. On scope exit we
+    // commit the original snapshot back, so we do not leak them into other tests sharing
+    // this binary.
+    auto original_batch = functions::change_batch();
+    {
+        auto custom_batch = functions::change_batch();
+        custom_batch.add_function(make_overload(int32_type));
+        custom_batch.add_function(make_overload(long_type));
+        custom_batch.commit();
+    }
+    auto cleanup = seastar::defer([&] () noexcept { original_batch.commit(); });
+
+    auto count_probes = [&] (const expression& e, bool memo_enabled) -> uint64_t {
+        cql3::expr::set_prepare_memo_enabled(memo_enabled);
+        cql3::expr::reset_test_assignment_function_call_count();
+        try {
+            // The expression is intentionally ambiguous, so preparation throws; we
+            // only care about how much probing happened on the way to the failure.
+            prepare_expression(e, db, "test_ks", table_schema.get(), nullptr);
+        } catch (const exceptions::invalid_request_exception&) {
+        }
+        return cql3::expr::test_assignment_function_call_count();
+    };
+
+    for (unsigned depth : {2u, 4u, 6u, 8u}) {
+        expression nested = make_nested_overloaded_calls(overloaded_test_fn, depth);
+        uint64_t without_memo = count_probes(nested, false);
+        uint64_t with_memo = count_probes(nested, true);
+        BOOST_TEST_MESSAGE(seastar::format(
+                "overloaded depth={} test_assignment_function_call_count without_memo={} with_memo={}",
+                depth, without_memo, with_memo));
+        // Linear in nesting depth: ~2 probes per level (one per candidate overload),
+        // with headroom so a benign change to that per-level constant won't fail here.
+        BOOST_CHECK_LE(with_memo, uint64_t(4) * depth);
+        if (depth >= 4) {
+            BOOST_CHECK_LT(with_memo, without_memo);
+        }
+    }
+    cql3::expr::set_prepare_memo_enabled(true);
+}
+
+// Default-type inference for a receiver-less collection must keep integer literals
+// untyped through overload resolution, so a function whose only overload takes tinyint
+// stays reachable: the raw literals are fit-checked against the parameter type rather
+// than pinned to their default int type first (int is not assignable to tinyint).
+BOOST_AUTO_TEST_CASE(infer_collection_of_function_calls_keeps_narrow_overload) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    auto narrow_fn = functions::make_native_scalar_function<true>(
+            "expr_test_narrow_identity", byte_type, std::vector<data_type>{byte_type, byte_type},
+            [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+    auto restore = functions::change_batch();
+    {
+        auto batch = functions::change_batch();
+        batch.add_function(narrow_fn);
+        batch.commit();
+    }
+    auto cleanup = seastar::defer([&] () noexcept { restore.commit(); });
+
+    // [f(1, 2)] with no receiver. f has only a tinyint overload, so the literals must
+    // be typed as tinyint and the inferred list element type must be tinyint.
+    expression call = function_call{
+        .func = functions::function_name::native_function("expr_test_narrow_identity"),
+        .args = {
+            untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "1"},
+            untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "2"},
+        },
+    };
+    expression list_literal = collection_constructor{
+        .style = collection_constructor::style_type::list_or_vector,
+        .elements = {std::move(call)},
+    };
+
+    expression prepared = prepare_expression(list_literal, db, "test_ks", table_schema.get(), nullptr);
+    // Inferred collections are frozen; the key point is the element type is tinyint
+    // (the narrow overload), not int (the literal default).
+    BOOST_REQUIRE_EQUAL(type_of(prepared)->as_cql3_type().to_string(), "frozen<list<tinyint>>");
+}
+
+// An integer literal prefers its default type (int) when choosing between overloads,
+// so f(1) resolves to f(int) instead of being ambiguous between f(int) and f(bigint).
+// This also resolves the otherwise-ambiguous sibling case [f(1), <bigint literal>]:
+// f(1) becomes int, and the list widens int and bigint to list<bigint>.
+BOOST_AUTO_TEST_CASE(integer_literal_prefers_int_overload) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    auto make_overload = [] (data_type t) {
+        return functions::make_native_scalar_function<true>(
+                "expr_test_int_or_bigint", t, std::vector<data_type>{t},
+                [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+    };
+    auto restore = functions::change_batch();
+    {
+        auto batch = functions::change_batch();
+        batch.add_function(make_overload(int32_type));
+        batch.add_function(make_overload(long_type));
+        batch.commit();
+    }
+    auto cleanup = seastar::defer([&] () noexcept { restore.commit(); });
+
+    auto call_with = [&] (const char* literal) {
+        return function_call{
+            .func = functions::function_name::native_function("expr_test_int_or_bigint"),
+            .args = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = literal}},
+        };
+    };
+
+    // f(1): no longer ambiguous - resolves the int overload.
+    expression f1 = prepare_expression(call_with("1"), db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(type_of(f1)->as_cql3_type().to_string(), "int");
+
+    // A literal that does not fit int defaults to bigint, so f(10000000000) -> bigint.
+    expression fbig = prepare_expression(call_with("10000000000"), db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(type_of(fbig)->as_cql3_type().to_string(), "bigint");
+
+    // A collection of such calls is no longer ambiguous either: each f(<int literal>)
+    // resolves to the int overload, so [f(1), f(2)] infers list<int>.
+    expression list_literal = collection_constructor{
+        .style = collection_constructor::style_type::list_or_vector,
+        .elements = {call_with("1"), call_with("2")},
+    };
+    expression prepared = prepare_expression(list_literal, db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(type_of(prepared)->as_cql3_type().to_string(), "frozen<list<int>>");
+}
+
+// A numeric widening must convert the value, not just relabel its type: an int
+// widened to bigint must produce the 8-byte bigint representation, and a function
+// result widened inside a collection must be converted too. (Before the conversion
+// was wired up, these produced a value whose bytes did not match the declared type.)
+BOOST_AUTO_TEST_CASE(widening_converts_value) {
+    schema_ptr s = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(s);
+
+    // int constant against a bigint receiver -> the value is the 8-byte bigint.
+    expression p = prepare_expression(make_int_const(1234), db, "test_ks", s.get(), make_receiver(long_type));
+    BOOST_REQUIRE(type_of(p) == long_type);
+    BOOST_REQUIRE_EQUAL(evaluate(p, query_options::DEFAULT), make_bigint_raw(1234));
+
+    // A list mixing an int-returning function call and a bigint literal infers
+    // list<bigint>; the int result must be converted to bigint, not left as 4 bytes.
+    auto make_overload = [] (data_type t) {
+        return functions::make_native_scalar_function<true>(
+                "expr_test_iob", t, std::vector<data_type>{t},
+                [] (std::span<const bytes_opt> a) -> bytes_opt { return a[0]; });
+    };
+    auto restore = functions::change_batch();
+    {
+        auto b = functions::change_batch();
+        b.add_function(make_overload(int32_type));
+        b.add_function(make_overload(long_type));
+        b.commit();
+    }
+    auto cleanup = seastar::defer([&] () noexcept { restore.commit(); });
+    auto iob = [&] (const char* lit) {
+        return function_call{.func = functions::function_name::native_function("expr_test_iob"),
+            .args = {untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = lit}}};
+    };
+    expression lst = collection_constructor{.style = collection_constructor::style_type::list_or_vector,
+        .elements = {iob("1"),
+                     untyped_constant{.partial_type = untyped_constant::type_class::integer, .raw_text = "10000000000"}}};
+    expression plst = prepare_expression(lst, db, "test_ks", s.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(type_of(plst)->as_cql3_type().to_string(), "frozen<list<bigint>>");
+    BOOST_REQUIRE_EQUAL(evaluate(plst, query_options::DEFAULT),
+                        make_list_raw({make_bigint_raw(1), make_bigint_raw(10000000000)}));
+}
+
 // prepare_expression for a column_value should do nothing
 BOOST_AUTO_TEST_CASE(prepare_column_value) {
     schema_ptr table_schema = make_simple_test_schema();
@@ -1409,6 +1659,59 @@ BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
 
     BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
                         exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(cast_type_hint_lossless_widening) {
+    auto s = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(s);
+    auto raw = [] (data_type t) {
+        return cql3_type::raw::from(t);
+    };
+    auto cc = [&] (data_type t, expression arg) -> expression {
+        return cast{.arg = std::move(arg), .type = raw(t)};
+    };
+    auto i = [] (const char* x) {
+        return make_int_untyped(x);
+    };
+    auto f = [] (const char* x) -> expression {
+        return untyped_constant{.partial_type = untyped_constant::type_class::floating_point, .raw_text = x};
+    };
+    auto ok = [&] (expression e) {
+        BOOST_CHECK_NO_THROW(prepare_expression(e, db, "test_ks", s.get(), nullptr));
+    };
+    auto rej = [&] (expression e) {
+        BOOST_CHECK_THROW(prepare_expression(e, db, "test_ks", s.get(), nullptr), exceptions::invalid_request_exception);
+    };
+
+    // Integer-chain widenings (lossless) - accepted
+    ok(cc(short_type,  cc(byte_type,  i("1"))));    // (smallint)(tinyint)1
+    ok(cc(int32_type,  cc(byte_type,  i("1"))));    // (int)(tinyint)1
+    ok(cc(long_type,   cc(byte_type,  i("1"))));    // (bigint)(tinyint)1
+    ok(cc(int32_type,  cc(short_type, i("1"))));    // (int)(smallint)1
+    ok(cc(long_type,   cc(int32_type, i("1"))));    // (bigint)(int)1
+    ok(cc(varint_type, cc(int32_type, i("1"))));    // (varint)(int)1
+    ok(cc(varint_type, cc(long_type,  i("1"))));    // (varint)(bigint)1
+    // Float-chain widening - accepted
+    ok(cc(double_type, cc(float_type, f("1.5"))));  // (double)(float)1.5
+    // Value-compatible reinterpret - accepted
+    ok(cc(bytes_type,  cc(int32_type, i("1"))));    // (blob)(int)1
+
+    // Narrowing - rejected
+    rej(cc(byte_type,  cc(int32_type, i("1"))));    // (tinyint)(int)1
+    rej(cc(short_type, cc(int32_type, i("1"))));    // (smallint)(int)1
+    rej(cc(int32_type, cc(long_type,  i("1"))));    // (int)(bigint)1
+    rej(cc(float_type, cc(double_type, f("1.5")))); // (float)(double)1.5
+    // Cross-chain - rejected
+    rej(cc(double_type, cc(int32_type, i("1"))));   // (double)(int)1
+    rej(cc(int32_type,  cc(float_type, f("1.5")))); // (int)(float)1.5
+
+    // The hint's result, in turn, widens to a wider receiver (consumer coerces) ...
+    BOOST_CHECK_NO_THROW(prepare_expression(
+        cc(byte_type, i("1")), db, "test_ks", s.get(), make_receiver(long_type)));   // (tinyint)1 -> bigint
+    // ... but is not assignable to a narrower receiver.
+    BOOST_CHECK_THROW(prepare_expression(
+        cc(long_type, i("1")), db, "test_ks", s.get(), make_receiver(byte_type)),    // (bigint)1 -> tinyint
+        exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {
@@ -1608,9 +1911,9 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_no_receiver) {
 
     expression untyped = make_int_untyped("1337");
 
-    // Can't infer type
-    BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE(expr::type_of(prepared) == int32_type);
+    BOOST_REQUIRE_EQUAL(prepared, make_int_const(1337));
 }
 
 BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bool) {
@@ -1699,7 +2002,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bad_int) {
                         exceptions::invalid_request_exception);
 }
 
-BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver_fails) {
+BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
@@ -1712,8 +2015,9 @@ BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver_fails) {
             },
         .type = nullptr};
 
-    BOOST_REQUIRE_THROW(prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = tuple_type_impl::get_instance({int32_type, int32_type, utf8_type});
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_tuple_constructor) {
@@ -1853,10 +2157,9 @@ BOOST_AUTO_TEST_CASE(prepare_list_or_vector_collection_constructor_no_receiver) 
             },
         .type = nullptr};
 
-    data_type list_type = list_type_impl::get_instance(long_type, true);
-
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = list_type_impl::get_instance(int32_type, false);
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_bind_var) {
@@ -2032,8 +2335,9 @@ BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_no_receiver) {
             },
         .type = nullptr};
 
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = set_type_impl::get_instance(int32_type, false);
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_with_bind_var) {
@@ -2188,8 +2492,9 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_no_receiver) {
                 },
             .type = nullptr};
 
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = map_type_impl::get_instance(int32_type, int32_type, false);
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_with_bind_var_key) {
@@ -2608,9 +2913,12 @@ BOOST_AUTO_TEST_CASE(prepare_constant_with_receiver) {
 
     BOOST_REQUIRE_EQUAL(int_const, prepared_int_const);
 
-    // Preparing an int32 with int64 receiver fails
-    BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(long_type)),
-                        exceptions::invalid_request_exception);
+    // Preparing an int32 with an int64 receiver succeeds - int32 widens to int64.
+    // The value must be converted to the 8-byte bigint representation, not relabelled.
+    expression prepared_int_long =
+        prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(long_type));
+    BOOST_REQUIRE(expr::type_of(prepared_int_long) == long_type);
+    BOOST_REQUIRE_EQUAL(evaluate(prepared_int_long, query_options::DEFAULT), make_bigint_raw(1234));
 
     // Preparing an int32 with text receiver fails
     BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(utf8_type)),
