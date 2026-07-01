@@ -12,7 +12,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name, wait_for
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
-from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version, get_topology_coordinator, find_server_by_host_id
 from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
 
 import pytest
@@ -1645,7 +1645,6 @@ async def test_drop_table_during_streaming(manager: ManagerClient, streaming_mod
         except HTTPError as e:
             logger.info("Tablet migration failed after drop as expected: %s", e.message)
 
-@pytest.mark.nightly
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_during_topology_change(manager: ManagerClient):
     """Test truncate operation during topology change."""
@@ -1662,16 +1661,41 @@ async def test_truncate_during_topology_change(manager: ManagerClient):
         await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(10000)))
         await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
 
-        async def truncate_table():
-            await asyncio.sleep(10)
-            logger.info("Executing truncate during bootstrap")
-            await cql.run_async(SimpleStatement(f"TRUNCATE {ks}.test USING TIMEOUT 4m", retry_policy=FallthroughRetryPolicy()))
+        # Find the topology coordinator and pause it after bootstrap streaming completes
+        # but before the topology transitions out of write_both_read_old state.
+        coord_host_id = await get_topology_coordinator(manager)
+        coord = await find_server_by_host_id(manager, servers, coord_host_id)
+        logger.info(f"Topology coordinator is {coord}")
+        await manager.api.enable_injection(coord.ip_addr,
+                                           'topology_coordinator/write_both_read_old/before_version_increment',
+                                           one_shot=True)
 
-        truncate_task = asyncio.create_task(truncate_table())
-        logger.info("Adding fourth node")
-        new_server = await manager.server_add(config={'error_injections_at_startup': ['delay_bootstrap_120s'], 'enable_tablets': True},
-                                              property_file=servers[0].property_file())
-        await truncate_task
+        logger.info("Adding fourth node in background")
+        bootstrap_task = asyncio.create_task(
+            manager.server_add(config={'enable_tablets': True},
+                               property_file=servers[0].property_file()))
+
+        # Wait until the topology is in write_both_read_old state (bootstrap streaming done)
+        logger.info("Waiting for topology coordinator to reach write_both_read_old injection point")
+        await manager.api.wait_for_injection_enter(coord.ip_addr,
+                                                   "topology_coordinator/write_both_read_old/before_version_increment")
+
+        # Issue truncate while the topology is in a transitional state.
+        # run_async returns a Future that is already in-flight, so the truncate
+        # request will be submitted to group0 while the topology coordinator is
+        # still paused at the injection point.
+        logger.info("Executing truncate during bootstrap")
+        truncate_future = cql.run_async(SimpleStatement(f"TRUNCATE {ks}.test USING TIMEOUT 4m", retry_policy=FallthroughRetryPolicy()))
+
+        # Give time for the truncate request to be submitted to group0
+        await asyncio.sleep(1)
+
+        logger.info("Releasing topology coordinator")
+        await manager.api.message_injection(coord.ip_addr,
+                                            "topology_coordinator/write_both_read_old/before_version_increment")
+
+        new_server = await bootstrap_task
+        await truncate_future
 
         # Wait for bootstrap completion
         await wait_for_cql_and_get_hosts(cql, servers + [new_server], time.time() + 60)
