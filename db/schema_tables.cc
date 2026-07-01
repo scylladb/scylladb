@@ -1733,7 +1733,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
     mutation indices_mutation(indexes(), pkey);
 
     if (with_columns_and_triggers) {
-        for (auto&& column : table->v3().all_columns()) {
+        for (auto&& column : table->v3_all_columns()) {
             if (column.is_view_virtual()) {
                 throw std::logic_error("view_virtual column found in non-view table");
             }
@@ -1873,13 +1873,15 @@ static void make_update_columns_mutations(schema_ptr old_table,
     mutation view_virtual_columns_mutation(view_virtual_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
     mutation computed_columns_mutation(computed_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
 
-    auto diff = difference(old_table->v3().columns_by_name(), new_table->v3().columns_by_name());
+    const auto& old_columns = old_table->all_columns_by_name();
+    const auto& new_columns = new_table->all_columns_by_name();
+    auto diff = difference(old_columns, new_columns);
 
     // columns that are no longer needed
     for (auto&& name : diff.entries_only_on_left) {
         // Thrift only knows about the REGULAR ColumnDefinition type, so don't consider other type
         // are being deleted just because they are not here.
-        const column_definition& column = *old_table->v3().columns_by_name().at(name);
+        const column_definition& column = *old_columns.at(name);
         if (column.is_view_virtual()) {
             drop_column_from_schema_mutation(view_virtual_columns(), old_table, column.name_as_text(), timestamp, mutations);
         } else {
@@ -1892,7 +1894,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
 
     // newly added columns and old columns with updated attributes
     for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
-        const column_definition& column = *new_table->v3().columns_by_name().at(name);
+        const column_definition& column = *new_columns.at(name);
         if (column.is_view_virtual()) {
             add_column_to_schema_mutation(new_table, column, timestamp, view_virtual_columns_mutation);
         } else {
@@ -2629,7 +2631,7 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
     mutation indices_mutation(indexes(), pkey);
 
     if (with_columns) {
-        for (auto&& column : view->v3().all_columns()) {
+        for (auto&& column : view->v3_all_columns()) {
             if (column.is_view_virtual()) {
                 add_column_to_schema_mutation(view, column, timestamp, view_virtual_columns_mutation);
             } else {
