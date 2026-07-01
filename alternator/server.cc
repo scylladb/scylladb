@@ -164,7 +164,8 @@ public:
                 }
              }, std::move(res));
          });
-    }) { }
+    }),
+            _cfg(config) { }
 
     api_handler(const api_handler&) = delete;
     future<std::unique_ptr<reply>> handle(const sstring& path,
@@ -188,8 +189,13 @@ protected:
         sstring content = rjson::print(std::move(results));
         slogger.trace("api_handler error case: {}", content);
         rep.set_status(err._http_code);
+        if (_cfg.alternator_response_crc32_header()) {
+            rep.add_header("x-amz-crc32", compute_crc32(content));
+        }
         rep.write_body(_content_type, std::move(content));
     }
+
+    const db::config& _cfg;
 };
 
 class gated_handler : public handler_base {
@@ -1113,6 +1119,14 @@ const char* api_error::what() const noexcept {
         _what_string = fmt::format("{} {}: {}", std::to_underlying(_http_code), _type, _msg);
     }
     return _what_string.c_str();
+}
+
+sstring compute_crc32(std::string_view data) {
+    // note that zlib's crc32() function only works on data.size() up to 4GB,
+    // it will be incorrect for larger responses, but this is fine because
+    // Alternator responses can't reach that size anyway.
+    uLong crc = ::crc32(0, reinterpret_cast<const Bytef*>(data.data()), data.size());
+    return fmt::format("{}", static_cast<uint32_t>(crc));
 }
 
 }

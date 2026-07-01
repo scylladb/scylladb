@@ -1644,6 +1644,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Disable the Date header in HTTP responses from Alternator.")
     , alternator_http_response_server_header(this, "alternator_http_response_server_header", liveness::LiveUpdate, value_status::Used, "",
         "Value for the Server header in HTTP responses from Alternator. An empty string (the default) omits the Server header entirely.")
+    , alternator_response_crc32_header(this, "alternator_response_crc32_header", liveness::LiveUpdate, value_status::Used, false,
+            "When true, Alternator adds an 'x-amz-crc32' header to each "
+            "response containing the CRC32 checksum of the response body. "
+            "Disabled by default because it adds CPU overhead.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , sanitizer_report_backtrace(this, "sanitizer_report_backtrace", value_status::Used, false,
             "In debug mode, report log-structured allocator sanitizer violations with a backtrace. Slow.")

@@ -123,5 +123,10 @@ private:
     future<executor::request_return_type> handle_api_request(std::unique_ptr<http::request> req);
 };
 
+/// Compute the CRC32 checksum (RFC 1952 / zlib polynomial) of the given data
+/// and return it as a decimal string. This is the value used in the
+/// x-amz-crc32 HTTP response header that DynamoDB adds to every response.
+sstring compute_crc32(std::string_view data);
+
 }
 

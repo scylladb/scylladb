@@ -62,13 +62,6 @@ the correct client address. The reverse proxy must be configured to use
 [Proxy Protocol v2](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt)
 (the binary header format).
 
-By default, ScyllaDB saves a snapshot of deleted tables. But Alternator does
-not offer an API to restore these snapshots, so these snapshots are not useful
-and waste disk space - deleting a table does not recover any disk space.
-It is therefore recommended to disable this automatic-snapshotting feature
-by configuring the **auto_snapshot** option to `false`.
-See also <https://github.com/scylladb/scylladb/issues/5283>.
-
 DynamoDB applications specify a single "endpoint" address, e.g.,
 `dynamodb.us-east-1.amazonaws.com`. Behind the scenes, a DNS server and/or
 load balancers distribute the connections to many different backend nodes.
@@ -76,6 +69,38 @@ Alternator does not provide such a load-balancing setup, so you should
 either set one up, or set up the client library to do the load balancing
 itself. Instructions, code and examples for doing this can be found in the
 [Alternator Load Balancing project](https://github.com/scylladb/alternator-load-balancing/).
+
+### Additional configuration options
+
+#### Disabling automatic snapshots for deleted tables
+By default, ScyllaDB saves a snapshot of deleted tables. But Alternator does
+not currently offer an API to restore these snapshots. With these snapshots
+enabled, deleting a table does not recover any disk space.
+It is therefore recommended to disable this automatic-snapshotting feature
+by configuring the **auto_snapshot** option to `false`.
+See also <https://github.com/scylladb/scylladb/issues/5283>.
+
+#### Enabling compression for large responses
+By default, HTTP responses are not compressed. If clients send an
+`Accept-Encoding: gzip` header indicating they support gzip compression,
+ScyllaDB can compress responses that exceed a configurable size threshold.
+The **alternator_response_compression_threshold_in_bytes** option sets this
+threshold (in bytes). Responses smaller than the threshold are sent
+uncompressed even if the client supports compression. This option defaults
+to 0, meaning compression is never used. DynamoDB compresses responses
+larger than 4096 bytes when the client supports it, so setting this option
+to `4096` matches DynamoDB's behavior.
+
+#### Enabling CRC32 response headers for client compatibility
+DynamoDB includes a `x-amz-crc32` header in every response, containing a
+CRC32 checksum of the response body. Most DynamoDB SDKs do not check this
+header, so by default Alternator does not calculate and return it to avoid
+the performance overhead. If you need this header for compatibility with
+a client that checks it, set the **alternator_response_crc32_header** option
+to `true`. Be aware that because HTTP response headers must be sent before
+the body, enabling this option requires buffering the entire response body
+in memory before sending anything, adding both memory overhead and CPU
+overhead for the checksum calculation.
 
 ## Alternator design and implementation
 
