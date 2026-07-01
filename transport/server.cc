@@ -1728,7 +1728,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
         if (!metadata_id_bytes) {
             return make_exception_future<cql_server::process_fn_return_type>(std::move(metadata_id_bytes).assume_error());
         }
-        metadata_id = cql_metadata_id_wrapper(cql3::cql_metadata_id_type(metadata_id_bytes.assume_value()), prepared->get_metadata_id());
+        metadata_id = cql_metadata_id_wrapper(cql3::cql_metadata_id_type(bytes_view(metadata_id_bytes.assume_value())), prepared->get_metadata_id());
     }
 
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
