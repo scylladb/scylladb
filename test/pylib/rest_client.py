@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Any, Optional, AsyncIterator
 
-import pytest
+import universalasync
 from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 
@@ -777,6 +777,7 @@ async def inject_error_one_shot(api: ScyllaRESTAPIClient, node_ip: IPAddress, in
     return InjectionHandler(api, injection, node_ip)
 
 
+@universalasync.async_to_sync_wraps
 async def read_barrier(api: ScyllaRESTAPIClient, node_ip: IPAddress, group_id: Optional[str] = None,
                        timeout: Optional[int] = None) -> None:
     """ Issue a read barrier on the specific host for the group_id.

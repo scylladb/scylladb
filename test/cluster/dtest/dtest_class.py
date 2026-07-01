@@ -7,16 +7,20 @@
 import logging
 import re
 import time
+from functools import singledispatch
 
 import cassandra
 import pytest
 import requests
 from cassandra import ConsistencyLevel
 from cassandra.auth import PlainTextAuthProvider
-from cassandra.cluster import ExecutionProfile
+from cassandra.cluster import ExecutionProfile, Session
 from cassandra.policies import RetryPolicy
 
+from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
 from test.cluster.dtest.tools.misc import retry_till_success
+from test.pylib.internal_types import IPAddress
+from test.pylib.rest_client import read_barrier as read_barrier_via_api
 
 
 logger = logging.getLogger(__name__)
@@ -170,13 +174,26 @@ def create_ks_query(session, name, query):
     session.execute(f"USE {name}")
 
 
-def read_barrier(session):
+@singledispatch
+def read_barrier(session_or_node) -> None:
+    raise NotImplementedError("Unsupported argument type")
+
+
+@read_barrier.register
+def _(session_or_node: Session) -> None:
     """To issue a read barrier it is sufficient to attempt dropping a
     non-existing table. We need to use `if exists`, otherwise the statement
     would fail on prepare/validate step which happens before a read barrier is
     performed.
     """
-    session.execute("drop table if exists nosuchkeyspace.nosuchtable")
+    session_or_node.execute("drop table if exists nosuchkeyspace.nosuchtable")
+
+
+@read_barrier.register
+def _(session_or_node: ScyllaNode) -> None:
+    """Issue a read barrier on the specific host using REST API."""
+
+    read_barrier_via_api(api=session_or_node.cluster.manager.api, node_ip=IPAddress(session_or_node.address()))
 
 
 def get_auth_provider(user, password):
