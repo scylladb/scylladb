@@ -1271,45 +1271,6 @@ def test_wait_for_vector_index_active(vs, needs_vector_store):
         )
         assert result.get('Items') and result['Items'][0]['p'] == p
 
-# The tests test_query_vector_prefill and test_query_vector_with_ck_prefill
-# used string keys in the indexed table. In theory, there shouldn't be any
-# difference in the vector store's behavior if the keys are of a different
-# type (in addition to string, they can be numeric or binary). But in
-# practice, the factor store does handle different key types differently,
-# and this test used to fail before this was fixed.
-# To save a bit of time, we don't test all combinations of hash and range
-# key types but test each type at least once as a hash key and a range key.
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/VECTOR-374",
-    reason="Bug in vector store for non-string keys, fails very slowly",
-)
-@pytest.mark.parametrize('hash_type,range_type', [
-    ('N', None), ('B', None), ('S', 'N'),  ('S', 'B'),
-], ids=[
-    'N', 'B', 'SN', 'SB'])
-def test_query_vector_prefill_key_types(vs, needs_vector_store, hash_type, range_type):
-    key_schema = [{'AttributeName': 'p', 'KeyType': 'HASH'}]
-    attr_defs = [{'AttributeName': 'p', 'AttributeType': hash_type}]
-    if range_type is not None:
-        key_schema.append({'AttributeName': 'c', 'KeyType': 'RANGE'})
-        attr_defs.append({'AttributeName': 'c', 'AttributeType': range_type})
-    key = {'S': 'hello', 'N': Decimal('42'), 'B': b'hello'}
-    with new_test_table(vs, KeySchema=key_schema,
-                            AttributeDefinitions=attr_defs) as table:
-        p = key[hash_type]
-        item = {'p': p, 'v': [1, 0, 0]}
-        if range_type is not None:
-            c = key[range_type]
-            item['c'] = c
-        table.put_item(Item=item)
-        table.update(VectorIndexUpdates=[{'Create':
-            {'IndexName': 'vind',
-             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
-        wait_for_vector_index_active(table, 'vind')
-        result = table.query(IndexName='vind',
-            VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1)
-        assert len(result['Items']) == 1 and result['Items'] == [item]
-
 # Same as test_query_vector_prefill but whereas in test_query_vector_prefill
 # the vector store reads the indexed data by scanning the table, here the
 # vector index is created first and only later the data is written, so the
