@@ -76,6 +76,10 @@ target_sources(cql3
     statements/raw/parsed_statement.cc
     statements/property_definitions.cc
     statements/update_statement.cc
+    statements/insert_select_statement.cc
+    statements/raw/insert_select_statement.cc
+    statements/create_table_select_statement.cc
+    statements/raw/create_table_select_statement.cc
     statements/broadcast_modification_statement.cc
     statements/broadcast_select_statement.cc
     statements/delete_statement.cc

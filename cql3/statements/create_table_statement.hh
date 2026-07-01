@@ -127,6 +127,17 @@ public:
     void add_key_aliases(const std::vector<::shared_ptr<column_identifier>> aliases);
 
     void add_column_alias(::shared_ptr<column_identifier> alias);
+
+    // Accessors used by CREATE TABLE ... AS SELECT to reuse the parsed primary
+    // key: the first key-alias group is the partition key, the column aliases
+    // are the clustering columns.
+    const std::vector<::shared_ptr<column_identifier>>& partition_key_columns() const {
+        static const std::vector<::shared_ptr<column_identifier>> empty;
+        return _key_aliases.empty() ? empty : _key_aliases.front();
+    }
+    const std::vector<::shared_ptr<column_identifier>>& clustering_key_columns() const {
+        return _column_aliases;
+    }
 protected:
     virtual audit::statement_category category() const override;
 };

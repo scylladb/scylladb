@@ -147,6 +147,20 @@ public:
          const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering, uint64_t limit,
         std::optional<service::cas_shard> cas_shard) const;
 
+    // Whether this SELECT can be safely split into N independent token-subrange
+    // scans whose disjoint union reproduces the full result. True only for a
+    // plain full-ring scan: no aggregation/GROUP BY, no LIMIT/PER PARTITION
+    // LIMIT, no post-query ordering, no secondary indexing. Used by
+    // INSERT...SELECT to parallelize a whole-table copy across the token ring.
+    bool can_be_split_into_token_ranges(const query_options& options) const;
+
+    // Execute this SELECT restricted to a single token sub-range (paged, like
+    // execute()). The range is supplied per call and nothing is stored, so it is
+    // safe to invoke concurrently for different sub-ranges of the same prepared
+    // statement. Only valid when can_be_split_into_token_ranges() holds.
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_paged_for_token_range(query_processor& qp,
+        service::query_state& state, const query_options& options, const dht::partition_range& range) const;
+
     future<shared_ptr<cql_transport::messages::result_message>> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
 
