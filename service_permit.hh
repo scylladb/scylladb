@@ -8,22 +8,59 @@
 
 #pragma once
 
+#include <optional>
+
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/shared_ptr.hh>
 
+#include "db/timeout_clock.hh"
+#include "timeout_config.hh"
+
 class service_permit {
-    seastar::lw_shared_ptr<seastar::semaphore_units<>> _permit;
-    service_permit(seastar::semaphore_units<>&& u) : _permit(seastar::make_lw_shared<seastar::semaphore_units<>>(std::move(u))) {}
+    struct impl {
+        seastar::semaphore_units<> units;
+        std::optional<db::timeout_clock::time_point> start_time;
+        db::timeout_clock::time_point deadline = db::timeout_clock::time_point::max();
+        timeout_context timeout_ctx;
+    };
+    seastar::lw_shared_ptr<impl> _permit;
+    service_permit(seastar::semaphore_units<>&& u) : _permit(seastar::make_lw_shared<impl>()) {
+        _permit->units = std::move(u);
+    }
     friend service_permit make_service_permit(seastar::semaphore_units<>&& permit);
     friend service_permit empty_service_permit();
 public:
-    size_t count() const { return _permit ? _permit->count() : 0; };
+    size_t count() const { return _permit ? _permit->units.count() : 0; };
     // Merge additional semaphore units into this permit.
     // Used to grow the permit after the actual resource cost is known.
     void adopt(seastar::semaphore_units<>&& units) {
         if (_permit) {
-            _permit->adopt(std::move(units));
+            _permit->units.adopt(std::move(units));
         }
+    }
+    void set_start_time(db::timeout_clock::time_point t) {
+        if (_permit) {
+            _permit->start_time = t;
+        }
+    }
+    std::optional<db::timeout_clock::time_point> start_time() const {
+        return _permit ? _permit->start_time : std::nullopt;
+    }
+    void set_deadline(db::timeout_clock::time_point d) {
+        if (_permit) {
+            _permit->deadline = d;
+        }
+    }
+    db::timeout_clock::time_point deadline() const {
+        return _permit ? _permit->deadline : db::timeout_clock::time_point::max();
+    }
+    void set_timeout_ctx(timeout_context ctx) {
+        if (_permit) {
+            _permit->timeout_ctx = ctx;
+        }
+    }
+    timeout_context timeout_ctx() const {
+        return _permit ? _permit->timeout_ctx : timeout_context{};
     }
 };
 

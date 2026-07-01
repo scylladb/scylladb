@@ -41,6 +41,34 @@ using namespace statements;
 using namespace cql_transport::messages;
 
 logging::logger log("query_processor");
+
+// Record the send-queue deadline, anchored at the request start time (on the
+// service_permit) so execution time doesn't extend it. Internal queries have no
+// start time and are skipped.
+static void set_response_deadline(
+        result_message& msg,
+        const cql_statement& stmt,
+        const service::query_state& query_state,
+        const query_options& options) {
+    if (msg.is_exception()) {
+        return;
+    }
+    auto permit = query_state.get_permit();
+    auto start_time = permit.start_time();
+    if (!start_time) {
+        return;
+    }
+    auto info = stmt.get_timeout_info();
+    if (!info.has_send_queue_deadline) {
+        return;
+    }
+    permit.set_deadline(*start_time + stmt.get_timeout(query_state.get_client_state(), options));
+    permit.set_timeout_ctx(timeout_context{
+        .cl = options.get_consistency(),
+        .is_write = info.is_write,
+        .wt = info.write_type,
+    });
+}
 logging::logger prep_cache_log("prepared_statements_cache");
 logging::logger authorized_prepared_statements_cache_log("authorized_prepared_statements_cache");
 
@@ -728,10 +756,13 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 
     auto msg = co_await statement->execute_without_checking_exception_message(*this, query_state, options, std::move(guard));
 
-    if (msg) {
-       co_return std::move(msg);
+    if (!msg) {
+        msg = ::make_shared<result_message::void_message>();
     }
-    co_return ::make_shared<result_message::void_message>();
+
+    set_response_deadline(*msg, *statement, query_state, options);
+
+    co_return std::move(msg);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
@@ -1109,7 +1140,11 @@ query_processor::execute_batch_without_checking_exception_message(
         }
         log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
     }
-    co_return co_await batch->execute(*this, query_state, options, std::nullopt);
+    auto msg = co_await batch->execute(*this, query_state, options, std::nullopt);
+    if (msg) {
+        set_response_deadline(*msg, *batch, query_state, options);
+    }
+    co_return msg;
 }
 
 future<service::broadcast_tables::query_result>
@@ -1303,10 +1338,10 @@ shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_n
         locator::tablet_replica replica,
         cql3::computed_function_values cached_fn_calls,
         seastar::lowres_clock::time_point timeout,
-        bool is_write,
+        timeout_context timeout_ctx,
         locator::host_id_or_exception_callback on_forwarding_finished) {
     get_cql_stats().forwarded_requests++;
-    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write, std::move(on_forwarding_finished));
+    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, timeout_ctx, std::move(on_forwarding_finished));
 }
 
 query_processor::consistency_level_set query_processor::to_consistency_level_set(const query_processor::cl_option_list& levels) {

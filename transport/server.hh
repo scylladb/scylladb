@@ -220,6 +220,8 @@ private:
         uint32_t requests_serving = 0;
         uint64_t requests_blocked_memory = 0;
         uint64_t requests_shed = 0;
+        uint64_t requests_dropped_due_to_timeout = 0;
+        uint64_t requests_sent_after_timeout = 0;
         // forwarding stats
         uint64_t requests_forwarded_successfully = 0;
         uint64_t requests_forwarded_failed = 0;
@@ -284,7 +286,8 @@ private:
     class fmt_visitor;
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
-            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata);
+            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata,
+            const service_permit& permit);
 
     static std::unique_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state);
     static std::unique_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state);
@@ -394,7 +397,7 @@ private:
     future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req);
 
     future<foreign_ptr<std::unique_ptr<cql_transport::response>>> forward_cql(locator::host_id target_host, unsigned target_shard, seastar::lowres_clock::time_point timeout,
-            bool is_write, uint16_t stream, tracing::trace_state_ptr trace_state, forward_cql_execute_request req,
+            timeout_context timeout_ctx, uint16_t stream, tracing::trace_state_ptr trace_state, forward_cql_execute_request req,
             const locator::host_id_or_exception_callback& on_forwarding_finished = {});
 
     virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;

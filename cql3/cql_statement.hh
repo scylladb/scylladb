@@ -12,6 +12,7 @@
 
 #include "timeout_config.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/client_state.hh"
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
 
@@ -19,7 +20,6 @@ namespace service {
 
 class storage_proxy;
 class query_state;
-class client_state;
 
 }
 
@@ -46,7 +46,7 @@ class query_options;
 using cql_warnings_vec = std::vector<sstring>;
 
 class cql_statement {
-    timeout_config_selector _timeout_config_selector;
+    timeout_info _timeout_info;
     audit::audit_info_ptr _audit_info;
 public:
     // CQL statement text
@@ -57,13 +57,18 @@ public:
         return false;
     }
 
-    explicit cql_statement(timeout_config_selector timeout_selector) : _timeout_config_selector(timeout_selector) {}
+    explicit cql_statement(timeout_info ti) : _timeout_info(ti) {}
     cql_statement(cql_statement&& o) = default;
-    cql_statement(const cql_statement& o) : _timeout_config_selector(o._timeout_config_selector), _audit_info(o._audit_info ? std::make_unique<audit::audit_info>(*o._audit_info) : nullptr) { }
+    cql_statement(const cql_statement& o) : _timeout_info(o._timeout_info), _audit_info(o._audit_info ? std::make_unique<audit::audit_info>(*o._audit_info) : nullptr) { }
     virtual ~cql_statement()
     { }
 
-    timeout_config_selector get_timeout_config_selector() const { return _timeout_config_selector; }
+    timeout_config_selector get_timeout_config_selector() const { return _timeout_info.selector; }
+    const timeout_info& get_timeout_info() const { return _timeout_info; }
+
+    virtual db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const {
+        return state.get_timeout_config().*get_timeout_config_selector();
+    }
 
     virtual uint32_t get_bound_terms() const = 0;
 
@@ -132,6 +137,9 @@ public:
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
 
     virtual void sanitize_audit_info() {}
+
+protected:
+    void set_timeout_write_type(db::write_type wt) { _timeout_info.write_type = wt; }
 };
 
 class cql_statement_no_metadata : public cql_statement {

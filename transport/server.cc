@@ -367,6 +367,15 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
         sm::make_counter("requests_shed", _stats.requests_shed,
                         sm::description("Holds an incrementing counter with the requests that were shed due to overload (threshold configured via max_concurrent_requests_per_shard). "
                                             "The first derivative of this value shows how often we shed requests due to overload in the \"CQL transport\" component."))(basic_level),
+        sm::make_counter("requests_dropped_due_to_timeout", _stats.requests_dropped_due_to_timeout,
+                        sm::description("Holds an incrementing counter with the responses that were replaced with a timeout error "
+                                            "(ReadTimeout/WriteTimeout) because the request timeout was exceeded while the response "
+                                            "was waiting in the send queue. A growing value indicates send queue backpressure causing "
+                                            "response delivery to exceed the configured request timeout."))(basic_level).set_skip_when_empty(),
+        sm::make_counter("requests_sent_after_timeout", _stats.requests_sent_after_timeout,
+                        sm::description("Holds an incrementing counter with the responses that were sent to the client even though the request timeout "
+                                            "had expired during write/flush. These responses could not be dropped because a partial CQL frame "
+                                            "may already have been written to the socket."))(basic_level).set_skip_when_empty(),
         sm::make_counter("connections_shed", _shed_connections,
             sm::description("Holds an incrementing counter with the CQL connections that were shed due to concurrency semaphore timeout (threshold configured via uninitialized_connections_semaphore_cpu_concurrency). "
                                             "This typically can happen during connection storm. ")),
@@ -559,7 +568,7 @@ cql_server::forward_cql(
     locator::host_id target_host,
     unsigned target_shard,
     seastar::lowres_clock::time_point timeout,
-    bool is_write,
+    timeout_context timeout_ctx,
     uint16_t stream,
     tracing::trace_state_ptr trace_state,
     forward_cql_execute_request req,
@@ -581,21 +590,21 @@ cql_server::forward_cql(
                 if (on_forwarding_finished) {
                     on_forwarding_finished(eptr);
                 }
-                eptr = is_write
+                eptr = timeout_ctx.is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_timeout_exception(
-                        format("Write request timed out while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, db::write_type::SIMPLE))
+                        format("Write request timed out while forwarding to {}", target_host), timeout_ctx.cl, 0, 0, timeout_ctx.wt))
                     : std::make_exception_ptr(exceptions::read_timeout_exception(
-                        format("Read request timed out while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, false));
+                        format("Read request timed out while forwarding to {}", target_host), timeout_ctx.cl, 0, 0, false));
             } else if (try_catch<seastar::rpc::closed_error>(eptr)) {
                 clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC closed connection. Will return blanket failure exception", target_host, target_shard);
                 if (on_forwarding_finished) {
                     on_forwarding_finished(eptr);
                 }
-                eptr = is_write
+                eptr = timeout_ctx.is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_failure_exception(
-                        format("Write request failed while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, 0, db::write_type::SIMPLE))
+                        format("Write request failed while forwarding to {}", target_host), timeout_ctx.cl, 0, 0, 0, timeout_ctx.wt))
                     : std::make_exception_ptr(exceptions::read_failure_exception(
-                        format("Read request failed while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, 0, false));
+                        format("Read request failed while forwarding to {}", target_host), timeout_ctx.cl, 0, 0, 0, false));
             } else {
                 clogger.debug("Forwarding CQL request to {} shard {} failed with an unexpected error: {}. Will return this error to the client", target_host, target_shard, eptr);
             }
@@ -604,14 +613,18 @@ cql_server::forward_cql(
 
         auto response = response_fut.get();
         switch (response.status) {
-        case forward_cql_status::success:
+        case forward_cql_status::success: {
             _stats.requests_forwarded_successfully++;
             clogger.trace("Forwarded CQL request executed successfully on replica: {}", target_host);
             tracing::trace(trace_state, "Forwarded CQL request executed successfully on replica: {}", target_host);
             if (on_forwarding_finished) {
                 on_forwarding_finished(current_host);
             }
-            co_return std::make_unique<cql_transport::response>(stream, cql_binary_opcode::RESULT, response.response_flags, std::move(response.response_body));
+            auto result = std::make_unique<cql_transport::response>(stream, cql_binary_opcode::RESULT, response.response_flags, std::move(response.response_body));
+            // The send-queue deadline is applied by the caller (cql_server::process()),
+            // which holds the bounce message carrying timeout()/timeout_ctx().
+            co_return std::move(result);
+        }
         case forward_cql_status::error: {
             _stats.requests_forwarded_failed++;
             clogger.trace("Forwarded CQL request failed on replica: {}", target_host);
@@ -1285,6 +1298,8 @@ future<> cql_server::connection::process_request() {
           semaphore_units<> mem_permit = mem_permit_fut.get();
           return this->read_and_decompress_frame(length, flags).then([this, op, stream, flags, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit)), request_start_time, request_start_timestamp] (fragmented_temporary_buffer buf) mutable {
 
+            mem_permit.set_start_time(request_start_time);
+
             ++_server._stats.requests_served;
             ++_server._stats.requests_serving;
             ++_server.get_cql_sg_stats()._requests_serving;
@@ -1568,7 +1583,8 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_op
 
 std::unique_ptr<cql_server::response>
 make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state,
-        cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata = false);
+        cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata = false,
+        const service_permit& permit = empty_service_permit());
 
 static inline cql_server::result_with_foreign_response_ptr convert_error_message_to_coordinator_result(messages::result_message* msg) {
     return std::move(*dynamic_cast<messages::result_message::exception*>(msg)).get_exception();
@@ -1652,7 +1668,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
 
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, cql_metadata_id_wrapper{}, skip_metadata)));
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, cql_metadata_id_wrapper{}, skip_metadata, q_state->query_state.get_permit())));
         }
     });
 }
@@ -1776,7 +1792,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, std::move(metadata_id), skip_metadata)));
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, std::move(metadata_id), skip_metadata, q_state->query_state.get_permit())));
         }
     });
 }
@@ -1923,7 +1939,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
 
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version, cql_metadata_id_wrapper{})));
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version, cql_metadata_id_wrapper{}, false, q_state->query_state.get_permit())));
         }
     });
 }
@@ -1977,14 +1993,22 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
             auto sg = _config.bounce_request_smp_service_group;
             auto gcs = client_state.move_to_other_shard();
             auto gt = tracing::global_trace_state_ptr(trace_state);
-            msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version, request_start_timestamp] (cql_server& server) -> future<process_fn_return_type> {
+            // The service_permit can't cross shards, so carry the request start
+            // time by value and apply it to a fresh permit on the target shard,
+            // so its response participates in send-queue accounting.
+            auto start_time = permit.start_time();
+            msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version, request_start_timestamp, start_time] (cql_server& server) -> future<process_fn_return_type> {
                 bytes_ostream linearization_buffer;
                 request_reader in(is, linearization_buffer);
                 auto local_client_state = gcs.get(&server._abort_source);
                 auto local_trace_state = gt.get();
                 auto& local_sg_stats = server.get_cql_sg_stats();
+                /* FIXME */ auto local_permit = empty_service_permit();
+                if (start_time) {
+                    local_permit.set_start_time(*start_time);
+                }
                 co_return co_await process_fn(local_client_state, server._query_processor, in, stream, version,
-                        /* FIXME */empty_service_permit(), std::move(local_trace_state), false, cached_vals, dialect, local_sg_stats, request_start_timestamp);
+                        std::move(local_permit), std::move(local_trace_state), false, cached_vals, dialect, local_sg_stats, request_start_timestamp);
             });
         } else {
             // Node bounce
@@ -2008,9 +2032,26 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 .cached_fn_calls = std::move(cached_fn_calls),
             };
 
+            // bounce timeout() is anchored at redirect time; re-anchor to request
+            // receipt (start_time + timeout) by subtracting elapsed time, so the
+            // forwarded response gets no more time than a local one. Internal
+            // requests have no start time; keep the bounce timeout.
+            auto request_deadline = (*bounce_msg)->timeout().value();
+            if (auto start = permit.start_time()) {
+                request_deadline -= db::timeout_clock::now() - *start;
+            }
+            // Carried on the bounce; types both the RPC error and the send-queue error.
+            auto timeout_ctx = (*bounce_msg)->timeout_ctx().value();
+
             auto response = co_await forward_cql(
-                target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(),
+                target_host, shard, (*bounce_msg)->timeout().value(), timeout_ctx,
                 stream, trace_state, std::move(req), (*bounce_msg)->on_forwarding_finished());
+
+            // Apply the request deadline + context to the forwarded response so the
+            // send queue can drop it if it expired, as for local statements.
+            if (response && response->opcode() == cql_binary_opcode::RESULT) {
+                response->set_deadline(request_deadline, timeout_ctx);
+            }
 
             co_return cql_server::result_with_foreign_response_ptr(std::move(response));
         }
@@ -2190,7 +2231,8 @@ public:
 
 std::unique_ptr<cql_server::response>
 make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state,
-        cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata) {
+        cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata,
+        const service_permit& permit) {
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
     if (!msg.warnings().empty() && version > 3) [[unlikely]] {
         response->set_frame_flag(cql_frame_flags::warning);
@@ -2202,6 +2244,8 @@ make_result(int16_t stream, messages::result_message& msg, const tracing::trace_
     }
     cql_server::fmt_visitor fmt{version, *response, skip_metadata, std::move(metadata_id)};
     msg.accept(fmt);
+    // Carry the permit's deadline + context so write_response can drop an expired response.
+    response->set_deadline(permit.deadline(), permit.timeout_ctx());
     return response;
 }
 
@@ -2246,9 +2290,63 @@ cql_server::connection::make_client_routes_change_event(const event::client_rout
 void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression)
 {
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
-        cql_server::response& r = *response;
-        auto del = make_deleter([response = std::move(response)] {});
-        return r.write_message(_write_buf, _version, compression, std::move(del));
+        auto do_write = [this, compression, response = std::move(response)] () mutable {
+            auto deadline = response->deadline();
+            // Replace a successful RESULT that exceeded its request timeout while
+            // waiting in the send queue with a typed ReadTimeout/WriteTimeout:
+            // expired responses otherwise block fresher ones, and the client is
+            // freed immediately with a proper CQL error. Error responses are sent
+            // as-is (they carry diagnostics); a max() deadline is a no-op.
+            if (response->opcode() == cql_binary_opcode::RESULT && db::timeout_clock::now() > deadline) {
+                ++_server._stats.requests_dropped_due_to_timeout;
+                auto stream = response->stream();
+                auto ctx = response->timeout_ctx();
+                response = {};
+                std::unique_ptr<cql_server::response> err;
+                sstring msg = "Request timeout exceeded while response was waiting in send queue";
+                // received=0, blockfor=1 (data_present=false for reads) report a
+                // timeout where no replica acked. We don't keep the real counts
+                // (the op completed; the response just expired here), and these
+                // values make the default driver retry policies treat the error as
+                // non-retriable: reads retry only when received >= blockfor, writes
+                // key off write_type (only BATCH_LOG, never reported here). So the
+                // client isn't pushed into a retry storm for an already-executed request.
+                //
+                // Empty trace_state: the original request is already recorded; the
+                // replacement error is a synthetic transport artifact, not traced.
+                if (ctx.is_write) {
+                    err = _server.make_mutation_write_timeout_error(stream,
+                            exceptions::exception_code::WRITE_TIMEOUT, std::move(msg),
+                            ctx.cl, 0, 1, ctx.wt, tracing::trace_state_ptr());
+                } else {
+                    err = _server.make_read_timeout_error(stream,
+                            exceptions::exception_code::READ_TIMEOUT, std::move(msg),
+                            ctx.cl, 0, 1, false, tracing::trace_state_ptr());
+                }
+                cql_server::response& r = *err;
+                auto del = make_deleter([err = std::move(err)] {});
+                return r.write_message(_write_buf, _version, compression, std::move(del));
+            }
+            cql_server::response& r = *response;
+            auto del = make_deleter([response = std::move(response)] {});
+            auto write_fut = r.write_message(_write_buf, _version, compression, std::move(del));
+            if (deadline == db::timeout_clock::time_point::max()) {
+                return write_fut;
+            }
+            // Account for responses that expired during write_message()/flush().
+            // We cannot abort mid-write without corrupting the CQL binary
+            // protocol framing, so these are sent but tracked separately.
+            return std::move(write_fut).then([this, deadline] {
+                if (db::timeout_clock::now() > deadline) {
+                    ++_server._stats.requests_sent_after_timeout;
+                }
+            });
+        };
+        // The injection runs before the deadline check so tests can hold a
+        // ready response in this connection's send queue until it expires.
+        // inject() is a zero-cost no-op when error injection is compiled out.
+        return utils::get_local_injector().inject("transport_write_response_delay",
+                utils::wait_for_message(60s)).then(std::move(do_write));
     });
 }
 
@@ -2265,7 +2363,14 @@ future<> cql_server::response::write_message(output_stream<char>& out, uint8_t v
             temporary_buffer<char> buf(reinterpret_cast<char*>(const_cast<signed char*>(fragment.data())), fragment.size(), del.share());
             return out.write(std::move(buf));
         }).then([&out] {
-            return out.flush();
+            // Inject a delay before flush() so tests can expire a response during
+            // write/flush. The frame header and body are already in the output
+            // buffer, so the response can't be dropped here.
+            // inject() is a zero-cost no-op when error injection is compiled out.
+            return utils::get_local_injector().inject("transport_pre_flush_delay",
+                    utils::wait_for_message(60s)).then([&out] {
+                return out.flush();
+            });
         });
     });
 }
