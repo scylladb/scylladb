@@ -128,6 +128,7 @@ schema_ptr make_raft_schema(sstring name, bool is_group0) {
         // id of the most recent persisted snapshot
         .with_column("snapshot_id", uuid_type, column_kind::static_column)
         .with_column("commit_idx", long_type, column_kind::static_column)
+        .with_column("stable_timestamp", long_type, column_kind::static_column)
 
         .with_hash_version()
         .set_caching_options(caching_options::get_disabled_caching_options());

@@ -144,6 +144,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     class stable_timestamp_tracker {
         replica::database& _db;
         netw::messaging_service& _ms;
+        cql3::query_processor& _qp;
         std::unordered_map<raft::group_id, raft_group_state>& _raft_groups;
 
         // Drives shutdown of the periodic refresh fiber.
@@ -161,6 +162,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     public:
         stable_timestamp_tracker(replica::database& db, netw::messaging_service& ms,
+            cql3::query_processor& qp,
             std::unordered_map<raft::group_id, raft_group_state>& raft_groups);
 
         // Idempotently launches the background refresh fiber (no-op if already
@@ -172,8 +174,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // Requests shutdown and waits for the background fiber to finish.
         future<> stop();
 
-        // Bumps state.stable_timestamp to candidate if it is greater.
-        void advance(raft_group_state& state, api::timestamp_type candidate);
+        // Bumps state.stable_timestamp to candidate if it is greater, persisting
+        // the advanced value so it survives restarts and never regresses.
+        future<> advance(raft_group_state& state, raft::group_id group_id, api::timestamp_type candidate);
     };
 
     netw::messaging_service& _ms;

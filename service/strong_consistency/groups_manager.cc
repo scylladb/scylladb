@@ -145,7 +145,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _features(features)
     , _gossiper(gossiper)
     , _raft_replay_buffer(raft_replay_buffer)
-    , _stable_timestamp_tracker(_db, _ms, _raft_groups)
+    , _stable_timestamp_tracker(_db, _ms, _qp, _raft_groups)
 {
     init_messaging_service();
 }
@@ -402,7 +402,7 @@ void groups_manager::init_messaging_service() {
                         if (git == gm._raft_groups.end()) {
                             continue; // Group no longer hosted here; drop the update.
                         }
-                        gm._stable_timestamp_tracker.advance(git->second, ts);
+                        co_await gm._stable_timestamp_tracker.advance(git->second, group_id, ts);
                     }
                 });
             });
@@ -530,9 +530,11 @@ future<> groups_manager::stable_timestamp_tracker::run() {
 }
 
 groups_manager::stable_timestamp_tracker::stable_timestamp_tracker(replica::database& db,
-        netw::messaging_service& ms, std::unordered_map<raft::group_id, raft_group_state>& raft_groups)
+        netw::messaging_service& ms, cql3::query_processor& qp,
+        std::unordered_map<raft::group_id, raft_group_state>& raft_groups)
     : _db(db)
     , _ms(ms)
+    , _qp(qp)
     , _raft_groups(raft_groups)
 {}
 
@@ -550,11 +552,13 @@ future<> groups_manager::stable_timestamp_tracker::stop() {
     co_await std::move(_fiber);
 }
 
-void groups_manager::stable_timestamp_tracker::advance(raft_group_state& state, api::timestamp_type candidate) {
+future<> groups_manager::stable_timestamp_tracker::advance(raft_group_state& state, raft::group_id group_id, api::timestamp_type candidate) {
     if (candidate <= state.stable_timestamp) {
-        return;
+        co_return;
     }
     state.stable_timestamp = candidate;
+    // Persist the advanced value so it survives restarts and never regresses.
+    co_await raft_groups_storage::store_stable_timestamp(_qp, group_id, this_shard_id(), state.stable_timestamp);
 }
 
 future<> groups_manager::stable_timestamp_tracker::refresh() {
@@ -619,12 +623,12 @@ future<> groups_manager::stable_timestamp_tracker::refresh() {
             auto group_id = tmap.get_tablet_raft_info(tid).group_id;
             auto git = _raft_groups.find(group_id);
             if (git == _raft_groups.end()) {
-                return make_ready_future<>(); // Skip stable_timestamp refresh.
+                co_return; // Skip stable_timestamp refresh.
             }
 
             auto& state = git->second;
             if (!state.leader_info) {
-                return make_ready_future<>(); // Skip stable_timestamp refresh.
+                co_return; // Skip stable_timestamp refresh.
             }
 
             auto replica_ts = [&](const tablet_replica& r) -> api::timestamp_type {
@@ -636,14 +640,13 @@ future<> groups_manager::stable_timestamp_tracker::refresh() {
                 return ts_it == host_it->second.end() ? api::min_timestamp : ts_it->second;
             };
             api::timestamp_type min_ts = std::ranges::min(ti.replicas | std::views::transform(replica_ts));
-            advance(state, min_ts);
+            co_await advance(state, group_id, min_ts);
 
             for (const auto& replica : ti.replicas) {
                 if (replica.host != my_host) {
                     stable_timestamps[replica.host][global_tablet_id{table, tid}] = min_ts;
                 }
             }
-            return make_ready_future<>();
         });
     }
 
@@ -717,6 +720,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                 co_await state.server_control_op.get_future();
                 co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
+
+                // Restore persisted stable_timestamp so the value survives restarts and never regresses.
+                state.stable_timestamp = co_await raft_groups_storage::load_stable_timestamp(_qp, id, this_shard_id());
+
                 state.leader_info_updater = leader_info_updater(state, tablet, id);
 
                 // We want to make sure the server is ready to serve requests before
