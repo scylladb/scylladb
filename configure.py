@@ -38,7 +38,7 @@ python3_dependencies = subprocess.run('./install-dependencies.sh --print-python3
 pip_dependencies = subprocess.run('./install-dependencies.sh --print-pip-runtime-packages', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
 pip_symlinks = subprocess.run('./install-dependencies.sh --print-pip-symlinks', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
 node_exporter_filename = subprocess.run('./install-dependencies.sh --print-node-exporter-filename', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
-node_exporter_dirname = os.path.basename(node_exporter_filename).rstrip('.tar.gz')
+node_exporter_dirname = subprocess.run('./install-dependencies.sh --print-node-exporter-dirname', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
 
 
 def get_os_ids():
