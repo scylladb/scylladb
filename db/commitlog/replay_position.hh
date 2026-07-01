@@ -59,6 +59,8 @@ struct replay_position {
     bool valid() const {
         return id != 0 && pos != 0;
     }
+
+    static const replay_position max;
 };
 
 class commitlog;
