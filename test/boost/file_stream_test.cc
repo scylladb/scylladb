@@ -765,3 +765,36 @@ SEASTAR_FIXTURE_TEST_CASE(test_clone_path_stream_uncompressed_gcs, gcs_fixture,
         return do_test_clone_path_stream(env, compress_sstable::no, make_storage_clause(so));
     }, cfg);
 }
+
+// tests that a ranged_source counts any skipped data into
+// remaining "len" (available data)
+SEASTAR_TEST_CASE(test_ranged_data_source_skip) {
+
+    constexpr size_t n_bufs = 30;
+    constexpr size_t buf_len = 4096;
+
+    std::vector<temporary_buffer<char>> src;
+    src.reserve(n_bufs);
+
+    for (size_t i = 0; i < n_bufs; ++i) {
+        auto rnd = tests::random::get_bytes(buf_len);
+        temporary_buffer<char> buf(reinterpret_cast<char*>(rnd.data()), rnd.size());
+        src.emplace_back(std::move(buf));
+    }
+
+    auto size = n_bufs * buf_len;
+    auto off = 1756u;
+    auto len = size - 2*off;
+
+    auto wrapped = create_ranged_source(create_memory_source(std::move(src)), off, len);
+
+    input_stream<char> in(std::move(wrapped));
+    co_await in.skip(off);
+
+    auto buf = co_await in.read_exactly(len); 
+
+    // ensure we did in fact only get (len - off) bytes from the read.
+    // i.e. ranged_source limited the available bytes correctly
+    BOOST_REQUIRE_LT(buf.size(), len);
+    BOOST_REQUIRE_EQUAL(buf.size(), len - off);
+}

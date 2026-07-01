@@ -9,18 +9,22 @@
 #include "utils/gcp/object_storage.hh"
 #include "utils/gcp/gcp_credentials.hh"
 
+#include <ranges>
 #include <unordered_set>
 #include <filesystem>
 #include <boost/test/unit_test.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/with_timeout.hh>
 
+#include "ent/encryption/symmetric_key.hh"
+#include "ent/encryption/encrypted_file_impl.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
@@ -31,6 +35,7 @@
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/io-wrappers.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/testing/test_fixture.hh>
 
@@ -64,6 +69,31 @@ static auto check_gcp_storage_test_enabled() {
     return tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true);
 }
 
+static future<> write_object_of_size(data_sink& sink
+                                      , size_t dest_size
+                                      , std::vector<temporary_buffer<char>>* buffer_store = nullptr
+                                      , std::optional<size_t> specific_buffer_size = std::nullopt
+                                      , bool can_share = true
+                                    ) 
+{
+    size_t done = 0;
+    while (done < dest_size) {
+        auto rem = dest_size - done;
+        auto len = std::min(rem, specific_buffer_size.value_or(tests::random::get_int(size_t(1), size_t(4*1024*1024))));
+        auto rnd = tests::random::get_bytes(len);
+        temporary_buffer<char> buf(reinterpret_cast<char*>(rnd.data()), rnd.size());
+        if (buffer_store) {
+            // maybe don't use share. if sink is encrypted, it will do in-place transforms
+            buffer_store->emplace_back(can_share 
+                ? buf.share()
+                : temporary_buffer<char>(buf.get(), len)
+            );
+        }
+        co_await sink.put(std::move(buf));
+        done += len;
+    }
+}
+
 static future<> create_object_of_size(storage::client& c
                                       , std::string_view bucket
                                       , std::string_view name
@@ -73,18 +103,7 @@ static future<> create_object_of_size(storage::client& c
                                     ) 
 {
     auto sink = c.create_upload_sink(bucket, name);
-    size_t done = 0;
-    while (done < dest_size) {
-        auto rem = dest_size - done;
-        auto len = std::min(rem, specific_buffer_size.value_or(tests::random::get_int(size_t(1), size_t(4*1024*1024))));
-        auto rnd = tests::random::get_bytes(len);
-        temporary_buffer<char> buf(reinterpret_cast<char*>(rnd.data()), rnd.size());
-        if (buffer_store) {
-            buffer_store->emplace_back(buf.share());
-        }
-        co_await sink.put(std::move(buf));
-        done += len;
-    }
+    co_await write_object_of_size(sink, dest_size, buffer_store, specific_buffer_size);
     co_await sink.flush();
     co_await sink.close();
 }
@@ -104,10 +123,15 @@ static future<> compare_stream_data(seastar::input_stream<char>& is1, seastar::i
     BOOST_REQUIRE_EQUAL(read, total);
 }
 
-static std::tuple<seastar::input_stream<char>, size_t> stream_from_buffers(std::vector<temporary_buffer<char>>&& bufs) {
+static size_t total_size(const std::vector<temporary_buffer<char>>& bufs) {
     auto total = std::accumulate(bufs.begin(), bufs.end(), size_t{}, [](size_t s, auto& buf) {
         return s + buf.size();
     });
+    return total;
+}
+
+static std::tuple<seastar::input_stream<char>, size_t> stream_from_buffers(std::vector<temporary_buffer<char>>&& bufs) {
+    auto total = total_size(bufs);
     auto is = seastar::input_stream<char>(create_memory_source(std::move(bufs)));
     return std::make_tuple(std::move(is), total);
 }
@@ -331,6 +355,143 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_large_object_iov, local_gcs_wrap
     BOOST_REQUIRE_EQUAL(total, total2);
     co_await compare_stream_data(is1, is2, total);
 
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_in_parallel, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+
+    // just a random number reasonably large size that is not a
+    // even sector size or anything. 32mb + change
+    auto dest_size = 32*1024*1024 + 357 + 1022*67 + 23324;
+
+    // ensure we remove the object
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, dest_size, &written);
+    auto source = c.create_download_source(bucket, name);
+    auto f = create_file_for_seekable_source(std::move(source));
+    auto total = total_size(written);
+
+    utils::get_local_injector().enable("gcp_storage_stall_requests", true);
+    auto def = defer([]() noexcept {
+        utils::get_local_injector().disable("gcp_storage_stall_requests");
+    });
+
+    auto read_file = [&]() -> future<std::tuple<seastar::input_stream<char>, size_t>> {
+        std::vector<temporary_buffer<char>> bufs;
+        for (size_t i = 0; i < total; ) {
+            auto n = std::min(total - i, size_t(64*1024));
+            auto buf = co_await f.dma_read_bulk<char>(i, n);
+            i += buf.size();
+            bufs.emplace_back(std::move(buf));
+        }
+        co_return stream_from_buffers(std::move(std::move(bufs)));
+    };
+
+    auto fut = read_file();
+    BOOST_REQUIRE(!fut.available());
+    auto [is1, t1] = co_await read_file();
+    auto [is2, t2] = co_await std::move(fut);
+
+    co_await f.close();
+
+    auto written2 = written | std::views::transform([](auto& buf) {
+        return buf.share();
+    }) | std::ranges::to<std::vector>();
+
+    {
+        BOOST_TEST_MESSAGE("Check stream 1");
+        auto [is_ref, total] = stream_from_buffers(std::move(written));
+        BOOST_REQUIRE_EQUAL(t1, total);
+        co_await compare_stream_data(is1, is_ref, total);
+    }
+    {
+        BOOST_TEST_MESSAGE("Check stream 2");
+        auto [is_ref, total] = stream_from_buffers(std::move(written2));
+        BOOST_REQUIRE_EQUAL(t2, total);
+        co_await compare_stream_data(is2, is_ref, total);
+    }
+}
+
+static future<> chunked_read_helper(const local_gcs_wrapper& w, bool do_ranged, bool encrypt, bool do_additional_skip) {
+    auto& c = w.client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+
+    auto dest_size = 56*1024*1024 + 357 + 1022*67;
+
+    // ensure we remove the object
+    w.objects_to_delete.emplace_back(name);
+
+    auto k = make_shared<encryption::symmetric_key>(encryption::key_info{ "AES", 128 });
+
+    {
+        data_sink sink = c.create_upload_sink(w.bucket, name);
+        if (encrypt) {
+            sink = data_sink(encryption::make_encrypted_sink(std::move(sink), k));
+        }
+        co_await write_object_of_size(sink, dest_size, &written, std::nullopt, !encrypt);
+        co_await sink.flush();
+        co_await sink.close();
+    }
+
+    auto [is_ref, total] = stream_from_buffers(std::move(std::move(written)));
+
+    auto chunk_size = 64 * 1024;
+    auto start = do_ranged ? 48*1024*1024 + 6 * chunk_size : 0;
+    auto len = dest_size - start;
+    auto skip = do_additional_skip ? chunk_size : 0;
+
+    co_await is_ref.skip(start + skip);
+
+    data_source source = c.create_download_source(w.bucket, name);
+    if (encrypt) {
+        source = data_source(encryption::make_encrypted_source(std::move(source), k));
+    }
+    if (do_ranged) {
+        source = create_ranged_source(std::move(source), start, len);
+    }
+
+    input_stream<char> is(std::move(source));
+
+    if (skip) {
+        co_await is.skip(chunk_size);
+    }
+
+    for (auto rem = len - skip; rem > 0;) {
+        auto chunk = std::min(rem, chunk_size);
+
+        auto buf1 = co_await is_ref.read_exactly(chunk_size);
+        auto buf2 = co_await is.read_exactly(chunk_size);
+
+        BOOST_REQUIRE_EQUAL(buf1.size(), chunk);
+        BOOST_REQUIRE_EQUAL(buf2.size(), chunk);
+
+        BOOST_REQUIRE_EQUAL(buf1, buf2);
+
+        rem -= chunk;
+    }
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, true, false, false);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial_with_skip, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, true, false, true);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_fully_encrypted, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, false, true, false);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial_encrypted, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, true, true, false);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial_encrypted_with_skip, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    co_await chunked_read_helper(*this, true, true, true);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

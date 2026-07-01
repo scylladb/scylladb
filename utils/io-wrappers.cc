@@ -192,11 +192,10 @@ seastar::file create_file_for_seekable_source(seekable_data_source src, seekable
             , _src_func(std::move(src_func))
         {}
         future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
-            co_await _source.seek(pos);
             size_t res = 0;
             auto dst = reinterpret_cast<char*>(buffer);
             while (len) {
-                auto buf = co_await _source.get(len);
+                auto buf = co_await _source.get_at(pos + res, len);
                 assert(buf.size() <= len);
                 if (buf.empty()) {
                     break;
@@ -293,7 +292,13 @@ seastar::data_source create_ranged_source(data_source src, uint64_t offset, std:
                 co_return temporary_buffer<char>{};
             }
             if (auto skip = std::exchange(_offset, 0); (skip + n) > 0) {
-                co_return trim(co_await _src.skip(skip + n));
+                _read += std::min(_len - _read, n);
+                // SCYLLADB-2962. Need to ensure any empty
+                // result from underlying source is actual eof.
+                auto res = co_await _src.skip(skip + n);
+                if (!res.empty() || _len == _read) {
+                    co_return trim(std::move(res));
+                }
             }
             co_return trim(co_await _src.get());
         }
