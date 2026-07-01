@@ -60,6 +60,7 @@ async def test_removenode_with_coordinator_restart(manager: ManagerClient):
     await manager.remove_node(servers[1].server_id, servers[2].server_id)
 
 
+@pytest.mark.slow
 async def test_replace(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [

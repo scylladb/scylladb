@@ -64,6 +64,7 @@ pytestmark = [
         "prepared-statements",
     ],
 )
+@pytest.mark.slow
 def test_scylla_commands(gdb_cmd, command):
     result = execute_gdb_command(gdb_cmd, command)
     assert result.returncode == 0, (

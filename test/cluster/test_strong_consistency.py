@@ -588,6 +588,7 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
     await manager.server_stop_gracefully(server.server_id)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_no_schema_when_apply_write(manager: ManagerClient):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
@@ -907,6 +908,7 @@ async def test_drop_table_during_insert(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+@pytest.mark.slow
 async def test_timed_out_queries(manager: ManagerClient):
     """
     A simple test verifying that we don't get stuck for an indefinite amount

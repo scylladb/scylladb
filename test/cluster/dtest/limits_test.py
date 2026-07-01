@@ -275,6 +275,7 @@ class TestLimits(Tester):
 
         session.execute("""TRUNCATE test1""")
 
+    @pytest.mark.slow
     def test_max_cells(self):
         if self.cluster.scylla_mode == "debug":
             skip_env("client times out in debug mode")

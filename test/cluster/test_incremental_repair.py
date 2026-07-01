@@ -442,6 +442,7 @@ async def test_tablet_incremental_repair_and_upgradesstables(manager: ManagerCli
 async def test_tablet_incremental_repair_and_major(manager: ManagerClient):
     await do_tablet_incremental_repair_and_ops(manager, 'major')
 
+@pytest.mark.slow
 async def test_tablet_incremental_repair_and_minor(manager: ManagerClient):
     nr_keys = 100
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await prepare_cluster_for_incremental_repair(manager, nr_keys)
@@ -574,6 +575,7 @@ async def test_tablet_incremental_repair_existing_and_repair_produced_sstable(ma
     await verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks, repaired_keys, unrepaired_keys)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager):
     nr_keys = 100
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await prepare_cluster_for_incremental_repair(manager, nr_keys)
@@ -685,6 +687,7 @@ async def do_test_tablet_incremental_repair_merge_error(manager, error):
     await verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks, repaired_keys, unrepaired_keys)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_tablet_incremental_repair_merge_error_in_merge_finalization(manager):
     await do_test_tablet_incremental_repair_merge_error(manager, 'handle_tablet_resize_finalization_for_merge_error')
 
@@ -752,6 +755,7 @@ async def test_incremental_repair_tablet_time_metrics(manager: ManagerClient):
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/26346
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_incremental_repair_finishes_when_tablet_skips_end_repair_stage(manager):
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
 
@@ -872,6 +876,7 @@ async def test_incremental_retry_end_repair_stage(manager):
 # with appending sstables produced by repair to a list work correctly with
 # multishard writer when the shard count is different.
 @pytest.mark.parametrize("use_tablet", [False, True])
+@pytest.mark.slow
 async def test_repair_sigsegv_with_diff_shard_count(manager: ManagerClient, use_tablet):
     cmdline0 = [ '--smp', '2']
     cmdline1 = [ '--smp', '3']
@@ -1212,6 +1217,7 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     return current_key
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_incremental_repair_race_window_promotes_unrepaired_data(manager: ManagerClient):
     cmdline = ['--hinted-handoff-enabled', '0']
     servers, cql, hosts, _, _, _, _, _, _, _ = \

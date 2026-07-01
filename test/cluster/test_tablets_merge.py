@@ -373,6 +373,7 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
 
 # Reproduces #23284
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.slow
 async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: ManagerClient, racks = 2):
     cmdline = ['--smp', '4', '-m', '2G', '--target-tablet-size-in-bytes', '30000', '--max-task-backlog', '200', '--logger-log-level', 'load_balancer=debug']
     config = {'tablet_load_stats_refresh_interval_in_seconds': 1}

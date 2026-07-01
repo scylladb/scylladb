@@ -25,6 +25,7 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
+@pytest.mark.slow
 async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes_with: str):
     """
     Test that the Raft-based recovery procedure works correctly with the user data. It involves testing:
