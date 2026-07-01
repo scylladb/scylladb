@@ -9,10 +9,15 @@
 #############################################################################
 
 import re
+import time
+
 import pytest
+import requests
+from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import InvalidRequest, SyntaxException
 
-from .util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int, new_user, new_session
+from .test_service_levels import new_service_level
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -462,3 +467,70 @@ def test_lwt_counter_syntax_decimal_magnitude_difference(cql, test_keyspace, scy
         cql.execute(f"INSERT INTO {table} (p, d) VALUES ({p}, 1e100000000)")
         with pytest.raises(InvalidRequest):
             cql.execute(f"UPDATE {table} SET d = d + 1 WHERE p = {p} IF EXISTS")
+
+
+# Helpers for verifying LWT read accounting via Prometheus metrics.
+# Each service level has its own reader_concurrency_semaphore exposed as
+# scylla_database_total_reads{class="sl:<name>"}.
+_METRIC_RE = re.compile(r'^scylla_database_total_reads\{([^}]*)\}\s+([0-9.eE+-]+)$')
+_LABEL_RE = re.compile(r'(\w+)="([^"]*)"')
+
+def _total_reads_by_class(host, sl_classes):
+    resp = requests.get(f"http://{host}:9180/metrics", timeout=30)
+    resp.raise_for_status()
+    totals = {c: 0.0 for c in sl_classes}
+    for line in resp.text.splitlines():
+        m = _METRIC_RE.match(line)
+        if not m:
+            continue
+        cls = dict(_LABEL_RE.findall(m.group(1))).get("class")
+        if cls in totals:
+            totals[cls] += float(m.group(2))
+    return totals
+
+
+# This test verifies that LWT (Paxos) internal reads are admitted under
+# the caller's service level, not always under sl:default.  It disproves
+# a theory in SCYLLADB-2379 that service levels might not be propagated
+# to LWT reads.
+def test_lwt_reads_use_attached_service_level(scylla_only, cql, host, test_keyspace_vnodes):
+    with new_user(cql, with_superuser_privileges=True) as user, \
+         new_service_level(cql, shares=200, role=user) as sl, \
+         new_test_table(cql, test_keyspace_vnodes,
+                        "p int, c int, v int, PRIMARY KEY (p, c)") as table:
+        sl_class = f"sl:{sl}"
+        insert = f"INSERT INTO {table} (p, c, v) VALUES (?, 0, 0) IF NOT EXISTS"
+        N = 1000
+
+        # Phase 1: Wait for the service level to propagate. A session's
+        # service level is resolved at login from an asynchronously-populated
+        # cache, so open a new session on each attempt until one lands on the
+        # SL's semaphore.
+        deadline = time.time() + 30
+        while True:
+            with new_session(cql, user) as session:
+                stmt = session.prepare(insert)
+                before = _total_reads_by_class(host, [sl_class])
+                execute_concurrent_with_args(session, stmt, [(0,)])
+                after = _total_reads_by_class(host, [sl_class])
+                if after[sl_class] - before[sl_class] > 0:
+                    break
+            assert time.time() < deadline, f"service level {sl_class} never took effect"
+
+        # Phase 2: Run the actual measurement. All N LWTs should account
+        # their reads to the SL's semaphore; none should leak to sl:default.
+        with new_session(cql, user) as session:
+            stmt = session.prepare(insert)
+            params = [(p,) for p in range(1, N + 1)]
+            classes = [sl_class, "sl:default"]
+            before = _total_reads_by_class(host, classes)
+            execute_concurrent_with_args(session, stmt, params)
+            after = _total_reads_by_class(host, classes)
+            sl_delta = after[sl_class] - before[sl_class]
+            default_delta = after["sl:default"] - before["sl:default"]
+
+        assert sl_delta >= N, (
+            f"expected >= {N} reads on {sl_class}, got {sl_delta}")
+        assert default_delta == 0, (
+            f"LWT reads leaked to sl:default: {default_delta} reads "
+            f"accounted to sl:default vs {sl_delta} to {sl_class}")
