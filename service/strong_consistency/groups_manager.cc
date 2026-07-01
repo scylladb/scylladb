@@ -362,6 +362,52 @@ void groups_manager::init_messaging_service() {
             co_return result;
         }
     );
+    ser::groups_manager_rpc_verbs::register_set_stable_timestamp(&_ms,
+        [this] (raft::server_id dst_id, service::fencing_token fence, applied_timestamp_per_tablet stable_timestamps) -> future<> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            const auto tm = _db.get_token_metadata_ptr();
+            const auto my_host = tm->get_my_id();
+            if (auto stale = _qp.proxy().check_fence(fence, my_host); stale) {
+                throw std::move(*stale);
+            }
+
+            // Group the tablets by the shard that hosts their local replica, so we
+            // hop to each shard at most once.
+            std::unordered_map<shard_id, applied_timestamp_per_tablet> by_shard;
+            for (const auto& [tablet, ts] : stable_timestamps) {
+                co_await coroutine::maybe_yield();
+                if (!tm->tablets().has_tablet_map(tablet.table)) {
+                    continue;
+                }
+                auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+                if (size_t(tablet.tablet) >= tmap.tablet_count()) {
+                    continue;
+                }
+                auto& info = tmap.get_tablet_info(tablet.tablet);
+                if (auto replica = info.maybe_find_replica(my_host); replica) {
+                    by_shard[replica->shard][tablet] = ts;
+                }
+            }
+
+            co_await coroutine::parallel_for_each(by_shard, [&] (const auto& entry) -> future<> {
+                const auto& [shard, local_timestamps] = entry;
+                co_await container().invoke_on(shard, [&local_timestamps] (this auto, groups_manager& gm) -> future<> {
+                    auto& tablets = gm._db.get_token_metadata().tablets();
+                    for (const auto& [tablet, ts] : local_timestamps) {
+                        co_await coroutine::maybe_yield();
+                        auto group_id = tablets.get_tablet_map(tablet.table).get_tablet_raft_info(tablet.tablet).group_id;
+                        auto git = gm._raft_groups.find(group_id);
+                        if (git == gm._raft_groups.end()) {
+                            continue; // Group no longer hosted here; drop the update.
+                        }
+                        gm._stable_timestamp_tracker.advance(git->second, ts);
+                    }
+                });
+            });
+        }
+    );
 }
 
 future<> groups_manager::uninit_messaging_service() {
@@ -565,6 +611,7 @@ future<> groups_manager::stable_timestamp_tracker::refresh() {
         }
     });
 
+    std::unordered_map<host_id, applied_timestamp_per_tablet> stable_timestamps;
     for (const auto& table : sc_tables) {
         _as.check();
         const auto& tmap = tm->tablets().get_tablet_map(table);
@@ -589,10 +636,33 @@ future<> groups_manager::stable_timestamp_tracker::refresh() {
                 return ts_it == host_it->second.end() ? api::min_timestamp : ts_it->second;
             };
             api::timestamp_type min_ts = std::ranges::min(ti.replicas | std::views::transform(replica_ts));
-            advance(git->second, min_ts);
+            advance(state, min_ts);
+
+            for (const auto& replica : ti.replicas) {
+                if (replica.host != my_host) {
+                    stable_timestamps[replica.host][global_tablet_id{table, tid}] = min_ts;
+                }
+            }
             return make_ready_future<>();
         });
     }
+
+    _as.check();
+    co_await coroutine::parallel_for_each(stable_timestamps, [&](const auto& entry) -> future<> {
+        auto& [host, timestamps] = entry;
+        auto dst = raft::server_id(host.uuid());
+        try {
+            abort_on_expiry aoe{lowres_clock::now() + std::chrono::seconds(5)};
+            auto subscription = _as.subscribe([&aoe] () noexcept {
+                aoe.abort_source().request_abort();
+            });
+            co_await ser::groups_manager_rpc_verbs::send_set_stable_timestamp(
+                &_ms, host, aoe.abort_source(), dst, fence, std::move(timestamps));
+        } catch (...) {
+            static thread_local logger::rate_limit rate_limit{std::chrono::seconds(5)};
+            logger.log(log_level::warn, rate_limit, "stable_timestamp_tracker::refresh: failed to scatter stable_timestamp to {}: {}", host, std::current_exception());
+        }
+    });
 }
 
 void groups_manager::update(token_metadata_ptr new_tm) {

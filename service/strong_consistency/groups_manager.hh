@@ -151,9 +151,6 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // The background fiber that periodically refreshes stable_timestamp.
         future<> _fiber = make_ready_future<>();
 
-        // Bumps state.stable_timestamp to candidate if it is greater.
-        void advance(raft_group_state& state, api::timestamp_type candidate);
-
         // A single refresh pass: for every tablet of a group led by this node,
         // collects applied timestamps from all replicas and advances the group's
         // stable_timestamp to the minimum across replicas.
@@ -174,6 +171,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
         // Requests shutdown and waits for the background fiber to finish.
         future<> stop();
+
+        // Bumps state.stable_timestamp to candidate if it is greater.
+        void advance(raft_group_state& state, api::timestamp_type candidate);
     };
 
     netw::messaging_service& _ms;
