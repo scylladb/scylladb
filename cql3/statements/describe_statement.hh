@@ -54,6 +54,11 @@ public:
     virtual seastar::future<> check_access(query_processor& qp, const service::client_state& state) const override;
     virtual seastar::shared_ptr<const metadata> get_result_metadata() const override;
 
+    // DESCRIBE only introspects schema metadata, it is not user load.
+    bool should_reclassify_control_connection() const override {
+        return false;
+    }
+
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
     execute(cql3::query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
 };
