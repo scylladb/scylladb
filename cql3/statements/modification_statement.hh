@@ -56,14 +56,14 @@ private:
     // columns, to match Cassandra behaviour.
     // This bitset contains a mask of ordinal_id identifiers
     // of the required columns.
-    column_set _columns_to_read;
+    std::unique_ptr<column_set> _columns_to_read;
     // A CAS statement returns a result set with the columns
     // used in condition expression. This is a mask of ordinal_id
     // identifiers of the required columns. Contains all columns
     // of a schema if we have IF EXISTS/IF NOT EXISTS. Does *not*
     // contain LIST columns prefetched to apply updates, unless
     // these columns are also used in conditions.
-    column_set _columns_of_cas_result_set;
+    std::unique_ptr<column_set> _columns_of_cas_result_set;
 public:
     const schema_ptr s;
     const std::unique_ptr<attributes> attrs;
@@ -73,8 +73,14 @@ protected:
     cql_stats& _stats;
 
     expr::expression _condition = expr::conjunction{{}}; // TRUE
+protected:
+    shared_ptr<const restrictions::statement_restrictions> _restrictions;
 private:
     const ks_selector _ks_sel;
+
+    // The following fields are cold (only used during prepare or CAS paths).
+    // They are placed last so that padding falls at the struct tail, and the
+    // hot cache line 3 contains _restrictions and _ks_sel instead.
 
     // True if this statement has _if_exists or _if_not_exists or other
     // conditions that apply to static/regular columns, respectively.
@@ -99,9 +105,6 @@ private:
     bool _selects_a_collection = false;
 
     std::optional<bool> _is_raw_counter_shard_write;
-
-protected:
-    shared_ptr<const restrictions::statement_restrictions> _restrictions;
 public:
     typedef std::optional<std::unordered_map<sstring, bytes_opt>> json_cache_opt;
 
@@ -199,11 +202,13 @@ public:
     bool requires_lwt() const { return _requires_lwt; }
 
     // Columns used in this statement conditions or operations.
-    const column_set& columns_to_read() const { return _columns_to_read; }
+    // Precondition: requires_read() || has_conditions() (i.e., _columns_to_read is populated).
+    const column_set& columns_to_read() const { return *_columns_to_read; }
 
     // Columns of the statement result set (only CAS statement
     // returns a result set).
-    const column_set& columns_of_cas_result_set() const { return _columns_of_cas_result_set; }
+    // Precondition: has_conditions() (i.e., build_cas_result_set_metadata() was called).
+    const column_set& columns_of_cas_result_set() const { return *_columns_of_cas_result_set; }
 
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
