@@ -356,6 +356,13 @@ installconfig 644 conf/cassandra-rackdc.properties "$retc"/scylla
 if $housekeeping; then
     installconfig 644 conf/housekeeping.cfg "$retc"/scylla.d
 fi
+# scylla-perf-collector
+if ! $nonroot; then
+    install -d -m755 "$retc"/logrotate.d
+    installconfig 644 dist/common/perf-collector/scylla-perf-collector.logrotate "$retc"/logrotate.d/scylla-perf-collector
+    install -d -m755 "$root"/var/log/scylla-perf
+    install -d -m755 "$root"/var/log/scylla-perf/old
+fi
 # scylla-kernel-conf
 if ! $nonroot; then
     install -m755 -d "$rusr/lib/sysctl.d"
@@ -395,6 +402,7 @@ if ! $without_systemd; then
     install -m644 dist/common/systemd/scylla-housekeeping-daily.service -Dt "$rsystemd"
     install -m644 dist/common/systemd/scylla-housekeeping-restart.service -Dt "$rsystemd"
     install -m644 dist/common/systemd/scylla-server.service -Dt "$rsystemd"
+    install -m644 dist/common/perf-collector/scylla-perf-collector.service -Dt "$rsystemd"
     install -m644 dist/common/systemd/*.slice -Dt "$rsystemd"
     install -m644 dist/common/systemd/*.timer -Dt "$rsystemd"
 fi

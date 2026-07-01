@@ -46,11 +46,20 @@ Description: Scylla kernel tuning configuration
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
 
+Package: %{product}-perf-collector
+Architecture: any
+Depends: linux-tools-common, logrotate, zstd
+Recommends: linux-tools-generic
+Description: Scylla system-wide perf data collector
+ This package contains the system-wide perf data collector for ScyllaDB.
+ It collects low-overhead CPU profiling samples and rotates logs automatically.
+
 Package: %{product}
 Section: metapackages
 Architecture: any
 Depends: %{product}-server (= ${binary:Version})
  , %{product}-kernel-conf (= ${binary:Version})
+ , %{product}-perf-collector (= ${binary:Version})
  , scylla-node-exporter
  , %{product}-cqlsh (= ${binary:Version})
 Replaces: scylla-enterprise (<< 2025.1.0~)

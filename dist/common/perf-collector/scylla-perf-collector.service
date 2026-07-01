@@ -1,0 +1,16 @@
+[Unit]
+Description=Collect system-wide perf samples
+After=network.target
+
+[Service]
+Type=simple
+Slice=scylla-helper.slice
+ExecStart=/usr/bin/perf record -a -F 2 --switch-output=1d -o /var/log/scylla-perf/perf.data
+Restart=always
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+
+[Install]
+WantedBy=multi-user.target

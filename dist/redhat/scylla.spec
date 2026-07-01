@@ -11,6 +11,7 @@ Requires:       %{product}-server = %{version}-%{release}
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
 Requires:       %{product}-kernel-conf = %{version}-%{release}
+Requires:       %{product}-perf-collector = %{version}-%{release}
 Requires:       scylla-node-exporter
 Requires:       %{product}-cqlsh = %{version}-%{release}
 Provides:       scylla-enterprise = %{version}-%{release}
@@ -220,6 +221,35 @@ fi
 /opt/scylladb/kernel_conf/*
 %ghost /etc/sysctl.d/99-scylla-perfevent.conf
 %ghost /etc/sysctl.d/99-scylla-tcp.conf
+
+
+%package perf-collector
+Group:          Applications/Databases
+Summary:        Scylla system-wide perf data collector
+Requires:       perf
+Requires:       logrotate
+Requires:       zstd
+%description perf-collector
+This package contains the system-wide perf data collector for ScyllaDB.
+It collects low-overhead CPU profiling samples and rotates logs automatically.
+
+%post perf-collector
+/usr/bin/systemctl daemon-reload ||:
+
+%preun perf-collector
+if [ $1 -eq 0 ] ; then
+    /usr/bin/systemctl --no-reload disable scylla-perf-collector.service ||:
+    /usr/bin/systemctl stop scylla-perf-collector.service ||:
+fi
+
+%postun perf-collector
+/usr/bin/systemctl daemon-reload ||:
+
+%files perf-collector
+%defattr(-,root,root)
+%config(noreplace) /etc/logrotate.d/scylla-perf-collector
+%attr(0644,root,root) %{_unitdir}/scylla-perf-collector.service
+%attr(0755,root,root) %dir /var/log/scylla-perf
 
 
 %changelog
