@@ -3107,7 +3107,13 @@ public:
         if (_step.reader.is_end_of_stream() && _step.reader.is_buffer_empty()) {
             // before going back to the minimum token, advance current_key to the end
             // and check for built views in that range.
-            _step.current_key = { _step.prange.end().value_or(dht::ring_position::max()).value().token(), partition_key::make_empty()};
+            // Use token::last() (the largest key-kind token) rather than the
+            // partition range's after_all_keys end bound: decorated_key stores its
+            // token as a raw value without the kind, so an after_all_keys token can't
+            // be represented (and asserts in debug builds). last() is >= every real
+            // first_token (always a key or minimum token), so check_for_built_views()
+            // still sees current_token() >= first_token for all views.
+            _step.current_key = { dht::token::last(), partition_key::make_empty() };
             check_for_built_views();
 
             _step.current_key = {dht::minimum_token(), partition_key::make_empty()};

@@ -120,7 +120,7 @@ SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     auto dk = partitioner.decorate_key(*s, key);
 
     // Expected value was taken from Origin
-    BOOST_REQUIRE_EQUAL(dk._token, token_from_long(4958784316840156970));
+    BOOST_REQUIRE_EQUAL(dk.token(), token_from_long(4958784316840156970));
     BOOST_REQUIRE(dk._key.equal(*s, key));
 }
 
@@ -272,6 +272,66 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_ordering) {
       .next(dht::ring_position_view::max())
         .equal_to(dht::ring_position_ext::max())
       .check();
+}
+
+// Covers the compact raw_token encoding used by decorated_key and
+// ring_position_view: the token is stored as a raw 8-byte value (without the
+// kind), and the min/max sentinels are reconstructed from that raw value and
+// (for ring_position_view) the weight. The interesting case is a real key
+// whose token raw value is INT64_MAX (INT64_MIN normalizes to INT64_MAX): it
+// must not be mistaken for the minimum/after-all-keys sentinels, which share
+// the boundary raw values INT64_MIN/INT64_MAX.
+SEASTAR_THREAD_TEST_CASE(test_ring_position_raw_token_encoding) {
+    simple_schema table;
+    auto s = table.schema();
+    auto pk = table.make_pkeys(1)[0].key();
+
+    // A normal key token round-trips through decorated_key and is neither sentinel.
+    {
+        auto dk = table.make_pkeys(1)[0];
+        BOOST_REQUIRE(!dk.token().is_minimum());
+        BOOST_REQUIRE(!dk.token().is_maximum());
+        BOOST_REQUIRE_EQUAL(dk.token(), dht::token(dk.token().raw()));
+        auto v = dht::ring_position_view(dk);
+        BOOST_REQUIRE(!v.is_min());
+        BOOST_REQUIRE(!v.is_max());
+    }
+
+    // minimum_token() (before_all_keys) is stored as a disengaged raw_token and
+    // round-trips back to the minimum.
+    {
+        dht::decorated_key dk(dht::minimum_token(), pk);
+        BOOST_REQUIRE(dk.token().is_minimum());
+        BOOST_REQUIRE_EQUAL(dk.token(), dht::minimum_token());
+    }
+
+    // A real key whose token raw value is INT64_MAX stays a key and is not the
+    // after-all-keys sentinel, even though both encode to raw INT64_MAX.
+    {
+        auto t_max_raw = dht::token(std::numeric_limits<int64_t>::max());
+        BOOST_REQUIRE_EQUAL(t_max_raw.raw(), std::numeric_limits<int64_t>::max());
+        BOOST_REQUIRE(!t_max_raw.is_maximum());
+        dht::decorated_key dk(t_max_raw, pk);
+        BOOST_REQUIRE(!dk.token().is_maximum());
+        BOOST_REQUIRE_EQUAL(dk.token(), t_max_raw);
+        BOOST_REQUIRE(!dht::ring_position_view(dk).is_max());
+    }
+
+    // ring_position_view sentinels report the right flags...
+    BOOST_REQUIRE(dht::ring_position_view::min().is_min());
+    BOOST_REQUIRE(!dht::ring_position_view::min().is_max());
+    BOOST_REQUIRE(dht::ring_position_view::max().is_max());
+    BOOST_REQUIRE(!dht::ring_position_view::max().is_min());
+
+    // ...and max() sorts strictly after the end bound of a key whose token raw
+    // value is INT64_MAX: same raw value, distinguished only by weight.
+    {
+        auto cmp = dht::ring_position_comparator(*s);
+        dht::decorated_key dk(dht::token(std::numeric_limits<int64_t>::max()), pk);
+        auto key_end = dht::ring_position(dk.token(), dht::ring_position::token_bound::end);
+        BOOST_REQUIRE(cmp(dht::ring_position_view(key_end), dht::ring_position_view::max()) < 0);
+        BOOST_REQUIRE(cmp(dht::ring_position_view::max(), dht::ring_position_view(key_end)) > 0);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_token_no_wraparound_1) {

@@ -329,13 +329,13 @@ public:
         auto it = candidates.begin();
         auto& first_sstable = *it;
         it++;
-        dht::token first = first_sstable->get_first_decorated_key()._token;
-        dht::token last = first_sstable->get_last_decorated_key()._token;
+        dht::token first = first_sstable->get_first_decorated_key().token();
+        dht::token last = first_sstable->get_last_decorated_key().token();
         while (it != candidates.end()) {
             auto& candidate_sstable = *it;
             it++;
-            dht::token first_candidate = candidate_sstable->get_first_decorated_key()._token;
-            dht::token last_candidate = candidate_sstable->get_last_decorated_key()._token;
+            dht::token first_candidate = candidate_sstable->get_first_decorated_key().token();
+            dht::token last_candidate = candidate_sstable->get_last_decorated_key().token();
 
             first = first <= first_candidate? first : first_candidate;
             last = last >= last_candidate ? last : last_candidate;
@@ -345,7 +345,7 @@ public:
 
     template <typename T>
     static std::vector<sstables::shared_sstable> overlapping(const schema& s, const sstables::shared_sstable& sstable, const T& others) {
-        return overlapping(s, sstable->get_first_decorated_key()._token, sstable->get_last_decorated_key()._token, others);
+        return overlapping(s, sstable->get_first_decorated_key().token(), sstable->get_last_decorated_key().token(), others);
     }
 
     /**
@@ -359,7 +359,7 @@ public:
         auto range = ::wrapping_interval<dht::token>::make(start, end);
 
         for (auto& candidate : sstables) {
-            auto candidate_range = ::wrapping_interval<dht::token>::make(candidate->get_first_decorated_key()._token, candidate->get_last_decorated_key()._token);
+            auto candidate_range = ::wrapping_interval<dht::token>::make(candidate->get_first_decorated_key().token(), candidate->get_last_decorated_key().token());
 
             if (range.overlaps(candidate_range, dht::token_comparator())) {
                 overlapped.push_back(candidate);
