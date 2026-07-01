@@ -116,10 +116,9 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
     await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
 
     logging.info(f'Removing {dead_servers}')
-    for i, being_removed in enumerate(dead_servers):
-        ignored = [dead_srv.ip_addr for dead_srv in dead_servers[i + 1:]]
-        initiator = live_servers[i % 2]
-        await manager.remove_node(initiator.server_id, being_removed.server_id, ignored)
+    dead_host_ids = await gather_safely(*(manager.get_host_id(srv.server_id) for srv in dead_servers))
+    await gather_safely(*(manager.remove_node(live_servers[i % 2].server_id, dead_servers[i].server_id,
+                                              dead_host_ids) for i in range(len(dead_servers))))
 
     logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
     await gather_safely(*(manager.server_remove_config_option(srv.server_id, 'recovery_leader') for srv in live_servers))
