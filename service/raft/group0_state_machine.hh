@@ -9,6 +9,7 @@
 
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
+#include <unordered_map>
 
 #include "data_dictionary/data_dictionary.hh"
 #include "keys/keys.hh"
@@ -16,6 +17,7 @@
 #include "raft/raft.hh"
 #include "service/raft/group0_state_id_handler.hh"
 #include "mutation/canonical_mutation.hh"
+#include "mutation/mutation.hh"
 #include "service/raft/raft_state_machine.hh"
 #include "gms/feature.hh"
 #include "gms/inet_address.hh"
@@ -56,6 +58,97 @@ struct mixed_change {
 // mutations' table_id.
 struct write_mutations {
     utils::chunked_vector<canonical_mutation> mutations;
+};
+
+
+/// Collects updates to the group0 state machine
+/// Merges mutations of the same partition in order to minimize output mutation.
+///
+/// Abstracts away details like what is the optimal split size of the output mutation,
+/// how to merge mutations of the same partition, how to store them without causing reactor stalls,
+/// and what is the serialized format of the output mutations (canonical_mutation).
+class group0_update_collector {
+    // Upper bound on the size of a single output mutation. add() keeps the
+    // accumulated per-partition mutations within this bound, and collect()
+    // splits any mutation that still exceeds it.
+    const size_t _max_mutation_size;
+
+    // Currently accumulating mutation per partition, together with a running
+    // upper-bound estimate of its size. Kept within _max_mutation_size by add().
+    std::unordered_map<mutation, size_t, mutation_hash_by_key, mutation_equals_by_key> _mutations;
+
+    // Mutations that reached _max_mutation_size and are no longer merged into,
+    // together with their running upper-bound size estimate.
+    utils::chunked_vector<std::pair<mutation, size_t>> _closed_mutations;
+    utils::chunked_vector<canonical_mutation> _frozen_mutations;
+    uint64_t _change_counter = 0;
+
+    // Locates the accumulating mutation that `m` should be merged into,
+    // accounting its size against it. Returns nullptr if `m` was instead stored
+    // as a new accumulation bucket - either because there was none for its
+    // partition, or the existing one was sealed to keep it within
+    // _max_mutation_size. In the nullptr cases `m` is moved-from.
+    mutation* locate_for_merge(mutation& m);
+
+public:
+    /// Default upper bound on the size of a single output canonical_mutation.
+    /// Should be large enough to amortize the per canonical_mutation memory overhead,
+    /// but small enough to avoid reactor stalls when (de)serializing and applying the mutation to memtables.
+    /// There is a lot of code which calls non-yielding canonical_mutation::to_mutation() and canonical_mutation(cons mutation&)
+    /// on group0 command fragments. Until that's fixed, the splitting before group0 command is built must be there.
+    static constexpr size_t default_max_mutation_size = 1 * 1024 * 1024;
+
+    explicit group0_update_collector(size_t max_mutation_size = default_max_mutation_size)
+        : _max_mutation_size(max_mutation_size) {}
+
+    /// Adds a mutation to the collector.
+    /// The mutation is merged with already collected mutations of the same
+    /// partition, without letting the accumulated mutation grow beyond
+    /// max_mutation_size.
+    future<> add(mutation);
+
+    /// Like add() but assumes the mutation is small-enough to not need yielding.
+    /// For places which don't want to defer due to future<>.
+    void add_small(mutation);
+
+    /// Like add() but assumes the mutation is large-enough to not need merging.
+    /// It may be split later in collect().
+    void add_large(mutation);
+
+    /// Adds a canonical mutation to the collector.
+    /// Not merged with other mutations and not split.
+    /// This is available for interoperability with old code, prefer add(mutation).
+    void add(canonical_mutation);
+
+    /// Adds a vector of canonical mutations to the collector.
+    /// Not merged with other mutations and not split.
+    /// This is available for interoperability with old code, prefer add(mutation).
+    void add(utils::chunked_vector<canonical_mutation>);
+
+    /// Returns a reference to the vector of canonical_mutations that have been added to the collector.
+    /// This is available for interoperability with old code, prefer add(mutation).
+    utils::chunked_vector<canonical_mutation>& frozen_mutations() {
+        return _frozen_mutations;
+    }
+
+    /// Converts accumulated mutations into a vector of canonical_mutations.
+    /// Any collected mutation whose (in-memory) size exceeds max_mutation_size
+    /// is split into several smaller mutations of the same partition, so that no
+    /// single output mutation is much larger than max_mutation_size.
+    /// It's a destructive conversion, the collected mutations are cleared.
+    future<utils::chunked_vector<canonical_mutation>> collect();
+
+    /// Clears the collected mutations.
+    void clear();
+
+    /// The change counter is incremented each time observable state of the collector changes.
+    uint64_t change_counter() const {
+        return _change_counter;
+    }
+
+    bool empty() const {
+        return _mutations.empty() && _closed_mutations.empty() && _frozen_mutations.empty();
+    }
 };
 
 struct group0_command {
