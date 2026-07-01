@@ -8,11 +8,14 @@
 
 #pragma once
 
+#include <deque>
+#include <functional>
 #include <boost/intrusive/list.hpp>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/util/log.hh>
 #include "reader_permit.hh"
 #include "utils/updateable_value.hh"
 #include "dht/i_partitioner_fwd.hh"
@@ -23,6 +26,108 @@ using namespace seastar;
 
 class mutation_reader;
 using mutation_reader_opt = optimized_optional<mutation_reader>;
+
+extern logger rcslog;
+
+class reader_concurrency_semaphore;
+
+// A shared pool of memory that can be used by multiple reader_concurrency_semaphores.
+// When a semaphore exhausts its dedicated memory, it can borrow from this pool.
+// A pool with total_memory=0 is inert: available_memory() returns 0, so no
+// borrowing occurs.
+//
+// Semaphores that have waiters blocked on memory can register themselves via
+// request_wakeup().  When memory is returned to the pool, a single registered
+// semaphore is woken up (FIFO order) so it can re-evaluate admission.  If it
+// still has blocked waiters, it re-registers at the back, giving round-robin
+// fairness across all waiting semaphores.
+//
+// The wakeup is handed off strictly in registration order: the next semaphore
+// is only offered the memory once the current head has had its turn and
+// actually borrowed some of it (via maybe_wake_next_waiter()).  A head whose
+// waiter is too big to fund declines without borrowing, leaving the memory
+// parked for its next turn rather than letting a smaller waiter in another
+// semaphore skim it.  This keeps a single large return from waking only one of
+// several waiters it could satisfy, while still preventing cross-semaphore
+// starvation.
+class reader_concurrency_semaphore_shared_pool {
+    ssize_t _available_memory;
+    ssize_t _total_memory;
+    seastar::metrics::metric_groups _metrics;
+    std::deque<std::reference_wrapper<reader_concurrency_semaphore>> _notify_list;
+public:
+    explicit reader_concurrency_semaphore_shared_pool(ssize_t memory) noexcept
+        : _available_memory(memory)
+        , _total_memory(memory) {}
+
+    /// Return a per-shard empty pool (total_memory=0) for semaphores that
+    /// do not participate in any shared pool.
+    static reader_concurrency_semaphore_shared_pool& empty_pool() noexcept {
+        static thread_local reader_concurrency_semaphore_shared_pool instance{0};
+        return instance;
+    }
+
+    // Take memory from the pool. The caller must not borrow more than
+    // available_memory(); overdrawing is a bug, so it is logged and clamped
+    // rather than silently producing negative availability.
+    void borrow(ssize_t amount) noexcept {
+        _available_memory -= amount;
+        if (_available_memory < 0)  [[unlikely]] {
+            static thread_local logger::rate_limit rate_limit(std::chrono::seconds(30));
+            rcslog.log(log_level::warn, rate_limit,
+                    "shared reader concurrency semaphore pool over-borrowed memory: available={}, total={}, borrowed={}; clamping available memory to 0",
+                    _available_memory, _total_memory, amount);
+            _available_memory = 0;
+        }
+    }
+
+    // Return previously borrowed memory to the pool and wake a waiting
+    // semaphore if any. Repaying more than was borrowed is a bug, so it is
+    // logged and clamped to total_memory rather than inflating the pool.
+    void repay(ssize_t amount) noexcept;
+
+    // Register a semaphore to be woken up the next time memory is returned
+    // to the pool.  Duplicate registrations are suppressed.
+    void request_wakeup(reader_concurrency_semaphore& sem) noexcept;
+
+    // Remove a semaphore from the notify list.  Must be called before
+    // the semaphore is destroyed to avoid dangling references.
+    void unregister_wakeup(reader_concurrency_semaphore& sem) noexcept;
+
+    // Wake the next registered semaphore if the pool still has memory to lend.
+    // Called by a semaphore that just borrowed pool memory while admitting
+    // waiters, to hand the remaining memory off to the next waiter in line.
+    void maybe_wake_next_waiter() noexcept;
+
+    ssize_t available_memory() const noexcept {
+        if (_available_memory < 0) {
+            return 0;
+        }
+        return _available_memory;
+    }
+
+    ssize_t total_memory() const noexcept {
+        return _total_memory;
+    }
+
+    void register_metrics(const seastar::sstring& name);
+
+    // Resize the pool, applying the change to the available memory too. If the
+    // pool shrinks below the amount currently borrowed, _available_memory goes
+    // negative; available_memory() clamps that to 0 on read, and the borrowed
+    // memory is reconciled as borrowers repay. Callers must serialize resizes
+    // (the group does so via adjust()) so the accounting stays consistent.
+    void set_total_memory(ssize_t memory) noexcept {
+        const auto diff = memory - _total_memory;
+        _total_memory = memory;
+        _available_memory += diff;
+    }
+
+private:
+    // Pop the semaphore at the front of the notify list and wake its execution
+    // loop so it re-evaluates admission.  Caller must ensure the list isn't empty.
+    void wake_front_waiter() noexcept;
+};
 
 /// Specific semaphore for controlling reader concurrency
 ///
@@ -69,6 +174,7 @@ public:
 
     friend class reader_permit;
     friend struct reader_concurrency_semaphore_tester;
+    friend class reader_concurrency_semaphore_shared_pool;
 
     enum class evict_reason {
         permit, // evicted due to permit shortage
@@ -126,6 +232,8 @@ public:
         uint64_t sstables_read = 0;
         // Permits waiting on something: admission, memory or execution
         uint64_t waiters = 0;
+        // Current amount of memory borrowed from the shared pool.
+        ssize_t reads_memory_borrowed_from_shared_pool = 0;
 
         friend auto operator<=>(const stats&, const stats&) = default;
     };
@@ -165,6 +273,8 @@ public:
 private:
     resources _initial_resources;
     resources _resources;
+    reader_concurrency_semaphore_shared_pool& _shared_pool;
+    bool _on_shared_pool_notify_list = false;
     utils::observer<int> _count_observer;
 
     struct wait_queue {
@@ -191,6 +301,7 @@ private:
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
+    size_t _unreduced_memory = 0;
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
     utils::updateable_value<uint32_t> _cpu_concurrency;
@@ -210,7 +321,8 @@ private:
     [[nodiscard]] mutation_reader detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
     void evict(reader_permit::impl&, evict_reason reason) noexcept;
 
-    bool has_available_units(const resources& r) const;
+    enum class reason { all_ok = 0, ready_list, need_cpu_permits, memory_resources, count_resources };
+    reason has_available_units(const resources& r) const;
 
     bool cpu_concurrency_limit_reached() const;
 
@@ -229,7 +341,6 @@ private:
     // A return value of can_admit::maybe means admission might be possible if
     // some of the inactive readers are evicted.
     enum class can_admit { no, maybe, yes };
-    enum class reason { all_ok = 0, ready_list, need_cpu_permits, memory_resources, count_resources };
     struct admit_result { can_admit decision; reason why; };
     admit_result can_admit_read(const reader_permit::impl& permit) const noexcept;
 
@@ -272,9 +383,20 @@ private:
     uint64_t get_serialize_limit() const;
     uint64_t get_kill_limit() const;
 
+    // Memory consumption counted against the anti-OOM (serialize/kill) limits.
+    // It excludes the memory the shared pool could still fund (this semaphore's
+    // current borrow plus the still-free pool), so while the pool can lend
+    // memory the effective serialize/kill limits are raised by that amount.
+    // Throttling thus engages only on consumption the semaphore must cover from
+    // its own dedicated memory. May be negative when the pool can fully fund the
+    // current consumption.
+    ssize_t oom_protection_consumed_memory() const noexcept;
+
     // Throws std::bad_alloc if memory consumed is oom_kill_limit_multiply_threshold more than the memory limit.
     void consume(reader_permit::impl& permit, resources r);
     void signal(const resources& r) noexcept;
+
+    resources repay_shared_pool(const resources& r) noexcept;
 
     future<> with_ready_permit(reader_permit::impl& permit);
 
@@ -294,7 +416,8 @@ public:
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
             utils::updateable_value<float> preemptive_abort_factor,
-            register_metrics metrics);
+            register_metrics metrics,
+            reader_concurrency_semaphore_shared_pool& shared_pool);
 
     reader_concurrency_semaphore(
             int count,
@@ -305,10 +428,11 @@ public:
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
             utils::updateable_value<float> preemptive_abort_factor,
-            register_metrics metrics)
+            register_metrics metrics,
+            reader_concurrency_semaphore_shared_pool& shared_pool)
         : reader_concurrency_semaphore(utils::updateable_value(count), memory, std::move(name), max_queue_length,
                 std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier), std::move(cpu_concurrency),
-                std::move(preemptive_abort_factor), metrics)
+                std::move(preemptive_abort_factor), metrics, shared_pool)
     { }
 
     /// Create a semaphore with practically unlimited count and memory.
@@ -329,9 +453,10 @@ public:
             utils::updateable_value<uint32_t> kill_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value<uint32_t> cpu_concurrency = utils::updateable_value<uint32_t>(1),
             utils::updateable_value<float> preemptive_abort_factor = utils::updateable_value<float>(0.0f),
-            register_metrics metrics = register_metrics::no)
+            register_metrics metrics = register_metrics::no,
+            reader_concurrency_semaphore_shared_pool& shared_pool = reader_concurrency_semaphore_shared_pool::empty_pool())
         : reader_concurrency_semaphore(utils::updateable_value(count), memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler),
-                std::move(kill_limit_multipler), std::move(cpu_concurrency), std::move(preemptive_abort_factor), metrics)
+                std::move(kill_limit_multipler), std::move(cpu_concurrency), std::move(preemptive_abort_factor), metrics, shared_pool)
     {}
 
     ~reader_concurrency_semaphore();
@@ -477,7 +602,11 @@ public:
     ///
     /// After this call, \ref initial_resources() will reflect the new value.
     /// Available resources will be adjusted by the delta.
-    void set_resources(resources r);
+    void set_resources(resources r, size_t unreduced_memory = 0);
+
+    size_t unreduced_memory() const noexcept {
+        return _unreduced_memory;
+    }
 
     const resources initial_resources() const {
         return _initial_resources;
