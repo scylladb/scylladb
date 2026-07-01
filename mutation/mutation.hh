@@ -131,6 +131,7 @@ public:
     const mutation_partition& partition() const { return _ptr->_p; }
     mutation_partition& partition() { return _ptr->_p; }
     const table_id& column_family_id() const { return _ptr->_schema->id(); }
+    bool empty() const { return _ptr->_p.empty(); }
     // Consistent with hash<canonical_mutation>
     bool operator==(const mutation&) const;
 public:
@@ -167,6 +168,7 @@ public:
     void apply(mutation&&);
     void apply(const mutation&);
     void apply(const mutation_fragment&);
+    future<> apply_gently(mutation&&);
 
     mutation operator+(const mutation& other) const;
     mutation& operator+=(const mutation& other);

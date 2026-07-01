@@ -11,6 +11,7 @@
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/make_random_string.hh"
 
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
@@ -24,6 +25,10 @@
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "utils/error_injection.hh"
 #include "test/lib/expr_test_utils.hh"
+#include "test/lib/simple_schema.hh"
+#include "test/lib/mutation_assertions.hh"
+#include "test/lib/mutation_source_test.hh"
+#include <seastar/core/thread.hh>
 
 BOOST_AUTO_TEST_SUITE(group0_cmd_merge_test)
 
@@ -122,6 +127,152 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
         BOOST_REQUIRE_EQUAL(mm.canonical_mutation_merge_count - merges, 2);
     }, cfg);
 #endif
+}
+
+// Verifies that group0_update_collector::collect() splits an oversized partition
+// into several smaller mutations, each within the requested size limit, and that
+// the pieces merge back into the original mutation.
+SEASTAR_TEST_CASE(test_group0_update_collector_splits_oversized_mutations) {
+    return seastar::async([] {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        // Build a single partition large enough to require splitting.
+        auto mut = ss.new_mutation("pk0");
+        const uint32_t row_count = 64;
+        const sstring big_value(8 * 1024, 'x');
+        for (uint32_t i = 0; i < row_count; ++i) {
+            ss.add_row(mut, ss.make_ckey(i), big_value);
+        }
+
+        const size_t max_size = 64 * 1024;
+        BOOST_REQUIRE_GT(mut.memory_usage(*s), max_size);
+
+        service::group0_update_collector collector(max_size);
+        collector.add_small(mut);
+        auto cms = collector.collect().get();
+
+        // The oversized partition must be split into more than one mutation.
+        BOOST_REQUIRE_GT(cms.size(), 1u);
+
+        utils::chunked_vector<mutation> pieces;
+        for (auto& cm : cms) {
+            BOOST_REQUIRE_EQUAL(cm.column_family_id(), s->id());
+            auto m = cm.to_mutation(s);
+            BOOST_REQUIRE(!m.partition().empty());
+            if (m.memory_usage(*s) > max_size) {
+                // A single row may exceed the limit; we don't split rows into cells.
+                const auto rows_count = m.partition().row_count() +
+                                        (m.partition().static_row().empty() ? 0 : 1);
+                BOOST_REQUIRE_EQUAL(rows_count, 1);
+            }
+            pieces.push_back(std::move(m));
+        }
+
+        // The pieces must merge back into the original mutation.
+        auto squashed = squash_mutations(std::move(pieces));
+        BOOST_REQUIRE_EQUAL(squashed.size(), 1u);
+        assert_that(squashed.front()).is_equal_to(mut);
+
+        // With a large enough limit the same mutation is returned as a single
+        // canonical mutation, i.e. it is not split.
+        service::group0_update_collector collector2(mut.memory_usage(*s) * 2);
+        collector2.add_small(mut);
+        auto cms2 = collector2.collect().get();
+        BOOST_REQUIRE_EQUAL(cms2.size(), 1u);
+        assert_that(cms2.front().to_mutation(s)).is_equal_to(mut);
+    });
+}
+
+// Verifies that group0_update_collector::add(canonical_mutation) accepts canonical_mutations
+// and collect() returns them unchanged.
+SEASTAR_TEST_CASE(test_group0_update_collector_accepts_canonical_mutations) {
+    return seastar::async([] {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        service::group0_update_collector collector;
+
+        auto mut = ss.new_mutation("pk0");
+        ss.add_row(mut, ss.make_ckey(0), make_random_string(64));
+        collector.add(canonical_mutation(mut));
+
+        auto mut2 = ss.new_mutation("pk1");
+        ss.add_row(mut2, ss.make_ckey(0), make_random_string(32));
+        collector.add(canonical_mutation(mut2));
+
+        auto cms = collector.collect().get();
+
+        BOOST_REQUIRE_EQUAL(cms.size(), 2u);
+
+        assert_that(cms[0].to_mutation(s)).is_equal_to(mut);
+        assert_that(cms[1].to_mutation(s)).is_equal_to(mut2);
+    });
+}
+
+// Verifies that adding many small mutations of the same partition through
+// add()/add_small() keeps the accumulated mutation bounded: collect() returns
+// several mutations, each within the size limit, that merge back into the union
+// of everything that was added.
+SEASTAR_TEST_CASE(test_group0_update_collector_bounds_accumulated_mutations) {
+    return seastar::async([] {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        const size_t max_size = 64 * 1024;
+        const uint32_t row_count = 64;
+        const sstring big_value(8 * 1024, 'x');
+
+        // Exercise both the gently (add) and non-gently (add_small) paths.
+        auto run = [&] (bool use_gently) {
+            service::group0_update_collector collector(max_size);
+
+            // Feed many small single-row mutations of the same partition,
+            // keeping copies so we can compute the expected union independently
+            // (add_row() advances a shared timestamp, so the expected mutation
+            // must be built from the very same mutations that were added).
+            utils::chunked_vector<mutation> added;
+            for (uint32_t i = 0; i < row_count; ++i) {
+                auto m = ss.new_mutation("pk0");
+                ss.add_row(m, ss.make_ckey(i), big_value);
+                added.push_back(m);
+                if (use_gently) {
+                    collector.add(m).get();
+                } else {
+                    collector.add_small(m);
+                }
+            }
+
+            auto cms = collector.collect().get();
+
+            // The accumulation must have been split rather than grown unbounded.
+            BOOST_REQUIRE_GT(cms.size(), 1u);
+
+            utils::chunked_vector<mutation> pieces;
+            for (auto& cm : cms) {
+                BOOST_REQUIRE_EQUAL(cm.column_family_id(), s->id());
+                auto m = cm.to_mutation(s);
+                BOOST_REQUIRE(!m.partition().empty());
+                if (m.memory_usage(*s) > max_size) {
+                    // A single row may exceed the limit; we don't split rows.
+                    const auto rows_count = m.partition().row_count() +
+                                            (m.partition().static_row().empty() ? 0 : 1);
+                    BOOST_REQUIRE_EQUAL(rows_count, 1);
+                }
+                pieces.push_back(std::move(m));
+            }
+
+            // The pieces must merge back into the union of everything added.
+            auto expected = squash_mutations(std::move(added));
+            BOOST_REQUIRE_EQUAL(expected.size(), 1u);
+            auto squashed = squash_mutations(std::move(pieces));
+            BOOST_REQUIRE_EQUAL(squashed.size(), 1u);
+            assert_that(squashed.front()).is_equal_to(expected.front());
+        };
+
+        run(false); // add_small()
+        run(true);  // add()
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
