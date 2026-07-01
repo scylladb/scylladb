@@ -4099,8 +4099,24 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // To maintain atomicity against concurrent migration requests
         // (e.g., finalization) and prevent failures from group0 conflicts, we
         // should turn this into a topology request.
+<<<<<<< HEAD
         utils::chunked_vector<canonical_mutation> updates;
         for (const auto& [tid, cf_name] : tables_to_migrate) {
+||||||| parent of 41647abfc0 (topology_coordinator: Convert tablet-related updates to group0_update_collector)
+        utils::chunked_vector<canonical_mutation> updates;
+
+        auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
+            slogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
+                         ks_name, cf_name, tmap.tablet_count(), target_pow2);
+
+=======
+        group0_update_collector updates;
+
+        auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
+            slogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
+                         ks_name, cf_name, tmap.tablet_count(), target_pow2);
+
+>>>>>>> 41647abfc0 (topology_coordinator: Convert tablet-related updates to group0_update_collector)
             co_await replica::tablet_map_to_mutations(
                 tmap,
                 tid,
@@ -4113,7 +4129,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                 });
         }
 
-        topology_change change{std::move(updates)};
+        topology_change change{co_await updates.collect()};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
             fmt::format("migrate keyspace {} to tablets", ks_name));
 
@@ -5334,8 +5350,9 @@ future<service::group0_guard> storage_service::get_guard_for_tablet_update() {
     co_return guard;
 }
 
-future<bool> storage_service::exec_tablet_update(service::group0_guard guard, utils::chunked_vector<canonical_mutation> updates, sstring reason) {
+future<bool> storage_service::exec_tablet_update(service::group0_guard guard, group0_update_collector uc, sstring reason) {
     rtlogger.info("{}", reason);
+    auto updates = co_await uc.collect();
     rtlogger.trace("do update {} reason {}", updates, reason);
     updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
             .set_version(_topology_state_machine._topology.version + 1)
@@ -5406,7 +5423,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        utils::chunked_vector<canonical_mutation> updates;
+        group0_update_collector updates;
 
         if (all_tokens) {
             tokens.clear();
@@ -5419,7 +5436,6 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
 
         auto ts = db_clock::now();
         auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
-        std::optional<mutation> repair_task_update;
         for (const auto& token : tokens) {
             auto tid = tmap.get_tablet_id(token);
             auto& tinfo = tmap.get_tablet_info(tid);
@@ -5440,22 +5456,10 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
             };
             if (_feature_service.tablet_repair_tasks_table) {
                 auto m = co_await _sys_ks.local().get_update_repair_task_mutation(entry, guard.write_timestamp());
-                if (repair_task_update) {
-                    if (!m.decorated_key().equal(*m.schema(), repair_task_update->decorated_key())) {
-                        on_internal_error(rtlogger, "add_repair_tablet_request(): repair task mutations have different partition keys");
-                    }
-                    repair_task_update->apply(std::move(m));
-                } else {
-                    repair_task_update = std::move(m);
-                }
+                updates.add_small(std::move(m));
             }
         }
-        if (repair_task_update) {
-            updates.emplace_back(std::move(*repair_task_update));
-        }
-        if (!tokens.empty()) {
-            updates.emplace_back(builder.build());
-        }
+        updates.add_large(builder.build());
 
         sstring reason = format("Repair tablet by API request tokens={} tablet_task_id={}", tokens, repair_task_info.tablet_task_id);
         if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
@@ -5517,7 +5521,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        utils::chunked_vector<canonical_mutation> updates;
+        group0_update_collector updates;
 
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
             auto& tinfo = tmap.get_tablet_info(tid);
@@ -5532,7 +5536,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
                 update.del_session(last_token);
             }
-            updates.emplace_back(update.build());
+            updates.add_small(update.build());
         });
 
         sstring reason = format("Deleting tablet repair request by API request tablet_id={} tablet_task_id={}", table, tablet_task_id);
@@ -5709,6 +5713,224 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
     });
 }
 
+<<<<<<< HEAD
+||||||| parent of 41647abfc0 (topology_coordinator: Convert tablet-related updates to group0_update_collector)
+future<> storage_service::abort_restore_tablets(table_id table) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.abort_restore_tablets(table);
+        });
+    }
+
+    slogger.info("Aborting tablet restore for table_id={}", table);
+    while (true) {
+        auto guard = co_await get_guard_for_tablet_update();
+
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        utils::chunked_vector<canonical_mutation> updates;
+
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
+            auto* trinfo = tmap.get_tablet_transition_info(tid);
+            if (!trinfo || trinfo->transition != locator::tablet_transition_kind::restore || !trinfo->session_id) {
+                co_return;
+            }
+            auto last_token = tmap.get_last_token(tid);
+            // Deleting the session aborts the restore: see the restore handling in the
+            // topology coordinator.
+            updates.emplace_back(tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
+                .del_session(last_token)
+                .build());
+        });
+
+        if (updates.empty()) {
+            break;
+        }
+
+        sstring reason = format("Aborting tablet restore for table_id={}", table);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            break;
+        }
+    }
+    slogger.info("Aborted tablet restore for table_id={}", table);
+}
+
+future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.restore_tablets(table, snap_name);
+        });
+    }
+
+    utils::UUID request_id;
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        // If a restore for the same table is already in flight (e.g. started
+        // by a node that has since died), join it instead of starting a new
+        // one. Reject a mismatched snapshot for the same table.
+        std::optional<utils::UUID> ongoing;
+        for (auto req : _topology_state_machine._topology.ongoing_restore_requests) {
+            auto entry = co_await _sys_ks.local().get_topology_request_entry(req);
+            if (entry.restore_table_id == table) {
+                if (entry.restore_snapshot_name != snap_name) {
+                    throw std::runtime_error(fmt::format("Table {} is already being restored from a different snapshot {}", table, *entry.restore_snapshot_name));
+                }
+                ongoing = req;
+                break;
+            }
+        }
+        if (ongoing) {
+            release_guard(std::move(guard));
+            request_id = *ongoing;
+            slogger.info("Restore for {} already in flight, waiting for it", table);
+            break;
+        }
+
+        request_id = guard.new_group0_state_id();
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        topology_request_tracking_mutation_builder trbuilder(request_id, _feature_service.topology_requests_type_column);
+
+        trbuilder.set_restore_tablets_data(table, snap_name)
+                 .set("done", false)
+                 .set("start_time", db_clock::now());
+
+        builder.queue_global_topology_request_id(request_id);
+        trbuilder.set("request_type", global_topology_request::restore_tablets);
+
+        topology_change change{{builder.build(), trbuilder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, "Restore tablets");
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            break;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("restore_tablets: concurrent modification, retrying");
+        }
+    }
+
+    auto error = co_await wait_for_topology_request_completion(request_id);
+    if (!error.empty()) {
+        throw std::runtime_error(error);
+    }
+
+    slogger.info("Restoring {} finished", table);
+}
+
+=======
+future<> storage_service::abort_restore_tablets(table_id table) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.abort_restore_tablets(table);
+        });
+    }
+
+    slogger.info("Aborting tablet restore for table_id={}", table);
+    while (true) {
+        auto guard = co_await get_guard_for_tablet_update();
+
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        group0_update_collector updates;
+        auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
+            auto* trinfo = tmap.get_tablet_transition_info(tid);
+            if (!trinfo || trinfo->transition != locator::tablet_transition_kind::restore || !trinfo->session_id) {
+                co_return;
+            }
+            auto last_token = tmap.get_last_token(tid);
+            // Deleting the session aborts the restore: see the restore handling in the
+            // topology coordinator.
+            builder.del_session(last_token);
+        });
+
+        co_await updates.add(builder.build());
+
+        if (updates.empty()) {
+            break;
+        }
+
+        sstring reason = format("Aborting tablet restore for table_id={}", table);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            break;
+        }
+    }
+    slogger.info("Aborted tablet restore for table_id={}", table);
+}
+
+future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.restore_tablets(table, snap_name);
+        });
+    }
+
+    utils::UUID request_id;
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        // If a restore for the same table is already in flight (e.g. started
+        // by a node that has since died), join it instead of starting a new
+        // one. Reject a mismatched snapshot for the same table.
+        std::optional<utils::UUID> ongoing;
+        for (auto req : _topology_state_machine._topology.ongoing_restore_requests) {
+            auto entry = co_await _sys_ks.local().get_topology_request_entry(req);
+            if (entry.restore_table_id == table) {
+                if (entry.restore_snapshot_name != snap_name) {
+                    throw std::runtime_error(fmt::format("Table {} is already being restored from a different snapshot {}", table, *entry.restore_snapshot_name));
+                }
+                ongoing = req;
+                break;
+            }
+        }
+        if (ongoing) {
+            release_guard(std::move(guard));
+            request_id = *ongoing;
+            slogger.info("Restore for {} already in flight, waiting for it", table);
+            break;
+        }
+
+        request_id = guard.new_group0_state_id();
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        topology_request_tracking_mutation_builder trbuilder(request_id, _feature_service.topology_requests_type_column);
+
+        trbuilder.set_restore_tablets_data(table, snap_name)
+                 .set("done", false)
+                 .set("start_time", db_clock::now());
+
+        builder.queue_global_topology_request_id(request_id);
+        trbuilder.set("request_type", global_topology_request::restore_tablets);
+
+        topology_change change{{builder.build(), trbuilder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, "Restore tablets");
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            break;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("restore_tablets: concurrent modification, retrying");
+        }
+    }
+
+    auto error = co_await wait_for_topology_request_completion(request_id);
+    if (!error.empty()) {
+        throw std::runtime_error(error);
+    }
+
+    slogger.info("Restoring {} finished", table);
+}
+
+>>>>>>> 41647abfc0 (topology_coordinator: Convert tablet-related updates to group0_update_collector)
 future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables() {
     auto holder = _async_gate.hold();
 
