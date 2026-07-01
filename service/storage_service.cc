@@ -1958,6 +1958,9 @@ future<> storage_service::stop_transport() {
             shutdown_protocol_servers().get();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
+            _qp.proxy().container().invoke_on_all(&service::storage_proxy::stop_remote_verbs).get();
+            slogger.info("Stop transport: shutdown storage proxy RPC verbs done");
+
             _gossiper.container().invoke_on_all(&gms::gossiper::shutdown).get();
             slogger.info("Stop transport: stop_gossiping done");
 
