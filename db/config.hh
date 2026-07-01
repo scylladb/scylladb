@@ -16,7 +16,8 @@
 #include <seastar/util/program-options.hh>
 #include <seastar/util/log.hh>
 
-#include "locator/abstract_replication_strategy.hh"
+#include "locator/replication_strategy_type.hh"
+#include "db/consistency_level_restriction.hh"
 #include "seastarx.hh"
 #include "utils/config_file.hh"
 #include "utils/enum_option.hh"
@@ -134,10 +135,6 @@ struct experimental_features_t {
 
 struct replication_strategy_restriction_t {
     static std::unordered_map<sstring, locator::replication_strategy_type> map(); // for enum_option<>
-};
-
-struct consistency_level_restriction_t {
-    static std::unordered_map<sstring, db::consistency_level> map(); // for enum_option<>
 };
 
 constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;

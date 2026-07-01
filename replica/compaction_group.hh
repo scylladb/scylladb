@@ -31,6 +31,7 @@ class compaction_manager;
 
 namespace locator {
 class effective_replication_map;
+using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;
 }
 
 namespace replica {

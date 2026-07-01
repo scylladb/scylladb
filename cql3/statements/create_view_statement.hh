@@ -11,6 +11,8 @@
 #include "cql3/expr/expression.hh"
 #include "cql3/statements/view_prop_defs.hh"
 
+#include "locator/token_metadata_fwd.hh"
+
 #include <seastar/core/shared_ptr.hh>
 
 #include <utility>

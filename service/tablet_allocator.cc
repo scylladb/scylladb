@@ -23,6 +23,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/div_ceil.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "db/tablet_options.hh"
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"

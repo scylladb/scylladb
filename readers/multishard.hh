@@ -11,6 +11,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
+#include "readers/multishard_fwd.hh"
 #include "tracing/trace_state.hh"
 #include "seastarx.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -102,9 +103,6 @@ public:
     virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout,
             tracing::trace_state_ptr trace_ptr) = 0;
 };
-
-using multishard_reader_buffer_hint = bool_class<struct multishard_reader_buffer_hint_tag>;
-using read_ahead = bool_class<struct read_ahead_tag>;
 
 /// Make a multishard_combining_reader.
 ///

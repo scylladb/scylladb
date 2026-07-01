@@ -10,6 +10,7 @@
 #include "topology_state_machine.hh"
 #include "utils/log.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "replica/database.hh"
 #include "locator/tablets.hh"
 #include "topology_mutation.hh"

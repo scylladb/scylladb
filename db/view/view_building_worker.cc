@@ -21,6 +21,7 @@
 #include "db/view/view_consumer.hh"
 #include "dht/token.hh"
 #include "replica/database.hh"
+#include "db/view/view.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"

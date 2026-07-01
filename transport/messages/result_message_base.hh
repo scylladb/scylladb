@@ -10,10 +10,14 @@
 #pragma once
 
 #include <vector>
+#include <optional>
+#include <unordered_map>
+#include <utility>
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
+#include "bytes_fwd.hh"
 
 namespace cql_transport {
 namespace messages {

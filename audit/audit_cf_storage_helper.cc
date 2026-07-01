@@ -9,6 +9,7 @@
 #include "audit/audit_cf_storage_helper.hh"
 
 #include "cql3/query_processor.hh"
+#include "db/config.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "utils/UUID_gen.hh"
 #include "cql3/query_options.hh"

@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "serializer.hh"
 #include "schema/schema.hh"
 
 namespace db {
@@ -28,12 +27,8 @@ public:
         throw std::logic_error("Cannot create tags from string");
     }
 #pragma clang diagnostic pop
-    bytes serialize() const override {
-        return ser::serialize_to_buffer<bytes>(_tags);
-    }
-    static std::map<sstring, sstring> deserialize(bytes_view buffer) {
-        return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<sstring, sstring>>());
-    }
+    bytes serialize() const override;
+    static std::map<sstring, sstring> deserialize(bytes_view buffer);
     const std::map<sstring, sstring>& tags() const {
         return _tags;
     }

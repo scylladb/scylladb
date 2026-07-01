@@ -24,10 +24,12 @@
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include "replica/streaming_reader_lifecycle_policy.hh"
 #include <memory>
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/try_future.hh>
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "db/system_keyspace_sstables_registry.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
@@ -515,6 +517,10 @@ locator::static_effective_replication_map_ptr keyspace::get_static_effective_rep
         on_internal_error(dblog, format("Tried to obtain per-keyspace effective replication map of {} but it's per-table", _metadata->name()));
     }
     return _effective_replication_map;
+}
+
+bool keyspace::uses_tablets() const {
+    return _replication_strategy->uses_tablets();
 }
 
 } // namespace replica
@@ -3659,6 +3665,63 @@ void database::unplug_snapshot_ctl() noexcept {
 }
 
 } // namespace replica
+
+streaming_reader_lifecycle_policy::streaming_reader_lifecycle_policy(sharded<replica::database>& db, table_id table_id, gc_clock::time_point compaction_time)
+    : _db(db)
+    , _table_id(table_id)
+    , _compaction_time(compaction_time)
+    , _contexts(smp::count) {
+}
+
+mutation_reader streaming_reader_lifecycle_policy::create_reader(
+    schema_ptr schema,
+    reader_permit permit,
+    const dht::partition_range& range,
+    const query::partition_slice& slice,
+    tracing::trace_state_ptr,
+    mutation_reader::forwarding fwd_mr) {
+    const auto shard = this_shard_id();
+    auto& cf = _db.local().find_column_family(schema);
+
+    _contexts[shard].range = make_foreign(make_lw_shared<const dht::partition_range>(range));
+    _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
+    _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
+
+    return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr, _compaction_time);
+}
+
+const dht::partition_range* streaming_reader_lifecycle_policy::get_read_range() const {
+    const auto shard = this_shard_id();
+    return _contexts[shard].range.get();
+}
+
+void streaming_reader_lifecycle_policy::update_read_range(lw_shared_ptr<const dht::partition_range> range) {
+    const auto shard = this_shard_id();
+    _contexts[shard].range = make_foreign(std::move(range));
+}
+
+future<> streaming_reader_lifecycle_policy::destroy_reader(stopped_reader reader) noexcept {
+    auto ctx = std::move(_contexts[this_shard_id()]);
+    auto reader_opt = ctx.semaphore->unregister_inactive_read(std::move(reader.handle));
+    if  (!reader_opt) {
+        return make_ready_future<>();
+    }
+    return reader_opt->close().finally([ctx = std::move(ctx)] {});
+}
+
+reader_concurrency_semaphore& streaming_reader_lifecycle_policy::semaphore() {
+    const auto shard = this_shard_id();
+    if (!_contexts[shard].semaphore) {
+        auto& cf = _db.local().find_column_family(_table_id);
+        _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
+    }
+    return *_contexts[shard].semaphore;
+}
+
+future<reader_permit> streaming_reader_lifecycle_policy::obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+    auto& cf = _db.local().find_column_family(_table_id);
+    return semaphore().obtain_permit(schema, description, cf.estimate_read_memory_cost(), timeout, std::move(trace_ptr));
+}
 
 mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db,
         schema_ptr schema, reader_permit permit,

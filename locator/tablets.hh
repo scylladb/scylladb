@@ -8,10 +8,9 @@
 
 #pragma once
 
+#include "locator/tablets_fwd.hh"
 #include "dht/token.hh"
 #include "locator/token_metadata_fwd.hh"
-#include "utils/small_vector.hh"
-#include "locator/host_id.hh"
 #include "service/session.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token-sharding.hh"
@@ -21,11 +20,10 @@
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
 #include "utils/UUID.hh"
-#include "raft/raft.hh"
+#include "raft/raft_fwd.hh"
 
 #include <memory>
 #include <ranges>
-#include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -102,15 +100,6 @@ struct range_based_tablet_id {
 
     bool operator==(const range_based_tablet_id&) const = default;
 };
-
-struct tablet_replica {
-    host_id host;
-    shard_id shard;
-
-    auto operator<=>(const tablet_replica&) const = default;
-};
-
-using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
 
 }
 
@@ -1027,11 +1016,6 @@ public:
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host);
 
 std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter);
-
-struct tablet_routing_info {
-    tablet_replica_set tablet_replicas;
-    std::pair<dht::token, dht::token> token_range;
-};
 
 /// Split a list of ranges, such that conceptually each input range is
 /// intersected with each tablet range.

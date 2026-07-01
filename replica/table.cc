@@ -47,6 +47,7 @@
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
 #include "query/query-result-writer.hh"
+#include "db/view/view.hh"
 #include "db/view/view_update_generator.hh"
 #include "utils/error_injection.hh"
 #include "utils/histogram_metrics_helper.hh"
@@ -972,6 +973,10 @@ public:
 
 bool table::uses_tablets() const {
     return _erm && _erm->get_replication_strategy().uses_tablets();
+}
+
+bool table::uses_static_sharding() const {
+    return !_erm || _erm->get_replication_strategy().is_vnode_based();
 }
 
 storage_group::storage_group(compaction_group_ptr cg)

@@ -62,6 +62,8 @@
 #include "replica/database.hh"
 #include "replica/mutation_dump.hh"
 #include "cql3/cql_config.hh"
+#include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 
 template<typename T = void>

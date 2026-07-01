@@ -59,6 +59,7 @@
 #include "db/view/view_builder.hh"
 #include "replica/mutation_dump.hh"
 #include "test/boost/database_test.hh"
+#include <seastar/core/reactor.hh>
 
 using namespace std::chrono_literals;
 using namespace sstables;
