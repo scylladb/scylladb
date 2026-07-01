@@ -458,7 +458,7 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
     // Each paxos state query returns at most one row, so paging never kicks in.
     // LIMIT 1 in the query causes may_need_paging() to short-circuit to false
     // (row_limit <= 1), avoiding pager allocation overhead entirely.
-    const auto qo = qp.make_internal_options(ps_ptr, values, db::consistency_level::ONE,
+    const auto qo = qp.make_internal_options(ps_ptr, std::move(values), db::consistency_level::ONE,
         1000, service::node_local_only::yes);
     const auto st = ps_ptr->statement;
 
