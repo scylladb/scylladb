@@ -14,6 +14,7 @@
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <seastar/json/formatter.hh>
+#include <seastar/coroutine/try_future.hh>
 
 #include "db/config.hh"
 
@@ -1324,7 +1325,11 @@ future<executor::request_return_type> executor::get_records(client_state& client
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
             query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
 
-    service::storage_proxy::coordinator_query_result qr = co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state));
+    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr = co_await _proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state));
+    if (!rqr) {
+        co_return co_await coroutine::try_future(std::move(rqr).assume_error().into_exception_future<executor::request_return_type>());
+    }
+    auto qr = std::move(rqr).assume_value();
     cql3::selection::result_set_builder builder(*selection, gc_clock::now());
     query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
 

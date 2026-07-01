@@ -52,6 +52,7 @@
 #include "replica/database.hh"
 #include "alternator/rmw_operation.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/try_future.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -409,12 +410,16 @@ static future<bool> is_view_built(
         schema->id(), schema->version(), partition_slice,
         proxy.get_max_result_size(partition_slice),
         query::tombstone_limit(proxy.get_tombstone_limit()));
-    service::storage_proxy::coordinator_query_result qr =
-        co_await proxy.query(
+    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+        co_await proxy.query_result(
             schema, std::move(command), std::move(partition_ranges),
             db::consistency_level::LOCAL_ONE,
             service::storage_proxy::coordinator_query_options(
                 executor::default_timeout(), std::move(permit), client_state, trace_state));
+    if (!rqr) {
+        co_return co_await coroutine::try_future(std::move(rqr).assume_error().into_exception_future<bool>());
+    }
+    auto qr = std::move(rqr).assume_value();
     query::result_set rs = query::result_set::from_raw_result(
         schema, partition_slice, *qr.query_result);
     std::unordered_map<locator::host_id, sstring> statuses;
@@ -2905,15 +2910,19 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
         auto selection = cql3::selection::selection::wildcard(schema);
         auto command = previous_item_read_command(proxy, schema, ck, selection);
         command->allow_limit = db::allow_per_partition_rate_limit::yes;
-        return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
-            [schema, command, selection = std::move(selection), &item_length] (service::storage_proxy::coordinator_query_result qr) {
+        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr = co_await proxy.query_result(
+                schema, command, to_partition_ranges(*schema, pk), cl,
+                service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state));
+        if (!rqr) {
+            co_return co_await coroutine::try_future(std::move(rqr).assume_error().into_exception_future<std::unique_ptr<rjson::value>>());
+        }
+        auto qr = std::move(rqr).assume_value();
         auto previous_item = describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, &item_length);
         if (previous_item) {
-            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
+            co_return std::make_unique<rjson::value>(std::move(*previous_item));
         } else {
-            return make_ready_future<std::unique_ptr<rjson::value>>();
+            co_return std::unique_ptr<rjson::value>();
         }
-    });
 }
 
 static future<std::unique_ptr<rjson::value>> get_previous_item(
