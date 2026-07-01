@@ -5150,6 +5150,7 @@ table::query(schema_ptr query_schema,
         if (table_name && *table_name == _schema->cf_name()) {
             tlogger.info("replica_query_wait: waiting");
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5));
+            tlogger.info("replica_query_wait: done");
         }
     });
 
@@ -5457,7 +5458,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
     auto lock = co_await std::move(lockf);
     auto pk = dht::partition_range::make_singular(m.decorated_key());
-    auto permit = co_await sem.obtain_permit(base, "push-view-updates-read-before-write", estimate_read_memory_cost(), timeout, tr_state);
+    auto permit = co_await sem.obtain_permit(base, "push-view-updates-read-before-write", estimate_read_memory_cost(), timeout, tr_state, {});
     auto reader = source.make_mutation_reader(base, permit, pk, slice, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     co_await gen->generate_and_propagate_view_updates(*this, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now, timeout);
     tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
