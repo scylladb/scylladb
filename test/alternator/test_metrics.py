@@ -36,6 +36,7 @@ from botocore.exceptions import ClientError
 from test.alternator.test_cql_rbac import new_dynamodb, new_role
 from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request
 from test.pylib.skip_types import skip_env
+from test.alternator.test_streams import wait_for_active_stream
 from test.alternator.test_vector import vs, needs_vector_store, wait_for_vector_index_active, table_vs
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
@@ -555,14 +556,19 @@ def test_streams_operations(test_table_s, dynamodbstreams, metrics):
 # to update latencies for one kind of operation (#17616, and compare #9406),
 # and to do that checking that ..._count increases for that op is enough.
 @contextmanager
-def check_sets_latency_by_metric(metrics, operation_names, metric_name):
+def check_sets_latency_by_metric(metrics, operation_names, metric_name, extra_labels=None):
+    def labels(op):
+        d = {'op': op}
+        if extra_labels:
+            d.update(extra_labels)
+        return d
     the_metrics = get_metrics(metrics)
-    saved_latency_count = { x: get_metric(metrics, f'{metric_name}_count', {'op': x}, the_metrics) for x in operation_names }
+    saved_latency_count = { x: get_metric(metrics, f'{metric_name}_count', labels(x), the_metrics) for x in operation_names }
     yield
     the_metrics = get_metrics(metrics)
     for op in operation_names:
         # The total "count" on all shards should strictly increase
-        assert saved_latency_count[op] < get_metric(metrics, f'{metric_name}_count', {'op': op}, the_metrics)
+        assert saved_latency_count[op] < get_metric(metrics, f'{metric_name}_count', labels(op), the_metrics)
 
 def check_sets_latency(metrics, operation_names):
     return check_sets_latency_by_metric(metrics, operation_names, 'scylla_alternator_op_latency')
@@ -582,7 +588,7 @@ def test_item_latency(test_table_s, metrics):
             test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
 
 def test_item_latency_per_table(test_table_s, metrics):
-    with check_sets_latency_by_metric(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem', 'BatchWriteItem', 'BatchGetItem'], 'scylla_alternator_table_op_latency'):
+    with check_sets_latency_by_metric(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem', 'BatchWriteItem', 'BatchGetItem'], 'scylla_alternator_table_op_latency', {'cf': test_table_s.name}):
         p = random_string()
         test_table_s.put_item(Item={'p': p})
         test_table_s.get_item(Key={'p': p})
@@ -592,6 +598,19 @@ def test_item_latency_per_table(test_table_s, metrics):
             test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
+
+# Test latency metrics for Query and Scan, both global and per-table.
+def test_scan_query_latency(test_table_s, metrics):
+    with check_sets_latency(metrics, ['Query', 'Scan']):
+        test_table_s.scan(Limit=1)
+        test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
+            ExpressionAttributeValues={':p': 'dog'})
+
+def test_scan_query_latency_per_table(test_table_s, metrics):
+    with check_sets_latency_by_metric(metrics, ['Query', 'Scan'], 'scylla_alternator_table_op_latency', {'cf': test_table_s.name}):
+        test_table_s.scan(Limit=1)
+        test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
+            ExpressionAttributeValues={':p': 'dog'})
 
 # Test latency metrics for GetRecords. Other Streams-related operations -
 # ListStreams, DescribeStream, and GetShardIterator, have an operation
@@ -606,25 +625,106 @@ def test_streams_latency(dynamodb, dynamodbstreams, metrics):
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
         StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}
         ) as table:
-        # Wait for the stream to become active. This should be instantenous
-        # in Alternator, so the following loop won't wait
-        stream_enabled = False
-        start_time = time.time()
-        while time.time() < start_time + 60:
-            desc = table.meta.client.describe_table(TableName=table.name)['Table']
-            if 'LatestStreamArn' in desc:
-                arn = desc['LatestStreamArn']
-                desc = dynamodbstreams.describe_stream(StreamArn=arn)
-                if desc['StreamDescription']['StreamStatus'] == 'ENABLED':
-                    stream_enabled = True
-                    break
-            time.sleep(1)
-        assert stream_enabled
+        arn, _ = wait_for_active_stream(dynamodbstreams, table)
         desc = dynamodbstreams.describe_stream(StreamArn=arn)
         shard_id = desc['StreamDescription']['Shards'][0]['ShardId'];
         it = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
         with check_sets_latency(metrics, ['GetRecords']):
             dynamodbstreams.get_records(ShardIterator=it)
+
+# Test that a successful GetRecords call increments both
+# scylla_alternator_returned_records (by the number of records returned) and
+# scylla_alternator_operation_size_kb{op="GetRecords"} (the response-size
+# histogram).
+# This test does not verify the correctness of the measured operation_size_kb,
+# just that it gets updated.
+def test_getrecords_records_and_size(dynamodb, dynamodbstreams, metrics):
+    with new_test_table(dynamodb,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+        StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}
+        ) as table:
+        arn, _ = wait_for_active_stream(dynamodbstreams, table)
+        # Get TRIM_HORIZON iterators for all shards so we catch the writes
+        # regardless of which shard each item's partition key maps to.
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        iterators = {
+            shard['ShardId']: dynamodbstreams.get_shard_iterator(
+                StreamArn=arn, ShardId=shard['ShardId'],
+                ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+            for shard in desc['StreamDescription']['Shards']
+        }
+        # Write some 2 items that should eventually appear in the stream:
+        for i in range(2):
+            table.put_item(Item={'p': random_string(), 'x': i})
+        before_records = get_metric(metrics, 'scylla_alternator_returned_records')
+        before_size = get_metric(metrics, 'scylla_alternator_operation_size_kb_count', {'op': 'GetRecords'})
+        # Poll all shards until at least 2 records appear (the stream may
+        # have a short delay, and items with random keys may land on
+        # different shards).
+        nreturned = 0
+        deadline = time.time() + 60
+        while time.time() < deadline and nreturned < 2:
+            for shard_id, it in iterators.items():
+                if it is None:
+                    continue
+                result = dynamodbstreams.get_records(ShardIterator=it)
+                nreturned += len(result['Records'])
+                iterators[shard_id] = result.get('NextShardIterator')
+            if nreturned < 2:
+                time.sleep(0.1)
+        assert nreturned >= 2
+        after_records = get_metric(metrics, 'scylla_alternator_returned_records')
+        after_size = get_metric(metrics, 'scylla_alternator_operation_size_kb_count', {'op': 'GetRecords'})
+        assert after_records >= before_records + nreturned
+        assert after_size > before_size
+
+# Test that GetRecords also updates per-table metrics: operation count,
+# latency, returned_records, and operation_size_kb{op="GetRecords"}.
+def test_getrecords_per_table_stats(dynamodb, dynamodbstreams, metrics):
+    with new_test_table(dynamodb,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+        StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}
+        ) as table:
+        arn, _ = wait_for_active_stream(dynamodbstreams, table)
+        # Get TRIM_HORIZON iterators for all shards so we catch all writes.
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        iterators = {
+            shard['ShardId']: dynamodbstreams.get_shard_iterator(
+                StreamArn=arn, ShardId=shard['ShardId'],
+                ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+            for shard in desc['StreamDescription']['Shards']
+        }
+        for i in range(2):
+            table.put_item(Item={'p': random_string(), 'x': i})
+        cf = table.name
+        before_count = get_metric(metrics, 'scylla_alternator_table_operation', {'op': 'GetRecords', 'cf': cf})
+        before_latency_count = get_metric(metrics, 'scylla_alternator_table_op_latency_count', {'op': 'GetRecords', 'cf': cf})
+        before_records = get_metric(metrics, 'scylla_alternator_table_returned_records', {'cf': cf})
+        before_size = get_metric(metrics, 'scylla_alternator_table_operation_size_kb_count', {'op': 'GetRecords', 'cf': cf})
+        nreturned = 0
+        npolls = 0
+        deadline = time.time() + 60
+        while time.time() < deadline and nreturned < 2:
+            for shard_id, it in list(iterators.items()):
+                if it is None:
+                    continue
+                result = dynamodbstreams.get_records(ShardIterator=it)
+                nreturned += len(result['Records'])
+                npolls += 1
+                iterators[shard_id] = result.get('NextShardIterator')
+            if nreturned < 2:
+                time.sleep(0.1)
+        assert nreturned >= 2
+        after_count = get_metric(metrics, 'scylla_alternator_table_operation', {'op': 'GetRecords', 'cf': cf})
+        after_latency_count = get_metric(metrics, 'scylla_alternator_table_op_latency_count', {'op': 'GetRecords', 'cf': cf})
+        after_records = get_metric(metrics, 'scylla_alternator_table_returned_records', {'cf': cf})
+        after_size = get_metric(metrics, 'scylla_alternator_table_operation_size_kb_count', {'op': 'GetRecords', 'cf': cf})
+        assert after_count == before_count + npolls
+        assert after_latency_count == before_latency_count + npolls
+        assert after_records == before_records + nreturned
+        assert after_size == before_size + npolls
 
 ###### Test metrics that are item size histograms of DynamoDB API operations which manipulate data:
 # Tests for histogram metrics operation_size_kb.
@@ -1243,6 +1343,239 @@ def test_reads_before_write_and_write_using_lwt_metrics(dynamodb, test_table_s, 
         with check_increases_metric_exact(metrics, table_rbw, [[0, lwt_cf]]):
             with check_increases_metric_exact(metrics, table_lwt, [[1, lwt_cf]]):
                 lwt_table.put_item(Item={'p': p})
+
+# Test that scylla_alternator_conditional_check_failed  is incremented when a
+# conditional write (PutItem, UpdateItem, DeleteItem) fails due to an
+# unsatisfied ConditionExpression. Both the global metric and the per-table
+# metric must increase.
+def test_conditional_check_failed(test_table_s, metrics):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'x': 1})
+    with check_increases_metric(metrics, ['scylla_alternator_conditional_check_failed']):
+        # PutItem with a condition that will fail because 'x' equals 1, not 2
+        try:
+            test_table_s.put_item(Item={'p': p, 'x': 3},
+                ConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 2})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+    with check_increases_metric(metrics, ['scylla_alternator_conditional_check_failed']):
+        # UpdateItem with a condition that will fail
+        try:
+            test_table_s.update_item(Key={'p': p},
+                UpdateExpression='SET x = :val',
+                ConditionExpression='x = :cond',
+                ExpressionAttributeValues={':val': 5, ':cond': 99})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+    with check_increases_metric(metrics, ['scylla_alternator_conditional_check_failed']):
+        # DeleteItem with a condition that will fail
+        try:
+            test_table_s.delete_item(Key={'p': p},
+                ConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 99})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+
+def test_conditional_check_failed_per_table(test_table_s, metrics):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'x': 1})
+    with check_increases_metric(metrics, ['scylla_alternator_table_conditional_check_failed'],
+                                requested_labels={'cf': test_table_s.name}):
+        try:
+            test_table_s.put_item(Item={'p': p, 'x': 3},
+                ConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 2})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+
+# Test that scylla_alternator_returned_items is incremented by the number of
+# items returned by Query and Scan operations. This counts items *after*
+# filter evaluation (i.e., items the caller receives), not the number of
+# items scanned. Both global and per-table variants must increase.
+def test_returned_item_count(test_table_ss, metrics):
+    p = random_string()
+    test_table_ss.put_item(Item={'p': p, 'c': 'a', 'x': 1})
+    test_table_ss.put_item(Item={'p': p, 'c': 'b', 'x': 2})
+    # Query returns 2 items. Check the global metric increases by at least 2
+    # (it may increase by more if running in parallel with other tests on a
+    # shared server).
+    before = get_metric(metrics, 'scylla_alternator_returned_items')
+    result = test_table_ss.query(KeyConditionExpression='p = :p',
+        ExpressionAttributeValues={':p': p}, ConsistentRead=True)
+    assert len(result['Items']) == 2
+    after = get_metric(metrics, 'scylla_alternator_returned_items')
+    assert after >= before + 2
+    # Also try Scan. The test table may have many items, but it must have
+    # at least the 2 we just added, so scanning with Limit=2 must return
+    # two items.
+    before = after
+    result = test_table_ss.scan(Limit=2, ConsistentRead=True)
+    assert len(result['Items']) == 2
+    after = get_metric(metrics, 'scylla_alternator_returned_items')
+    assert after >= before + 2
+    # Also check the returned_items_histogram. A query returning 2 items should
+    # fall in the le=2 bucket but not the le=1 bucket.
+    with check_increases_metric_exact(metrics, 'scylla_alternator_returned_items_histogram_bucket', [[0, {'le': '1.000000'}], [1, {'le': '2.000000'}]]):
+        result = test_table_ss.query(KeyConditionExpression='p = :p',
+            ExpressionAttributeValues={':p': p}, ConsistentRead=True)
+        assert len(result['Items']) == 2
+
+def test_returned_item_count_per_table(test_table_ss, metrics):
+    p = random_string()
+    test_table_ss.put_item(Item={'p': p, 'c': 'a', 'x': 1})
+    test_table_ss.put_item(Item={'p': p, 'c': 'b', 'x': 2})
+    test_table_ss.put_item(Item={'p': p, 'c': 'c', 'x': 3})
+    # While testing the per-table metric, because we are working on a
+    # temporary table not shared by unrelated workloads we can expect the
+    # metric to increase by exactly the number of items returned.
+    # Let's try a Query with a filter, which returns 2 items out of the 3
+    # scanned, and verify the metric increases by 2, not 3:
+    before = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name})
+    result = test_table_ss.query(KeyConditionExpression='p = :p',
+        FilterExpression='x > :one',
+        ExpressionAttributeValues={':p': p, ':one': 1})
+    assert len(result['Items']) == 2
+    after = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name})
+    assert after == before + 2
+    # Also check the per-table returned_items_histogram. The same query
+    # returning 2 items should fall in the le=2 bucket but not the le=1 bucket.
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_returned_items_histogram_bucket', [[0, {'le': '1.000000', 'cf': test_table_ss.name}], [1, {'le': '2.000000', 'cf': test_table_ss.name}]]):
+        result = test_table_ss.query(KeyConditionExpression='p = :p',
+            FilterExpression='x > :one',
+            ExpressionAttributeValues={':p': p, ':one': 1})
+        assert len(result['Items']) == 2
+    # GetItem and BatchGetItem should not increment returned_items. We check
+    # this using the per-table metric (not global) to allow exact equality.
+    before = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name})
+    result = test_table_ss.get_item(Key={'p': p, 'c': 'a'})
+    assert 'Item' in result
+    result = test_table_ss.meta.client.batch_get_item(RequestItems={
+        test_table_ss.name: {'Keys': [{'p': p, 'c': 'a'}, {'p': p, 'c': 'b'}], 'ConsistentRead': True}})
+    assert len(result['Responses'][test_table_ss.name]) == 2
+    assert get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name}) == before
+
+# Test that scylla_alternator_returned_items is NOT incremented by a Query
+# or Scan with Select=COUNT, because those operations return a count rather
+# than actual items.
+# We test this with the per-table metric scylla_alternator_table_returned_items
+# to potentially allow running this test on a server shared by other workloads.
+def test_returned_item_count_not_incremented_for_select_count(test_table_ss, metrics):
+    p = random_string()
+    test_table_ss.put_item(Item={'p': p, 'c': 'a'})
+    test_table_ss.put_item(Item={'p': p, 'c': 'b'})
+    before = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name})
+    result = test_table_ss.query(KeyConditionExpression='p = :p',
+        ExpressionAttributeValues={':p': p}, Select='COUNT', ConsistentRead=True)
+    assert result['Count'] == 2
+    assert 'Items' not in result
+    assert get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name}) == before
+
+# Test that a vector search Query also increments scylla_alternator_returned_items
+# and scylla_alternator_returned_items_histogram_bucket, and that SELECT=COUNT
+# does not. These are the same general Query/Scan counters tested above for
+# plain queries, but here we verify they work for the vector code path too.
+# This test requires a configured vector store and will be skipped otherwise.
+def test_returned_item_count_vector(vs, metrics, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        for i in range(3):
+            table.put_item(Item={'p': random_string(), 'v': [i, 0, 0]})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+
+        # A normal vector query returning 2 items should increment
+        # returned_items by 2 and the histogram bucket for le=2 by 1.
+        # For per-table metrics, we can use exact equality since no other
+        # workload touches this table.
+        cf = table.name
+        with check_increases_metric_exact(metrics, 'scylla_alternator_returned_items_histogram_bucket',
+                [[0, {'le': '1.000000'}], [1, {'le': '2.000000'}]]):
+            with check_increases_metric_exact(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
+                    [[0, {'le': '1.000000', 'cf': cf}], [1, {'le': '2.000000', 'cf': cf}]]):
+                before = get_metric(metrics, 'scylla_alternator_returned_items')
+                before_table = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf})
+                result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]},
+                    Limit=2, Select='ALL_ATTRIBUTES')
+                assert result['Count'] == 2
+                after = get_metric(metrics, 'scylla_alternator_returned_items')
+                after_table = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf})
+                assert after >= before + 2
+                assert after_table == before_table + 2
+
+        # SELECT=COUNT should not increment returned_items or the histogram.
+        before = get_metric(metrics, 'scylla_alternator_returned_items')
+        before_table = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf})
+        before_hist = get_metric(metrics, 'scylla_alternator_returned_items_histogram_bucket',
+            {'le': '2.000000'})
+        before_hist_table = get_metric(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
+            {'le': '2.000000', 'cf': cf})
+        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=2, Select='COUNT')
+        assert result['Count'] == 2
+        assert get_metric(metrics, 'scylla_alternator_returned_items') == before
+        assert get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf}) == before_table
+        assert get_metric(metrics, 'scylla_alternator_returned_items_histogram_bucket',
+            {'le': '2.000000'}) == before_hist
+        assert get_metric(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
+            {'le': '2.000000', 'cf': cf}) == before_hist_table
+
+# Test that HTTP 400 errors increment scylla_alternator_user_errors, but
+# that ConditionalCheckFailedException (which DynamoDB excludes from its
+# UserErrors metric) does not.
+def test_user_errors(test_table_s, metrics):
+    # A ValidationException (HTTP 400) should increment user_errors
+    with check_increases_metric(metrics, ['scylla_alternator_user_errors']):
+        try:
+            test_table_s.get_item(Key={'wrong_key': 'x'})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ValidationException'
+    # A ConditionalCheckFailedException (HTTP 400) should NOT increment user_errors
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'x': 1})
+    before = get_metric(metrics, 'scylla_alternator_user_errors')
+    try:
+        test_table_s.put_item(Item={'p': p},
+            ConditionExpression='x = :val',
+            ExpressionAttributeValues={':val': 2})
+    except ClientError as e:
+        assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+    assert get_metric(metrics, 'scylla_alternator_user_errors') == before
+
+# Test that HTTP 500 errors increment scylla_alternator_system_errors.
+# An unsupported Content-Encoding header triggers a 500 response.
+def test_system_errors(dynamodb, test_table_s, metrics):
+    with check_increases_metric(metrics, ['scylla_alternator_system_errors']):
+        p = random_string()
+        payload = '{}'
+        req = get_signed_request(dynamodb, 'DescribeEndpoints', payload)
+        headers = dict(req.headers)
+        headers.update({'Content-Encoding': 'garbage'})
+        r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+        assert r.status_code == 500
+
+# Test that reads_before_write is incremented exactly once per RMW operation.
+# We especially check this for "unsafe_rmw" write isolation mode, because we
+# used to have a bug that double-counted reads_before_write in that mode.
+# We use the per-table metric in the test so the test is isolated from any
+# potential parallel workloads on other tables.
+@pytest.mark.parametrize("write_isolation", ['unsafe_rmw', 'always'])
+def test_metric_reads_before_write(dynamodb, metrics, write_isolation):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            Tags=[{'Key': 'system:write_isolation', 'Value': write_isolation}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p})
+        with check_increases_metric_exact(metrics, 'scylla_alternator_table_reads_before_write',
+                [[1, {'cf': table.name}]]):
+            table.update_item(Key={'p': p},
+                UpdateExpression='SET a = :val',
+                ConditionExpression='attribute_exists(p)',
+                ExpressionAttributeValues={':val': 'newval'})
 
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:

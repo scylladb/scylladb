@@ -92,6 +92,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
     OPERATION_LATENCY(batch_write_item_latency, "BatchWriteItem")
     OPERATION_LATENCY(batch_get_item_latency, "BatchGetItem")
     OPERATION_LATENCY(get_records_latency, "GetRecords")
+    OPERATION_LATENCY(query_latency, "Query")
+    OPERATION_LATENCY(scan_latency, "Scan")
     if (!has_table) {
         // Create and delete operations are not applicable to a per-table metrics
         // only register it for the global metrics
@@ -116,6 +118,12 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     seastar::metrics::description("Counts a number of requests blocked due to memory pressure."), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("requests_shed", stats.requests_shed,
                     seastar::metrics::description("Counts a number of requests shed due to overload."), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("conditional_check_failed", stats.conditional_check_failed,
+                    seastar::metrics::description("number of conditional requests whose condition was false (ConditionalCheckFailedException)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("returned_items", stats.returned_items,
+                    seastar::metrics::description("number of items returned by Query and Scan operations (not other operations)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("returned_records", stats.returned_records,
+                    seastar::metrics::description("number of stream records returned by GetRecords operations"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_read_total", stats.cql_stats.filtered_rows_read_total,
                     seastar::metrics::description("number of rows read during filtering operations"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_matched_total", stats.cql_stats.filtered_rows_matched_total,
@@ -140,6 +148,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     [&stats]{ return to_metrics_histogram(stats.api_operations.batch_get_item_histogram);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("batch_item_count_histogram", seastar::metrics::description("Histogram of the number of items in a batch request"), labels,
                     [&stats]{ return to_metrics_histogram(stats.api_operations.batch_write_item_histogram);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_histogram("returned_items_histogram", seastar::metrics::description("Histogram of the number of items returned per Query or Scan operation"), labels,
+                    [&stats]{ return to_metrics_histogram(stats.returned_items_histogram);}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
                     [&stats]{ return to_metrics_histogram(stats.operation_sizes.get_item_op_size_kb);})(op("GetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
@@ -152,6 +162,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     [&stats]{ return to_metrics_histogram(stats.operation_sizes.batch_get_item_op_size_kb);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
                     [&stats]{ return to_metrics_histogram(stats.operation_sizes.batch_write_item_op_size_kb);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
+                    [&stats]{ return to_metrics_histogram(stats.operation_sizes.get_records_op_size_kb);})(op("GetRecords")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
     });
 
     seastar::metrics::label expression_label("expression");
@@ -194,6 +206,10 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                 seastar::metrics::description("total number of authentication failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_counter("authorization_failures", stats.authorization_failures,
                 seastar::metrics::description("total number of authorization failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("user_errors", stats.user_errors,
+                    seastar::metrics::description("number of HTTP 400 client error responses, excluding ConditionalCheckFailedException"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("system_errors", stats.system_errors,
+                    seastar::metrics::description("number of HTTP 500 internal server error responses"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
         });
     }
 }

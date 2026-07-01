@@ -2916,21 +2916,7 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     });
 }
 
-static future<std::unique_ptr<rjson::value>> get_previous_item(
-        service::storage_proxy& proxy,
-        service::client_state& client_state,
-        schema_ptr schema,
-        const partition_key& pk,
-        const clustering_key& ck,
-        service_permit permit,
-        alternator::stats& global_stats,
-        alternator::stats& per_table_stats,
-        uint64_t& item_length)
-{
-    global_stats.reads_before_write++;
-    per_table_stats.reads_before_write++;
-    return get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_QUORUM, item_length);
-}
+
 
 static future<uint64_t> get_previous_item_size(
             service::storage_proxy& proxy,
@@ -2968,10 +2954,12 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         if (_write_isolation == write_isolation::UNSAFE_RMW) {
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
+            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, db::consistency_level::LOCAL_QUORUM, _consumed_capacity._total_bytes).then(
+                    [this, &proxy, &wcu_total, &global_stats, &per_table_stats, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
                 if (!m) {
+                    global_stats.conditional_check_failed++;
+                    per_table_stats.conditional_check_failed++;
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
                 return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
@@ -2997,8 +2985,10 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             nullptr;
     return proxy.cas(schema(), std::move(*cas_shard), *this, read_command, to_partition_ranges(*schema(), _pk),
             {timeout, std::move(permit), client_state, trace_state},
-            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout, true, std::move(cdc_opts)).then([this, read_command, &wcu_total] (service::storage_proxy::cas_result cas_result) mutable {
+            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout, true, std::move(cdc_opts)).then([this, read_command, &wcu_total, &global_stats, &per_table_stats] (service::storage_proxy::cas_result cas_result) mutable {
         if (!cas_result.is_applied) {
+            global_stats.conditional_check_failed++;
+            per_table_stats.conditional_check_failed++;
             return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
         }
         return make_ready_future<executor::request_return_type>(rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total));

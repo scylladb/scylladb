@@ -117,7 +117,7 @@ class api_handler : public handler_base {
     static constexpr std::string_view REPLY_CONTENT_TYPE = "application/x-amz-json-1.0";
 public:
     api_handler(const std::function<future<executor::request_return_type>(std::unique_ptr<request> req)>& _handle,
-                const db::config& config) :
+                const db::config& config, stats& stats) :
             _content_type(config.alternator_http_response_disable_content_type_header()
                           ? std::nullopt
                           : std::optional<std::string_view>(REPLY_CONTENT_TYPE)),
@@ -125,7 +125,7 @@ public:
                 [this](const bool& ct) {
                     _content_type = ct ? std::nullopt : std::optional<std::string_view>(REPLY_CONTENT_TYPE);
                 })),
-            _response_compressor(config), _f_handle(
+            _response_compressor(config), _stats(stats), _f_handle(
          [this, _handle](std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
          sstring accept_encoding = _response_compressor.get_accepted_encoding(*req);
          return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped(
@@ -177,8 +177,18 @@ protected:
     std::optional<std::string_view> _content_type;
     utils::observer<bool> _content_type_observer;
     response_compressor _response_compressor;
+    stats& _stats;
     future_handler_function _f_handle;
     void generate_error_reply(reply& rep, const api_error& err) {
+        // Count HTTP 400 errors as UserErrors (matching DynamoDB's UserErrors
+        // metric), but exclude ConditionalCheckFailedException which DynamoDB
+        // does not count in UserErrors.
+        if (err._http_code == http::reply::status_type::bad_request &&
+                err._type != "ConditionalCheckFailedException") {
+            _stats.user_errors++;
+        } else if (err._http_code == http::reply::status_type::internal_server_error) {
+            _stats.system_errors++;
+        }
         rjson::value results = rjson::empty_object();
         if (!err._extra_fields.IsNull() && err._extra_fields.IsObject()) {
             results = rjson::copy(err._extra_fields);
@@ -819,7 +829,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
 void server::set_routes(routes& r) {
     api_handler* req_handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
         return handle_api_request(std::move(req));
-    }, _proxy.data_dictionary().get_config());
+    }, _proxy.data_dictionary().get_config(), _executor._stats);
 
     r.put(operation_type::POST, "/", req_handler);
     r.put(operation_type::GET, "/", new health_handler(_pending_requests));
