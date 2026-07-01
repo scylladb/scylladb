@@ -5632,6 +5632,8 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         }
 
         auto ts = db_clock::now();
+        auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
+        std::optional<mutation> repair_task_update;
         for (const auto& token : tokens) {
             auto tid = tmap.get_tablet_id(token);
             auto& tinfo = tmap.get_tablet_info(tid);
@@ -5641,10 +5643,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
                         locator::global_tablet_id{table, tid}, req_id));
             }
             auto last_token = tmap.get_last_token(tid);
-            updates.emplace_back(
-                tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                    .set_repair_task_info(last_token, repair_task_info, _feature_service)
-                    .build());
+            builder.set_repair_task_info(last_token, repair_task_info, _feature_service);
             db::system_keyspace::repair_task_entry entry{
                 .task_uuid   = tasks::task_id(repair_task_info.tablet_task_id.uuid()),
                 .operation   = db::system_keyspace::repair_task_operation::requested,
@@ -5654,11 +5653,22 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
                 .table_uuid  = table,
             };
             if (_feature_service.tablet_repair_tasks_table) {
-                auto cmuts = co_await _sys_ks.local().get_update_repair_task_mutations(entry, guard.write_timestamp());
-                for (auto& m : cmuts) {
-                    updates.push_back(std::move(m));
+                auto m = co_await _sys_ks.local().get_update_repair_task_mutation(entry, guard.write_timestamp());
+                if (repair_task_update) {
+                    if (!m.decorated_key().equal(*m.schema(), repair_task_update->decorated_key())) {
+                        on_internal_error(rtlogger, "add_repair_tablet_request(): repair task mutations have different partition keys");
+                    }
+                    repair_task_update->apply(std::move(m));
+                } else {
+                    repair_task_update = std::move(m);
                 }
             }
+        }
+        if (repair_task_update) {
+            updates.emplace_back(std::move(*repair_task_update));
+        }
+        if (!tokens.empty()) {
+            updates.emplace_back(builder.build());
         }
 
         sstring reason = format("Repair tablet by API request tokens={} tablet_task_id={}", tokens, repair_task_info.tablet_task_id);
