@@ -872,7 +872,7 @@ std::pair<std::reference_wrapper<struct query_processor::remote>, gate::holder> 
 
 query_options query_processor::make_internal_options(
         const statements::prepared_statement::checked_weak_ptr& p,
-        const std::vector<data_value_or_unset>& values,
+        std::vector<data_value_or_unset> values,
         db::consistency_level cl,
         int32_t page_size,
         service::node_local_only node_local_only) const {
@@ -898,8 +898,8 @@ query_options query_processor::make_internal_options(
             }, [&] (const unset_value&) {
                 bound_values.values.emplace_back(cql3::raw_value::make_null());
                 bound_values.unset[std::distance(p->bound_names.begin(), ni)] = true;
-            }, [&] (const managed_bytes& mb) {
-                bound_values.values.emplace_back(cql3::raw_value::make_value(mb));
+            }, [&] (managed_bytes& mb) {
+                bound_values.values.emplace_back(cql3::raw_value::make_value(std::move(mb)));
             }
         }, var);
         ++ni;
@@ -1048,7 +1048,7 @@ future<utils::chunked_vector<mutation>> query_processor::get_mutations_internal(
     if (!mod_stmt) {
         on_internal_error(log, "Only modification statement is supported in get_mutations_internal");
     }
-    auto opts = make_internal_options(stmt, values, db::consistency_level::LOCAL_ONE);
+    auto opts = make_internal_options(stmt, std::move(values), db::consistency_level::LOCAL_ONE);
     auto json_cache = mod_stmt->maybe_prepare_json_cache(opts);
     auto keys = mod_stmt->build_partition_keys(opts, json_cache);
     // timeout only applies when modification requires read
