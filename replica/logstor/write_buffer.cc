@@ -12,6 +12,7 @@
 #include "logstor.hh"
 #include "replica/logstor/types.hh"
 #include <seastar/core/simple-stream.hh>
+#include <seastar/core/timed_out_error.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "serializer_impl.hh"
@@ -301,7 +302,9 @@ buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group 
 future<> buffered_writer::start() {
     logstor_logger.info("Starting write buffer");
     _consumer = with_gate(_async_gate, [this] {
-        return consumer_loop();
+        return with_scheduling_group(_flush_sg, [this] {
+            return consumer_loop();
+        });
     });
     co_return;
 }
@@ -323,10 +326,18 @@ future<> buffered_writer::stop() {
     logstor_logger.info("Write buffer stopped");
 }
 
-future<log_location_with_holder> buffered_writer::write(log_record record, compaction_group* cg, seastar::gate::holder cg_holder) {
+future<log_location_with_holder> buffered_writer::write(log_record record, db::timeout_clock::time_point timeout, compaction_group* cg, seastar::gate::holder cg_holder) {
     auto holder = _async_gate.hold();
 
     log_record_writer writer(std::move(record));
+
+    auto check_timeout = [timeout] {
+        if (timeout != db::no_timeout && timeout <= db::timeout_clock::now()) {
+            throw timed_out_error{};
+        }
+    };
+
+    check_timeout();
 
     if (writer.size() > head_buf().max_record_size()) {
         throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), head_buf().max_record_size()));
@@ -341,6 +352,7 @@ future<log_location_with_holder> buffered_writer::write(log_record record, compa
         auto current_head = _head;
         while (ring_full() && !_async_gate.is_closed()) {
             co_await _head_can_advance.wait();
+            check_timeout();
         }
         _async_gate.check();
         if (_head == current_head) {
@@ -378,9 +390,7 @@ future<> buffered_writer::consumer_loop() {
             _head_can_advance.broadcast();
         }
 
-        co_await with_scheduling_group(_flush_sg, [this] {
-            return _sm.write(tail_buf());
-        });
+        co_await _sm.write(tail_buf());
 
         tail_buf().reset();
         ++_tail;

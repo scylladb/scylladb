@@ -21,6 +21,7 @@
 #include "replica/logstor/ondisk.hh"
 #include "schema/schema_fwd.hh"
 #include "types.hh"
+#include "timeout_config.hh"
 
 namespace replica {
 
@@ -324,7 +325,7 @@ public:
     future<> start();
     future<> stop();
 
-    future<log_location_with_holder> write(log_record, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
+    future<log_location_with_holder> write(log_record, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
 
 private:
     // The flush consumer loop.

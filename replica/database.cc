@@ -606,6 +606,9 @@ database::setup_metrics() {
 
         sm::make_gauge("unspooled_dirty_bytes", [this] { return _dirty_memory_manager.unspooled_dirty_memory() + _system_dirty_memory_manager.unspooled_dirty_memory(); },
                        sm::description("Holds the size of all (\"regular\" and \"system\") used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
+
+        sm::make_gauge("logstor_bytes", [this] { return get_logstor_memory_usage(); },
+                       sm::description("Holds the current size of memory used by logstor in bytes.")),
     });
 
     _metrics.add_group("memtables", {
@@ -964,7 +967,7 @@ database::init_logstor() {
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
     };
-    _logstor = std::make_unique<logstor::logstor>(std::move(cfg));
+    _logstor = std::make_unique<logstor::logstor>(std::move(cfg), _row_cache_tracker);
 
     _logstor->set_trigger_compaction_hook([this] {
         trigger_logstor_compaction(false);

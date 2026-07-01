@@ -110,6 +110,8 @@ public:
     void clear_continuity(cache_entry& ce) noexcept;
     void on_partition_erase() noexcept;
     void on_partition_merge() noexcept;
+    void on_partition_insert() noexcept;
+    void on_partition_remove() noexcept;
     void on_partition_hit() noexcept;
     void on_partition_miss() noexcept;
     void on_partition_eviction() noexcept;
@@ -141,6 +143,8 @@ public:
     partition_index_cache_stats& get_partition_index_cache_stats() { return _partition_index_cache_stats; }
     seastar::memory::reclaiming_result evict_from_lru_shallow() noexcept;
 };
+
+cache_tracker* get_current_cache_tracker() noexcept;
 
 inline
 void cache_tracker::remove(rows_entry& entry) noexcept {

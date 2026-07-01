@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/future.hh>
+#include "query/query-request.hh"
 #include "readers/from_mutations.hh"
 #include "keys/keys.hh"
 #include "replica/logstor/segment_manager.hh"
@@ -40,9 +41,10 @@ static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
     throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
 }
 
-logstor::logstor(logstor_config config)
+logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
     : _segment_manager(config.segment_manager_cfg)
-    , _write_buffer(_segment_manager, config.flush_sg) {
+    , _write_buffer(_segment_manager, config.flush_sg)
+    , _cache_tracker(shared_cache_tracker) {
 }
 
 future<> logstor::do_recovery(replica::database& db) {
@@ -87,7 +89,7 @@ const compaction_manager& logstor::get_compaction_manager() const noexcept {
     return _segment_manager.get_compaction_manager();
 }
 
-future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder) {
+future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout) {
     primary_index_key key(m.decorated_key());
     table_id table = m.schema()->id();
     auto& index = cg.get_logstor_index();
@@ -103,14 +105,14 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record), &cg, std::move(cg_holder)).then_unpack([this, &index, ts, key = std::move(key)]
+    return _write_buffer.write(std::move(record), timeout, &cg, std::move(cg_holder)).then_unpack([this, index_ptr = &index, ts, key = std::move(key)]
             (log_location location, seastar::gate::holder op) {
         index_entry new_entry {
             .location = location,
             .timestamp = ts,
         };
 
-        auto [inserted, prev_entry] = index.insert(key, std::move(new_entry));
+        auto [inserted, prev_entry] = index_ptr->insert(key, std::move(new_entry));
 
         if (!inserted) {
             // A newer entry already exists; free the record we just wrote.
@@ -125,50 +127,52 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
     });
 }
 
-future<std::optional<log_record>> logstor::read(const primary_index& index, primary_index_key key) {
+future<std::optional<mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
     auto op = index.start_read();
 
-    auto entry_opt = index.get(key);
-    if (!entry_opt.has_value()) {
-        return make_ready_future<std::optional<log_record>>(std::nullopt);
+    const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
+    auto* cache = bypass_cache ? nullptr : index.cache_tracker();
+
+    auto it = index.find(dk);
+    if (it == index.end()) {
+        co_return std::nullopt;
     }
 
-    const auto& entry = *entry_opt;
+    // lookup in cache
+    if (cache) {
+        auto cached_mut = cache->lookup(*it, s.shared_from_this());
+        if (cached_mut) {
+            co_return std::move(*cached_mut);
+        }
+    }
 
-    return _segment_manager.read(entry.location).then([key = std::move(key), op = std::move(op)] (log_record record) {
-        return std::optional<log_record>(std::move(record));
-    }).handle_exception([] (std::exception_ptr ep) {
-        logstor_logger.error("Error reading record: {}", ep);
-        return make_exception_future<std::optional<log_record>>(ep);
-    });
+    // Cache miss (or bypass): read from disk using the entry we already have.
+    // copy the entry. we want to remember the original entry that we use for the read. the entry may change while we read.
+    const index_entry entry_for_read = it->entry();
+    auto record = co_await _segment_manager.read(entry_for_read.location);
+
+    if (record.mut.key() != dk.key()) [[unlikely]] {
+        on_internal_error(logstor_logger, format("Key mismatch reading log entry: expected {}, got {}", dk.key(), record.mut.key()));
+    }
+
+    mutation m = record.mut.to_mutation(s.shared_from_this());
+
+    // Populate the cache with the freshly deserialized mutation.
+    // Skipped when bypass_cache is set.
+    // We must re-find the entry because the iterator may have been invalidated
+    // across the co_await above.
+    if (cache) {
+        auto it = index.find(dk);
+        if (it != index.end() && it->entry().location == entry_for_read.location) {
+            cache->populate(*it, m);
+        }
+    }
+
+    co_return std::move(m);
 }
 
-future<std::optional<canonical_mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk) {
-    primary_index_key key(dk);
-    return read(index, key).then([&dk] (std::optional<log_record> record_opt) -> std::optional<canonical_mutation> {
-        if (!record_opt.has_value()) {
-            return std::nullopt;
-        }
-
-        auto& record = *record_opt;
-
-        if (record.mut.key() != dk.key()) [[unlikely]] {
-            throw std::runtime_error(fmt::format(
-                "Key mismatch reading log entry: expected {}, got {}",
-                dk.key(), record.mut.key()
-            ));
-        }
-
-        return std::optional<canonical_mutation>(std::move(record.mut));
-    });
-}
-
-mutation_reader logstor::make_reader(schema_ptr schema,
-                                            const primary_index& index,
-                                            reader_permit permit,
-                                            const dht::partition_range& pr,
-                                            const query::partition_slice& slice,
-                                            tracing::trace_state_ptr trace_state) {
+mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& index, reader_permit permit, const dht::partition_range& pr,
+        const query::partition_slice& slice, tracing::trace_state_ptr trace_state) {
 
     class logstor_range_reader : public mutation_reader::impl {
         logstor* _logstor;
@@ -243,18 +247,18 @@ mutation_reader logstor::make_reader(schema_ptr schema,
                 auto current_key = it->key();
 
                 auto guard = reader_permit::awaits_guard(_permit);
-                auto cmut = co_await _logstor->read(*_schema, _index, current_key);
+                auto mut = co_await _logstor->read(*_schema, _index, current_key, _slice);
 
                 _last_key = current_key; // mark as visited even if not found (tombstoned)
 
-                if (!cmut) {
+                if (!mut) {
                     continue; // key was removed between index lookup and read
                 }
 
                 tracing::trace(_trace_state, "logstor_range_reader: fetched key {}", current_key);
 
                 _current_partition_reader = make_mutation_reader_from_mutations(
-                    _schema, _permit, cmut->to_mutation(_schema),
+                    _schema, _permit, std::move(*mut),
                     _slice, streamed_mutation::forwarding::no
                 );
             }

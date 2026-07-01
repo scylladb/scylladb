@@ -2130,6 +2130,9 @@ table::stop() {
         _sg_manager->clear_storage_groups();
         _sstables = make_compound_sstable_set();
     }));
+    if (uses_logstor()) {
+        co_await _logstor_index->drain_cache();
+    }
     _cache.refresh_snapshot();
 }
 static seastar::metrics::label_instance node_table_metrics("__per_table", "node");
@@ -4736,7 +4739,7 @@ future<> table::discard_logstor_segments() {
         co_return;
     }
 
-    _logstor_index->clear();
+    co_await _logstor_index->clear();
 
     co_await parallel_foreach_compaction_group([] (compaction_group& cg) {
         return cg.discard_logstor_segments();
@@ -4756,6 +4759,10 @@ void table::mark_ready_for_writes(db::commitlog* cl) {
 void table::init_logstor(logstor::logstor* ls) {
     _logstor = ls;
     _logstor_index = std::make_unique<logstor::primary_index>(_schema);
+
+    if (cache_enabled()) {
+        _logstor_index->set_cache_tracker(&ls->get_cache_tracker());
+    }
 }
 
 size_t table::get_logstor_memory_usage() const {
@@ -5046,7 +5053,7 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
 
     if (_logstor) [[unlikely]] {
         auto ss_holder = cg.sstable_add_gate().hold();
-        return _logstor->write(m, cg, std::move(ss_holder));
+        return _logstor->write(m, cg, std::move(ss_holder), timeout);
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h), &cg, holder = std::move(holder)] () mutable {
@@ -5067,7 +5074,7 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
 
     if (_logstor) [[unlikely]] {
         auto ss_holder = cg.sstable_add_gate().hold();
-        return _logstor->write(m.unfreeze(m_schema), cg, std::move(ss_holder));
+        return _logstor->write(m.unfreeze(m_schema), cg, std::move(ss_holder), timeout);
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), guardrails = std::move(guardrails), violations_out]() mutable {
