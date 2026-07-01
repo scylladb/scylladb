@@ -22,6 +22,7 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
+#include "utils/error_injection.hh"
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -195,6 +196,14 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
+
+    // Tests may lengthen the tick interval via error injection so that any
+    // unwanted waiting on a raft tick becomes visible as a large delay.
+    const auto tick_interval = utils::get_local_injector()
+            .inject_parameter<int64_t>("strongly-consistent-raft-group-tick-interval-in-ms")
+            .transform([](int64_t ms) { return raft_ticker_type::duration{std::chrono::milliseconds{ms}}; })
+            .value_or(raft_tick_interval);
+
     co_await _raft_gr.start_server_for_group(raft_server_for_group {
         .gid = group_id,
         .server = std::move(server),
@@ -202,7 +211,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .rpc = rpc_ref,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref
-    });
+    }, tick_interval);
 }
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
