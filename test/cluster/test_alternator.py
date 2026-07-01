@@ -23,6 +23,7 @@ from botocore.exceptions import ClientError
 import requests
 import json
 from cassandra.auth import PlainTextAuthProvider
+from cassandra.protocol import InvalidRequest
 import threading
 import random
 import re
@@ -563,23 +564,29 @@ async def test_alternator_enforce_authorization_false2(manager: ManagerClient):
     table.get_item(Key={'p': 42})
     table.delete()
 
-def get_secret_key(cql, user):
+async def get_secret_key(cql, user):
     """The secret key used for a user in Alternator is its role's salted_hash.
        This function retrieves it from the system table.
     """
-    # Newer Scylla places the "roles" table in the "system" keyspace, but
-    # older versions used "system_auth_v2" or "system_auth"
-    for ks in ['system', 'system_auth_v2', 'system_auth']:
-        try:
-            e = list(cql.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{user}'"))
-            if e != [] and e[0].salted_hash is not None:
-                return e[0].salted_hash
-        except:
-            pass
-    pytest.fail(f"Couldn't get secret key for user {user}")
+    # The role may not be fully populated yet after server startup,
+    # so retry with a generous deadline.
+    async def secret_key_is_available():
+        # Newer Scylla places the "roles" table in the "system" keyspace, but
+        # older versions used "system_auth_v2" or "system_auth"
+        for ks in ['system', 'system_auth_v2', 'system_auth']:
+            try:
+                rows = await cql.run_async(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{user}'")
+            except InvalidRequest:
+                continue
+            if rows and rows[0].salted_hash is not None:
+                return rows[0].salted_hash
+        return None
 
-#flaky, see https://github.com/scylladb/scylladb/issues/20135")
-@pytest.mark.unstable
+    return await wait_for(
+        secret_key_is_available,
+        deadline=time.time() + 60,
+        label=f"secret key for role {user}")
+
 async def test_alternator_enforce_authorization_true(manager: ManagerClient):
     """A basic test for how Alternator authentication and authorization
        work when authentication and authorization is enabled in CQL, and
@@ -605,7 +612,7 @@ async def test_alternator_enforce_authorization_true(manager: ManagerClient):
         alternator.meta.client.list_tables()
     # We know that Scylla is set up with a "cassandra" user. If we retrieve
     # its correct secret key, the ListTables will work.
-    alternator = get_alternator(servers[0].ip_addr, 'cassandra', get_secret_key(cql, 'cassandra'))
+    alternator = get_alternator(servers[0].ip_addr, 'cassandra', await get_secret_key(cql, 'cassandra'))
     alternator.meta.client.list_tables()
     # Privileged operations also work for the superuser account "cassandra":
     table = alternator.create_table(TableName=unique_table_name(),
@@ -617,7 +624,7 @@ async def test_alternator_enforce_authorization_true(manager: ManagerClient):
     table.delete()
     # Create a new role "user2" and make a new connection "alternator2" with it:
     cql.execute("CREATE ROLE user2 WITH PASSWORD = 'user2' AND LOGIN=TRUE")
-    alternator2 = get_alternator(servers[0].ip_addr, 'user2', get_secret_key(cql, 'user2'))
+    alternator2 = get_alternator(servers[0].ip_addr, 'user2', await get_secret_key(cql, 'user2'))
     # In the new role, ListTables works, but other privileged operations
     # don't.
     alternator2.meta.client.list_tables()
