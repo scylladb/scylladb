@@ -12,7 +12,10 @@ from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.skip_types import skip_env
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
 from test.pylib.util import start_writes
-from test.cluster.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for
+from test.cluster.util import (
+    wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for,
+    wait_for_no_pending_topology_transition, get_topology_coordinator, find_server_by_host_id,
+)
 import time
 import pytest
 import logging
@@ -112,6 +115,66 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
                 assert res[0].count != 0
             else:
                 assert res[0].count == 0
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: ManagerClient, scale_timeout):
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+    servers = []
+    hosts_by_rack = defaultdict(list)
+
+    async def make_server(rack: str, start: bool = True):
+        server = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack}, start=start)
+        if start:
+            servers.append(server)
+            hosts_by_rack[rack].append(await manager.get_host_id(server.server_id))
+        return server
+
+    await make_server("r1")
+    await make_server("r2")
+    await make_server("r3")
+
+    await manager.disable_tablet_balancing()
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in range(256)])
+
+        await make_server("r1")
+        target_server = servers[-1]
+        target_host = hosts_by_rack["r1"][-1]
+
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        assert len(replicas) == 1 and len(replicas[0].replicas) == 3
+        old_replica = next(r for r in replicas[0].replicas if r[0] in hosts_by_rack["r1"] and r[0] != target_host)
+
+        await manager.api.enable_injection(target_server.ip_addr, "migration_streaming_wait", one_shot=True)
+        migration_task = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, "test",
+                                                                     old_replica[0], old_replica[1],
+                                                                     target_host, 0,
+                                                                     replicas[0].last_token))
+        await manager.api.wait_for_injection_enter(target_server.ip_addr, "migration_streaming_wait")
+
+        # The injection is coordinator-side, so it has to be enabled on the topology coordinator
+        # rather than on the joining node or its rack. Pausing right after accepting the node
+        # proves bootstrap started without holding tablet streaming across bootstrap barriers.
+        coordinator_host = await get_topology_coordinator(manager)
+        coordinator_server = await find_server_by_host_id(manager, servers, coordinator_host)
+        bootstrap_started_injection = "topology_coordinator_pause_after_accept_node"
+        await manager.api.enable_injection(coordinator_server.ip_addr, bootstrap_started_injection, one_shot=True)
+        joining_server = await make_server("r2", start=False)
+        bootstrap_task = asyncio.create_task(manager.server_start(joining_server.server_id))
+
+        await manager.api.wait_for_injection_enter(coordinator_server.ip_addr, bootstrap_started_injection, deadline=time.time() + scale_timeout(60))
+        assert not migration_task.done()
+
+        await manager.api.message_injection(coordinator_server.ip_addr, bootstrap_started_injection)
+        await manager.api.message_injection(target_server.ip_addr, "migration_streaming_wait")
+
+        await bootstrap_task
+        await migration_task
+        await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
 
 
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
