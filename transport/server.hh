@@ -345,6 +345,7 @@ private:
         service::client_state& get_client_state() { return _client_state; }
         scheduling_group get_scheduling_group() const { return _current_scheduling_group; }
     private:
+        cql_protocol_extension_enum_set supported_cql_protocol_extensions() const;
         friend class process_request_executor;
 
         future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, uint8_t flags, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit, api::timestamp_type request_start_timestamp);

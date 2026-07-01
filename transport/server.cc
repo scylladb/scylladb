@@ -24,6 +24,7 @@
 #include "service/storage_service.hh"
 #include "service/memory_limiter.hh"
 #include "service/storage_proxy.hh"
+#include "gms/feature_service.hh"
 #include "service/qos/service_level_controller.hh"
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
@@ -967,6 +968,16 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
         return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state);
     }
 }
+
+cql_protocol_extension_enum_set cql_server::connection::supported_cql_protocol_extensions() const {
+    auto exts = cql_protocol_extension_enum_set::full();
+    const bool strongly_consistent_tables = _server._query_processor.local().proxy().features().strongly_consistent_tables;
+    if (!strongly_consistent_tables) {
+        exts.remove(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL);
+    }
+    return exts;
+}
+
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
     cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, uint8_t flags, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit, api::timestamp_type request_start_timestamp) {
     using auth_state = service::client_state::auth_state;
@@ -1732,6 +1743,16 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
     }
+
+    if (client_state.is_protocol_extension_set(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+        auto tablet_version_byte = in.read_byte();
+        if (!tablet_version_byte) {
+            return make_exception_future<cql_server::process_fn_return_type>(std::move(tablet_version_byte).assume_error());
+        }
+        const uint8_t block = tablet_version_byte.assume_value();
+        options.set_tablet_version_block(locator::tablet_version_block{block});
+    }
+
     auto skip_metadata = options.skip_metadata();
 
     if (init_trace && trace_state) {

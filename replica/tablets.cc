@@ -40,6 +40,7 @@ static thread_local auto tablet_task_info_type = user_type_impl::get_instance(
 static thread_local auto replica_type = tuple_type_impl::get_instance({uuid_type, int32_type});
 static thread_local auto replica_set_type = list_type_impl::get_instance(replica_type, false);
 static thread_local auto tablet_info_type = tuple_type_impl::get_instance({long_type, long_type, replica_set_type});
+static thread_local auto tablet_info_v2_type = tuple_type_impl::get_instance({long_type, long_type, replica_set_type, long_type});
 
 data_type get_replica_set_type() {
     return replica_set_type;
@@ -47,6 +48,10 @@ data_type get_replica_set_type() {
 
 data_type get_tablet_info_type() {
     return tablet_info_type;
+}
+
+data_type get_tablet_info_v2_type() {
+    return tablet_info_v2_type;
 }
 
 void tablet_add_repair_scheduler_user_types(const sstring& ks, replica::database& db) {

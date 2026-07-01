@@ -27,8 +27,10 @@
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
+#include "locator/tablets.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "service/qos/qos_common.hh"
+#include "transport/cql_protocol_extension.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/as_json_function.hh"
@@ -477,13 +479,27 @@ select_statement::do_execute(query_processor& qp,
 
     auto token = dht::token();
     std::optional<locator::tablet_routing_info> tablet_info = {};
+    std::optional<locator::tablet_routing_info_v2> tablet_info_v2 = {};
 
     auto&& table = _schema->table();
-    if (_may_use_token_aware_routing && table.uses_tablets() && state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
-        if (key_ranges.size() == 1 && query::is_single_partition(key_ranges.front())) {
-            token = key_ranges[0].start()->value().as_decorated_key().token();
+    if (_may_use_token_aware_routing && table.uses_tablets()
+            && key_ranges.size() == 1 && query::is_single_partition(key_ranges.front())) {
+        token = key_ranges[0].start()->value().as_decorated_key().token();
+        auto erm = table.get_effective_replication_map();
 
-            auto erm = table.get_effective_replication_map();
+        if (state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+            if (!options.get_tablet_version_block().has_value()) {
+                // V2 is negotiated but no block was parsed. process_execute_internal()
+                // reads the block unconditionally whenever the V2 extension is set and
+                // rejects the request with a protocol_exception if the byte is missing,
+                // so the block is guaranteed present here. Reaching this point is a
+                // server-side invariant violation, not a client error, hence on_internal_error.
+                utils::on_internal_error(
+                    "The protocol extension tablets-routing-v2 requires that every EXECUTE request "
+                    "carry a tablet_version_block");
+            }
+            tablet_info_v2 = erm->check_tablet_version(token, *options.get_tablet_version_block());
+        } else if (state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
             tablet_info = erm->check_locality(token, state.get_client_state().get_original_shard());
         }
     }
@@ -516,8 +532,15 @@ select_statement::do_execute(query_processor& qp,
             nonpaged_filtering, parsed_limit, std::move(cas_shard));
     }
 
-    if (!tablet_info.has_value()) {
+    if (!tablet_info.has_value() && !tablet_info_v2.has_value()) {
         return f;
+    }
+
+    if (tablet_info_v2.has_value()) {
+        return f.then([tablet_info_v2 = std::move(*tablet_info_v2)] (auto res) mutable {
+            res->add_tablet_info_v2(std::move(tablet_info_v2));
+            return res;
+        });
     }
 
     return f.then([tablet_info = std::move(*tablet_info)] (auto res) mutable {

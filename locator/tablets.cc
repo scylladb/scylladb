@@ -19,8 +19,10 @@
 #include "utils/rjson.hh"
 #include "utils/div_ceil.hh"
 #include "gms/feature_service.hh"
+#include "utils/xx_hasher.hh"
 
 #include <algorithm>
+#include <cstring>
 #include <flat_set>
 #include <iterator>
 #include <chrono>
@@ -34,6 +36,28 @@
 namespace locator {
 
 seastar::logger tablet_logger("tablets");
+
+
+
+namespace internal {
+
+tablet_version hash_replica_list(const tablet_replica_set& replicas) noexcept {
+    xx_hasher hasher{0};
+
+    for (const auto& replica : replicas) {
+        feed_hash(hasher, replica.host);
+        feed_hash(hasher, replica.shard);
+    }
+
+    return tablet_version{hasher.finalize_uint64()};
+}
+
+} // namespace internal
+
+static tablet_replica_set prepare_replicas_for_ec_tablet_version(tablet_replica_set replicas) {
+    std::ranges::sort(replicas);
+    return replicas;
+}
 
 std::pair<tablet_id, std::optional<tablet_id>> tablet_map::sibling_tablets(tablet_id t) const {
     check_tablet_id(t);
@@ -1581,6 +1605,30 @@ public:
         }
 
         return make_tablet_routing_info();
+    }
+
+    std::optional<tablet_routing_info_v2> check_tablet_version(const token& search_token, tablet_version_block block) const override {
+        const auto& tablet_map = get_tablet_map();
+        const auto tid = tablet_map.get_tablet_id(search_token);
+        const auto& tablet_info = tablet_map.get_tablet_info(tid);
+
+        tablet_replica_set prepared_replicas = prepare_replicas_for_ec_tablet_version(tablet_info.replicas);
+        const auto tablet_version = internal::hash_replica_list(prepared_replicas);
+
+        if (compare_tablet_version_block(tablet_version, block)) [[likely]] {
+            return std::nullopt;
+        }
+
+        const dht::token first_token = (tid == tablet_map.first_tablet())
+                ? dht::minimum_token()
+                : tablet_map.get_last_token(tablet_id(size_t(tid) - 1));
+        const dht::token last_token = tablet_map.get_last_token(tid);
+
+        return tablet_routing_info_v2 {
+            .tablet_replicas = std::move(prepared_replicas),
+            .token_range = std::make_pair(first_token, last_token),
+            .hash = tablet_version
+        };
     }
 
     virtual bool has_pending_ranges(locator::host_id host_id) const override {

@@ -8,6 +8,8 @@
 
 #include "groups_manager.hh"
 
+#include "locator/tablets.hh"
+#include "raft/raft.hh"
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
@@ -34,6 +36,18 @@ static logging::logger logger("sc_groups_manager");
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
+
+static std::optional<locator::tablet_replica_set> prepare_replicas_for_sc_tablet_version(locator::tablet_replica_set replicas, raft::server_id group_leader) {
+    std::ranges::sort(replicas);
+    const auto leader_host_id = locator::host_id{group_leader.uuid()};
+    auto leader_it = std::ranges::find(replicas, leader_host_id, &tablet_replica::host);
+    if (leader_it == replicas.end()) [[unlikely]] {
+        on_internal_error(logger, seastar::format("Leader ({}) is not among the replicas: {}",
+                leader_host_id, replicas));
+    }
+    std::ranges::rotate(replicas, leader_it);
+    return std::make_optional(std::move(replicas));
+}
 
 class groups_manager::rpc_impl: public service::raft_rpc {
 public:
@@ -511,6 +525,55 @@ future<> groups_manager::stop() {
     }
 
     logger.info("stop() completed");
+}
+
+std::optional<locator::tablet_routing_info_v2> groups_manager::check_tablet_version(
+        const replica::table& table,
+        const dht::token& token,
+        const locator::tablet_version_block block) const
+{
+    const auto& erm = table.get_effective_replication_map();
+    const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(table.schema()->id());
+    const auto tablet_id = tablet_map.get_tablet_id(token);
+    const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
+    const auto group_id = raft_info.group_id;
+
+    auto group_it = _raft_groups.find(group_id);
+    if (group_it == _raft_groups.end()) [[unlikely]] {
+        return std::nullopt;
+    }
+
+    const raft_group_state& state = group_it->second;
+    if (!state.server) [[unlikely]] {
+        // We don't know who the leader is, so we cannot compute routing information.
+        return std::nullopt;
+    }
+
+    const raft::server_id group_leader = state.server->current_leader();
+    const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
+    auto maybe_replicas = prepare_replicas_for_sc_tablet_version(tablet_info.replicas, group_leader);
+
+    if (!maybe_replicas) [[unlikely]] {
+        // The leader is not present in the replica set.
+        return std::nullopt;
+    }
+
+    const auto hash = locator::internal::hash_replica_list(*maybe_replicas);
+
+    if (locator::compare_tablet_version_block(hash, block)) [[likely]] {
+        return std::nullopt;
+    }
+
+    const dht::token first_token = (tablet_id == tablet_map.first_tablet())
+            ? dht::minimum_token()
+            : tablet_map.get_last_token(locator::tablet_id(size_t(tablet_id) - 1));
+    const dht::token last_token = tablet_map.get_last_token(tablet_id);
+
+    return locator::tablet_routing_info_v2 {
+        .tablet_replicas = std::move(*maybe_replicas),
+        .token_range = std::make_pair(first_token, last_token),
+        .hash = hash
+    };
 }
 
 }

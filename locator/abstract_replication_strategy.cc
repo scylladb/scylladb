@@ -116,6 +116,10 @@ std::optional<tablet_routing_info> vnode_effective_replication_map::check_locali
     return {};
 }
 
+std::optional<tablet_routing_info_v2> vnode_effective_replication_map::check_tablet_version(const token&, tablet_version_block) const {
+    return {};
+}
+
 bool vnode_effective_replication_map::has_pending_ranges(locator::host_id endpoint) const {
     for (const auto& item : *_pending_endpoints) {
         const auto& nodes = item.second;

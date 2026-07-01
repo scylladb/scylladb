@@ -105,6 +105,10 @@ public:
     // until the raft groups for those tablets are started and ready to serve queries.
     // For the local node, waits directly without an RPC.
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
+
+    const groups_manager& get_groups_manager() const noexcept {
+        return _groups_manager;
+    }
 };
 
 }

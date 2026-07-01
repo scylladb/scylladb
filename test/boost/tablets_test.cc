@@ -7747,4 +7747,119 @@ SEASTAR_THREAD_TEST_CASE(test_pow2_convergence_does_not_trigger_scale_down) {
     }, std::move(cfg)).get();
 }
 
+static
+locator::tablet_version_block extract_tablet_version_block(locator::tablet_version hash, uint8_t block_idx) {
+    uint64_t hash_value = hash.value();
+    hash_value >>= (block_idx * 4);
+    uint8_t block_index = block_idx << 4;
+    uint8_t block_value = static_cast<uint8_t>(hash_value & 0x0F);
+    return locator::tablet_version_block{block_index | block_value};
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_version_block_matches) {
+    tablet_version version{0xABCD1234DEADBEEFULL};
+
+    // All 16 blocks should match when extracted from the same version.
+    for (unsigned i = 0; i < 16; ++i) {
+        auto block = extract_tablet_version_block(version, i);
+        BOOST_REQUIRE(compare_tablet_version_block(version, block));
+    }
+
+    // A block from a different version should not match.
+    tablet_version other{0x1111111111111111ULL};
+    bool found_mismatch = false;
+    for (unsigned i = 0; i < 16; ++i) {
+        auto block = extract_tablet_version_block(other, i);
+        if (!compare_tablet_version_block(version, block)) {
+            found_mismatch = true;
+            break;
+        }
+    }
+    BOOST_REQUIRE_MESSAGE(found_mismatch, "All 16 blocks matched between two different versions -- unexpected");
+
+    size_t counter = 0;
+    for (unsigned value = 0; value < 1 << 8; ++value) {
+        const auto block = tablet_version_block{value};
+        if (compare_tablet_version_block(version, block)) {
+            ++counter;
+        }
+    }
+    // There are 16 blocks we can match.
+    BOOST_REQUIRE_MESSAGE(counter == 16, "We should get exactly 16 matches");
+
+    // A manually crafted wrong block should not match.
+    auto correct_block_0 = extract_tablet_version_block(version, 0);
+    // Flip the value nibble.
+    auto wrong_block_0 = tablet_version_block{correct_block_0.value() ^ 0x0F};
+    BOOST_REQUIRE(!compare_tablet_version_block(version, wrong_block_0));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_version_changes_after_tablet_migration) {
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+
+        const unsigned shard_count = 1;
+        const auto dc = topo.dc();
+        const auto rack = topo.rack();
+        // Let's be extra careful with adding the nodes to the SAME rack.
+        // That's necessary because we're going to be migrating the tablet
+        // from one to the other.
+        const auto host1 = topo.add_node(node_state::normal, shard_count, rack);
+        const auto host2 = topo.add_node(node_state::normal, shard_count, rack);
+
+        testlog.info("DC: {}, hosts: host1={}, host2={}", dc, host1, host2);
+
+        const auto ks = add_keyspace(e, {{dc, 1}}, 1);
+        const auto table = add_table(e, ks).get();
+
+        const auto move_tablet = [&] (const locator::host_id host_id) {
+            mutate_tablets(e, [&](tablet_metadata& tmeta) -> future<> {
+                auto boundaries = dht::get_uniform_tokens(1);
+                tablet_map tmap(std::move(boundaries));
+                for (auto tid : tmap.tablet_ids()) {
+                    tmap.set_tablet(tid, tablet_info{tablet_replica_set{{{host_id, 0}}}});
+                }
+                tmeta.set_tablet_map(table, std::move(tmap));
+                co_return;
+            });
+            auto aoe = abort_on_expiry(lowres_clock::now() + std::chrono::seconds(60));
+            auto guard = e.get_raft_group0_client().start_operation(aoe.abort_source()).get();
+            save_token_metadata(e, std::move(guard)).get();
+        };
+
+        const auto get_tablet_version = [&] {
+            const auto schema = e.local_db().as_data_dictionary().find_schema(table);
+            const auto erm = schema->table().get_effective_replication_map();
+            // The table has just one tablet, so we can use an arbitrary token.
+            const auto token = dht::token{0};
+
+            const tablet_version_block blocks[2] = {tablet_version_block{0x00}, tablet_version_block{0x01}};
+            for (const auto block : blocks) {
+                auto result = erm->check_tablet_version(token, block);
+                if (result) {
+                    return result->hash;
+                }
+            }
+
+            throw std::runtime_error(fmt::format("Couldn't obtain tablet version for {}.{}", schema->ks_name(), schema->cf_name()));
+        };
+
+        move_tablet(host1);
+        const auto tv1 = get_tablet_version();
+        move_tablet(host2);
+        const auto tv2 = get_tablet_version();
+
+        testlog.info("Comparing versions: tv1={:016x} vs. tv2={:016x}", tv1.value(), tv2.value());
+        // Technically, it's possible that these two versions will be the same even after tablet migration.
+        // However, that's a highly unlikely scenario.
+        BOOST_REQUIRE_MESSAGE(tv1 != tv2, "Tablet version was supposed to change after tablet migration");
+    }, std::move(cfg)).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

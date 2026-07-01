@@ -203,7 +203,7 @@ The string map in the SUPPORTED response will contain the following parameters:
   - `ERROR_CODE`: a 32-bit signed decimal integer which Scylla
     will use as the error code for the rate limit exception.
 
-## Sending tablet info to the drivers
+## Tablets routing v1
 
 This extension adds support for sending tablet info to the drivers if the 
 request was routed to the wrong node/shard.
@@ -236,7 +236,7 @@ the previously received tablets has an overlapping token range.
 The group of tablets that meets this criterion has to be deleted, and the new
 tablet should replace them.
 
-## Negotiate sending tablets info to the drivers
+### Negotiating tablets-routing-v1 extension
 
 This extension allows the driver to inform the database that it is aware of
 tablets and is able to interpret the tablet information sent in `custom_payload`.
@@ -246,6 +246,106 @@ Having a designated flag gives the ability to skip tablet metadata generation
 
 The feature is identified by the `TABLETS_ROUTING_V1` key, which is meant to be sent
 in the SUPPORTED message.
+
+## Tablets routing v2
+
+The `tablets-routing-v1` payload described above is only sent when a request is
+routed to the wrong node or shard, and it is never produced for strongly
+consistent (SC) tables. This leaves two gaps:
+
+  - A driver whose cached replica set has gone stale is not corrected as long as
+    its requests keep reaching a node that is still a replica (so no misrouting
+    is observed).
+  - Although it should technically be possible to adjust the protocol to cover
+    strongly consistent tables, any solution would come with its own set of
+    problems.
+
+`tablets-routing-v2` closes both gaps by associating every tablet with a
+`tablet_version`: an opaque 64-bit value the server derives from the tablet's
+current replica set (and, for strongly consistent tablets, from the tablet's Raft
+leader). Whenever a tablet's routing changes, its version changes. The driver
+echoes a small fingerprint of the version it currently holds on every request,
+and the server returns up-to-date routing information whenever the fingerprints
+disagree.
+
+More information on TABLETS_ROUTING_V2 can be found in [tablets-routing-v2.md](tablets-routing-v2.md).
+
+### Presenting the version on a request
+
+When `tablets-routing-v2` is negotiated, the driver appends one extra byte — the
+`tablet_version_block` — to the body of every EXECUTE request, immediately after
+the regular query parameters:
+
+```
+<id><query_parameters><tablet_version_block>
+```
+
+`tablet_version_block` is a `[byte]` carrying a single 4-bit slice of the 64-bit
+`tablet_version` the driver currently holds for the target tablet:
+
+  - the high nibble (bits 4-7) is the *block index* (`0..15`), selecting which
+    4-bit slice of the version is being presented (blocks are indexed from the
+    least significant bits towards the most significant ones);
+  - the low nibble (bits 0-3) is the value of that slice.
+
+Example: 0xA3 corresponds to the block of index 0xA and its value: 0x3.
+
+Only one block is sent per request, keeping the overhead at a single byte. A
+driver is expected to rotate the block index across requests so that, over time,
+the whole 64-bit version is checked; any single mismatching block is enough to
+trigger a refresh. A driver that holds no version yet for a tablet should still
+send a byte — the resulting mismatch makes the server return the current routing.
+
+### Receiving the refreshed routing info
+
+The server takes the tablet's current `tablet_version`, extracts the same block
+the driver presented, and compares the two 4-bit values:
+
+  - if they match, the routing is considered current and nothing is added to the
+    response;
+  - otherwise the server attaches a `tablets-routing-v2` entry to the RESULT
+    message `custom_payload`.
+
+The driver has to be able to deserialize the `tablets-routing-v2` field from
+`bytes` to:
+
+  - `TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)), LongType)`
+
+whose elements are:
+
+  - two `LongType`s — the first and last token of the tablet's token range, in the
+    form `(first_token, last_token]`;
+  - `ListType(TupleType(UUIDType, Int32Type))` — the ordered replica set, one
+    `(host_id, shard)` tuple per replica;
+  - a trailing `LongType` — the new 64-bit `tablet_version`, which the driver
+    should remember and fingerprint on subsequent requests.
+
+This is a superset of the `tablets-routing-v1` tuple, which has the same first
+three elements but no version. As with `tablets-routing-v1`, on receiving this
+payload the driver must drop every cached tablet whose token range overlaps the
+new one and replace it with the received tablet.
+
+The order of the returned replicas is deterministic. Moreover, for strongly-consistent
+tables, the replicas are shifted so that the leader of the corresponding Raft
+group is always the first in the list.
+
+### Negotiating tablets-routing-v2 extension
+
+This extension tells the database that the driver understands the
+`tablets-routing-v2` mechanism described above: that it will present a
+`tablet_version_block` on EXECUTE requests and can interpret the
+`tablets-routing-v2` `custom_payload`.
+
+The feature is identified by the `TABLETS_ROUTING_V2_EXPERIMENTAL` key, which is
+meant to be sent in the SUPPORTED message.
+
+Unlike `TABLETS_ROUTING_V1`, the server advertises
+`TABLETS_ROUTING_V2_EXPERIMENTAL` only once the `STRONGLY_CONSISTENT_TABLES`
+cluster feature is enabled — that is, once every node in the cluster supports it.
+Gating on the cluster feature rather than on a single node's local configuration
+ensures that, during a rolling upgrade, connections to different nodes cannot
+negotiate the extension inconsistently. The `_EXPERIMENTAL` suffix indicates the
+feature is still under development and its format may change.
 
 ## Negotiate sending metadata id
 

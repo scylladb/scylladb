@@ -11,8 +11,10 @@
 #include "db/consistency_level_type.hh"
 #include "query/query-request.hh"
 #include "cql3/query_processor.hh"
+#include "replica/database.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "service/strong_consistency/groups_manager.hh"
 
 namespace cql3::statements::strong_consistency {
 
@@ -66,8 +68,32 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
         co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
     }
 
-    co_return co_await process_results(get<lw_shared_ptr<query::result>>(std::move(query_result)),
+    auto result = co_await process_results(get<lw_shared_ptr<query::result>>(std::move(query_result)),
         read_command, options, now);
+
+    if (state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+        if (!options.get_tablet_version_block().has_value()) {
+            // V2 is negotiated but no block was parsed. process_execute_internal()
+            // reads the block unconditionally whenever the V2 extension is set and
+            // rejects the request with a protocol_exception if the byte is missing,
+            // so the block is guaranteed present here. Reaching this point is a
+            // server-side invariant violation, not a client error, hence on_internal_error.
+            utils::on_internal_error(
+                "The protocol extension tablets-routing-v2 requires that every EXECUTE request "
+                "carry a tablet_version_block");
+        }
+
+        const auto& groups_manager = coordinator.get().get_groups_manager();
+        const auto& table = _query_schema->table();
+        const auto& token = key_ranges[0].start()->value().token();
+
+        auto maybe_routing_info_v2 = groups_manager.check_tablet_version(table, token, *options.get_tablet_version_block());
+        if (maybe_routing_info_v2) {
+            result->add_tablet_info_v2(std::move(*maybe_routing_info_v2));
+        }
+    }
+
+    co_return std::move(result);
 }
 
 }
