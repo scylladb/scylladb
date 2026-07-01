@@ -258,6 +258,14 @@ public:
 
 std::pair<unsigned, size_t> calc_part_size(size_t total_size, size_t part_size);
 
+// Parses the ETag out of an S3 UploadPartCopy <CopyPartResult> response body.
+// Returns an empty string if the body is not well-formed XML. Throws
+// std::runtime_error if the body is valid XML but lacks the expected
+// <CopyPartResult>/<ETag> nodes (e.g. an S3 <Error> document). Callers must
+// handle both the empty result and the exception as upload failures.
+// Exposed for unit testing.
+sstring parse_multipart_copy_upload_etag(sstring& body);
+
 } // namespace s3
 
 template <>

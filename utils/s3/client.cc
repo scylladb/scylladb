@@ -815,6 +815,17 @@ future<> client::delete_bucket_with_objects(sstring bucket_name, seastar::abort_
     co_await delete_bucket(bucket_name, as);
 }
 
+// Looks up a required child node, throwing a descriptive error if it is
+// missing. Shared by the multipart-upload response parsers below to avoid
+// dereferencing the nullptr that rapidxml returns for absent nodes.
+static const rapidxml::xml_node<>* get_node_safe(const rapidxml::xml_node<>* node, std::string_view node_name, std::string_view response_name) {
+    auto child = node->first_node(node_name.data());
+    if (!child) {
+        throw std::runtime_error(seastar::format("'{}' node is missing in {} response", node_name, response_name));
+    }
+    return child;
+}
+
 sstring parse_multipart_copy_upload_etag(sstring& body) {
     auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
@@ -825,8 +836,8 @@ sstring parse_multipart_copy_upload_etag(sstring& body) {
         // and handle the error the way it prefers
         return "";
     }
-    auto root_node = doc->first_node("CopyPartResult");
-    auto etag_node = root_node->first_node("ETag");
+    auto root_node = get_node_safe(doc.get(), "CopyPartResult", "CopyPartResult");
+    auto etag_node = get_node_safe(root_node, "ETag", "CopyPartResult");
     return etag_node->value();
 }
 
@@ -982,14 +993,6 @@ public:
 };
 
 sstring parse_multipart_upload_id(sstring& body) {
-    auto get_node_safe = []<typename T>(const T* node, const std::string_view node_name) {
-        auto child = node->first_node(node_name.data());
-        if (!child) {
-            throw std::runtime_error(seastar::format("'{}' node is missing in InitiateMultipartUploadResult response", node_name));
-        }
-        return child;
-    };
-
     auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
         doc->parse<0>(body.data());
@@ -999,8 +1002,8 @@ sstring parse_multipart_upload_id(sstring& body) {
         // and handle the error the way it prefers
         return "";
     }
-    auto root_node = get_node_safe(doc.get(), "InitiateMultipartUploadResult");
-    auto uploadid_node = get_node_safe(root_node, "UploadId");
+    auto root_node = get_node_safe(doc.get(), "InitiateMultipartUploadResult", "InitiateMultipartUploadResult");
+    auto uploadid_node = get_node_safe(root_node, "UploadId", "InitiateMultipartUploadResult");
     return uploadid_node->value();
 }
 
