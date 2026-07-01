@@ -7747,4 +7747,63 @@ SEASTAR_THREAD_TEST_CASE(test_pow2_convergence_does_not_trigger_scale_down) {
     }, std::move(cfg)).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_effective_capacity_smoothing) {
+    // Verifies that storage_service::smooth_effective_capacity() suppresses
+    // small fluctuations to prevent load balancer oscillations.
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& ss = e.get_storage_service().local();
+
+        const double threshold = 0.005; // 0.5%
+        const uint64_t base = 1'000'000'000; // 1 GB
+
+        // First call: no cached value, should accept new value.
+        auto result = ss.smooth_effective_capacity(base, threshold);
+        BOOST_REQUIRE_EQUAL(result, base);
+
+        // Small increase within threshold (0.25%) — value should be suppressed.
+        uint64_t small_increase = base + base * 25 / 10000; // +0.25%
+        result = ss.smooth_effective_capacity(small_increase, threshold);
+        BOOST_REQUIRE_EQUAL(result, base);
+
+        // Small decrease within threshold — value should be suppressed.
+        uint64_t small_decrease = base - base * 25 / 10000; // -0.25%
+        result = ss.smooth_effective_capacity(small_decrease, threshold);
+        BOOST_REQUIRE_EQUAL(result, base);
+
+        // Multiple successive small changes should all be suppressed.
+        for (int i = 1; i <= 5; ++i) {
+            uint64_t val = base + i * (base / 20000); // +0.005% increments
+            result = ss.smooth_effective_capacity(val, threshold);
+            BOOST_REQUIRE_EQUAL(result, base);
+        }
+
+        // Exact threshold boundary: change of exactly 0.5% is NOT strictly
+        // greater than threshold, so it should be suppressed.
+        uint64_t at_threshold = base + base / 200; // exactly +0.5%
+        result = ss.smooth_effective_capacity(at_threshold, threshold);
+        BOOST_REQUIRE_EQUAL(result, base);
+
+        // Just above threshold should update.
+        uint64_t above_threshold = base + base / 200 + 1; // just above +0.5%
+        result = ss.smooth_effective_capacity(above_threshold, threshold);
+        BOOST_REQUIRE_EQUAL(result, above_threshold);
+
+        // Large increase above threshold (1%) — value should be updated.
+        // (relative to the new cached value from above)
+        uint64_t large_increase = above_threshold + above_threshold / 100; // +1%
+        result = ss.smooth_effective_capacity(large_increase, threshold);
+        BOOST_REQUIRE_EQUAL(result, large_increase);
+
+        // Large decrease above threshold — value should be updated.
+        uint64_t large_decrease = large_increase - large_increase / 100; // -1%
+        result = ss.smooth_effective_capacity(large_decrease, threshold);
+        BOOST_REQUIRE_EQUAL(result, large_decrease);
+
+        // Threshold of 0 disables smoothing — any change should be accepted.
+        uint64_t tiny_change = large_decrease + 1;
+        result = ss.smooth_effective_capacity(tiny_change, 0.0);
+        BOOST_REQUIRE_EQUAL(result, tiny_change);
+    }).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

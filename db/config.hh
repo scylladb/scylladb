@@ -656,6 +656,7 @@ public:
     named_value<bool> force_capacity_based_balancing;
     named_value<float> size_based_balance_threshold_percentage;
     named_value<uint64_t> minimal_tablet_size_for_balancing;
+    named_value<double> effective_capacity_smoothing_threshold;
 
     named_value<double> background_writer_scheduling_quota;
     named_value<bool> auto_adjust_flush_quota;

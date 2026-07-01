@@ -6058,10 +6058,23 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
         for (const auto& ts : tablet_sizes_per_shard) {
             sum_tablet_sizes += ts.size;
         }
-        tls.effective_capacity = si.available + sum_tablet_sizes;
+        uint64_t new_effective_capacity = si.available + sum_tablet_sizes;
+
+        const double threshold = _db.local().get_config().effective_capacity_smoothing_threshold();
+        tls.effective_capacity = smooth_effective_capacity(new_effective_capacity, threshold);
     }
 
     co_return std::move(load_stats);
+}
+
+uint64_t storage_service::smooth_effective_capacity(uint64_t new_value, double threshold) {
+    if (!_cached_effective_capacity || threshold == 0 ||
+        double(std::max(new_value, *_cached_effective_capacity) -
+               std::min(new_value, *_cached_effective_capacity)) >
+        threshold * *_cached_effective_capacity) {
+        _cached_effective_capacity = new_value;
+    }
+    return *_cached_effective_capacity;
 }
 
 future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
