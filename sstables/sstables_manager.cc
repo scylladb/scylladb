@@ -259,6 +259,7 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
             ? mutation_fragment_stream_validation_level::clustering_key
             : mutation_fragment_stream_validation_level::token;
     cfg.summary_byte_cost = summary_byte_cost(_config.sstable_summary_ratio);
+    cfg.summary_max_partitions_per_page = _config.sstable_summary_max_partitions_per_page();
 
     cfg.origin = std::move(origin);
     cfg.large_data_records_per_sstable = _config.large_data_records_per_sstable();
