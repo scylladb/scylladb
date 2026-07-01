@@ -21,14 +21,19 @@
 #include "replica/logstor/ondisk.hh"
 #include "schema/schema_fwd.hh"
 #include "types.hh"
+#include "timeout_config.hh"
 
 namespace replica {
-
-class compaction_group;
 
 namespace logstor {
 
 class segment_manager;
+class logstor_group;
+
+struct write_target {
+    logstor_group* cg = nullptr;
+    seastar::gate::holder cg_holder;
+};
 
 // Writer for log records that handles serialization and size computation
 class log_record_writer {
@@ -199,16 +204,17 @@ private:
 // follow-up work such as index updates. For mixed buffers it also keeps copies
 // of appended records so separator rewriting can replay them after the flush.
 class write_buffer {
-    raw_write_buffer _raw;
-    shared_promise<log_location> _written;
-    seastar::gate _write_gate;
-
+public:
     struct record_in_buffer {
         log_record_writer writer;
         future<log_location> loc;
-        compaction_group* cg;
-        seastar::gate::holder cg_holder;
+        write_target target;
     };
+
+private:
+    raw_write_buffer _raw;
+    shared_promise<log_location> _written;
+    seastar::gate _write_gate;
 
     std::vector<record_in_buffer> _records_copy;
 
@@ -252,18 +258,14 @@ public:
     // Returns a future that will be resolved with the log location once flushed and a gate holder
     // that keeps the write buffer open. The gate should be held for index updates after the write
     // is done.
-    future<log_location_with_holder> write(log_record_writer, compaction_group*, seastar::gate::holder cg_holder);
-
-    future<log_location_with_holder> write(log_record_writer writer) {
-        return write(std::move(writer), nullptr, {});
-    }
+    future<log_location_with_holder> write(log_record_writer, write_target target = {});
 
 private:
     bool with_record_copy() const noexcept {
         return _raw.kind() == segment_kind::mixed;
     }
 
-    std::vector<record_in_buffer>& records_for_separator();
+    std::vector<record_in_buffer> take_separator_records();
 
     /// Complete all tracked writes with their locations when the buffer is flushed to base_location
     future<> complete_writes(log_location base_location);
@@ -324,7 +326,7 @@ public:
     future<> start();
     future<> stop();
 
-    future<log_location_with_holder> write(log_record, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
+    future<log_location_with_holder> write(log_record, db::timeout_clock::time_point timeout, write_target target = {});
 
 private:
     // The flush consumer loop.

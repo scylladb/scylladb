@@ -93,6 +93,7 @@ future<scheduling_groups> get_scheduling_groups() {
     if (!_scheduling_groups) {
         _scheduling_groups.emplace();
         _scheduling_groups->compaction_scheduling_group = co_await create_scheduling_group("compaction", 1000);
+        _scheduling_groups->logstor_compaction_scheduling_group = co_await create_scheduling_group("logstor_compaction", 1000);
         _scheduling_groups->maintenance_compaction_scheduling_group = co_await create_scheduling_group("maintenance_compaction", 200);
         _scheduling_groups->memory_compaction_scheduling_group = co_await create_scheduling_group("mem_compaction", 1000);
         _scheduling_groups->streaming_scheduling_group = co_await create_scheduling_group("streaming", 200);
@@ -658,6 +659,7 @@ private:
             }
 
             dbcfg.compaction_scheduling_group = scheduling_groups.compaction_scheduling_group;
+            dbcfg.logstor_compaction_scheduling_group = scheduling_groups.logstor_compaction_scheduling_group;
             dbcfg.maintenance_compaction_scheduling_group = scheduling_groups.maintenance_compaction_scheduling_group;
             dbcfg.memory_compaction_scheduling_group = scheduling_groups.memory_compaction_scheduling_group;
             dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
@@ -1058,6 +1060,10 @@ private:
             }).get();
 
             replica::distributed_loader::init_non_system_keyspaces(_db, _proxy, _sys_ks).get();
+
+            _db.invoke_on_all([] (replica::database& db) {
+                return db.recover_logstor();
+            }).get();
 
             _db.invoke_on_all([] (replica::database& db) {
                 db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {

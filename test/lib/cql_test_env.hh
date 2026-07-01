@@ -78,6 +78,7 @@ namespace db {
 
 struct scheduling_groups {
     scheduling_group compaction_scheduling_group;
+    scheduling_group logstor_compaction_scheduling_group;
     scheduling_group maintenance_compaction_scheduling_group;
     scheduling_group memory_compaction_scheduling_group;
     scheduling_group streaming_scheduling_group;

@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/rwlock.hh>
@@ -47,10 +48,11 @@ struct segment_manager_config {
     size_t disk_size;
     bool compaction_enabled = true;
     size_t max_segments_per_compaction = 8;
+    uint32_t trigger_compaction_threshold_percent = 20;
+    uint32_t compaction_soft_pressure_threshold_percent = 15;
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;
     seastar::scheduling_group separator_sg;
-    uint32_t separator_delay_limit_ms;
     size_t max_separator_memory = 1 * 1024 * 1024;
 };
 
@@ -113,6 +115,7 @@ public:
     segment_manager& operator=(const segment_manager&) = delete;
 
     future<> do_recovery(replica::database&);
+    future<> do_recovery_for_test();
 
     future<> start();
     future<> stop();
@@ -126,9 +129,6 @@ public:
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
 
-    void set_trigger_compaction_hook(std::function<void()> fn);
-    void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn);
-
     size_t get_segment_size() const noexcept;
 
     future<> discard_segments(segment_set&);
@@ -137,7 +137,7 @@ public:
 
     future<> await_pending_writes();
 
-    future<utils::chunked_vector<segment_snapshot>> make_snapshot(compaction_group& cg);
+    future<utils::chunked_vector<segment_snapshot>> make_snapshot(logstor_group& cg);
 
     // Create an output stream to write a segment (for receiving from remote node)
     // Allocates a new local segment and returns an output stream for writing to the segment.

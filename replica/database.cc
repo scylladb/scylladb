@@ -606,6 +606,9 @@ database::setup_metrics() {
 
         sm::make_gauge("unspooled_dirty_bytes", [this] { return _dirty_memory_manager.unspooled_dirty_memory() + _system_dirty_memory_manager.unspooled_dirty_memory(); },
                        sm::description("Holds the size of all (\"regular\" and \"system\") used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
+
+        sm::make_gauge("logstor_bytes", [this] { return get_logstor_memory_usage(); },
+                       sm::description("Holds the current size of memory used by logstor in bytes.")),
     });
 
     _metrics.add_group("memtables", {
@@ -956,23 +959,16 @@ database::init_logstor() {
             .base_dir = std::filesystem::path(_cfg.logstor_directory()),
             .file_size = _cfg.logstor_file_size_in_mb() * 1024ull * 1024ull,
             .disk_size = _cfg.logstor_disk_size_in_mb() * 1024ull * 1024ull,
-            .compaction_sg = _dbcfg.compaction_scheduling_group,
+            .trigger_compaction_threshold_percent = _cfg.logstor_compaction_trigger_threshold_percent(),
+            .compaction_soft_pressure_threshold_percent = _cfg.logstor_compaction_soft_pressure_threshold_percent(),
+            .compaction_sg = _dbcfg.logstor_compaction_scheduling_group,
             .compaction_static_shares = _cfg.compaction_static_shares,
             .separator_sg = _dbcfg.memtable_scheduling_group,
-            .separator_delay_limit_ms = _cfg.logstor_separator_delay_limit_ms(),
             .max_separator_memory = _cfg.logstor_separator_max_memory_in_mb() * 1024ull * 1024ull,
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
     };
-    _logstor = std::make_unique<logstor::logstor>(std::move(cfg));
-
-    _logstor->set_trigger_compaction_hook([this] {
-        trigger_logstor_compaction(false);
-    });
-
-    _logstor->set_trigger_separator_flush_hook([this] (logstor::segment_sequence seq_num) {
-        (void)flush_logstor_separator(seq_num);
-    });
+    _logstor = std::make_unique<logstor::logstor>(std::move(cfg), _row_cache_tracker);
 
     dblog.info("logstor initialized");
     co_return;
@@ -1218,7 +1214,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     }
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, schema->logstor_enabled() ? _logstor.get() : nullptr, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     if (is_new) {
@@ -1230,7 +1226,6 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         if (!_logstor) {
             throw std::runtime_error(fmt::format("The table {}.{} is using logstor storage but logstor is not initialized", schema->ks_name(), schema->cf_name()));
         }
-        cf->init_logstor(_logstor.get());
         dblog.info0("Table {}.{} is using logstor storage", schema->ks_name(), schema->cf_name());
     }
 
@@ -3137,7 +3132,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
             if (cf.uses_logstor()) {
                 auto& logstor_cm = cf.get_logstor_compaction_manager();
                 co_await cf.parallel_foreach_logstor_compaction_group([&logstor_cm, &st] (replica::compaction_group& cg) -> future<> {
-                    st->logstor_cres.emplace_back(co_await logstor_cm.disable_compaction(cg));
+                    st->logstor_cres.emplace_back(co_await logstor_cm.disable_compaction(cg.as_logstor_group()));
                 });
             }
 
