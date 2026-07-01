@@ -10,6 +10,7 @@
 #include "api/api.hh"
 #include "api/api-doc/cache_service.json.hh"
 #include "column_family.hh"
+#include "db/config.hh"
 
 namespace api {
 using namespace json;
@@ -318,6 +319,46 @@ void set_cache_service(http_context& ctx, sharded<replica::database>& db, routes
         // so currently returning a 0 for entries is ok
         return make_ready_future<json::json_return_type>(0);
     });
+
+    cs::get_tinylfu_sketch_entries_per_mb.set(r, [&db] (std::unique_ptr<http::request> req) {
+        double ratio = db.local().get_config().tinylfu_sketch_entries_per_mb();
+        return make_ready_future<json::json_return_type>(ratio);
+    });
+
+    cs::set_tinylfu_sketch_entries_per_mb.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto& cfg = const_cast<db::config&>(db.local().get_config());
+        try {
+            co_await cfg.tinylfu_sketch_entries_per_mb.set_value_on_all_shards(
+                req->get_query_param("value"), utils::config_file::config_source::API);
+        } catch (...) {
+            throw bad_param_exception(fmt::format("{}", std::current_exception()));
+        }
+        co_return json::json_return_type(json_void());
+    });
+
+    cs::tinylfu_sketch_resize.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_await db.invoke_on_all([] (replica::database& db) {
+            db.row_cache_tracker().resize_sketch();
+        });
+        co_return json::json_return_type(json_void());
+    });
+
+    cs::get_tinylfu_initial_window_percent.set(r, [&db] (std::unique_ptr<http::request> req) {
+        double pct = db.local().get_config().tinylfu_initial_window_percent();
+        return make_ready_future<json::json_return_type>(pct);
+    });
+
+    cs::set_tinylfu_initial_window_percent.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto& cfg = const_cast<db::config&>(db.local().get_config());
+        try {
+            co_await cfg.tinylfu_initial_window_percent.set_value_on_all_shards(
+                req->get_query_param("value"), utils::config_file::config_source::API);
+        } catch (...) {
+            throw bad_param_exception(fmt::format("{}", std::current_exception()));
+        }
+        co_return json::json_return_type(json_void());
+    });
+
 }
 
 void unset_cache_service(http_context& ctx, routes& r) {
@@ -363,6 +404,11 @@ void unset_cache_service(http_context& ctx, routes& r) {
     cs::get_counter_requests_moving_avrage.unset(r);
     cs::get_counter_size.unset(r);
     cs::get_counter_entries.unset(r);
+    cs::get_tinylfu_sketch_entries_per_mb.unset(r);
+    cs::set_tinylfu_sketch_entries_per_mb.unset(r);
+    cs::tinylfu_sketch_resize.unset(r);
+    cs::get_tinylfu_initial_window_percent.unset(r);
+    cs::set_tinylfu_initial_window_percent.unset(r);
 }
 
 }
