@@ -453,18 +453,19 @@ private:
         }
     }
 public:
-    explicit background_reclaimer(scheduling_group sg, noncopyable_function<void (size_t target)> reclaim)
+    explicit background_reclaimer(scheduling_group sg, std::chrono::nanoseconds adjust_shares_period, noncopyable_function<void (size_t target)> reclaim)
             : _sg(sg)
             , _reclaim(std::move(reclaim))
             , _adjust_shares_timer(default_scheduling_group(), [this] { adjust_shares(); })
             , _done(with_scheduling_group(_sg, [this] { return main_loop(); })) {
         if (sg != default_scheduling_group()) {
-            _adjust_shares_timer.arm_periodic(50ms);
+            _adjust_shares_timer.arm_periodic(adjust_shares_period);
         }
     }
     future<> stop() {
         _stopping = true;
         main_loop_wake();
+        _adjust_shares_timer.cancel();
         return std::move(_done);
     }
 };
@@ -551,9 +552,9 @@ public:
     // Abort on allocation failure from LSA
     void enable_abort_on_bad_alloc() noexcept { _abort_on_bad_alloc = true; }
     bool should_abort_on_bad_alloc() const noexcept { return _abort_on_bad_alloc; }
-    void setup_background_reclaim(scheduling_group sg) {
+    void setup_background_reclaim(scheduling_group sg, std::chrono::nanoseconds adjust_shares_period) {
         SCYLLA_ASSERT(!_background_reclaimer);
-        _background_reclaimer.emplace(sg, [this] (size_t target) {
+        _background_reclaimer.emplace(sg, adjust_shares_period, [this] (size_t target) {
             reclaim(target, is_preemptible::yes);
         });
     }
@@ -2397,7 +2398,7 @@ void tracker::configure(const config& cfg) {
     if (cfg.abort_on_lsa_bad_alloc) {
         _impl->enable_abort_on_bad_alloc();
     }
-    _impl->setup_background_reclaim(cfg.background_reclaim_sched_group);
+    _impl->setup_background_reclaim(cfg.background_reclaim_sched_group, cfg.background_reclaim_shares_adjust_period);
     _impl->set_sanitizer_report_backtrace(cfg.sanitizer_report_backtrace);
 }
 

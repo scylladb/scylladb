@@ -806,6 +806,7 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     st_cfg.abort_on_lsa_bad_alloc = false;
     st_cfg.lsa_reclamation_step = 1;
     st_cfg.background_reclaim_sched_group = background_reclaim_scheduling_group;
+    st_cfg.background_reclaim_shares_adjust_period = 1ms;
     logalloc::shard_tracker().configure(st_cfg);
 
     auto stop_lsa_background_reclaim = defer([&] () noexcept {
@@ -817,7 +818,7 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     for (int i = 0; i < 50; ++i) {
         // Background reclaim is supposed to eventually ensure a certain amount of free memory.
         while (memory::free_memory() < background_reclaim_free_memory_threshold) {
-            thread::maybe_yield();
+            seastar::sleep(std::chrono::milliseconds(1)).get();
         }
 
         auto compacted_pre = logalloc::shard_tracker().statistics().memory_compacted;

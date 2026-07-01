@@ -65,6 +65,7 @@ public:
         bool sanitizer_report_backtrace = false; // Better reports but slower
         size_t lsa_reclamation_step;
         scheduling_group background_reclaim_sched_group;
+        std::chrono::nanoseconds background_reclaim_shares_adjust_period = std::chrono::milliseconds(50);
     };
 
     struct stats {
