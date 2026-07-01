@@ -4270,6 +4270,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
         }
 
+        {
         auto erm = ks.get_static_effective_replication_map();
 
         // Build tablet map mutations for all tables and persist them to group0 (system.tablets)
@@ -4312,6 +4313,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             for (const auto& [tid, cf_name] : tables_to_migrate) {
                 co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
             }
+        }
         }
 
         topology_change change{std::move(updates)};
