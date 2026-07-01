@@ -388,7 +388,7 @@ auto mutation::consume_gently(Consumer& consumer, consume_in_reverse reverse, mu
 
 struct mutation_equals_by_key {
     bool operator()(const mutation& m1, const mutation& m2) const {
-        return m1.schema() == m2.schema()
+        return m1.schema()->version() == m2.schema()->version()
                 && m1.decorated_key().equal(*m1.schema(), m2.decorated_key());
     }
 };
@@ -396,7 +396,8 @@ struct mutation_equals_by_key {
 struct mutation_hash_by_key {
     size_t operator()(const mutation& m) const {
         auto dk_hash = std::hash<dht::decorated_key>();
-        return dk_hash(m.decorated_key());
+        return utils::hash_combine(dk_hash(m.decorated_key()),
+                                   std::hash<table_schema_version>()(m.schema()->version()));
     }
 };
 
