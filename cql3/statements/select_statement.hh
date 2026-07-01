@@ -74,7 +74,9 @@ protected:
     lw_shared_ptr<const parameters> _parameters;
     ::shared_ptr<selection::selection> _selection;
     const ::shared_ptr<const restrictions::statement_restrictions> _restrictions;
-    const bool _restrictions_need_filtering;
+private:
+    const bool _restrictions_need_filtering; // Access via needs_post_filtering()
+protected:
     ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
     bool _is_reversed;
     expr::unset_bind_variable_guard _limit_unset_guard;
@@ -163,6 +165,10 @@ public:
 protected:
     uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
+
+    virtual bool needs_post_filtering() const {
+        return _restrictions_need_filtering;
+    }
 
     bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {
@@ -402,6 +408,10 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(query_processor& qp, service::query_state& state,
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
             std::vector<dht::partition_range> partition_ranges) const;
+
+    bool needs_post_filtering() const override {
+        return false; // All filtering is done by the index query, so no post-filtering is allowed.
+    }
 };
 
 }
