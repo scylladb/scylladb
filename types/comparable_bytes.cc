@@ -1390,3 +1390,76 @@ data_value comparable_bytes::to_data_value(const data_type& type) const {
 
     return type->deserialize(decoded_bytes.value());
 }
+<<<<<<< HEAD
+||||||| parent of 88c5fa2de9 (sstables/trie: in `mt` sstables, use legacy partition key ordering)
+
+static bytes_view bytespan_to_bytesview(std::span<const std::byte> s) {
+    return {reinterpret_cast<const bytes::value_type*>(s.data()), s.size()};
+}
+
+template <allow_prefixes AllowPrefixes>
+comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator) {
+    bytes_ostream out;
+    auto t_it = p.types().begin();
+    const auto t_end = p.types().end();
+    auto c_it = p.components(representation).begin();
+    const auto c_end = p.components(representation).end();
+    while (c_it != c_end) {
+        SCYLLA_ASSERT(t_it != t_end);
+
+        constexpr std::byte col_separator = std::byte(0x40);
+        out.write(bytespan_to_bytesview(object_representation(col_separator)));
+        auto mbv = *c_it;
+        to_comparable_bytes(**t_it, mbv, out);
+        ++c_it;
+        ++t_it;
+    }
+    out.write(bytespan_to_bytesview(object_representation(terminator)));
+    return std::move(out).to_managed_bytes();
+}
+template comparable_bytes comparable_bytes_from_compound<allow_prefixes::yes>(const compound_type<allow_prefixes::yes>&, managed_bytes_view, std::byte);
+template comparable_bytes comparable_bytes_from_compound<allow_prefixes::no>(const compound_type<allow_prefixes::no>&, managed_bytes_view, std::byte);
+=======
+
+static bytes_view bytespan_to_bytesview(std::span<const std::byte> s) {
+    return {reinterpret_cast<const bytes::value_type*>(s.data()), s.size()};
+}
+
+template <allow_prefixes AllowPrefixes>
+comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator) {
+    bytes_ostream out;
+    auto t_it = p.types().begin();
+    const auto t_end = p.types().end();
+    auto c_it = p.components(representation).begin();
+    const auto c_end = p.components(representation).end();
+    while (c_it != c_end) {
+        SCYLLA_ASSERT(t_it != t_end);
+
+        constexpr std::byte col_separator = std::byte(0x40);
+        out.write(bytespan_to_bytesview(object_representation(col_separator)));
+        auto mbv = *c_it;
+        to_comparable_bytes(**t_it, mbv, out);
+        ++c_it;
+        ++t_it;
+    }
+    out.write(bytespan_to_bytesview(object_representation(terminator)));
+    return std::move(out).to_managed_bytes();
+}
+template comparable_bytes comparable_bytes_from_compound<allow_prefixes::yes>(const compound_type<allow_prefixes::yes>&, managed_bytes_view, std::byte);
+template comparable_bytes comparable_bytes_from_compound<allow_prefixes::no>(const compound_type<allow_prefixes::no>&, managed_bytes_view, std::byte);
+
+comparable_bytes comparable_bytes_from_legacy_partition_key(const compound_type<allow_prefixes::no>& t, managed_bytes_view v, std::byte terminator) {
+    bytes_ostream out;
+
+    constexpr std::byte col_separator = std::byte(0x40);
+    out.write(bytespan_to_bytesview(object_representation(col_separator)));
+
+    auto legacy_form = to_legacy(t, v);
+    auto legacy_form_view = managed_bytes_view(legacy_form);
+    to_comparable_bytes(*bytes_type, legacy_form_view, out);
+
+    out.write(bytespan_to_bytesview(object_representation(terminator)));
+
+    return std::move(out).to_managed_bytes();
+}
+>>>>>>> 88c5fa2de9 (sstables/trie: in `mt` sstables, use legacy partition key ordering)

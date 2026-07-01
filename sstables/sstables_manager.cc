@@ -155,13 +155,15 @@ storage_manager::config_updater::config_updater(const db::config& cfg, storage_m
 {}
 
 sstables::sstable::version_types sstables_manager::get_highest_supported_format() const noexcept {
-    // FIXME: start announcing `ms` here after it becomes the default.
+    // FIXME: start announcing `mt` here after it becomes the default.
     // (There are several tests which expect that new sstables are written with
     // the format reported by this API).
     //
-    // After `ms` becomes the default, this function look like this:
+    // After `mt` becomes the default, this function look like this:
     //
-    // if (_features.ms_sstable) {
+    // if (_features.mt_sstable) {
+    //     return sstable_version_types::mt;
+    // } else if (_features.ms_sstable) {
     //     return sstable_version_types::ms;
     // } else {
     //     return sstable_version_types::me;
@@ -170,23 +172,53 @@ sstables::sstable::version_types sstables_manager::get_highest_supported_format(
 }
 
 sstables::sstable::version_types sstables_manager::get_preferred_sstable_version() const {
+<<<<<<< HEAD
     auto preferred_format = sstables::version_from_string(config().sstable_format());
+||||||| parent of 8e44575df5 (db/config: expose sstable format version "mt")
+    auto preferred_format = sstables::version_from_string(_config.format());
+=======
+    auto preferred_format = sstables::version_from_string(_config.format());
+    auto mt_supported = bool(_features.mt_sstable);
+    if (mt_supported && preferred_format == sstable_version_types::mt) {
+        return sstable_version_types::mt;
+    }
+    // `mt` supersedes `ms` (it's just `ms`, but with a problem fixed), so
+    // if `ms` is chosen, but `mt` is available, we assume that the user
+    // wants `mt` and we silently pick that instead.
+    if (mt_supported && preferred_format == sstable_version_types::ms) {
+        return sstable_version_types::mt;
+    }
+>>>>>>> 8e44575df5 (db/config: expose sstable format version "mt")
     auto ms_supported = bool(_features.ms_sstable);
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
-    } else {
-        return sstable_version_types::me;
     }
+    return sstable_version_types::me;
 }
 
 sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const {
+<<<<<<< HEAD
     auto preferred_format = sstables::version_from_string(config().sstable_format());
+||||||| parent of 8e44575df5 (db/config: expose sstable format version "mt")
+    auto preferred_format = sstables::version_from_string(_config.format());
+=======
+    auto preferred_format = sstables::version_from_string(_config.format());
+    auto mt_supported = bool(_features.mt_sstable) || existing_version >= sstable_version_types::mt;
+    if (mt_supported && preferred_format == sstable_version_types::mt) {
+        return sstable_version_types::mt;
+    }
+    // `mt` supersedes `ms` (it's just `ms`, but with a problem fixed), so
+    // if `ms` is chosen, but `mt` is available, we assume that the user
+    // wants `mt` and we silently pick that instead.
+    if (mt_supported && preferred_format == sstable_version_types::ms) {
+        return sstable_version_types::mt;
+    }
+>>>>>>> 8e44575df5 (db/config: expose sstable format version "mt")
     auto ms_supported = bool(_features.ms_sstable) || existing_version >= sstable_version_types::ms;
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
-    } else {
-        return sstable_version_types::me;
     }
+    return sstable_version_types::me;
 }
 
 locator::host_id sstables_manager::get_local_host_id() const {

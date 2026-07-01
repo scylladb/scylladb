@@ -76,3 +76,15 @@ struct fmt::formatter<comparable_bytes_opt> : fmt::formatter<managed_bytes_view>
         return fmt::format_to(ctx.out(), "null");
     }
 };
+<<<<<<< HEAD
+||||||| parent of 88c5fa2de9 (sstables/trie: in `mt` sstables, use legacy partition key ordering)
+
+template <allow_prefixes AllowPrefixes>
+comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator);
+=======
+
+template <allow_prefixes AllowPrefixes>
+comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator);
+
+comparable_bytes comparable_bytes_from_legacy_partition_key(const compound_type<allow_prefixes::no>& p, managed_bytes_view representation, std::byte terminator);
+>>>>>>> 88c5fa2de9 (sstables/trie: in `mt` sstables, use legacy partition key ordering)

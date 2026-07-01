@@ -4548,6 +4548,7 @@ class scylla_sstables(gdb.Command):
             'md': new_format,
             'me': new_format,
             'ms': new_format,
+            'mt': new_format,
         }
         format_to_str = ['big']
         schema = schema_ptr(sst['_schema'])

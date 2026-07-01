@@ -11,6 +11,7 @@
 
 namespace sstables::trie {
 
+<<<<<<< HEAD
 static bytes_view bytespan_to_bytesview(std::span<const std::byte> s) {
     return {reinterpret_cast<const bytes::value_type*>(s.data()), s.size()};
 }
@@ -22,15 +23,66 @@ lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_positi
     // and `init_first_fragment` assumes that it's 1.
     , _weight(_token.is_maximum() ? 1 : rpv.weight())
     , _s(s)
+||||||| parent of 79ba0049b1 (sstables/trie: pass sstable format version to trie index readers and writers)
+lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(const schema& s, dht::ring_position_view rpv)
+    : _s(s)
+    // Note about `dht::maximum_token()`: this isn't a real token.
+    // It's just a fake element greater than any real token.
+    // It is never written used during writes, but might appear as a search key during reads.
+    // So we need to encode it in a way that preserves the ordering, doesn't matter to what exactly.
+    // Here we arbitrarily encode identically to the greatest real token, with weight 1.
+    // (Weight was handled in the constructor).
+    //
+    // dht::minimum_token() also isn't a real token, but it doesn't need special handling,
+    // because its `unbias()` returns something smaller than any real token's `unbias()`.
+    , _weight(rpv.token().is_maximum() ? bound_weight::after_all_prefixed : bound_weight(rpv.weight()))
+    // If there's no key, we just eagerly translate the "key part" to the terminator byte.
+    , _pk(rpv.key()
+        ? decltype(_pk)(*rpv.key())
+        : decltype(_pk)(comparable_bytes(managed_bytes{bytes::value_type(bound_weight_to_terminator(_weight))})))
+=======
+lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(sstable_version_types sst_ver, const schema& s, dht::ring_position_view rpv)
+    : _s(s)
+    // Note about `dht::maximum_token()`: this isn't a real token.
+    // It's just a fake element greater than any real token.
+    // It is never written used during writes, but might appear as a search key during reads.
+    // So we need to encode it in a way that preserves the ordering, doesn't matter to what exactly.
+    // Here we arbitrarily encode identically to the greatest real token, with weight 1.
+    // (Weight was handled in the constructor).
+    //
+    // dht::minimum_token() also isn't a real token, but it doesn't need special handling,
+    // because its `unbias()` returns something smaller than any real token's `unbias()`.
+    , _weight(rpv.token().is_maximum() ? bound_weight::after_all_prefixed : bound_weight(rpv.weight()))
+    // If there's no key, we just eagerly translate the "key part" to the terminator byte.
+    , _pk(rpv.key()
+        ? decltype(_pk)(*rpv.key())
+        : decltype(_pk)(comparable_bytes(managed_bytes{bytes::value_type(bound_weight_to_terminator(_weight))})))
+    , _format_version(sst_ver)
+>>>>>>> 79ba0049b1 (sstables/trie: pass sstable format version to trie index readers and writers)
 {
     init_first_fragment();
 }
 
+<<<<<<< HEAD
 lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(const schema& s, dht::decorated_key dk)
     : _token(std::move(dk._token))
+||||||| parent of 79ba0049b1 (sstables/trie: pass sstable format version to trie index readers and writers)
+lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(const schema& s, dht::decorated_key dk)
+    : _s(s)
+    , _weight(bound_weight::equal)
+=======
+lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(sstable_version_types sst_ver, const schema& s, dht::decorated_key dk)
+    : _s(s)
+    , _weight(bound_weight::equal)
+>>>>>>> 79ba0049b1 (sstables/trie: pass sstable format version to trie index readers and writers)
     , _pk(std::move(dk._key))
+<<<<<<< HEAD
     , _weight(0)
     , _s(s)
+||||||| parent of 79ba0049b1 (sstables/trie: pass sstable format version to trie index readers and writers)
+=======
+    , _format_version(sst_ver)
+>>>>>>> 79ba0049b1 (sstables/trie: pass sstable format version to trie index readers and writers)
 {
     init_first_fragment();
 }
