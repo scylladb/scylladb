@@ -1964,6 +1964,21 @@ future<> storage_service::stop_transport() {
             shutdown_protocol_servers().get();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
+            // Drain the storage proxy RPC verbs before gossip shutdown: announcing
+            // the shutdown makes the peers mark this node dead, and marking a node
+            // dead drops the RPC connections to it (storage_service::notify_down()),
+            // which would kill exactly the in-flight replica requests whose replies
+            // we are trying to deliver here.
+            //
+            // The wait is bounded, so that callers such as isolate() are not held
+            // back by an arbitrarily long replica request; whatever does not finish
+            // in time is joined later by storage_proxy::stop_remote(). This mirrors
+            // what shutdown_protocol_servers() above already does for the CQL
+            // connections, and uses the same knob.
+            const lowres_clock::duration drain_timeout = std::chrono::seconds(_db.local().get_config().request_timeout_on_shutdown_in_seconds());
+            _qp.proxy().container().invoke_on_all(&service::storage_proxy::drain_remote_verbs, drain_timeout).get();
+            slogger.info("Stop transport: drain storage proxy RPC verbs done");
+
             _gossiper.container().invoke_on_all(&gms::gossiper::shutdown).get();
             slogger.info("Stop transport: stop_gossiping done");
 
