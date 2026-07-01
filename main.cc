@@ -2830,12 +2830,13 @@ int main(int ac, char** av) {
         std::string_view name;
         main_func_type func;
         std::string_view desc;
+        bool needs_tls = true;
     };
     const tool tools[] = {
         {"server", scylla_main, "the scylladb server"},
         {"types", tools::scylla_types_main, "a command-line tool to examine values belonging to scylla types"},
         {"sstable", tools::scylla_sstable_main, "a multifunctional command-line tool to examine the content of sstables"},
-        {"nodetool", tools::scylla_nodetool_main, "a command-line tool to administer local or remote ScyllaDB nodes"},
+        {"nodetool", tools::scylla_nodetool_main, "a command-line tool to administer local or remote ScyllaDB nodes", false},
         {"local-file-key-generator", tools::scylla_local_file_key_generator_main, "a command-line tool to generate encryption at rest keys"},
         {"perf-fast-forward", perf::scylla_fast_forward_main, "run performance tests by fast forwarding the reader on this server"},
         {"perf-row-cache-update", perf::scylla_row_cache_update_main, "run performance tests by updating row cache on this server"},
@@ -2848,6 +2849,7 @@ int main(int ac, char** av) {
         {"perf-cql-raw", perf::perf_cql_raw(scylla_main, &after_init_func), "run performance tests using raw CQL protocol frames"}
     };
 
+    const tool* found_tool = nullptr;
     main_func_type main_func;
     if (exec_name.empty() || exec_name[0] == '-') {
         main_func = scylla_main;
@@ -2855,7 +2857,8 @@ int main(int ac, char** av) {
                                return tool.name == exec_name;
                            });
                tool != std::ranges::end(tools)) {
-        main_func = tool->func;
+        found_tool = &*tool;
+        main_func = found_tool->func;
         // shift args to consume the recognized tool name
         std::shift_left(av + 1, av + ac, 1);
         --ac;
@@ -2896,20 +2899,21 @@ int main(int ac, char** av) {
         return 0;
     }
 
-    // We have to override p11-kit config path before p11-kit initialization.
-    // And the initialization will invoke on seastar initialization, so it has to
-    // be before app.run()
-    // #3583 - need to potentially ensure this for tools as well, since at least
-    // sstable* might need crypto libraries.
-    auto scylla_path = fs::read_symlink(fs::path("/proc/self/exe")); // could just be argv[0] I guess...
-    auto p11_trust_paths_from_env = std::getenv("SCYLLA_P11_TRUST_PATHS");
-    auto trust_module_path = scylla_path.parent_path().parent_path().append("libreloc/pkcs11/p11-kit-trust.so");
-    if (fs::exists(trust_module_path) && p11_trust_paths_from_env) {
-        gnutls_pkcs11_init(GNUTLS_PKCS11_FLAG_MANUAL, nullptr);
-        auto trust_config = fmt::format("p11-kit:paths={} trusted=yes", p11_trust_paths_from_env);
-        auto ret = gnutls_pkcs11_add_provider(trust_module_path.string().c_str(), trust_config.c_str());
-        if (ret != GNUTLS_E_SUCCESS) {
-            startlog.warn("Could not initialize p11-kit trust module: {}\n", gnutls_strerror(ret));
+    // gnutls_pkcs11_init(MANUAL) must precede gnutls_global_init(), which fires
+    // lazily on first TLS credential/DH-param/x509 construction — before app.run().
+    // Skip for tools that have no TLS path (e.g. nodetool uses plain HTTP only).
+    // #3583 - sstable* may need this when reading encrypted sstables.
+    if (!found_tool || found_tool->needs_tls) {
+        auto scylla_path = fs::read_symlink(fs::path("/proc/self/exe")); // could just be argv[0] I guess...
+        auto p11_trust_paths_from_env = std::getenv("SCYLLA_P11_TRUST_PATHS");
+        auto trust_module_path = scylla_path.parent_path().parent_path().append("libreloc/pkcs11/p11-kit-trust.so");
+        if (fs::exists(trust_module_path) && p11_trust_paths_from_env) {
+            gnutls_pkcs11_init(GNUTLS_PKCS11_FLAG_MANUAL, nullptr);
+            auto trust_config = fmt::format("p11-kit:paths={} trusted=yes", p11_trust_paths_from_env);
+            auto ret = gnutls_pkcs11_add_provider(trust_module_path.string().c_str(), trust_config.c_str());
+            if (ret != GNUTLS_E_SUCCESS) {
+                startlog.warn("Could not initialize p11-kit trust module: {}\n", gnutls_strerror(ret));
+            }
         }
     }
 
