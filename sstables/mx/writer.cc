@@ -833,11 +833,10 @@ private:
 public:
 
     writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-        const sstable_writer_config& cfg, encoding_stats enc_stats,
-        shard_id shard = this_shard_id())
+        const sstable_writer_config& cfg, encoding_stats enc_stats)
         : sstable_writer::writer_impl(sst, s, cfg)
         , _enc_stats(enc_stats)
-        , _shard(shard)
+        , _shard(cfg.shard)
         , _tmp_bufs(_sst.sstable_buffer_size)
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
         , _run_identifier(cfg.run_identifier)
@@ -878,7 +877,7 @@ public:
         _compression_enabled = !_sst.has_component(component_type::CRC);
         _delayed_filter = _sst.has_component(component_type::Filter) && !_sst.has_component(component_type::Index);
         init_file_writers();
-        _sst._shards = { shard };
+        _sst._shards = { _shard };
 
         _cfg.monitor->on_write_started(_data_writer->offset_tracker());
         if (!_delayed_filter) {
@@ -1895,9 +1894,8 @@ std::unique_ptr<sstable_writer::writer_impl> make_writer(sstable& sst,
         const schema& s,
         uint64_t estimated_partitions,
         const sstable_writer_config& cfg,
-        encoding_stats enc_stats,
-        shard_id shard) {
-    return std::make_unique<writer>(sst, s, estimated_partitions, cfg, enc_stats, shard);
+        encoding_stats enc_stats) {
+    return std::make_unique<writer>(sst, s, estimated_partitions, cfg, enc_stats);
 }
 
 }
