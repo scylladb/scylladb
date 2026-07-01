@@ -404,6 +404,12 @@ def test_table_scan_operations(test_table_s, metrics):
         test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
             ExpressionAttributeValues={':p': 'dog'})
 
+def test_export_table_operations(test_table_s, metrics):
+    table_arn = test_table_s.meta.client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    with check_increases_operation(metrics, ['ExportTableToPointInTime']):
+        with check_table_increases_operation(metrics, ['ExportTableToPointInTime'], test_table_s.name):
+            test_table_s.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
+
 # Test counter for Query with VectorSearch: both global and per-table.
 def test_query_vector_operations(vs, metrics):
     with new_test_table(vs,
