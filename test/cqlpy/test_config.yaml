@@ -5,5 +5,6 @@ extra_scylla_cmdline_options:
   - '--experimental-features=udf'
   - '--experimental-features=keyspace-storage-options'
   - '--experimental-features=views-with-tablets'
+  - '--experimental-features=logstor'
   - '--enable-tablets=true'
   - '--tablets-initial-scale-factor=1'
