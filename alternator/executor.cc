@@ -19,6 +19,7 @@
 #include "auth/service.hh"
 #include "cql3/cql3_type.hh"
 #include "db/config.hh"
+#include "db/consistency_level_type.hh"
 #include "db/view/view_build_status.hh"
 #include "locator/tablets.hh"
 #include "mutation/tombstone.hh"
@@ -382,7 +383,7 @@ static rjson::value generate_arn_for_index(const schema& schema, std::string_vie
 // In theory, there can be a period during upgrading an old cluster when this
 // table is not yet available. However, since the IndexStatus is a new feature
 // too, it is acceptable that it doesn't yet work in the middle of the update.
-static future<bool> is_view_built(
+static future<std::variant<bool, api_error>> is_view_built(
         view_ptr view,
         service::storage_proxy& proxy,
         service::client_state& client_state,
@@ -409,14 +410,18 @@ static future<bool> is_view_built(
         schema->id(), schema->version(), partition_slice,
         proxy.get_max_result_size(partition_slice),
         query::tombstone_limit(proxy.get_tombstone_limit()));
-    service::storage_proxy::coordinator_query_result qr =
-        co_await proxy.query(
-            schema, std::move(command), std::move(partition_ranges),
-            db::consistency_level::LOCAL_ONE,
-            service::storage_proxy::coordinator_query_options(
-                executor::default_timeout(), std::move(permit), client_state, trace_state));
+
+    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+            co_await proxy.query_result(
+                schema, std::move(command), std::move(partition_ranges),
+                db::consistency_level::LOCAL_ONE,
+                service::storage_proxy::coordinator_query_options(
+                    executor::default_timeout(), std::move(permit), client_state, trace_state));
+    if (!rqr) {
+        co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+    }
     query::result_set rs = query::result_set::from_raw_result(
-        schema, partition_slice, *qr.query_result);
+        schema, partition_slice, *rqr.assume_value().query_result);
     std::unordered_map<locator::host_id, sstring> statuses;
     for (auto&& r : rs.rows()) {
         auto host_id = r.get<utils::UUID>("host_id");
@@ -447,7 +452,6 @@ static future<bool> is_view_built(
             }
         });
     co_return all_built;
-
 }
 
 future<> executor::cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl) {
@@ -481,7 +485,7 @@ future<> executor::fill_table_size(rjson::value &table_description, schema_ptr s
     rjson::add(table_description, "TableSizeBytes", total_size);
 }
 
-future<rjson::value> executor::fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
+future<std::variant<rjson::value, api_error>> executor::fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
 {
     rjson::value table_description = rjson::empty_object();
     auto tags_ptr = db::get_tags_of_table(schema);
@@ -568,7 +572,11 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
                 // (for a built view) or CREATING+Backfilling (if view building
                 // is in progress).
                 if (!is_lsi) {
-                    if (co_await is_view_built(vptr, _proxy, client_state, trace_state, permit)) {
+                    auto is_view_build_result = co_await is_view_built(vptr, _proxy, client_state, trace_state, permit);
+                    if (auto error = std::get_if<api_error>(&is_view_build_result)) {
+                        co_return std::move(*error);
+                    }
+                    if (std::get<bool>(is_view_build_result)) {
                         rjson::add(view_entry, "IndexStatus", "ACTIVE");
                     } else {
                         rjson::add(view_entry, "IndexStatus", "CREATING");
@@ -668,9 +676,12 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     get_stats_from_schema(_proxy, *schema)->api_operations.describe_table++;
     tracing::add_alternator_table_name(trace_state, schema->cf_name());
 
-    rjson::value table_description = co_await fill_table_description(schema, table_status::active, client_state, trace_state, permit);
+    std::variant<rjson::value, api_error> table_description_result = co_await fill_table_description(schema, table_status::active, client_state, trace_state, permit);
+    if (auto error = std::get_if<api_error>(&table_description_result)) {
+        co_return std::move(*error);
+    }
     rjson::value response = rjson::empty_object();
-    rjson::add(response, "Table", std::move(table_description));
+    rjson::add(response, "Table", std::move(std::get<rjson::value>(table_description_result)));
     elogger.trace("returning {}", response);
     co_return rjson::print(std::move(response));
 }
@@ -688,7 +699,10 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     auto& p = _proxy.container();
 
     schema_ptr schema = get_table(_proxy, request);
-    rjson::value table_description = co_await fill_table_description(schema, table_status::deleting, client_state, trace_state, permit);
+    std::variant<rjson::value, api_error> table_description_result = co_await fill_table_description(schema, table_status::deleting, client_state, trace_state, permit);
+    if (auto error = std::get_if<api_error>(&table_description_result)) {
+        co_return std::move(*error);
+    }
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::DROP, _stats);
     co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
         size_t retries = mm.get_concurrent_ddl_retries();
@@ -745,7 +759,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     });
 
     rjson::value response = rjson::empty_object();
-    rjson::add(response, "TableDescription", std::move(table_description));
+    rjson::add(response, "TableDescription", std::move(std::get<rjson::value>(table_description_result)));
     elogger.trace("returning {}", response);
     co_return rjson::print(std::move(response));
 }
@@ -2892,7 +2906,7 @@ static executor::request_return_type rmw_operation_return(rjson::value&& attribu
     return rjson::print(std::move(ret));
 }
 
-static future<std::unique_ptr<rjson::value>> get_previous_item(
+static future<std::variant<std::unique_ptr<rjson::value>, api_error>> get_previous_item(
             service::storage_proxy& proxy,
             service::client_state& client_state,
             schema_ptr schema,
@@ -2905,20 +2919,22 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
         auto selection = cql3::selection::selection::wildcard(schema);
         auto command = previous_item_read_command(proxy, schema, ck, selection);
         command->allow_limit = db::allow_per_partition_rate_limit::yes;
-        return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
-            [schema, command, selection = std::move(selection), &item_length] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, &item_length);
-        if (previous_item) {
-            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
-        } else {
-            return make_ready_future<std::unique_ptr<rjson::value>>();
+        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr = 
+                co_await proxy.query_result(
+                    schema, command, to_partition_ranges(*schema, pk), cl,
+                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state));
+        if (!rqr) {
+            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
         }
-    });
+        auto previous_item = describe_single_item(schema, command->slice, *selection, *rqr.assume_value().query_result, {}, &item_length);
+        if (previous_item) {
+            co_return std::make_unique<rjson::value>(std::move(*previous_item));
+        } else {
+            co_return std::unique_ptr<rjson::value>();
+        }
 }
 
-
-
-static future<uint64_t> get_previous_item_size(
+static future<std::variant<uint64_t, api_error>> get_previous_item_size(
             service::storage_proxy& proxy,
             service::client_state& client_state,
             schema_ptr schema,
@@ -2928,7 +2944,10 @@ static future<uint64_t> get_previous_item_size(
     uint64_t item_length = 0;
     // The use of get_previous_item here is for DynamoDB calculation compatibility mode,
     // and the actual value is ignored. For performance reasons, we use CL_LOCAL_ONE.
-    co_await  get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_ONE, item_length);
+    auto res = co_await get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_ONE, item_length);
+    if (auto error = std::get_if<api_error>(&res)) {
+        co_return std::move(*error);
+    }
     co_return item_length;
 }
 
@@ -2955,7 +2974,11 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, db::consistency_level::LOCAL_QUORUM, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, &global_stats, &per_table_stats, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
+                    [this, &proxy, &wcu_total, &global_stats, &per_table_stats, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::variant<std::unique_ptr<rjson::value>, api_error> previous_item_result) mutable {
+                if (auto error = std::get_if<api_error>(&previous_item_result)) {
+                    return make_ready_future<executor::request_return_type>(std::move(*error));
+                }
+                auto previous_item = std::move(std::get<std::unique_ptr<rjson::value>>(previous_item_result));
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
                 if (!m) {
                     global_stats.conditional_check_failed++;
@@ -3539,7 +3562,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // If alternator_force_read_before_write is true we will first get the previous item size
     // and only then do send the mutation.
     if (_proxy.data_dictionary().get_config().alternator_force_read_before_write()) {
-        std::vector<future<uint64_t>> previous_items_sizes;
+        std::vector<future<std::variant<uint64_t, api_error>>> previous_items_sizes;
         previous_items_sizes.reserve(mutation_builders.size());
 
         // Parallel get all previous item sizes
@@ -3555,7 +3578,13 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         size_t pos = 0;
         // We are going to wait for all the requests
         for (auto&& pi : previous_items_sizes) {
-            auto res = co_await std::move(pi);
+            auto res_result = co_await std::move(pi);
+
+            if (auto error = std::get_if<api_error>(&res_result)) {
+                co_return std::move(*error);
+            }
+            auto res = std::get<uint64_t>(res_result);
+
             if (mutation_builders[pos].second.length_in_bytes() < res) {
                 mutation_builders[pos].second.set_length_in_bytes(res);
             }
