@@ -9,6 +9,8 @@
 #pragma once
 
 #include "keys/keys.hh"
+#include "dht/ring_position.hh"
+#include "dht/i_partitioner.hh"
 #include "mutation/position_in_partition.hh"
 
 struct full_position;
@@ -33,8 +35,12 @@ struct full_position {
     }
 
     static std::strong_ordering cmp(const schema& s, const full_position& a, const full_position& b) {
-        partition_key::tri_compare pk_cmp(s);
-        if (auto res = pk_cmp(a.partition, b.partition); res != 0) {
+        // Use ring order (token first, then legacy raw-byte compare) to match the physical
+        // SSTable ordering. Using the type-aware partition_key::tri_compare here would give
+        // wrong results for key types (e.g. timeuuid) where semantic order differs from the
+        // raw-byte order used on disk, potentially causing paging cursors to be advanced past
+        // partitions that haven't been returned yet.
+        if (auto res = dht::ring_position_tri_compare(s, dht::decorate_key(s, a.partition), dht::decorate_key(s, b.partition)); res != 0) {
             return res;
         }
         position_in_partition::tri_compare pos_cmp(s);
