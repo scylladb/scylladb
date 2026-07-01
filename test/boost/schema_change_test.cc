@@ -795,6 +795,30 @@ BOOST_AUTO_TEST_CASE(metadata_id_with_udt) {
     verify_metadata_id_is_stable(h6, "02f16bdc4b235791a44983fe56618006");
 }
 
+BOOST_AUTO_TEST_CASE(metadata_id_accepts_any_input_size) {
+    // Empty input: zero-initialized 16 bytes
+    cql3::cql_metadata_id_type from_empty{bytes_view{}};
+    bytes zero_16(bytes::initialized_later(), 16);
+    std::fill(zero_16.begin(), zero_16.end(), int8_t(0));
+    BOOST_REQUIRE_EQUAL(from_empty.to_bytes_view(), bytes_view(zero_16));
+
+    // Smaller than 16 bytes: zero-padded to 16
+    bytes small = {int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(5)};
+    cql3::cql_metadata_id_type from_small{bytes_view(small)};
+    bytes small_expected(bytes::initialized_later(), 16);
+    auto it = std::copy(small.begin(), small.end(), small_expected.begin());
+    std::fill(it, small_expected.end(), int8_t(0));
+    BOOST_REQUIRE_EQUAL(from_small.to_bytes_view(), bytes_view(small_expected));
+
+    // Larger than 16 bytes: first 16 bytes stored, rest discarded
+    bytes large(bytes::initialized_later(), 32);
+    std::fill(large.begin(), large.end(), int8_t(0x42));
+    cql3::cql_metadata_id_type from_large{bytes_view(large)};
+    bytes expected_16(bytes::initialized_later(), 16);
+    std::fill(expected_16.begin(), expected_16.end(), int8_t(0x42));
+    BOOST_REQUIRE_EQUAL(from_large.to_bytes_view(), bytes_view(expected_16));
+}
+
 cql3::cql_metadata_id_type get_metadata_id(cql_test_env& e, sstring const& table) {
     auto msg = e.execute_cql(format("SELECT * FROM {};", table)).get();
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
