@@ -522,7 +522,7 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
                 # Emit split decision during repair.
                 await run_split()
 
-                await manager.api.wait_for_injection_enter(servers[0].ip_addr, "maybe_split_new_sstable_wait")
+                mark, _ = await log.wait_for("maybe_split_new_sstable_wait: waiting for message", from_mark=mark)
                 await manager.api.disable_injection(coord_serv.ip_addr, "tablet_resize_finalization_postpone")
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
