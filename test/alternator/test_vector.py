@@ -1279,10 +1279,6 @@ def test_wait_for_vector_index_active(vs, needs_vector_store):
 # and this test used to fail before this was fixed.
 # To save a bit of time, we don't test all combinations of hash and range
 # key types but test each type at least once as a hash key and a range key.
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/VECTOR-374",
-    reason="Bug in vector store for non-string keys, fails very slowly",
-)
 @pytest.mark.parametrize('hash_type,range_type', [
     ('N', None), ('B', None), ('S', 'N'),  ('S', 'B'),
 ], ids=[
@@ -1307,7 +1303,8 @@ def test_query_vector_prefill_key_types(vs, needs_vector_store, hash_type, range
              'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
         wait_for_vector_index_active(table, 'vind')
         result = table.query(IndexName='vind',
-            VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1)
+            VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1,
+            Select='ALL_ATTRIBUTES')
         assert len(result['Items']) == 1 and result['Items'] == [item]
 
 # Same as test_query_vector_prefill but whereas in test_query_vector_prefill
