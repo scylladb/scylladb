@@ -15,6 +15,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/checked_ptr.hh>
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -32,16 +33,11 @@ struct cql_metadata_id_type {
 
     cql_metadata_id_type() : _id{} {}
     explicit cql_metadata_id_type(bytes_view metadata_id) : _id{} {
-        if (metadata_id.size() != size) {
-            throw exceptions::protocol_exception(
-                fmt::format("Expected metadata_id of {} bytes, got {}", size, metadata_id.size()));
-        }
-        std::copy_n(metadata_id.begin(), size, _id.begin());
+        std::copy_n(metadata_id.begin(), std::min(metadata_id.size(), size), _id.begin());
     }
 
     bool operator==(const cql_metadata_id_type& other) const = default;
 
-    // For wire protocol: return a view for write_short_bytes
     bytes_view to_bytes_view() const {
         return bytes_view(reinterpret_cast<const bytes::value_type*>(_id.data()), size);
     }
