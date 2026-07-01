@@ -464,6 +464,16 @@ future<> system_distributed_keyspace::insert_snapshot_sstable(sstring snapshot_n
             cql3::query_processor::cache_internal::yes).discard_result();
 }
 
+future<> system_distributed_keyspace::get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, std::function<void(snapshot_sstable_entry)> fn, db::consistency_level cl) const {
+    static const sstring query = format("SELECT toc_name, prefix, sstable_id, first_token, last_token, downloaded FROM {}.{}"
+        " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?", NAME, SNAPSHOT_SSTABLES);
+    return _qp.query_internal(query, cl, { snapshot_name, ks, table, dc, rack }, 1000, [fn = std::move(fn)] (const cql3::untyped_result_set_row& row) {
+            snapshot_sstable_entry ent{sstables::sstable_id(row.get_as<utils::UUID>("sstable_id")), dht::token::from_int64(row.get_as<int64_t>("first_token")), dht::token::from_int64(row.get_as<int64_t>("last_token")), row.get_as<sstring>("toc_name"), row.get_as<sstring>("prefix"), is_downloaded(row.get_or<bool>("downloaded", false))};
+            fn(std::move(ent));
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+}
+
 future<utils::chunked_vector<snapshot_sstable_entry>>
 system_distributed_keyspace::get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl, std::optional<dht::token> start_token, std::optional<dht::token> end_token) const {
     utils::chunked_vector<snapshot_sstable_entry> sstables;

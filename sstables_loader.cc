@@ -11,6 +11,7 @@
 #include <seastar/core/map_reduce.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/shared_mutex.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/core/units.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
@@ -1078,7 +1079,7 @@ future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_test
     return tablet_sstable_streamer::get_sstables_for_tablets(sstables, std::move(tablets_ranges));
 }
 
-static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace, sstring table,
+static future<manifest_summary> process_manifest(input_stream<char>& is, sstring keyspace, sstring table,
                                  const sstring& expected_snapshot_name,
                                  const sstring& manifest_prefix, db::system_distributed_keyspace& sys_dist_ks,
                                  db::consistency_level cl) {
@@ -1117,7 +1118,7 @@ static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace,
     // FIXME: cleanup of the snapshot-related rows is needed in case anything throws in here.
     auto sstables = rjson::find(parsed, "sstables");
     if (!sstables) {
-        co_return tablet_count;
+        co_return manifest_summary{tablet_count, 0};
     }
     if (!sstables->IsArray()) {
         throw std::runtime_error("Malformed manifest, 'sstables' is not array");
@@ -1139,10 +1140,10 @@ static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace,
                                                     toc_name, prefix, cl);
     }
 
-    co_return tablet_count;
+    co_return manifest_summary{tablet_count, sstables->Size()};
 }
 
-future<size_t> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
     if (manifest_prefixes.empty()) {
         throw std::invalid_argument("manifest prefixes list must not be empty");
     }
@@ -1153,39 +1154,83 @@ future<size_t> populate_snapshot_sstables_from_manifests(sstables::storage_manag
 
     // tablet_count to be returned by this function, we also validate that all manifests passed contain the same tablet count
     std::optional<size_t> tablet_count;
+    size_t nr_sstables = 0;
 
     co_await seastar::max_concurrent_for_each(manifest_prefixes, 16, [&] (const sstring& manifest_prefix) {
         // Download the manifest JSON file
         sstables::object_name name(bucket, manifest_prefix);
         auto source = client->make_download_source(name);
         return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
-            return process_manifest(is, keyspace, table, expected_snapshot_name, manifest_prefix, sys_dist_ks, cl).then([&](size_t count) {
+            return process_manifest(is, keyspace, table, expected_snapshot_name, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
+                size_t count = ms.tablet_count;
                 if (!tablet_count) {
                     tablet_count = count;
                 } else if (*tablet_count != count) {
                     throw std::runtime_error(fmt::format("Inconsistent tablet_count values in manifest {}: expected {}, got {}", manifest_prefix, *tablet_count, count));
                 }
+                nr_sstables += ms.nr_sstables;
             });
         });
     });
 
-    co_return *tablet_count;
+    co_return manifest_summary{
+        .tablet_count = *tablet_count,
+        .nr_sstables = nr_sstables,
+    };
 }
 
 class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::task::impl {
     sharded<sstables_loader>& _loader;
     table_id _tid;
     sstring _snap_name;
+    tasks::task_manager::task::progress _progress;
+    seastar::named_gate _gate{"progress_updater"};
+    timer<seastar::lowres_clock> _progress_update_timer;
+
+    future<> update_progress() {
+        auto& loader = _loader.local();
+        auto& db = loader._db.local();
+        auto s = db.find_schema(_tid);
+        auto md = db.get_token_metadata_ptr();
+        const auto& topo = md->get_topology();
+        auto dc = topo.get_datacenter();
+        auto dc_racks_it = topo.get_datacenter_racks().find(dc);
+        if (dc_racks_it == topo.get_datacenter_racks().end()) {
+            co_return;
+        }
+
+        tasks::task_manager::task::progress progress = {};
+        co_await max_concurrent_for_each(dc_racks_it->second, 16, [&](const auto& rack_entry) -> future<> {
+            co_await loader._sys_dist_ks.get_snapshot_sstables(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first, [&] (auto ent) {
+                progress.total++;
+                if (ent.downloaded == db::is_downloaded::yes) {
+                    progress.completed++;
+                }
+            });
+        });
+        _progress = progress;
+    }
 
 public:
     tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
-            table_id tid, sstring snap_name) noexcept
+            table_id tid, sstring snap_name, size_t nr_sstables) noexcept
         : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
         , _loader(loader)
         , _tid(std::move(tid))
         , _snap_name(std::move(snap_name))
+        , _progress_update_timer([this] {
+            if (auto gh = _gate.try_hold()) {
+                std::ignore = update_progress().finally([this, gh = std::move(*gh)] {
+                    if (!_gate.is_closed()) {
+                        _progress_update_timer.rearm(lowres_clock::now() + 5s);
+                    }
+                });
+            }
+        })
     {
-        _status.progress_units = "batches";
+        _status.progress_units = "sstables";
+        _progress.total = nr_sstables;
+        _progress_update_timer.arm(lowres_clock::now());
     }
 
     virtual std::string type() const override {
@@ -1204,22 +1249,36 @@ public:
         return tasks::is_abortable::no;
     }
 
+    future<tasks::task_manager::task::progress> get_progress() const override {
+        co_return _progress;
+    }
+
+    future<> release_resources() noexcept override {
+        _progress_update_timer.cancel();
+        co_await _gate.close();
+    }
+
 protected:
     virtual future<> run() override {
         auto& loader = _loader.local();
         co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+
+        // Restore complete. The total was known upfront from manifest parsing.
+        // Mark all progress as complete and stop the background update timer.
+        _progress_update_timer.cancel();
+        _progress.completed = _progress.total;
     }
 };
 
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, sstring prefix, utils::chunked_vector<sstring> manifests) {
-    auto tablet_count = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, snap_name, std::move(manifests));
+    auto summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, snap_name, std::move(manifests));
 
     auto datacenter = _db.local().get_token_metadata().get_topology().get_datacenter();
     co_await _sys_dist_ks.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix);
 
-    co_await container().invoke_on(0, [tid, tablet_count] (auto& sl) -> future<> {
-        co_await sl._ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
+    co_await container().invoke_on(0, [tid, &summary] (auto& sl) -> future<> {
+        co_await sl._ss.local().alter_table_with_tablet_hints(tid, summary.tablet_count, summary.tablet_count);
     });
-    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name));
+    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), summary.nr_sstables);
     co_return task->id();
 }
