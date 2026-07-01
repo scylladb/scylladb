@@ -21,7 +21,6 @@
 #include "gms/gossiper.hh"
 #include "utils/log.hh"
 #include "db/config.hh"
-#include "replica/database.hh"
 #include "streaming/stream_reason.hh"
 #include "locator/abstract_replication_strategy.hh"
 
@@ -30,6 +29,7 @@ static logging::logger blogger("boot_strapper");
 namespace dht {
 
 future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard topo_guard,
+                                  std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms,
                                   locator::host_id replace_address) {
     blogger.debug("Beginning bootstrap process: sorted_tokens={}", get_token_metadata().sorted_tokens());
     sstring description;
@@ -41,14 +41,14 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
         throw std::runtime_error("Wrong stream_reason provided: it can only be replace or bootstrap");
     }
     try {
-        auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason, topo_guard);
+        auto streamer = make_lw_shared<range_streamer>(_stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason, topo_guard,
+                _consistent_rangemovement, _stream_plan_ranges_fraction);
         auto nodes_to_filter = gossiper.get_unreachable_members();
         if (reason == streaming::stream_reason::replace) {
             nodes_to_filter.insert(std::move(replace_address));
         }
         blogger.debug("nodes_to_filter={}", nodes_to_filter);
         streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(nodes_to_filter));
-        auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
         for (const auto& [keyspace_name, erm] : ks_erms) {
             auto& strategy = erm->get_replication_strategy();
             // We took a strategy ptr to keep it alive during the `co_await`.
