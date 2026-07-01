@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager, contextmanager, suppress
 
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
-from test.pylib.internal_types import ServerInfo, HostID
+from test.pylib.internal_types import ServerInfo, HostID, IPAddress
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
@@ -180,6 +180,114 @@ async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, dea
                 return None
             return True
         await wait_for(token_ring_and_group0_match, deadline, period=.5)
+
+
+async def wait_for_expected_rows(
+    manager: ManagerClient,
+    table: str,
+    host_ip: IPAddress,
+    expected_rows: int,
+    deadline: float,
+    consistency_level: ConsistencyLevel = ConsistencyLevel.ONE,
+) -> None:
+    """Wait until a host can read at least the expected number of rows from a table.
+
+    `table` is the fully-qualified "keyspace.table" name (as returned by new_test_table()).
+    """
+    cql = manager.get_cql()
+    server = next((srv for srv in await manager.running_servers() if srv.rpc_address == host_ip), None)
+    if server is None:
+        raise AssertionError(f"Host {host_ip} is not a running server")
+
+    hosts = await wait_for_cql_and_get_hosts(cql, [server], deadline)
+    host = hosts[0]
+
+    async def has_expected_rows() -> bool | None:
+        rows = await cql.run_async(
+            SimpleStatement(f"SELECT count(*) FROM {table}", consistency_level=consistency_level),
+            host=host,
+        )
+        if rows[0].count < expected_rows:
+            logger.info("Host %s has %s/%s rows for %s, waiting for data to converge", host_ip, rows[0].count, expected_rows, table)
+            return None
+        return True
+
+    await wait_for(has_expected_rows, deadline, label=f"verify-data-{host_ip}-{table}")
+
+
+async def wait_for_replacement_propagation(
+    manager: ManagerClient,
+    replaced: ServerInfo,
+    old_host_id: HostID,
+    old_ip: IPAddress,
+    deadline: float,
+) -> None:
+    """Wait until live observers agree on the replacement's identity and reachability.
+
+    Supported replacement matrix:
+      - different-IP, different-host_id
+      - same-IP,      different-host_id
+      - different-IP, same-host_id
+    The same-IP AND same-host_id case is NOT supported: there is no observable
+    identity change to wait on, so it would spin until the deadline.
+    """
+    cql = manager.get_cql()
+    new_host_id = await manager.get_host_id(replaced.server_id)
+    assert not (old_ip == replaced.ip_addr and str(old_host_id) == str(new_host_id)), \
+        "wait_for_replacement_propagation does not support same-IP + same-host_id replace (no observable change)"
+
+    observers = [server for server in await manager.running_servers() if server.server_id != replaced.server_id]
+    if not observers:
+        return
+
+    _, hosts = await manager.get_ready_cql(observers)
+
+    async def observer_sees_replacement(observer: ServerInfo, host: Host) -> bool | None:
+        current_peers = {(str(row.host_id), row.peer) for row in await cql.run_async("select peer, host_id from system.peers", host=host)}
+        expected_old_peer = (str(old_host_id), old_ip)
+        if expected_old_peer in current_peers:
+            logger.info("Observer %s still shows the replaced peer %s in system.peers: %s", observer, expected_old_peer, current_peers)
+            return None
+
+        expected_new_peer = (str(new_host_id), replaced.ip_addr)
+        if expected_new_peer not in current_peers:
+            logger.info("Observer %s has not yet updated system.peers to %s: %s", observer, expected_new_peer, current_peers)
+            return None
+
+        alive_eps = set(await manager.api.get_alive_endpoints(observer.ip_addr))
+        if old_ip != replaced.ip_addr and old_ip in alive_eps:
+            logger.info("Observer %s still reports replaced IP %s as alive", observer, old_ip)
+            return None
+        if replaced.ip_addr not in alive_eps:
+            logger.info("Observer %s does not yet see replacement %s as alive", observer, replaced.ip_addr)
+            return None
+
+        down_eps = set(await manager.api.get_down_endpoints(observer.ip_addr))
+        if old_ip in down_eps:
+            logger.info("Observer %s still reports replaced IP %s as down", observer, old_ip)
+            return None
+
+        actual_host_id_map = {entry['value']: entry['key'] for entry in await manager.api.get_host_id_map(observer.ip_addr)}
+        if old_ip != replaced.ip_addr and actual_host_id_map.get(old_host_id) == old_ip:
+            logger.info("Observer %s still maps replaced host %s to the old IP %s: %s", observer, old_host_id, old_ip, actual_host_id_map)
+            return None
+        if old_ip == replaced.ip_addr and actual_host_id_map.get(old_host_id) == old_ip:
+            logger.info("Observer %s still maps replaced host %s to shared IP %s: %s", observer, old_host_id, old_ip, actual_host_id_map)
+            return None
+        if actual_host_id_map.get(new_host_id) != replaced.ip_addr:
+            logger.info("Observer %s has not yet mapped the new host %s to %s: %s", observer, new_host_id, replaced.ip_addr, actual_host_id_map)
+            return None
+
+        return True
+
+    await asyncio.gather(*(
+        wait_for(
+            lambda observer=observer, host=host: observer_sees_replacement(observer, host),
+            deadline,
+            label=f"replacement-visible-on-{observer.ip_addr}",
+        )
+        for observer, host in zip(observers, hosts)
+    ))
 
 
 async def delete_discovery_state_and_group0_id(cql: Session, host: Host) -> None:
