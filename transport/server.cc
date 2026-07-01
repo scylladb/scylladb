@@ -1152,9 +1152,11 @@ client_data cql_server::connection::make_client_data() const {
     cd.scheduling_group_name = _current_scheduling_group.name();
     cd.client_options = _client_state.get_client_options();
 
-    cd.ssl_enabled = _ssl_enabled;
-    cd.ssl_protocol = _ssl_protocol;
-    cd.ssl_cipher_suite = _ssl_cipher_suite;
+    cd.ssl_enabled = bool(_ssl_info);
+    if (_ssl_info) {
+        cd.ssl_protocol = _ssl_info->protocol;
+        cd.ssl_cipher_suite = _ssl_info->cipher_suite;
+    }
 
     return cd;
 }
