@@ -19,7 +19,7 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_all
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from cassandra.cluster import ConsistencyLevel
-from collections import defaultdict
+from collections import defaultdict, Counter
 from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
 from test.cluster.tasks.task_manager_client import TaskManagerClient
@@ -458,36 +458,68 @@ class topo:
         self.racks = racks
         self.dcs = dcs
 
-async def create_cluster(topology, manager, logger, object_storage=None):
-    rf_rack_valid_keyspaces = (topology.rf <= topology.racks)
-    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
+# Shared by every server_add(); read-only, do not mutate.
+CLUSTER_CMDLINE = ['--logger-log-level',
+                   'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:http=debug:api=info']
 
-    cfg = {'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces}
-    if object_storage:
-        objconf = object_storage.create_endpoint_conf()
-        cfg['object_storage_endpoints'] = objconf
 
-    cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:http=debug:api=info' ]
-    servers = []
-    host_ids = {}
-
-    cur_dc = 0
-    cur_rack = 0
-    for s in range(topology.nodes):
-        dc = f"dc{cur_dc}"
-        rack = f"rack{cur_rack}"
+def dc_rack_slots(topology):
+    cur_dc = cur_rack = 0
+    for _ in range(topology.nodes):
+        yield f"dc{cur_dc}", f"rack{cur_rack}"
         cur_dc += 1
         if cur_dc >= topology.dcs:
             cur_dc = 0
             cur_rack += 1
             if cur_rack >= topology.racks:
                 cur_rack = 0
-        s = await manager.server_add(config=cfg, cmdline=cmd, property_file={'dc': dc, 'rack': rack})
+
+
+def make_cluster_config(rf_rack_valid, object_storage=None):
+    cfg = {'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid}
+    if object_storage is not None:
+        cfg['object_storage_endpoints'] = object_storage.create_endpoint_conf()
+    return cfg
+
+
+async def create_cluster(topology, manager, logger, object_storage=None):
+    rf_rack_valid_keyspaces = (topology.rf <= topology.racks)
+    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
+
+    cfg = make_cluster_config(rf_rack_valid_keyspaces, object_storage)
+    servers = []
+    host_ids = {}
+
+    for dc, rack in dc_rack_slots(topology):
+        s = await manager.server_add(config=cfg, cmdline=CLUSTER_CMDLINE, property_file={'dc': dc, 'rack': rack})
         logger.info(f'Created node {s.ip_addr} in {dc}.{rack}')
         servers.append(s)
         host_ids[s.server_id] = await manager.get_host_id(s.server_id)
 
     return servers,host_ids
+
+
+async def add_servers_for_restore(target_topology: topo, servers: list[ServerInfo],
+                                  manager: ManagerClient, logger: logging.Logger,
+                                  object_storage=None) -> list[ServerInfo]:
+    occupied = Counter((s.datacenter, s.rack) for s in servers)
+    wanted = Counter(dc_rack_slots(target_topology))
+    assert occupied <= wanted, (f'target_topology slots {dict(wanted)} must be a superset of '
+                                f'existing slots {dict(occupied)}')
+
+    rf_rack_valid = target_topology.rf <= target_topology.racks
+    logger.info(f'Expanding cluster from {len(servers)} to {target_topology.nodes} nodes '
+                f'({target_topology.dcs} DCs, {target_topology.racks} racks)')
+    cfg = make_cluster_config(rf_rack_valid, object_storage)
+
+    new_servers = []
+    for (dc, rack), count in (wanted - occupied).items():
+        for _ in range(count):
+            s = await manager.server_add(config=cfg, cmdline=CLUSTER_CMDLINE, property_file={'dc': dc, 'rack': rack})
+            logger.info(f'Added restore node {s.ip_addr} in {dc}.{rack}')
+            new_servers.append(s)
+
+    return new_servers
 
 async def do_restore_server(manager, logger, ks, cf, s, toc_names, scope, primary_replica_only, prefix, object_storage):
     logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
@@ -767,6 +799,55 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
         assert (status is not None) and (status['state'] == 'done')
 
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+
+
+@pytest.mark.parametrize("topology,target_topology", [
+    (topo(rf = 3, nodes = 3, racks = 1, dcs = 1), topo(rf = 3, nodes = 6, racks = 1, dcs = 1)),
+    (topo(rf = 2, nodes = 2, racks = 1, dcs = 1), topo(rf = 2, nodes = 4, racks = 1, dcs = 1)),
+    (topo(rf = 2, nodes = 4, racks = 2, dcs = 1), topo(rf = 2, nodes = 8, racks = 2, dcs = 1)),
+])
+async def test_restore_tablets_expand_cluster(build_mode: str, manager: ManagerClient,
+                                              object_storage, topology, target_topology):
+    '''Check that tablet-aware restore works when restoring into a larger cluster than backed up'''
+
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+
+    cql = manager.get_cql()
+
+    num_keys = 10
+    tablet_count = 5
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
+
+    new_servers = await add_servers_for_restore(target_topology, servers, manager, logger, object_storage)
+    restore_servers = servers + new_servers
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {target_topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int );")
+
+        logger.info(f'Restore expanded cluster via {servers[0].ip_addr}')
+        manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, 'test', snap_name, servers[0].datacenter,
+                                                 object_storage.address, object_storage.bucket_name, manifests)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done')
+
+        await manager.disable_tablet_balancing()
+        await check_mutation_replicas(cql, manager, restore_servers, range(num_keys), target_topology, logger, ks, 'test')
+
+        new_node_mutations = await asyncio.gather(
+            *(collect_mutations(cql, s, manager, ks, 'test') for s in new_servers))
+        new_node_key_counts = {s.ip_addr: len(frags) for s, frags in zip(new_servers, new_node_mutations)}
+        assert any(len(frags) > 0 for frags in new_node_mutations), (
+            f'Expanded-cluster restore placed no data on any new node: {new_node_key_counts}'
+        )
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
