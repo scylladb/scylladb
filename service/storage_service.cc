@@ -671,7 +671,6 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
     // read topology state from disk and recreate token_metadata from it
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
-    _topology_state_machine.reload_count++;
     auto& topology = _topology_state_machine._topology;
 
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
@@ -791,8 +790,6 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 future<> storage_service::topology_transition(state_change_hint hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     co_await topology_state_load(std::move(hint)); // reload new state
-
-    _topology_state_machine.event.broadcast();
 }
 
 future<> storage_service::view_building_state_load() {
@@ -843,8 +840,8 @@ future<> storage_service::reload_raft_topology_state(service::raft_group0_client
     slogger.info("Waiting for group 0 read/apply mutex before reloading Raft topology state...");
     auto holder = co_await group0_client.hold_read_apply_mutex(_abort_source);
     slogger.info("Reloading Raft topology state");
-    // Using topology_transition() instead of topology_state_load(), because the former notifies listeners
     co_await topology_transition();
+    wake_up_topology_state_machine();
     slogger.info("Reloaded Raft topology state");
 }
 
@@ -3978,8 +3975,8 @@ future<locator::token_metadata_lock> storage_service::get_token_metadata_lock() 
 //
 // By default the merge_lock (that is unified with the token_metadata_lock)
 // is acquired for mutating the token_metadata.  Pass acquire_merge_lock::no
-// when called from paths that already acquire the merge_lock, like
-// db::schema_tables::do_merge_schema.
+// when called from paths that already acquire the merge_lock, like the
+// schema-applier commit path.
 //
 // Note: must be called on shard 0.
 future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock acquire_merge_lock) noexcept {
@@ -4049,6 +4046,9 @@ future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_meta
 }
 
 void storage_service::wake_up_topology_state_machine() noexcept {
+    // reload_count is used as an event generation by waiters to avoid missed
+    // wakeups when a state change happens between checking state and sleeping.
+    _topology_state_machine.reload_count++;
     _topology_state_machine.event.broadcast();
 }
 
