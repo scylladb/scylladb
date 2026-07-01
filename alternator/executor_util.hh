@@ -30,10 +30,12 @@
 #include "schema/schema_fwd.hh"
 #include "types/types.hh"
 #include "auth/permission.hh"
+#include "alternator/error.hh"
 #include "alternator/stats.hh"
 #include "alternator/attribute_path.hh"
 #include "audit/audit.hh"
 #include "utils/managed_bytes.hh"
+#include "exceptions/coordinator_result.hh"
 
 namespace query { class partition_slice; class result; }
 namespace cql3::selection { class selection; }
@@ -250,4 +252,5 @@ std::optional<rjson::value> describe_single_item(schema_ptr,
 /// help avoid large allocations/many re-allocs.
 body_writer make_streamed(rjson::value&&);
 
+api_error create_api_error_from_exception(const exceptions::coordinator_exception_container &exc);
 } // namespace alternator

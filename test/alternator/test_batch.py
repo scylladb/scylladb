@@ -586,27 +586,35 @@ def test_batch_get_item_partial(scylla_only, dynamodb, rest_api, test_table_sn):
         for i in range(count):
             batch.put_item(Item={
                 'p': p + str(i % partitions), 'c': i, 'content': content})
-    responses = []
-    to_read = { test_table_sn.name: {'Keys': [{'p': p + str(c % partitions), 'c': c} for c in range(count)], 'ConsistentRead': True } }
-    with scylla_inject_error(rest_api, "alternator_batch_get_item", one_shot=True):
-        some_keys_were_unprocessed = False
-        while to_read:
-            reply = test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
-            assert 'UnprocessedKeys' in reply
-            to_read = reply['UnprocessedKeys']
-            # The UnprocessedKeys should not only list the keys, it should
-            # also copy the additional parameters used in the original read.
-            # In this example this was "ConsistentRead".
-            for tbl in to_read:
-                assert 'ConsistentRead' in to_read[tbl]
-            some_keys_were_unprocessed = some_keys_were_unprocessed or len(to_read) > 0
-            print("Left to read:", to_read)
-            assert 'Responses' in reply
-            assert test_table_sn.name in reply['Responses']
-            responses.extend(reply['Responses'][test_table_sn.name])
-        assert multiset(responses) == multiset(
-            [{'p': p + str(i % partitions), 'c': i, 'content': content} for i in range(count)])
-        assert some_keys_were_unprocessed
+            
+    # We trigger two different errors here:
+    # - runtime_error thrown from handler dealing with data returned by proxy.query_result
+    # - read_timeout_exception returned by proxy.query_result (not thrown) - different code path (no stack unwinding, see SCYLLADB-2960)
+    # In both cases return value should be properly created and returned to the user (including UnprocessedKeys)
+    # and no internal server error should be returned to the user.
+    for error_to_inject in ("alternator_batch_get_item", "storage_proxy_query_result_timeout"):
+        responses = []
+        to_read = { test_table_sn.name: {'Keys': [{'p': p + str(c % partitions), 'c': c} for c in range(count)], 'ConsistentRead': True } }
+        with scylla_inject_error(rest_api, error_to_inject, one_shot=True):
+            some_keys_were_unprocessed = False
+            while to_read:
+                reply = test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
+                assert 'UnprocessedKeys' in reply
+                to_read = reply['UnprocessedKeys']
+                # The UnprocessedKeys should not only list the keys, it should
+                # also copy the additional parameters used in the original read.
+                # In this example this was "ConsistentRead".
+                for tbl in to_read:
+                    assert 'ConsistentRead' in to_read[tbl]
+                some_keys_were_unprocessed = some_keys_were_unprocessed or len(to_read) > 0
+                print("Left to read:", to_read)
+                assert 'Responses' in reply
+                assert test_table_sn.name in reply['Responses']
+                responses.extend(reply['Responses'][test_table_sn.name])
+            assert multiset(responses) == multiset(
+                [{'p': p + str(i % partitions), 'c': i, 'content': content} for i in range(count)])
+            assert some_keys_were_unprocessed
+
 
 # Test that if the batch read failure is total, i.e. all read requests
 # failed, it's reported as an error and not as a regular response with

@@ -21,6 +21,7 @@
 #include "cql3/result_set.hh"
 #include "types/types.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/try_future.hh>
 
 namespace alternator {
 

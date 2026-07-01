@@ -17,6 +17,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/try_future.hh>
 #include <seastar/util/defer.hh>
+#include "db/consistency_level_type.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "locator/host_id.hh"
@@ -6762,6 +6763,11 @@ storage_proxy::query_result(schema_ptr query_schema,
     storage_proxy::coordinator_query_options query_options,
     std::optional<cas_shard> shard)
 {
+    // Error injection for testing read timeout handling returned as value instead of being thrown
+    if (utils::get_local_injector().enter("storage_proxy_query_result_timeout")) {
+        std::cout << "QWERTY " << __FILE__ << ":" << __LINE__ << "\n"; 
+        return make_ready_future<result<coordinator_query_result>>(read_timeout_exception{ "Error injection: timeout", db::consistency_level::ONE, 0, 99999999, false });
+    }
     if (slogger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;
