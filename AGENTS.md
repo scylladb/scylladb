@@ -8,6 +8,7 @@ Do NOT load all files at once — read only what applies to your current task.
 - `.github/copilot-instructions.md` — build system, test runner, code philosophy, test philosophy
 - `.github/instructions/cpp.instructions.md` — C++ style, Seastar patterns, memory, error handling (for `*.cc`, `*.hh`)
 - `.github/instructions/python.instructions.md` — Python style, testing conventions (for `*.py`)
+- `skills/unflake-test/SKILL.md` — fix flaky tests: diagnosis, 20 fix strategies with commit examples, verification (load via `skill unflake-test`)
 
 ## Which files to read
 
