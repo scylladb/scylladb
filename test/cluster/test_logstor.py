@@ -7,6 +7,7 @@
 import asyncio
 import random
 import time
+from pathlib import Path
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace
 from cassandra.protocol import ConfigurationException
@@ -16,6 +17,12 @@ from test.pylib.tablets import get_tablet_count, get_tablet_replica
 from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
+
+segment_size = 128 * 1024
+
+async def count_logstor_data_files(manager: ManagerClient, server_id: int, shard: int) -> int:
+    workdir = await manager.server_get_workdir(server_id)
+    return len(list((Path(workdir) / "logstor").glob(f"ls_{shard}-*-Data.db")))
 
 async def test_property(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
@@ -355,6 +362,196 @@ async def test_recovery_with_segment_reuse(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
             assert len(rows) == 1, f"Key {pk} not found after recovery"
             assert rows[0].v == expected_v, f"Key {pk} value mismatch after recovery"
+
+async def test_grow_logstor_disk_size(manager: ManagerClient):
+    old_disk_size_mb = 4
+    new_disk_size_mb = 8
+    file_size_mb = 1
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': old_disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'logstor_format_on_startup': True,
+        'experimental_features': ['logstor'],
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        files_before_restart = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_before_restart == old_disk_size_mb // file_size_mb
+
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        old_free_segments = metrics.get("scylla_logstor_sm_free_segments") or 0
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_update_config(servers[0].server_id, 'logstor_disk_size_in_mb', new_disk_size_mb)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        files_after_growth = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_after_growth == new_disk_size_mb // file_size_mb
+
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        new_free_segments = metrics.get("scylla_logstor_sm_free_segments") or 0
+
+        assert new_free_segments >= old_free_segments + ((new_disk_size_mb - old_disk_size_mb) * 1024 * 1024) // segment_size, \
+            "Free segments should increase after growing disk size"
+
+async def test_shrink_logstor_disk_size_no_data(manager: ManagerClient):
+    old_disk_size_mb = 8
+    new_disk_size_mb = 4
+    file_size_mb = 1
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': old_disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'logstor_format_on_startup': True,
+        'experimental_features': ['logstor'],
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        files_before_restart = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_before_restart == old_disk_size_mb // file_size_mb
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_update_config(servers[0].server_id, 'logstor_disk_size_in_mb', new_disk_size_mb)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        files_after_restart = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_after_restart == new_disk_size_mb // file_size_mb
+
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        free_segments = metrics.get("scylla_logstor_sm_free_segments") or 0
+        assert free_segments <= new_disk_size_mb * 1024 * 1024 // segment_size, "Free segments should not exceed total segments after shrinking disk size"
+
+
+async def test_shrink_logstor_disk_size_dead_data(manager: ManagerClient):
+    """
+    Test that shrinking the disk size removes the extra file when all data in it is dead.
+
+    Starts with 2 files (8MB disk, 4MB per file). Fills both files by writing to
+    a single key with segment-sized values enough times to use segments in both
+    files. Drops the table to make all data dead, then restarts with 4MB disk.
+    The second file should be removed since it only contains dead data.
+    """
+    old_disk_size_mb = 8
+    new_disk_size_mb = 4
+    file_size_mb = 4
+    segments_per_file = (file_size_mb * 1024 * 1024) // segment_size
+
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': old_disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'logstor_format_on_startup': True,
+        'experimental_features': ['logstor'],
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        files_before = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_before == old_disk_size_mb // file_size_mb
+
+        # Fill segments in both files by writing to a single key with segment-sized values.
+        # Write segments_per_file + 1 times to ensure at least one segment in each file has data.
+        value_size = 120 * 1024  # ~120 KB fills approximately one 128 KB segment
+        value = 'x' * value_size
+        for _ in range(segments_per_file + 1):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (1, '{value}')")
+
+        # Drop the table to mark all data as dead
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_update_config(servers[0].server_id, 'logstor_disk_size_in_mb', new_disk_size_mb)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        files_after_shrink = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_after_shrink == new_disk_size_mb // file_size_mb, \
+            f"Expected {new_disk_size_mb // file_size_mb} file(s) after shrink with dead data, got {files_after_shrink}"
+
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        free_segments = metrics.get("scylla_logstor_sm_free_segments") or 0
+        segments_in_use = metrics.get("scylla_logstor_sm_segments_in_use") or 0
+        configured_segments = new_disk_size_mb * 1024 * 1024 // segment_size
+        # The segment manager allocates one empty active segment on startup, so
+        # after recovery with no live data all configured segments should be
+        # accounted for by free segments plus that active segment.
+        assert free_segments + segments_in_use == configured_segments, \
+            f"Expected all configured segments to be accounted for after shrink with dead data, got free={free_segments}, in_use={segments_in_use}"
+        assert segments_in_use <= 1, \
+            f"Expected at most one active segment after shrink with dead data, got {segments_in_use}"
+
+
+async def test_shrink_logstor_disk_size_live_data(manager: ManagerClient):
+    """
+    Test that shrinking the disk size does not remove a file that contains live data.
+
+    Starts with 2 files (8MB disk, 4MB per file, 8 segments per file). Writes
+    segments_per_file + 1 unique keys with segment-sized values so that the last
+    key's segment lands in the second file. Restarts with 4MB disk. Since live
+    data exists in the second file it must not be removed—the number of files
+    should stay at 2.
+    """
+    old_disk_size_mb = 8
+    new_disk_size_mb = 4
+    file_size_mb = 4
+    segments_per_file = (file_size_mb * 1024 * 1024) // segment_size
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': old_disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        'logstor_format_on_startup': True,
+        'experimental_features': ['logstor'],
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        files_before = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_before == old_disk_size_mb // file_size_mb
+
+        # Write segments_per_file + 1 unique keys with segment-sized values so
+        # that the last key's segment falls in the second file.
+        num_keys = segments_per_file + 1
+        value_size = 120 * 1024  # ~120 KB fills approximately one 128 KB segment
+        value = 'x' * value_size
+        for i in range(num_keys):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_update_config(servers[0].server_id, 'logstor_disk_size_in_mb', new_disk_size_mb)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # The second file must not be removed because it contains live data
+        files_after_shrink = await count_logstor_data_files(manager, servers[0].server_id, 0)
+        assert files_after_shrink == old_disk_size_mb // file_size_mb, \
+            f"Expected {old_disk_size_mb // file_size_mb} files (live data prevents removal of second file), got {files_after_shrink}"
+
+        # Verify all data is still accessible
+        for i in range(num_keys):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert len(rows) == 1, f"Key {i} not found after attempted shrink with live data"
+            assert rows[0].v == value, f"Wrong value for key {i} after attempted shrink with live data"
+
 
 async def test_compaction(manager: ManagerClient):
     """

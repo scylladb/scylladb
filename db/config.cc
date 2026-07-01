@@ -974,6 +974,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Total size in megabytes allocated for logstor storage on disk.")
     , logstor_file_size_in_mb(this, "logstor_file_size_in_mb", value_status::Used, 32,
         "Total size in megabytes allocated for each logstor data file on disk.")
+    , logstor_format_on_startup(this, "logstor_format_on_startup", value_status::Used, false,
+        "Controls when logstor data files are formatted. When enabled, all logstor files are formatted during node startup, which increases startup time but ensures optimal write performance immediately after startup. "
+        "When disabled, logstor files are formatted lazily on first write, which reduces startup time but may cause slightly degraded write performance on first access to each file.")
     , logstor_separator_delay_limit_ms(this, "logstor_separator_delay_limit_ms", value_status::Used, 100,
         "Maximum delay in milliseconds for logstor separator debt control.")
     , logstor_separator_max_memory_in_mb(this, "logstor_separator_max_memory_in_mb", value_status::Used, 256,
