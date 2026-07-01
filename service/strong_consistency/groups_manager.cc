@@ -287,6 +287,19 @@ future<> groups_manager::wait_for_groups_to_start(lowres_clock::time_point timeo
     }
 }
 
+using applied_timestamp_per_tablet = std::unordered_map<global_tablet_id, api::timestamp_type>;
+
+static future<applied_timestamp_per_tablet> get_applied_timestamps(const replica::database& db, const std::vector<global_tablet_id>& tablets) {
+    applied_timestamp_per_tablet res;
+    res.reserve(tablets.size());
+    for (const auto& tablet : tablets) {
+        auto table = db.get_tables_metadata().get_table_if_exists(tablet.table);
+        res[tablet] = table ? table->get_max_timestamp_for_tablet(tablet.tablet) : api::min_timestamp;
+        co_await coroutine::maybe_yield();
+    }
+    co_return res;
+}
+
 void groups_manager::init_messaging_service() {
     ser::groups_manager_rpc_verbs::register_wait_for_raft_groups_to_start(&_ms,
         [this] (rpc::opt_time_point timeout, raft::server_id dst_id, table_id table) -> future<> {
@@ -297,6 +310,51 @@ void groups_manager::init_messaging_service() {
             co_await container().invoke_on_all([timeout] (groups_manager& gm) {
                 return gm.wait_for_groups_to_start(*timeout);
             });
+        }
+    );
+    ser::groups_manager_rpc_verbs::register_get_local_applied_timestamps(&_ms,
+        [this] (raft::server_id dst_id, service::fencing_token fence, std::vector<global_tablet_id> tablets) -> future<applied_timestamp_per_tablet> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            const auto tm = _db.get_token_metadata_ptr();
+            const auto my_host = tm->get_my_id();
+            if (auto stale = _qp.proxy().check_fence(fence, my_host); stale) {
+                throw std::move(*stale);
+            }
+
+            applied_timestamp_per_tablet result;
+            std::unordered_map<shard_id, std::vector<global_tablet_id>> by_shard;
+            for (const auto& tablet : tablets) {
+                co_await coroutine::maybe_yield();
+                if (!tm->tablets().has_tablet_map(tablet.table)) {
+                    result[tablet] = api::min_timestamp;
+                    continue;
+                }
+                auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+                if (size_t(tablet.tablet) >= tmap.tablet_count()) {
+                    result[tablet] = api::min_timestamp;
+                    continue;
+                }
+                auto& info = tmap.get_tablet_info(tablet.tablet);
+                if (auto replica = info.maybe_find_replica(my_host); replica) {
+                    by_shard[replica->shard].push_back(tablet);
+                } else {
+                    result[tablet] = api::min_timestamp;
+                }
+            }
+
+            co_await coroutine::parallel_for_each(by_shard, [&] (this auto, const auto& entry) -> future<> {
+                const auto& [shard, local_tablets] = entry;
+                auto timestamps = co_await container().invoke_on(shard, [&local_tablets] (groups_manager& gm) -> future<foreign_ptr<std::unique_ptr<applied_timestamp_per_tablet>>> {
+                    co_return make_foreign(std::make_unique<applied_timestamp_per_tablet>(co_await get_applied_timestamps(gm._db, local_tablets)));
+                });
+                for (const auto& [tablet, ts] : *timestamps) {
+                    result[tablet] = ts;
+                    co_await coroutine::maybe_yield();
+                }
+            });
+            co_return result;
         }
     );
 }
