@@ -64,7 +64,8 @@ interval<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix&
 
 inline bool needs_filtering(oper_t op) {
     return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE) ||
-           (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
+           (op == oper_t::NEQ) || (op == oper_t::NOT_IN) ||
+           (op == oper_t::IS) || (op == oper_t::IS_NOT);  // identity operators, currently restricted to NULL
 }
 
 static
@@ -451,6 +452,17 @@ to_predicates(
                                     .filter = oper,
                                     .on = on_column{col.col},
                                     .is_singleton = false,
+                                    .order = oper.order,
+                                    .op = oper.op,
+                                });
+                            } else if (oper.op == oper_t::IS) {
+                                // This predicate restricts null presence, but value_set can only represent
+                                // concrete non-null values or non-null value ranges. Treat it as
+                                // range-unbounded here; the row filter evaluates the null check.
+                                return to_vector(predicate{
+                                    .solve_for = [] (const query_options&) { return unbounded_value_set; },
+                                    .filter = oper,
+                                    .on = on_column{col.col},
                                     .order = oper.order,
                                     .op = oper.op,
                                 });
@@ -891,12 +903,12 @@ statement_restrictions::statement_restrictions(private_tag,
     single_column_predicate_vectors sc_ck_pred_vectors;
     single_column_predicate_vectors sc_nonpk_pred_vectors;
     for (auto& pred : predicates) {
-        if (pred.is_not_null_single_column) {
+        if ((pred.op == oper_t::IS || pred.is_not_null_single_column) && for_view) {
             auto* col = require_on_single_column(pred);
-            _not_null_columns.insert(col);
-
-            if (!for_view) {
-                throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", pred.filter));
+            if (pred.op == oper_t::IS) {
+                _null_columns.insert(col);
+            } else {
+                _not_null_columns.insert(col);
             }
         } else if (pred.is_multi_column) {
             // Multi column restrictions are only allowed on clustering columns
@@ -1081,7 +1093,7 @@ statement_restrictions::statement_restrictions(private_tag,
             throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", pred.filter));
         }
 
-        if (!pred.is_not_null_single_column) {
+        if (!(for_view && pred.is_not_null_single_column)) {
             _where.push_back(pred.filter);
         }
         // Subscript EQ (e.g. m[1] = 'a') is not considered an EQ on the column
@@ -1387,6 +1399,10 @@ statement_restrictions::ck_restrictions_need_filtering() const {
 
 bool
 statement_restrictions::is_restricted(const column_definition* cdef) const {
+    if (_null_columns.contains(cdef)) {
+        return true;
+    }
+
     if (_not_null_columns.contains(cdef)) {
         return true;
     }
@@ -2788,6 +2804,10 @@ void statement_restrictions::validate_primary_key(const query_options& options) 
     validate_primary_key_restrictions(options, _clustering_prefix_restrictions | std::views::transform(&predicate::filter));
 }
 
+
+const std::unordered_set<const column_definition*> statement_restrictions::get_null_columns() const {
+    return _null_columns;
+}
 
 const std::unordered_set<const column_definition*> statement_restrictions::get_not_null_columns() const {
     return _not_null_columns;

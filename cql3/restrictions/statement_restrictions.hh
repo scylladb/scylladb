@@ -159,6 +159,7 @@ private:
     expr::expression _regular_columns_filter = expr::conjunction({});
 
 
+    std::unordered_set<const column_definition*> _null_columns;
     std::unordered_set<const column_definition*> _not_null_columns;
 
     /**
@@ -324,6 +325,9 @@ public:
     const expr::expression& get_nonprimary_key_restrictions() const {
         return _nonprimary_key_restrictions;
     }
+
+    // Get a set of columns restricted by the IS NULL restriction.
+    const std::unordered_set<const column_definition*> get_null_columns() const;
 
     // Get a set of columns restricted by the IS NOT NULL restriction.
     // IS NOT NULL is a special case that is handled separately from other restrictions.
