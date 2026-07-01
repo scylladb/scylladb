@@ -209,6 +209,40 @@ def test_storage_service_keyspace_scrub_mode(cql, this_dc, rest_api):
                 resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[0]}", "quarantine_mode": "YYY" })
                 assert resp.status_code == requests.codes.bad_request
 
+def test_storage_service_keyspace_scrub_no_quarantine(cql, this_dc, rest_api):
+    """Test that the quarantine_invalid_sstables parameter is accepted for VALIDATE mode and
+    rejected for other scrub modes."""
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t0:
+            table = t0.split('.')[1]
+
+            # quarantine_invalid_sstables=false is valid with scrub_mode=VALIDATE
+            resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}",
+                                 { "cf": table, "scrub_mode": "VALIDATE", "quarantine_invalid_sstables": "false" })
+            resp.raise_for_status()
+
+            # quarantine_invalid_sstables=true is the default but also valid explicitly
+            resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}",
+                                 { "cf": table, "scrub_mode": "VALIDATE", "quarantine_invalid_sstables": "true" })
+            resp.raise_for_status()
+
+            # quarantine_invalid_sstables with an unknown value is rejected
+            resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}",
+                                 { "cf": table, "scrub_mode": "VALIDATE", "quarantine_invalid_sstables": "maybe" })
+            assert resp.status_code == requests.codes.bad_request
+
+            # quarantine_invalid_sstables=false is rejected when scrub_mode is not VALIDATE
+            for mode in ["ABORT", "SKIP", "SEGREGATE"]:
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}",
+                                     { "cf": table, "scrub_mode": mode, "quarantine_invalid_sstables": "false" })
+                assert resp.status_code == requests.codes.bad_request, \
+                    f"Expected 400 for scrub_mode={mode} with quarantine_invalid_sstables=false"
+
+            # quarantine_invalid_sstables=false is rejected when scrub_mode defaults to ABORT
+            resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}",
+                                 { "cf": table, "quarantine_invalid_sstables": "false" })
+            assert resp.status_code == requests.codes.bad_request
+
 def test_storage_service_keyspace_bad_param(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         # Url must include the keyspace param.

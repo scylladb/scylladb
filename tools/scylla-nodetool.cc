@@ -2255,6 +2255,7 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const bool has_skip_corrupted = vm.contains("skip-corrupted");
     const bool has_mode = vm.contains("mode");
     const bool has_drop_unfixable = vm.contains("drop-unfixable-sstables");
+    const bool has_quarantine_invalid_sstables = vm.contains("quarantine-invalid-sstables");
 
     const sstring mode = has_mode ? vm["mode"].as<sstring>() : "";
 
@@ -2264,6 +2265,10 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 
     if (has_drop_unfixable && (!has_mode || mode != "SEGREGATE")) {
         throw std::invalid_argument("--drop-unfixable-sstables is only valid with --mode=SEGREGATE");
+    }
+
+    if (has_quarantine_invalid_sstables && (!has_mode || mode != "VALIDATE")) {
+        throw std::invalid_argument("--quarantine-invalid-sstables is only valid with --mode=VALIDATE");
     }
 
     std::unordered_map<sstring, sstring> params;
@@ -2288,6 +2293,10 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 
     if (has_drop_unfixable) {
         params["drop_unfixable_sstables"] = "true";
+    }
+
+    if (has_quarantine_invalid_sstables) {
+        params["quarantine_invalid_sstables"] = fmt::to_string(vm["quarantine-invalid-sstables"].as<bool>());
     }
 
     std::vector<api::scrub_status> statuses;
@@ -4811,6 +4820,34 @@ For more information, see: {}
                 "scrub",
                 "Scrub the SSTable files in the specified keyspace or table(s)",
 fmt::format(R"(
+The main use-case of scrub is to find corrupt sstables.
+
+This can be achieved with `nodetool scrub --mode=VALIDATE`.
+
+Validate-mode scrub is read-only, sstables are not rewritten like in the other
+scrub modes. The following are validated:
+* Checksums and digests for data component and any other component if available.
+* Partition, row and mutation-fragment kind order.
+* index<->data consistency (only for sstable formats mc to me).
+
+Any problem found during validating an sstable are logged by ScyllaDB via the
+compaction logger (error level).
+
+If validate completed successfully, nodetool will exit with exit code 0. If
+nodetool completed successfully but found invalid sstables, it exits with exit
+code 3 (and a message about invalid sstables).
+
+By default, validate-mode scrub quarantines invalid sstables. Quarantined
+sstables are handled distinctly:
+* They participate in reads.
+* They participate in streaming and data migration.
+* They do not participate in compaction, but participate in overlap checks for
+  the purpose of tombstone-gc.
+* They do not participate in repair.
+
+It is possible to opt-out from quarantining sstables by passing
+--quarantine-invalid-sstables=false to scrub.
+
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/scrub.html")),
                 {
@@ -4822,6 +4859,7 @@ For more information, see: {}
                     typed_option<>("reinsert-overflowed-ttl,r", "Rewrites rows with overflowed expiration date (unused)"),
                     typed_option<int64_t>("jobs,j", "The number of sstables to be scrubbed concurrently (unused)"),
                     typed_option<>("drop-unfixable-sstables", "Drop unfixed sstables instead of aborting the entire scrub (only with --mode=SEGREGATE)"),
+                    typed_option<bool>("quarantine-invalid-sstables", "Whether to quarantine invalid sstables found during scrub (yes or no, default yes; only with --mode=VALIDATE)"),
                 },
                 {
                     typed_option<sstring>("keyspace", "The keyspace to scrub", 1),

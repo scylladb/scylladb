@@ -205,3 +205,33 @@ def test_scrub_drop_unfixable_sstables_option(nodetool):
             ("scrub", "ks", "tbl1", "--mode=ABORT", "--drop-unfixable-sstables"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks"])]},
             ["error processing arguments: --drop-unfixable-sstables is only valid with --mode=SEGREGATE"])
+
+
+def test_scrub_no_quarantine_option(nodetool, scylla_only):
+    # --quarantine-invalid-sstables=false with --mode=VALIDATE passes quarantine_invalid_sstables=false to the API
+    nodetool("scrub", "ks", "tbl1", "--mode=VALIDATE", "--quarantine-invalid-sstables=false", expected_requests=[
+        expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspace_scrub/ks",
+                         params={"cf": "tbl1", "scrub_mode": "VALIDATE", "quarantine_invalid_sstables": "false"},
+                         response=scrub_status.successful.value)])
+
+    # --quarantine-invalid-sstables=true is the default but can be passed explicitly
+    nodetool("scrub", "ks", "tbl1", "--mode=VALIDATE", "--quarantine-invalid-sstables=true", expected_requests=[
+        expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspace_scrub/ks",
+                         params={"cf": "tbl1", "scrub_mode": "VALIDATE", "quarantine_invalid_sstables": "true"},
+                         response=scrub_status.successful.value)])
+
+    # --quarantine-invalid-sstables without --mode=VALIDATE is rejected
+    check_nodetool_fails_with(
+            nodetool,
+            ("scrub", "ks", "tbl1", "--mode=ABORT", "--quarantine-invalid-sstables=false"),
+            {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks"])]},
+            ["error processing arguments: --quarantine-invalid-sstables is only valid with --mode=VALIDATE"])
+
+    # --quarantine-invalid-sstables without any --mode is also rejected
+    check_nodetool_fails_with(
+            nodetool,
+            ("scrub", "ks", "tbl1", "--quarantine-invalid-sstables=false"),
+            {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks"])]},
+            ["error processing arguments: --quarantine-invalid-sstables is only valid with --mode=VALIDATE"])
