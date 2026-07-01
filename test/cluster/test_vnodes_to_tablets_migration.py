@@ -19,7 +19,7 @@ from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import new_test_keyspace, reconnect_driver, ensure_group0_leader_on
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
 logger = logging.getLogger(__name__)
@@ -1356,3 +1356,244 @@ async def test_replace_during_migration(manager: ManagerClient, rbno_enabled: bo
             f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'", host=host1)
         assert len(res) == 1 and res[0].initial_tablets is not None, \
             "Keyspace is still using vnodes after migration finalization"
+
+
+async def _check_migrating_tablet_map(manager: ManagerClient, server: ServerInfo, ks: str, table_name: str,
+                                      expected_stage: str, expected_replicas_host_ids: set,
+                                      expected_new_replicas_host_ids: set) -> None:
+    """Read all rows for this table from system.tablets on `server` (after a read barrier) and assert,
+    for every row:
+      - stage == expected_stage
+      - transition == 'rebuild'
+      - {str(host) for (host, _) in replicas} == expected_replicas_host_ids
+      - {str(host) for (host, _) in new_replicas} == expected_new_replicas_host_ids
+    """
+    await read_barrier(manager.api, server.ip_addr)
+    host = manager.get_cql().cluster.metadata.get_host(server.ip_addr)
+    table_id = await manager.get_table_or_view_id(ks, table_name)
+    tablet_rows = await manager.get_cql().run_async(
+        f"SELECT last_token, replicas, new_replicas, stage, transition FROM system.tablets WHERE table_id = {table_id}",
+        host=host)
+    assert tablet_rows, f"No tablet rows found for {ks}.{table_name} — tablet map is empty"
+    for row in tablet_rows:
+        replica_hosts = {str(h) for h, _ in row.replicas}
+        new_replica_hosts = {str(h) for h, _ in row.new_replicas} if row.new_replicas is not None else set()
+        assert row.stage == expected_stage, \
+            f"Tablet at {row.last_token}: expected stage={expected_stage!r}, got {row.stage!r}"
+        assert row.transition == 'rebuild', \
+            f"Tablet at {row.last_token}: expected transition='rebuild', got {row.transition!r}"
+        assert replica_hosts == expected_replicas_host_ids, \
+            f"Tablet at {row.last_token}: expected replicas {expected_replicas_host_ids}, got {replica_hosts}"
+        assert new_replica_hosts == expected_new_replicas_host_ids, \
+            f"Tablet at {row.last_token}: expected new_replicas {expected_new_replicas_host_ids}, got {new_replica_hosts}"
+
+
+async def _read_key(cql, ks: str, key: int, host) -> None:
+    """Read a single row at CL=ONE via `host` (a Cassandra driver Host object) and assert the value.
+
+    Verifies that a write that was supposed to reach `host` as a replica is actually readable.
+    """
+    stmt = cql.prepare(f"SELECT c FROM {ks}.test WHERE pk = ?")
+    stmt.consistency_level = ConsistencyLevel.ONE
+    rows = await cql.run_async(stmt, [key], host=host)
+    assert len(rows) == 1 and rows[0].c == key, \
+        f"CL=ONE read via {host} for pk={key} returned {rows}"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_request_routing_during_replace(manager: ManagerClient):
+    """Verify that CQL coordinators correctly route reads and writes to the
+    replacing node during the write_both_read_old and write_both_read_new
+    topology states if the table is undergoing vnodes-to-tablets migration.
+
+    The difference between a normal vnode/tablet-based table and a migrating
+    table is that, in the latter case, the cluster is in a mixed state with
+    some nodes using a vnode ERM and others using a tablet ERM. To ensure that
+    the replacement process remains transparent to user queries while the
+    cluster is in this mixed state, the topology coordinator must update both
+    ERMs in lockstep as part of the replacement process.
+
+    Note that this test focuses only on the coordinator-to-replica request
+    routing logic during the topology transitions. The end-to-end correctness
+    of the replacement process is covered by test_replace_during_migration.
+
+    Steps:
+    1. Start a 3-node cluster {s0, s1, s2}, one node per rack.
+    2. Create a vnode-based table, RF=3.
+    3. Start vnodes-to-tablets migration and upgrade node s0 to tablets.
+    4. Ensure the group0 leader runs on s1 and enable error injections for
+       write_both_read_old and write_both_read_new on that node.
+    5. Start replacing s2 with s2'. Wait for the replacement process to pause in write_both_read_old.
+    6. Write keys K1 and K2 to s0 and s1 respectively.
+       In one case the coordinator uses a tablet ERM, in the other it uses a vnode ERM.
+       Read the keys to verify they are readable from both nodes.
+       We also expect the write to be routed to s2', but s2' is not yet ready to serve CQL requests as coordinator, only as replica.
+    7. Progress to write_both_read_new.
+       Again, write and read new keys K3 and K4 to s0 and s1.
+    8. Finish the replacement process and verify that K1..K4 are readable from s2'.
+    """
+    num_shards = 2
+    num_tokens = 16
+    K1, K2, K3, K4 = 1, 2, 3, 4
+    INJECTION_WBRO = 'topology_coordinator/write_both_read_old/before_version_increment'
+    INJECTION_WBRN = 'topology_coordinator/write_both_read_new/after_barrier'
+
+    cfg = {
+        'num_tokens': num_tokens,
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+    }
+    cmdline = ['--smp', str(num_shards)]
+
+    logger.info("Starting a 3-node cluster (one rack per node)")
+    property_files = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+    servers = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=property_files)
+    s0, s1, s2 = servers[0], servers[1], servers[2]
+
+    logger.info(f"Pinning raft group0 leader on s1 ({s1.server_id})")
+    await ensure_group0_leader_on(manager, s1)
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager,
+            f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} "
+            f"AND tablets = {{'enabled': false}}") as ks:
+        table_name = 'test'
+        await cql.run_async(f"CREATE TABLE {ks}.{table_name} (pk int PRIMARY KEY, c int)")
+
+        s0_id = str(await manager.get_host_id(s0.server_id))
+        s1_id = str(await manager.get_host_id(s1.server_id))
+        s2_id = str(await manager.get_host_id(s2.server_id))
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet map)")
+        await manager.api.create_vnode_tablet_migration(s1.ip_addr, ks)
+
+        logger.info(f"Upgrading s0 ({s0.server_id}) to tablets")
+        await manager.api.upgrade_node_to_tablets(s0.ip_addr)
+        await manager.server_restart(s0.server_id)
+
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info(f"Enabling injection {INJECTION_WBRO!r} on s1")
+        await manager.api.enable_injection(s1.ip_addr, INJECTION_WBRO, one_shot=True)
+        logger.info(f"Enabling injection {INJECTION_WBRN!r} on s1")
+        await manager.api.enable_injection(s1.ip_addr, INJECTION_WBRN, one_shot=True)
+
+        logger.info(f"Stopping s2 ({s2.server_id}) — to be replaced")
+        await manager.server_stop(s2.server_id, convict=True)
+
+        logger.info("Starting replacement for s2 in background")
+        replace_cfg = ReplaceConfig(replaced_id=s2.server_id, reuse_ip_addr=False, use_host_id=True)
+        replace_task = asyncio.create_task(manager.server_add(replace_cfg, cmdline=cmdline, property_file=s2.property_file(), config=cfg))
+
+        # PAUSE 1: write_both_read_old
+        # The replacing node s2' must be in the tablet write set.
+        # When this injection is hit, streaming has finished.
+        # The following writes can reach s2' only via the CQL write path.
+        logger.info(f"Waiting for injection {INJECTION_WBRO!r}")
+        await manager.api.wait_for_injection_enter(s1.ip_addr, INJECTION_WBRO)
+
+        # FIXME: AI argues that we cannot derive the host ID with get_host_id().
+        # Not sure why. Need to investigate.
+        # Discover the replacement node's host ID from system.topology.
+        # At this point s2' has been accepted into the topology.
+        await read_barrier(manager.api, s1.ip_addr)
+        s1_cql_host = cql.cluster.metadata.get_host(s1.ip_addr)
+        topology_rows = await cql.run_async(
+            "SELECT host_id FROM system.topology WHERE key = 'topology'",
+            host=s1_cql_host)
+        old_ids = {s0_id, s1_id, s2_id}
+        s2p_candidates = [str(r.host_id) for r in topology_rows if str(r.host_id) not in old_ids]
+        # FIXME: If this assertion fires the replacement node has not yet appeared in
+        # system.topology at this injection point.  Check whether the injection fires
+        # before or after the new node is added to group0.
+        assert len(s2p_candidates) == 1, \
+            f"Expected exactly one replacement node in system.topology, got {s2p_candidates}"
+        s2p_id = s2p_candidates[0]
+        logger.info(f"Replacement node (s2') host_id: {s2p_id}")
+
+        logger.info("Checking tablet map: stage=write_both_read_old (before K1 write)")
+        await _check_migrating_tablet_map(
+            manager, s0, ks, table_name,
+            expected_stage='write_both_read_old',
+            expected_replicas_host_ids={s0_id, s1_id, s2_id},
+            expected_new_replicas_host_ids={s0_id, s1_id, s2p_id})
+
+        s0_host = cql.cluster.metadata.get_host(s0.ip_addr)
+        s1_host = cql.cluster.metadata.get_host(s1.ip_addr)
+        write_stmt = cql.prepare(f"INSERT INTO {ks}.{table_name} (pk, c) VALUES (?, ?)")
+        write_stmt.consistency_level = ConsistencyLevel.QUORUM
+
+        logger.info(f"Writing K1={K1} via s0 (tablets-based coordinator)")
+        await cql.run_async(write_stmt, [K1, K1], host=s0_host)
+        await _read_key(cql, ks, K1, s0_host)
+        await _read_key(cql, ks, K1, s1_host)
+
+        logger.info(f"Writing K2={K2} via s1 (vnodes-based coordinator)")
+        await cql.run_async(write_stmt, [K2, K2], host=s1_host)
+        await _read_key(cql, ks, K2, s0_host)
+        await _read_key(cql, ks, K2, s1_host)
+
+        logger.info(f"Releasing injection {INJECTION_WBRO!r}")
+        await manager.api.message_injection(s1.ip_addr, INJECTION_WBRO)
+
+        # PAUSE 2: write_both_read_new
+        # The replacing node s2' must be in the tablet read and write set.
+        logger.info(f"Waiting for injection {INJECTION_WBRN!r}")
+        await manager.api.wait_for_injection_enter(s1.ip_addr, INJECTION_WBRN)
+
+        logger.info("Checking tablet map: stage=write_both_read_new (before K3 write)")
+        await _check_migrating_tablet_map(
+            manager, s0, ks, table_name,
+            expected_stage='write_both_read_new',
+            expected_replicas_host_ids={s0_id, s1_id, s2_id},
+            expected_new_replicas_host_ids={s0_id, s1_id, s2p_id})
+
+        logger.info(f"Writing K3={K3} via s0 (tablets-based coordinator)")
+        await cql.run_async(write_stmt, [K3, K3], host=s0_host)
+        await _read_key(cql, ks, K3, s0_host)
+        await _read_key(cql, ks, K3, s1_host)
+
+        logger.info(f"Writing K4={K4} via s1 (vnodes-based coordinator)")
+        await cql.run_async(write_stmt, [K4, K4], host=s1_host)
+        await _read_key(cql, ks, K4, s0_host)
+        await _read_key(cql, ks, K4, s1_host)
+
+        logger.info(f"Releasing injection {INJECTION_WBRN!r}")
+        await manager.api.message_injection(s1.ip_addr, INJECTION_WBRN)
+
+        # REPLACE COMPLETES
+        logger.info("Waiting for replace to complete")
+        new_server = await replace_task
+        logger.info(f"Replacement node started: server_id={new_server.server_id}")
+
+        await reconnect_driver(manager)
+        live_servers = [s0, s1, new_server]
+        cql, _ = await manager.get_ready_cql(live_servers)
+
+        # POST-REPLACE VERIFICATION
+        logger.info("Verifying final tablet map: replicas swapped, no pending transitions")
+        await read_barrier(manager.api, s0.ip_addr)
+        s0_host = cql.cluster.metadata.get_host(s0.ip_addr)
+        table_id = await manager.get_table_or_view_id(ks, table_name)
+        tablet_rows = await cql.run_async(
+            f"SELECT last_token, replicas, new_replicas, stage, transition FROM system.tablets WHERE table_id = {table_id}",
+            host=s0_host)
+        assert tablet_rows, f"No tablet rows found for {ks}.{table_name} after replace"
+        for row in tablet_rows:
+            replica_hosts = {str(h) for h, _ in row.replicas}
+            assert s2p_id in replica_hosts, \
+                f"Tablet at {row.last_token}: replacement node {s2p_id} not in replicas {replica_hosts}"
+            assert s2_id not in replica_hosts, \
+                f"Tablet at {row.last_token}: dead node {s2_id} still in replicas {replica_hosts}"
+            assert row.new_replicas is None, \
+                f"Tablet at {row.last_token}: expected new_replicas=None, got {row.new_replicas}"
+            assert row.stage is None, \
+                f"Tablet at {row.last_token}: expected stage=None, got {row.stage}"
+            assert row.transition is None, \
+                f"Tablet at {row.last_token}: expected transition=None, got {row.transition}"
+
+        logger.info("Verifying K1..K4 are present in s2'")
+        new_server_host = cql.cluster.metadata.get_host(new_server.ip_addr)
+        for k in [K1, K2, K3, K4]:
+            await _read_key(cql, ks, k, new_server_host)
