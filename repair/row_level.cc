@@ -1458,7 +1458,7 @@ private:
     copy_rows_from_working_row_buf() {
         std::list<repair_row> rows;
         for (const repair_row& r : _working_row_buf) {
-            rows.push_back(r);
+            rows.push_back(r.copy());
             co_await coroutine::maybe_yield();
         }
         co_return rows;
@@ -1469,7 +1469,7 @@ private:
         std::list<repair_row> rows;
         for (const repair_row& r : _working_row_buf) {
             if (set_diff.contains(r.hash())) {
-                rows.push_back(r);
+                rows.push_back(r.copy());
             }
             co_await coroutine::maybe_yield();
         }
@@ -1524,20 +1524,29 @@ private:
         stats().rx_row_nr += row_diff.size();
         stats().rx_row_nr_peer[from] += row_diff.size();
         if (update_buf) {
-            // Both row_diff and _working_row_buf and are ordered, merging
-            // two sored list to make sure the combination of row_diff
-            // and _working_row_buf are ordered.
-            utils::merge_to_gently(_working_row_buf, row_diff,
-                 [this] (const repair_row& x, const repair_row& y) { return _cmp(x.boundary(), y.boundary()) < 0; });
+            // Accumulate the row hashes before merging: merge_to_gently below
+            // splices row_diff's nodes into _working_row_buf (leaving row_diff
+            // empty), and the combined hash is an XOR so it is independent of
+            // the order in which the hashes are added.
             for (auto& r : row_diff) {
                 thread::maybe_yield();
                 _working_row_buf_combined_hash.add(r.hash());
             }
         }
         if (update_hash_set) {
+            // Build the peer hash set before the merge below, which moves
+            // row_diff's rows into _working_row_buf and leaves row_diff empty.
             _peer_row_hash_sets[node_idx] = row_diff
                    | std::views::transform([] (repair_row& r) { thread::maybe_yield(); return r.hash(); })
                    | std::ranges::to<repair_hash_set>();
+        }
+        if (update_buf) {
+            // Both row_diff and _working_row_buf are ordered, merging
+            // two sorted lists to make sure the combination of row_diff
+            // and _working_row_buf are ordered. The rows are spliced (moved)
+            // out of row_diff, so it is left empty afterwards.
+            utils::merge_to_gently(_working_row_buf, std::move(row_diff),
+                 [this] (const repair_row& x, const repair_row& y) { return _cmp(x.boundary(), y.boundary()) < 0; });
         }
         // Repair rows in row_diff will be flushed to disk by flush_rows_in_working_row_buf,
         // so we skip calling do_apply_rows here.
