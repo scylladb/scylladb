@@ -381,15 +381,18 @@ def failure_detector_timeout(build_mode):
     return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
 
 @pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
-async def storage(request, pytestconfig, tmpdir):
+async def storage(request, pytestconfig, tmpdir, manager: ManagerClient):
     """Parametrize tests over local / S3 / GCS storage.
 
     When storage is None the test runs with local (filesystem) storage.
     Otherwise the fixture yields an object-storage server handle.
+
+    Depends on manager to guarantee that servers are stopped before the bucket
+    is destroyed during teardown (see SCYLLADB-2471).
     """
     if request.param is None:
         yield None
         return
 
-    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name) as server:
+    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name, manager) as server:
         yield server
