@@ -59,9 +59,6 @@ private:
     type _type;
     std::vector<single_statement> _statements;
     std::unique_ptr<attributes> _attrs;
-    // True if *any* statement of the batch has IF .. clause. In
-    // this case entire batch is considered a CAS batch.
-    bool _has_conditions;
     // If the BATCH has conditions, it must return columns which
     // are involved in condition expressions in its result set.
     // Unlike Cassandra, Scylla always returns all columns,
@@ -71,8 +68,13 @@ private:
     // Cassandra returns a result set only if CAS succeeds. If
     // any statement in the batch has IF EXISTS, we must return
     // all columns of the table, including the primary key.
-    column_set _columns_of_cas_result_set;
+    std::unique_ptr<column_set> _columns_of_cas_result_set;
     cql_stats& _stats;
+    // True if *any* statement of the batch has IF .. clause. In
+    // this case entire batch is considered a CAS batch.
+    // Placed last to avoid 7B padding hole between it and the
+    // next 8B-aligned field; padding is now at the struct tail.
+    bool _has_conditions;
 public:
     /**
      * Creates a new BatchStatement from a list of statements
