@@ -414,6 +414,14 @@ void migration_notifier::before_create_column_family(const keyspace_metadata& ks
     });
 }
 
+void migration_notifier::before_create_column_family_in_notification(const keyspace_metadata& ksm,
+        const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
+    _listeners.thread_for_each_nested([&ksm, &schema, &mutations, timestamp] (migration_listener* listener) {
+        // allow exceptions. so a listener can effectively kill a create-table
+        listener->on_before_create_column_family(ksm, schema, mutations, timestamp);
+    });
+}
+
 void migration_notifier::pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms, api::timestamp_type timestamp) {
     _listeners.thread_for_each([&ksm, &cfms, timestamp] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a create-table
@@ -440,6 +448,14 @@ void migration_notifier::before_update_column_family(const schema& new_schema,
 void migration_notifier::before_drop_column_family(const schema& schema,
         utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
     _listeners.thread_for_each([&mutations, &schema, ts] (migration_listener* listener) {
+        // allow exceptions. so a listener can effectively kill a drop-column
+        listener->on_before_drop_column_family(schema, mutations, ts);
+    });
+}
+
+void migration_notifier::before_drop_column_family_in_notification(const schema& schema,
+        utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
+    _listeners.thread_for_each_nested([&mutations, &schema, ts] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a drop-column
         listener->on_before_drop_column_family(schema, mutations, ts);
     });
@@ -697,7 +713,7 @@ future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(stora
 }
 
 future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(storage_proxy& sp,
-        const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts, drop_views drop_views) {
+        const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts, drop_views drop_views, bool in_notification) {
     try {
         auto& db = sp.local_db();
         auto& old_cfm = db.find_column_family(ks_name, cf_name);
@@ -739,10 +755,15 @@ future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(
 
         // notifiers must run in seastar thread
         co_await seastar::async([&] {
+            auto&& notify_drop = [&] (const ::schema& s) {
+                in_notification
+                    ? db.get_notifier().before_drop_column_family_in_notification(s, mutations, ts)
+                    : db.get_notifier().before_drop_column_family(s, mutations, ts);
+            };
             for (auto& view : views) {
-                db.get_notifier().before_drop_column_family(*view, mutations, ts);
+                notify_drop(*view);
             }
-            db.get_notifier().before_drop_column_family(*schema, mutations, ts);
+            notify_drop(*schema);
         });
         co_return co_await include_keyspace(sp, *keyspace, std::move(mutations));
     } catch (const replica::no_such_column_family& e) {
