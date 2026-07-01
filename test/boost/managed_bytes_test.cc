@@ -21,11 +21,10 @@ struct fragmenting_allocation_strategy : standard_allocation_strategy {
     size_t allocated_bytes = 0;
     std::unordered_set<void*> allocations;
 
-    fragmenting_allocation_strategy(size_t n) {
-        _preferred_max_contiguous_allocation = n;
+    fragmenting_allocation_strategy(size_t n) : standard_allocation_strategy(n) {
     }
     virtual void* alloc(migrate_fn mf, size_t size, size_t alignment) override {
-        BOOST_CHECK_LE(size, _preferred_max_contiguous_allocation);
+        BOOST_CHECK_LE(size, preferred_max_contiguous_allocation());
         void* addr = standard_allocation_strategy::alloc(mf, size, alignment);
         allocated_bytes += size;
         allocations.insert(addr);

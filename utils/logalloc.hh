@@ -299,7 +299,7 @@ protected:
     bool _reclaiming_enabled = true;
     seastar::shard_id _cpu = this_shard_id();
 public:
-    basic_region_impl(tracker& tracker) : _tracker(tracker)
+    basic_region_impl(tracker& tracker) : allocation_strategy(max_managed_object_size), _tracker(tracker)
     { }
 
     tracker& get_tracker() { return _tracker; }

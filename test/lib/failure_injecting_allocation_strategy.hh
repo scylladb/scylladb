@@ -15,7 +15,10 @@ class failure_injecting_allocation_strategy : public allocation_strategy {
     uint64_t _alloc_count = 0;
     uint64_t _fail_at = std::numeric_limits<uint64_t>::max();
 public:
-    failure_injecting_allocation_strategy(allocation_strategy& delegate) : _delegate(delegate) {}
+    failure_injecting_allocation_strategy(allocation_strategy& delegate)
+        : allocation_strategy(delegate.preferred_max_contiguous_allocation()),
+        _delegate(delegate)
+    {}
 
     virtual void* alloc(migrate_fn mf, size_t size, size_t alignment) override {
         if (_alloc_count >= _fail_at) {

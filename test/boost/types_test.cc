@@ -604,8 +604,7 @@ static managed_bytes make_fragmented_managed_bytes(bytes_view data, size_t frag_
         + std::max(sizeof(multi_chunk_blob_storage), sizeof(single_chunk_blob_storage));
     class limited_alloc : public standard_allocation_strategy {
     public:
-        explicit limited_alloc(size_t limit) {
-            _preferred_max_contiguous_allocation = limit;
+        explicit limited_alloc(size_t limit) : standard_allocation_strategy(limit) {
         }
     };
     limited_alloc alloc(alloc_limit);

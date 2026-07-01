@@ -2000,7 +2000,6 @@ public:
         : basic_region_impl(tracker), _region(region), _sanitizer(tracker.get_impl().sanitizer_report_backtrace()), _id(next_id())
     {
         _buf_ptrs_for_compact_segment.reserve(segment::size / buf_align);
-        _preferred_max_contiguous_allocation = max_managed_object_size;
         tracker_instance._impl->register_region(this);
     }
 
