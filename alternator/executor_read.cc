@@ -1579,7 +1579,7 @@ static future<executor::request_return_type> query_vector(
                         service::storage_proxy::coordinator_query_options(
                                 timeout, permit, client_state, trace_state));
         if (!rqr) {
-            co_return co_await coroutine::try_future(std::move(rqr).assume_error().into_exception_future<executor::request_return_type>());
+            co_return create_api_error_from_exception(std::move(rqr).assume_error());
         }
         auto qr = std::move(rqr).assume_value();
         auto opt_item = describe_single_item(base_schema, partition_slice,
@@ -1837,7 +1837,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
             schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state));
     if (!rqr) {
-        co_return co_await coroutine::try_future(std::move(rqr).assume_error().into_exception_future<executor::request_return_type>());
+        co_return create_api_error_from_exception(std::move(rqr).assume_error());
     }
     auto qr = std::move(rqr).assume_value();
     per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -1961,7 +1961,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     return make_ready_future<batch_get_item_result>(std::move(rqr).as_failure());
                 }
                 auto qr = std::move(rqr).assume_value();
-                utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
+                utils::get_local_injector().inject("alternator_batch_get_item", [] { std::cout << "QWERTY " << __FILE__ << ":" << __LINE__ << "\n"; throw std::runtime_error("batch_get_item injection"); });
                 return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get), std::move(item_callback)).then([] (std::vector<rjson::value> result) {
                     return make_ready_future<batch_get_item_result>(std::move(result));
                 });
@@ -1985,8 +1985,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     auto fut_it = response_futures.begin();
     rjson::value consumed_capacity = rjson::empty_array();
     auto add_unprocessed_keys = [&] (const std::string& table, const auto& cks) {
-        // Read failed, we need to add it to UnprocessedKeys field in reply object.
-        // We create `UnprocessedKeys` object on first failure.
+        // Read failed on item represented by `cks` key(s), we need to add it to UnprocessedKeys field in reply object.
+        // We create `UnprocessedKeys` object on first failure - multiple items might fail for the same BatchGetItem call.
         if (!response["UnprocessedKeys"].HasMember(table)) {
             // Add the table's entry in UnprocessedKeys. Need to copy all the table's parameters from the request except the
             // Keys field, which we start empty and then build below.
@@ -2024,6 +2024,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                 // We need to handle both failures in the same way.
                 batch_get_item_result result = co_await std::move(fut);
                 if (!result) {
+                    std::cout << "QWERTY " << __LINE__ << "\n";
                     if (!query_error) {
                         query_error.emplace(std::move(result).assume_error());
                     }
@@ -2039,6 +2040,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     rjson::push_back(response["Responses"][table], std::move(json));
                 }
             } catch(...) {
+                std::cout << "QWERTY " << __LINE__ << "\n";
                 eptr = std::current_exception();
                 add_unprocessed_keys(table, cks);
             }
@@ -2076,7 +2078,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         co_await coroutine::return_exception_ptr(std::move(eptr));
     }
     if (!some_succeeded && query_error) {
-        co_return co_await coroutine::try_future(std::move(*query_error).into_exception_future<executor::request_return_type>());
+        co_return create_api_error_from_exception(*query_error);
     }
     auto duration = std::chrono::steady_clock::now() - start_time;
     _stats.api_operations.batch_get_item_latency.mark(duration);

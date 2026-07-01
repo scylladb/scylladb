@@ -44,12 +44,8 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::strin
     auto cl = db::consistency_level::LOCAL_ONE;
 
     service::client_state client_state{service::client_state::internal_tag()};
-    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr = co_await proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl,
+    service::storage_proxy::coordinator_query_result qr = co_await proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), empty_service_permit(), client_state));
-    if (!rqr) {
-        co_return co_await coroutine::try_future(std::move(rqr).assume_error().into_exception_future<std::string>());
-    }
-    auto qr = std::move(rqr).assume_value();
 
     cql3::selection::result_set_builder builder(*selection, gc_clock::now());
     query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));

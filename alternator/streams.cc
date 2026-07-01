@@ -1327,7 +1327,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
     service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr = co_await _proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state));
     if (!rqr) {
-        co_return co_await coroutine::try_future(std::move(rqr).assume_error().into_exception_future<executor::request_return_type>());
+        co_return create_api_error_from_exception(std::move(rqr).assume_error());
     }
     auto qr = std::move(rqr).assume_value();
     cql3::selection::result_set_builder builder(*selection, gc_clock::now());

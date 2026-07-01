@@ -7,7 +7,7 @@
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from test.alternator.util import random_string, random_bytes
+from test.alternator.util import random_string, random_bytes, scylla_inject_error
 
 # Basic test for creating a new item with a random name, and reading it back
 # with strong consistency.
@@ -384,6 +384,18 @@ def test_getitem_attributes_to_get_empty(dynamodb, test_table):
     c = random_string()
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.get_item(Key={'p': p, 'c': c}, AttributesToGet=[], ConsistentRead=True)
+
+# Verify that timeout exception is propely returned to the user when error is injected in storage_proxy::query_result
+def test_getitem_timeout_is_propagated_to_user(dynamodb, test_table, rest_api):
+    p = random_string()
+    c = random_string()
+    try:
+        with scylla_inject_error(rest_api, 'storage_proxy_query_result_timeout', one_shot=True):
+            test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
+        assert False
+    except Exception as e:
+        print(f"QWERTY Exception: {e}")
+        assert False
 
 # Basic test for DeleteItem, with hash key only
 def test_delete_item_hash(test_table_s):
