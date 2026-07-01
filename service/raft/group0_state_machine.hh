@@ -120,6 +120,13 @@ public:
     /// This is available for interoperability with old code, prefer add(mutation).
     void add(canonical_mutation);
 
+    /// Adds a canonical mutation to the collector, without merging or splitting.
+    /// Vector-like alias for add(canonical_mutation), so that call sites which
+    /// used to emplace_back() into a canonical_mutation vector stay unchanged.
+    void emplace_back(canonical_mutation&& cm) {
+        add(std::move(cm));
+    }
+
     /// Adds a vector of canonical mutations to the collector.
     /// Not merged with other mutations and not split.
     /// This is available for interoperability with old code, prefer add(mutation).
