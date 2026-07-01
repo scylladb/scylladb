@@ -778,6 +778,14 @@ Buffer serialize_to_buffer(const T& v, size_t head_space) {
     return ret;
 }
 
+// Serializes v into a managed_bytes (fragmented), avoiding a large contiguous allocation.
+template<typename T>
+managed_bytes serialize_to_managed_bytes(const T& v) {
+    bytes_ostream buf;
+    ser::serialize(buf, v);
+    return std::move(buf).to_managed_bytes();
+}
+
 template<typename T, typename Buffer>
 T deserialize_from_buffer(const Buffer& buf, std::type_identity<T> type, size_t head_space) {
     seastar::simple_input_stream in(reinterpret_cast<const char*>(buf.begin() + head_space), buf.size() - head_space);

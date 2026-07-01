@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #include <exception>
+#include <type_traits>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/exception.hh>
@@ -457,7 +458,7 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
     // Each paxos state query returns at most one row, so paging never kicks in.
     // LIMIT 1 in the query causes may_need_paging() to short-circuit to false
     // (row_limit <= 1), avoiding pager allocation overhead entirely.
-    const auto qo = qp.make_internal_options(ps_ptr, values, db::consistency_level::ONE,
+    const auto qo = qp.make_internal_options(ps_ptr, std::move(values), db::consistency_level::ONE,
         1000, service::node_local_only::yes);
     const auto st = ps_ptr->statement;
 
@@ -469,9 +470,18 @@ template <typename... Args>
 future<cql3::untyped_result_set> paxos_store::execute_cql_with_timeout(sstring req,
         db::timeout_clock::time_point timeout,
         Args&&... args) {
+    auto make_dv = []<typename T>(T&& v) -> data_value_or_unset {
+        if constexpr (std::is_same_v<std::remove_cvref_t<T>, managed_bytes>)
+            return std::forward<T>(v);
+        else
+            return data_value(std::forward<T>(v));
+    };
+    std::vector<data_value_or_unset> values;
+    values.reserve(sizeof...(args));
+    (values.emplace_back(make_dv(std::forward<Args>(args))), ...);
     return do_execute_cql_with_timeout(std::move(req),
         timeout,
-        { data_value(std::forward<Args>(args))... },
+        std::move(values),
         _sys_ks.query_processor()
     );
 }
@@ -603,7 +613,7 @@ future<> paxos_store::save_paxos_proposal(const schema& s, const proposal& propo
             paxos_ttl_sec(s),
             proposal.ballot,
             proposal.ballot,
-            ser::serialize_to_buffer<bytes>(proposal.update),
+            ser::serialize_to_managed_bytes(proposal.update),
             to_legacy(*key.get_compound_type(s), key.representation())
         );
 }
@@ -628,7 +638,7 @@ future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decis
             utils::UUID_gen::micros_timestamp(decision.ballot),
             paxos_ttl_sec(s),
             decision.ballot,
-            ser::serialize_to_buffer<bytes>(decision.update),
+            ser::serialize_to_managed_bytes(decision.update),
             to_legacy(*key.get_compound_type(s), key.representation())
         );
 }
