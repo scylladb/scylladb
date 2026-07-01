@@ -2688,7 +2688,6 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                     } else {
                         if (now < last_replay) {
                             flush_time = now;
-                            utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "skip_flush_use_now", fmt::to_string(flush_time));
                         } else if (now - last_replay < cache_time) {
                             // Skip the replay request since last_replay is already
                             // updated since last _flush_hints_batchlog_time
@@ -2696,7 +2695,6 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                             // flush time because last_replay (batchlog replay
                             // time) is smaller than now (hint flush time).
                             flush_time = last_replay;
-                            utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "skip_flush_use_last_replay", fmt::to_string(flush_time));
                         } else {
                             // Issue the replay so the last_replay will be updated
                             // to bigger than now after the call.
@@ -2705,8 +2703,8 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                         }
                     }
                     if (issue_flush) {
+                        utils::get_local_injector().enter("repair_flush_hints_batchlog_handler");
                         all_replayed = co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
-                        utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "issue_flush", fmt::to_string(flush_time));
                     }
                     rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={} all_replayed={}", req.repair_uuid, from, issue_flush, all_replayed);
                 }
@@ -2724,7 +2722,6 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
         });
         updated = true;
     } else {
-        utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "skip_flush", fmt::to_string(flush_time));
     }
     auto duration = std::chrono::duration<float>(gc_clock::now() - now);
     rlogger.info("repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} updated={} flush_hints_batchlog_time={} flush_cache_time={} flush_duration={}",
