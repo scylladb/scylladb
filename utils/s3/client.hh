@@ -37,6 +37,9 @@ static constexpr unsigned maximum_parts_in_piece = 10'000;
 // https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingObjects.html
 static constexpr size_t maximum_object_size = maximum_parts_in_piece * maximum_part_size;
 
+static constexpr size_t max_client_mpu_in_flight = 32;
+static constexpr size_t max_client_buffered_downloads_in_flight = 32;
+
 class range {
     friend struct fmt::formatter<range>;
 
@@ -111,6 +114,8 @@ class client : public enable_shared_from_this<client> {
     std::string _host;
     endpoint_config_ptr _cfg;
     semaphore _creds_sem;
+    semaphore _mpus_sem{max_client_mpu_in_flight};
+    semaphore _buffered_dl_sem{max_client_buffered_downloads_in_flight};
     timer<seastar::lowres_clock> _creds_invalidation_timer;
     timer<seastar::lowres_clock> _creds_update_timer;
     aws_credentials _credentials;
@@ -122,7 +127,6 @@ class client : public enable_shared_from_this<client> {
         uint64_t read_bytes = 0;
         uint64_t write_bytes = 0;
         uint64_t prefetch_bytes = 0;
-        uint64_t downloads_blocked_on_memory = 0;
         seastar::metrics::metric_groups metrics;
         group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn);
         void register_metrics(std::string class_name, std::string host);
@@ -131,12 +135,9 @@ class client : public enable_shared_from_this<client> {
     semaphore _rebalance_sem{1};
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
-    semaphore& _memory;
     std::unique_ptr<seastar::http::retry_strategy> _retry_strategy;
 
     struct private_tag {};
-
-    future<semaphore_units<>> claim_memory(size_t mem, seastar::abort_source* as);
 
     future<> update_credentials_and_rearm();
     future<> authorize(http::request&);
@@ -175,10 +176,10 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr);
-    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
-    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
-    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
+    client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr);
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
+    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);
