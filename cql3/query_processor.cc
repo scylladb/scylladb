@@ -872,7 +872,7 @@ std::pair<std::reference_wrapper<struct query_processor::remote>, gate::holder> 
 
 query_options query_processor::make_internal_options(
         const statements::prepared_statement::checked_weak_ptr& p,
-        const std::vector<data_value_or_unset>& values,
+        const query_data_params& values,
         db::consistency_level cl,
         int32_t page_size,
         service::node_local_only node_local_only) const {
@@ -935,7 +935,7 @@ struct internal_query_state {
 internal_query_state query_processor::create_paged_state(
         const sstring& query_string,
         db::consistency_level cl,
-        const data_value_list& values,
+        const query_data_params& values,
         int32_t page_size,
         std::optional<service::query_state> qs) {
     auto p = prepare_internal(query_string);
@@ -1006,7 +1006,7 @@ future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
-        const data_value_list& values,
+        const query_data_params& values,
         cache_internal cache) {
     auto qs = query_state_for_internal_call();
     co_return co_await execute_internal(query_string, cl, qs, values, cache);
@@ -1017,7 +1017,7 @@ query_processor::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
         service::query_state& query_state,
-        const data_value_list& values,
+        const query_data_params& values,
         cache_internal cache) {
 
     if (log.is_enabled(logging::log_level::trace)) {
@@ -1062,7 +1062,7 @@ query_processor::execute_with_params(
         statements::prepared_statement::checked_weak_ptr p,
         db::consistency_level cl,
         service::query_state& query_state,
-        const data_value_list& values) {
+        const query_data_params& values) {
     auto opts = make_internal_options(p, values, cl);
     auto statement = p->statement;
 
@@ -1277,7 +1277,7 @@ bool query_processor::migration_subscriber::should_invalidate(
 future<> query_processor::query_internal(
         const sstring& query_string,
         db::consistency_level cl,
-        const data_value_list& values,
+        const query_data_params& values,
         int32_t page_size,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
         std::optional<service::query_state> qs) {
