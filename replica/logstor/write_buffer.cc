@@ -12,11 +12,12 @@
 #include "logstor.hh"
 #include "replica/logstor/types.hh"
 #include <seastar/core/simple-stream.hh>
+#include <seastar/core/timed_out_error.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "serializer_impl.hh"
-#include "idl/logstor.dist.hh"
-#include "idl/logstor.dist.impl.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include "utils/crc.hh"
@@ -24,10 +25,6 @@
 namespace replica::logstor {
 
 void log_record_writer::compute_sizes() const {
-    seastar::measuring_output_stream ms_header;
-    ser::serialize(ms_header, _record.header);
-    _header_size = ms_header.size();
-
     seastar::measuring_output_stream ms_data;
     ser::serialize(ms_data, _record.mut);
     _data_size = ms_data.size();
@@ -89,7 +86,6 @@ raw_write_buffer::append_result raw_write_buffer::append(const log_record_writer
 
     size_t record_header_offset = offset_in_buffer();
     auto rh = ondisk::record_header {
-        .header_size = static_cast<uint32_t>(writer.header_size()),
         .data_size = static_cast<uint32_t>(writer.data_size())
     };
     ser::serialize(_stream, rh);
@@ -102,11 +98,11 @@ raw_write_buffer::append_result raw_write_buffer::append(const log_record_writer
 
     _net_data_size += total_size;
     _record_count++;
-    if (!_min_token || writer.record().header.key.dk.token() < *_min_token) {
-        _min_token = writer.record().header.key.dk.token();
+    if (!_min_token || writer.record().header.key.token() < *_min_token) {
+        _min_token = writer.record().header.key.token();
     }
-    if (!_max_token || writer.record().header.key.dk.token() > *_max_token) {
-        _max_token = writer.record().header.key.dk.token();
+    if (!_max_token || writer.record().header.key.token() > *_max_token) {
+        _max_token = writer.record().header.key.token();
     }
 
     // Add padding to align record
@@ -203,7 +199,7 @@ future<> write_buffer::close() {
     }
 }
 
-future<log_location_with_holder> write_buffer::write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder) {
+future<log_location_with_holder> write_buffer::write(log_record_writer writer, write_target target) {
     auto append_result = _raw.append(writer);
 
     auto record_location = [record_header_offset = append_result.record_header_offset, total_size = append_result.total_size] (log_location base_location) {
@@ -218,8 +214,7 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, c
         _records_copy.push_back(record_in_buffer {
             .writer = std::move(writer),
             .loc = _written.get_shared_future().then(record_location),
-            .cg = cg,
-            .cg_holder = std::move(cg_holder)
+            .target = std::move(target)
         });
     }
 
@@ -284,7 +279,7 @@ bool ondisk::validate_header(const ondisk::buffer_header& bh) {
 }
 
 bool ondisk::validate_record_header(const ondisk::record_header& rh) {
-    return rh.header_size != 0;
+    return true;
 }
 
 // buffered_writer
@@ -301,7 +296,9 @@ buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group 
 future<> buffered_writer::start() {
     logstor_logger.info("Starting write buffer");
     _consumer = with_gate(_async_gate, [this] {
-        return consumer_loop();
+        return with_scheduling_group(_flush_sg, [this] {
+            return consumer_loop();
+        });
     });
     co_return;
 }
@@ -323,10 +320,18 @@ future<> buffered_writer::stop() {
     logstor_logger.info("Write buffer stopped");
 }
 
-future<log_location_with_holder> buffered_writer::write(log_record record, compaction_group* cg, seastar::gate::holder cg_holder) {
+future<log_location_with_holder> buffered_writer::write(log_record record, db::timeout_clock::time_point timeout, write_target target) {
     auto holder = _async_gate.hold();
 
     log_record_writer writer(std::move(record));
+
+    auto check_timeout = [timeout] {
+        if (timeout != db::no_timeout && timeout <= db::timeout_clock::now()) {
+            throw timed_out_error{};
+        }
+    };
+
+    check_timeout();
 
     if (writer.size() > head_buf().max_record_size()) {
         throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), head_buf().max_record_size()));
@@ -341,6 +346,7 @@ future<log_location_with_holder> buffered_writer::write(log_record record, compa
         auto current_head = _head;
         while (ring_full() && !_async_gate.is_closed()) {
             co_await _head_can_advance.wait();
+            check_timeout();
         }
         _async_gate.check();
         if (_head == current_head) {
@@ -350,7 +356,7 @@ future<log_location_with_holder> buffered_writer::write(log_record record, compa
         }
     }
 
-    auto fut = head_buf().write(std::move(writer), cg, std::move(cg_holder));
+    auto fut = head_buf().write(std::move(writer), std::move(target));
 
     // Wake the consumer: there is now data at the tail.
     _tail_can_advance.broadcast();
@@ -378,9 +384,7 @@ future<> buffered_writer::consumer_loop() {
             _head_can_advance.broadcast();
         }
 
-        co_await with_scheduling_group(_flush_sg, [this] {
-            return _sm.write(tail_buf());
-        });
+        co_await _sm.write(tail_buf());
 
         tail_buf().reset();
         ++_tail;

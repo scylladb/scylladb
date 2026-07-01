@@ -11,18 +11,19 @@
 #include <seastar/core/temporary_buffer.hh>
 #include <optional>
 #include <seastar/core/scheduling.hh>
+#include "db/cache_tracker.hh"
 #include "readers/mutation_reader.hh"
-#include "replica/compaction_group.hh"
+#include "replica/logstor/compaction.hh"
 #include "types.hh"
 #include "index.hh"
 #include "segment_manager.hh"
 #include "write_buffer.hh"
+#include "cache.hh"
 #include "mutation/mutation.hh"
 #include "dht/decorated_key.hh"
 
 namespace replica {
 
-class compaction_group;
 class database;
 
 namespace logstor {
@@ -38,15 +39,17 @@ class logstor {
 
     segment_manager _segment_manager;
     buffered_writer _write_buffer;
+    cache_tracker _cache_tracker;
 
 public:
 
-    explicit logstor(logstor_config);
+    logstor(logstor_config, ::cache_tracker& shared_cache_tracker);
 
     logstor(const logstor&) = delete;
     logstor& operator=(const logstor&) = delete;
 
     future<> do_recovery(replica::database&);
+    future<> do_recovery_for_test();
 
     future<> start();
     future<> stop();
@@ -59,11 +62,16 @@ public:
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
 
-    future<> write(const mutation&, compaction_group&, seastar::gate::holder cg_holder);
+    cache_tracker& get_cache_tracker() noexcept {
+        return _cache_tracker;
+    }
+    const cache_tracker& get_cache_tracker() const noexcept {
+        return _cache_tracker;
+    }
 
-    future<std::optional<log_record>> read(const primary_index&, primary_index_key);
+    future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout);
 
-    future<std::optional<canonical_mutation>> read(const schema&, const primary_index&, const dht::decorated_key&);
+    future<std::optional<mutation>> read(const schema&, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
 
     /// Create a mutation reader for a specific key
     mutation_reader make_reader(schema_ptr schema,
@@ -72,6 +80,8 @@ public:
                                        const dht::partition_range& pr,
                                        const query::partition_slice& slice,
                                        tracing::trace_state_ptr trace_state = nullptr);
+
+    future<> flush_to_separator();
 
     void set_trigger_compaction_hook(std::function<void()> fn);
     void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn);

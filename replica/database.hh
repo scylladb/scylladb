@@ -622,9 +622,8 @@ public:
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
 
-    bool add_logstor_segment(logstor::log_segment_id, logstor::segment_descriptor&, dht::token first_token, dht::token last_token);
-
-    logstor::separator_buffer& get_logstor_separator_buffer(dht::token token, size_t write_size);
+    logstor::logstor_group& get_logstor_group(dht::token token);
+    logstor::logstor_group& get_logstor_group(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token);
 
     // Restricted to new sstables produced by external processes such as repair.
     // The sstable might undergo split if table is in split mode.

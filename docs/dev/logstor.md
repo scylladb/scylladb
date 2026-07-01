@@ -14,7 +14,39 @@ Logstor consists of several key components:
 
 #### Primary Index
 
-The primary index is entirely in memory and it maps a partition key to its location in the log segments. It consists of a B-tree per each table that is ordered token.
+The primary index is entirely in memory and it maps a partition key to its location in the log segments. It consists of a B-tree per each table ordered by token and then by key hash.
+
+### Keys, Hashing, and Partitioner
+
+Logstor does not store the full partition key in its primary index. Instead, each index entry stores a compact `primary_index_key` derived from the partition key by a collision-resistant hash function.
+
+#### Partitioner
+
+Logstor tables use a dedicated partitioner, `com.scylladb.dht.LogstorHashPrefixPartitioner`, which is assigned automatically when a table is created with `storage_engine = 'logstor'`.
+
+For a natural logstor key, the token is derived from the first 8 bytes of the key hash. This makes the token a pure function of the partition key bytes for logstor tables.
+
+#### Key Hash
+
+The key hash is a 20-byte prefix of a SHA-256 digest.
+
+- For a logical `partition_key_view`, logstor hashes the partition key in the same external byte encoding used by SSTable keys.
+- For a stored `sstables::key_view`, logstor hashes the raw key bytes directly.
+
+This distinction matters for multi-component partition keys. Scylla's internal `partition_key` representation is not the same as the external composite encoding used by SSTables, so hashing a composite key safely requires the schema in order to emit the correct component boundaries. The schema-aware path and the SSTable-key path are intentionally defined to produce the same hash.
+
+#### `primary_index_key` Layout
+
+`primary_index_key` keeps the token hot in memory while preserving a compact fixed-size serialized form.
+
+- In memory it stores:
+  - the raw token as an `int64_t`
+  - the remaining 12 bytes of the key hash
+- On disk it is serialized as 20 bytes:
+  - 8-byte token prefix in big-endian order
+  - 12-byte hash suffix
+
+Reconstructing the full stored key bytes is therefore lossless, but index operations can usually work directly on the cached raw token without decoding it from the hash prefix each time.
 
 #### Segment Manager
 
@@ -191,8 +223,8 @@ A serialized form of `write_buffer::segment_header`.
 Each record within the buffer is structured as:
 
 ```
-record_header        (8 bytes)
-log_record_header    (header_size bytes)
+record_header        (4 bytes)
+log_record_header    (52 bytes)
 canonical_mutation   (data_size bytes)
 zero_padding         -- to align to record_alignment (8 bytes)
 ```
@@ -201,13 +233,12 @@ zero_padding         -- to align to record_alignment (8 bytes)
 
 | Offset | Size | Field         | Description |
 |--------|------|---------------|-------------|
-| 0      | 4    | `header_size` | Size in bytes of the serialized `log_record_header` that follows. |
-| 4      | 4    | `data_size`   | Size in bytes of the serialized `canonical_mutation` that follows `log_record_header`. |
+| 0      | 4    | `data_size`   | Size in bytes of the serialized `canonical_mutation` that follows the fixed-size `log_record_header`. |
 
 **Log Record Header** (`log_record_header`):
 
-The `header_size` bytes immediately following the record header are the IDL-serialized form of `log_record_header`, which contains:
-- `key`: the partition key (`primary_index_key`), including a `decorated_key` with a token and partition key bytes.
+The bytes immediately following the record header are the fixed-size logstor serialization of `log_record_header`, which contains:
+- `key`: the partition key identifier (`primary_index_key`), serialized as the token prefix plus the remaining key-hash suffix.
 - `timestamp`: the timestamp of the record, used to resolve conflicts by keeping the record with the latest timestamp.
 - `table`: UUID of the table this record belongs to.
 

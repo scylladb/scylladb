@@ -21,14 +21,19 @@
 #include "replica/logstor/ondisk.hh"
 #include "schema/schema_fwd.hh"
 #include "types.hh"
+#include "timeout_config.hh"
 
 namespace replica {
-
-class compaction_group;
 
 namespace logstor {
 
 class segment_manager;
+class logstor_group;
+
+struct write_target {
+    logstor_group* cg = nullptr;
+    seastar::gate::holder cg_holder;
+};
 
 // Writer for log records that handles serialization and size computation
 class log_record_writer {
@@ -36,7 +41,6 @@ class log_record_writer {
     using ostream = seastar::simple_memory_output_stream;
 
     log_record _record;
-    mutable std::optional<size_t> _header_size;
     mutable std::optional<size_t> _data_size;
 
     void compute_sizes() const;
@@ -46,12 +50,13 @@ public:
         : _record(std::move(record))
     {}
 
-    // Get serialized sizes (computed lazily)
+    static constexpr size_t serialized_header_size() {
+        return ondisk::serialized_log_record_header_size;
+    }
+
+    // log_record_header now has a fixed serialized size.
     size_t header_size() const {
-        if (!_header_size) {
-            compute_sizes();
-        }
-        return *_header_size;
+        return serialized_header_size();
     }
 
     size_t data_size() const {
@@ -206,8 +211,7 @@ class write_buffer {
     struct record_in_buffer {
         log_record_writer writer;
         future<log_location> loc;
-        compaction_group* cg;
-        seastar::gate::holder cg_holder;
+        write_target target;
     };
 
     std::vector<record_in_buffer> _records_copy;
@@ -252,11 +256,7 @@ public:
     // Returns a future that will be resolved with the log location once flushed and a gate holder
     // that keeps the write buffer open. The gate should be held for index updates after the write
     // is done.
-    future<log_location_with_holder> write(log_record_writer, compaction_group*, seastar::gate::holder cg_holder);
-
-    future<log_location_with_holder> write(log_record_writer writer) {
-        return write(std::move(writer), nullptr, {});
-    }
+    future<log_location_with_holder> write(log_record_writer, write_target target = {});
 
 private:
     bool with_record_copy() const noexcept {
@@ -324,7 +324,7 @@ public:
     future<> start();
     future<> stop();
 
-    future<log_location_with_holder> write(log_record, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
+    future<log_location_with_holder> write(log_record, db::timeout_clock::time_point timeout, write_target target = {});
 
 private:
     // The flush consumer loop.

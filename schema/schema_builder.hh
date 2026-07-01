@@ -11,6 +11,7 @@
 #include "schema.hh"
 #include "replica/database_fwd.hh"
 #include "cdc/log.hh"
+#include "dht/logstor_partitioner.hh"
 #include "mutation/timestamp.hh"
 #include "tombstone_gc_options.hh"
 #include "db/view/base_info.hh"
@@ -276,7 +277,7 @@ public:
 
     schema_builder& set_logstor() {
         _raw._props.storage_engine = storage_engine_type::logstor;
-        return *this;
+        return with_partitioner(dht::logstor_partitioner::classname);
     }
 
     class default_names {
