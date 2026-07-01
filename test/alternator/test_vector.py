@@ -41,13 +41,16 @@ boto3.dynamodb.types.DYNAMODB_CONTEXT = decimal.Context(prec=100)
 # Users can use exactly the same code to get vector search support in boto3,
 # but the more "official" way would be to modify botocore's JSON configuration
 # file, botocore/data/dynamodb/2012-08-10/service-2.json.
-@pytest.fixture(scope="module")
-def vs(new_dynamodb_session, dynamodb):
-    if is_aws(dynamodb):
-        skip_env('Scylla-only: vector search extensions not available on DynamoDB')
-    resource = new_dynamodb_session()
-    client = resource.meta.client
-    # Patch the client to support the new APIs:
+
+# add_vs_to_client() is a context manager that modifies the given boto3
+# client to accept the new vector-search parameters in requests and responses,
+# and also monkey-patches the global TypeSerializer/TypeDeserializer so that
+# the Vector type is serialized as FLOAT32VECTOR.
+# On exit, only the global TypeSerializer/TypeDeserializer patches are
+# restored. The per-client service-model mutations (new shapes, added
+# members, AttributeValue.FLOAT32VECTOR, etc.) are not reverted.
+@contextmanager
+def add_vs_to_client(client):
     # All the new parameter "shapes" that we will use below for the
     # new parameters of the different operations:
     new_shapes = {
@@ -197,13 +200,26 @@ def vs(new_dynamodb_session, dynamodb):
             return {'FLOAT32VECTOR': list(value)}
         return _orig_serialize(self, value)
     boto3.dynamodb.types.TypeSerializer.serialize = _serialize_with_vector
+    _sentinel = object()
+    _orig_deserialize_float32vector = getattr(boto3.dynamodb.types.TypeDeserializer, '_deserialize_float32vector', _sentinel)
     boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector = lambda self, value: Vector(value)
+    try:
+        yield
+    finally:
+        boto3.dynamodb.types.TypeSerializer.serialize = _orig_serialize
+        if _orig_deserialize_float32vector is _sentinel:
+            del boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector
+        else:
+            boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector = _orig_deserialize_float32vector
 
-    yield resource
 
-    # Restore the original serialize method and remove the deserializer patch.
-    boto3.dynamodb.types.TypeSerializer.serialize = _orig_serialize
-    del boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector
+@pytest.fixture(scope="module")
+def vs(new_dynamodb_session, dynamodb):
+    if is_aws(dynamodb):
+        skip_env('Scylla-only: vector search extensions not available on DynamoDB')
+    resource = new_dynamodb_session()
+    with add_vs_to_client(resource.meta.client):
+        yield resource
 
 # Use the Vector(list) type for test values that are meant to be stored as
 # optimized vectors (array of floats instead of JSON list of numbers).
@@ -913,6 +929,9 @@ def test_putitem_vectorindex_updatetable(vs):
 # global queries on it, not filtering to a specific partition, may get
 # results from other tests - so such tests will need to create their own
 # table instead of using this shared one.
+# If vector store is configured, we wait for the vector index to become
+# active before yielding the table, so tests that use this fixture can
+# read from it immediately.
 @pytest.fixture(scope="module")
 def table_vs(vs):
     with new_test_table(vs,
@@ -922,6 +941,8 @@ def table_vs(vs):
                 {'IndexName': 'vind',
                  'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}
             ]) as table:
+        if vector_store_configured(table):
+            wait_for_vector_index_active(table, 'vind')
         yield table
 
 # Test that a Query with a VectorSearch parameter without an IndexName
@@ -1008,6 +1029,34 @@ def test_query_vectorsearch_limit_bad(table_vs):
                 VectorSearch={'QueryVector': [1, 2, 3]},
                 Limit=bad_limit
             )
+
+# The maximum allowed Limit for vector search. Set as max_vector_search_limit
+# in alternator/executor_read.cc, and analogous to CQL's max_ann_query_limit
+# defined in cql3/statements/select_statement.hh.
+MAX_VECTOR_SEARCH_LIMIT = 1000
+
+# Test that a Query with VectorSearch does not allow a Limit above
+# MAX_VECTOR_SEARCH_LIMIT. This limit also exists in CQL as max_ann_query_limit
+# in vector_indexed_table_select_statement (select_statement.hh). The allowed
+# Limit needs to be limited because vector search does not support pagination.
+def test_query_vectorsearch_limit_too_large(table_vs):
+    with pytest.raises(ClientError, match='ValidationException.*Limit'):
+        table_vs.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 2, 3]},
+            Limit=MAX_VECTOR_SEARCH_LIMIT + 1,
+        )
+
+# Test that a Query with VectorSearch with Limit=MAX_VECTOR_SEARCH_LIMIT
+# (the maximum allowed value) succeeds - it should not be rejected.
+# The query may return fewer results than the limit (the table_vs fixture
+# has few items, possibly none), but must not fail with a validation error.
+def test_query_vectorsearch_limit_at_max(table_vs, needs_vector_store):
+    table_vs.query(
+        IndexName='vind',
+        VectorSearch={'QueryVector': [1, 2, 3]},
+        Limit=MAX_VECTOR_SEARCH_LIMIT,
+    )
 
 # Test that a Query with VectorSearch does not support ConsistentRead=True,
 # just like queries on a GSI.
@@ -1097,7 +1146,7 @@ def vector_store_configured(table_vs):
 # It is assumed that if Scylla is configured to use the vector store, then
 # the reverse is also true - the vector store is configured to use Scylla,
 # so we can check the end-to-end functionality.
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def needs_vector_store(table_vs):
     if not vector_store_configured(table_vs):
         skip_env('Vector Store is not configured (run with --vs)')
@@ -1379,11 +1428,12 @@ def test_query_vector_cdc_lwt(vs, needs_vector_store):
 # Similar to test_query_vector_cdc, this test also that a vector search Query
 # find data inserted after the index was created. But this test adds a twist:
 # before creating the index, we insert a malformed value for the vector
-# attribute (a string). We check that this malformed is ignored by the initial
-# prefill scan, but should not prevent a later write with a well-formed vector
-# from being indexed and returned by queries.
+# attribute (a string or wrong-length vector). We check that this malformed
+# value is ignored by the initial prefill scan, but should not prevent a later
+# write with a well-formed vector from being indexed and returned by queries.
+@pytest.mark.parametrize('use_update_item', [False, True], ids=['put_item', 'update_item'])
 @pytest.mark.parametrize('malformed', ['garbage', [1,2]], ids=['string','wrong_length'])
-def test_query_vector_cdc_malformed_prefill(vs, needs_vector_store, malformed):
+def test_query_vector_cdc_malformed_prefill(vs, needs_vector_store, malformed, use_update_item):
     with new_test_table(vs,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
@@ -1406,7 +1456,12 @@ def test_query_vector_cdc_malformed_prefill(vs, needs_vector_store, malformed):
         assert len(result['Items']) == 1 and result['Items'][0]['p'] == p2
         # Now replace the value of p1 by a properly formed vector. It should
         # be eventually picked up by CDC and indexed by the vector index:
-        table.put_item(Item={'p': p1, 'v': [1, Decimal("0.1"), 0]})
+        if use_update_item:
+            table.update_item(Key={'p': p1},
+                UpdateExpression='SET v = :v',
+                ExpressionAttributeValues={':v': [1, Decimal("0.1"), 0]})
+        else:
+            table.put_item(Item={'p': p1, 'v': [1, Decimal("0.1"), 0]})
         deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
         while True:
             result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]},
@@ -1648,6 +1703,18 @@ def test_batchwriteitem_vectorindex_bad_vector(table_vs):
         with table_vs.batch_writer() as batch:
             batch.put_item(Item={'p': p, 'v': [1, Decimal('1e100'), 3]})
 
+# If one item in the batch is valid and another is invalid, the entire
+# batch should be rejected and neither item should be inserted:
+def test_batchwriteitem_vectorindex_bad_and_good(table_vs):
+    p_good = random_string()
+    p_bad = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        with table_vs.batch_writer() as batch:
+            batch.put_item(Item={'p': p_good, 'v': [1, 2, 3]})
+            batch.put_item(Item={'p': p_bad,  'v': 'not a list'})
+    assert 'Item' not in table_vs.get_item(Key={'p': p_good}, ConsistentRead=True)
+    assert 'Item' not in table_vs.get_item(Key={'p': p_bad},  ConsistentRead=True)
+
 # Test that DeleteItem removes the item from the vector index.
 # Two variants are tested via parametrize:
 # - without clustering key (no_ck): deleting the only item in a partition
@@ -1703,6 +1770,115 @@ def test_deleteitem_vectorindex(vs, needs_vector_store, with_ck):
             if time.monotonic() > deadline:
                 pytest.fail('Timed out waiting for deleted item to disappear from vector index')
             time.sleep(0.1)
+
+# Test that PutItem or UpdateItem on an existing item replaces its vector in
+# the index: the old vector is removed and the new one is indexed. Two items
+# are inserted so we can verify the ordering changes after the replace.
+@pytest.mark.parametrize('use_update_item', [False, True], ids=['put_item', 'update_item'])
+def test_replace_vector_vectorindex(vs, needs_vector_store, use_update_item):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p1 = random_string()
+        p2 = random_string()
+        # Insert two different items and index them.
+        table.put_item(Item={'p': p1, 'v': [1, 0, 0]})
+        table.put_item(Item={'p': p2, 'v': [0, 1, 0]})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        # Initially, search [1, 0, 0] returns p1 first, p2 second.
+        result = table.query(IndexName='vind',
+                             VectorSearch={'QueryVector': [1, 0, 0]},
+                             Limit=2)
+        assert [item['p'] for item in result['Items']] == [p1, p2]
+        # Replace p1's vector with [-1, 0, 0] (opposite direction, now farthest
+        # from [1, 0, 0]), using either PutItem or UpdateItem.
+        if use_update_item:
+            table.update_item(Key={'p': p1},
+                UpdateExpression='SET v = :v',
+                ExpressionAttributeValues={':v': [-1, 0, 0]})
+        else:
+            table.put_item(Item={'p': p1, 'v': [-1, 0, 0]})
+        # Wait until the index reflects the change: p2 should now come before p1
+        # in a search for [1, 0, 0].
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(IndexName='vind',
+                                 VectorSearch={'QueryVector': [1, 0, 0]},
+                                 Limit=2)
+            got = [item['p'] for item in result.get('Items', [])]
+            if got == [p2, p1]:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail(f'Timed out waiting for index to reflect replaced vector; last order: {got}')
+            time.sleep(0.1)
+
+# Test that UpdateItem modifying non-vector attributes does not affect the
+# vector index: the item remains discoverable by its unchanged vector, and
+# its updated attributes are returned with Select='ALL_ATTRIBUTES'.
+def test_updateitem_nonvector_vectorindex(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': [1, 0, 0], 'x': 'before'})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        # UpdateItem to change a non-vector attribute.
+        table.update_item(Key={'p': p},
+            UpdateExpression='SET x = :newx',
+            ExpressionAttributeValues={':newx': 'after'})
+        # The item should still be findable by its vector, which didn't change.
+        # Select='ALL_ATTRIBUTES' fetches the full item from the base table (x
+        # is not projected), so the updated x should be visible immediately
+        # without any delay (note that actually, the item is read with eventual
+        # consistency so there can be a delay, on our single-node setup there
+        # won't be any consistency delay).
+        result = table.query(IndexName='vind',
+                             VectorSearch={'QueryVector': [1, 0, 0]},
+                             Select='ALL_ATTRIBUTES',
+                             Limit=1)
+        assert result['Items'] == [{'p': p, 'v': [1, 0, 0], 'x': 'after'}]
+
+# Test that UpdateItem removing the vector attribute (but not the item itself)
+# causes the item to be removed from the vector index. The item should still
+# exist in the base table (readable via GetItem), but must no longer appear
+# in vector search results.
+def test_updateitem_remove_vector_vectorindex(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': [1, 0, 0], 'x': 'hello'})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(IndexName='vind',
+                             VectorSearch={'QueryVector': [1, 0, 0]},
+                             Limit=1)
+        # Verify the item was indexed
+        assert result['Items'] == [{'p': p}]
+        # Remove only the vector attribute, leaving the rest of the item intact.
+        table.update_item(Key={'p': p}, UpdateExpression='REMOVE v')
+        # The item must eventually disappear from the vector index.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(IndexName='vind',
+                                 VectorSearch={'QueryVector': [1, 0, 0]},
+                                 Limit=1)
+            if not result['Items']:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for item to disappear from vector index after vector attribute removal')
+            time.sleep(0.1)
+        # The item itself must still exist in the base table, just without 'v'.
+        result = table.get_item(Key={'p': p}, ConsistentRead=True)
+        assert result['Item'] == {'p': p, 'x': 'hello'}
 
 # Test vector index with Alternator TTL together. A table is created without
 # TTL enabled, data is inserted with expiration time set to the past (but
@@ -2806,38 +2982,408 @@ def test_query_vectorsearch_return_similarity_dot_product_overflow2(vs, needs_ve
         # The highly dissimilar item's score should be large and negative.
         assert scores[2] < -BIG
 
+# In virtually all the tests above, we used vectors of dimension 3 as an
+# example. But dimensions up to MAX_VECTOR_DIMENSION are allowed, so let's
+# have at least one test that actually uses MAX_VECTOR_DIMENSION to check
+# that it works end-to-end - indexing (via either prefill or CDC) and
+# querying.
+@pytest.mark.parametrize('via_cdc', [False, True], ids=['prefill', 'cdc'])
+def test_query_vector_max_dimension(vs, needs_vector_store, via_cdc):
+    dim = MAX_VECTOR_DIMENSION
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            **({} if not via_cdc else
+               {'VectorIndexes': [{'IndexName': 'vind',
+                                   'VectorAttribute': {'AttributeName': 'v',
+                                                       'Dimensions': dim}}]}
+            )) as table:
+        if via_cdc:
+            # The index was already created in new_test_table above. Wait for
+            # it to become ACTIVE so that subsequent writes are picked up via
+            # CDC rather than prefill.
+            wait_for_vector_index_active(table, 'vind')
+        # Build a query vector: all zeros except the first element which is 1.
+        # The item we insert has exactly this vector, so it is the nearest
+        # neighbor of the query.
+        query_vec = Vector([1.0] + [0.0] * (dim - 1))
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': query_vec})
+        if not via_cdc:
+            # For the prefill case the index is created after the data, so
+            # we create it now and wait for the prefill scan to complete.
+            table.update(VectorIndexUpdates=[{'Create':
+                {'IndexName': 'vind',
+                 'VectorAttribute': {'AttributeName': 'v', 'Dimensions': dim}}}])
+            wait_for_vector_index_active(table, 'vind')
+        # Retry the query until the item appears in the results.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': query_vec},
+                Limit=1,
+            )
+            if result.get('Items') and result['Items'][0]['p'] == p:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail(f'Timed out waiting for MAX_VECTOR_DIMENSION={dim} item to appear via '
+                            f'{"CDC" if via_cdc else "prefill"}')
+            time.sleep(0.1)
+
 ##############################################################################
-# CONTINUE HERE - MAKE A DECISION! PRE-FILTERING:
-# Tests *pre-filtering* for filtering on projected attributes, which can be (if
-# we continue the implementation) pushed to the vector store or right now -
-# key columns.
-# We need to decide: In DynamoDB pre-filtering is done with
-# KeyConditionExpression NOT FilterExpression.
-# KeyConditionExpression is the traditional approach in Query, but is a bit
-# weird because these aren't really "keys" (even though in CQL CREATE TABLE
-# syntax we pretend they are - and today, they really are keys).
-# Do we want to force the user to put these pre-filtering in KeyConditionExpression
-# instead of FilterExpression, and only allow FilterExpression for post-filtering
-# that must be done in Scylla?
-# Alternatively, we could put everything in FilterExpression. This is less
-# with DynamoDB's usual semantics but simpler for users.
-############################################################################
+# Tests for vector search pre-filtering via KeyConditionExpression.
+#
+# KeyConditionExpression in a vector search query is sent to the vector store
+# as a pre-filter: only nearest neighbors from the matching set are returned.
+# Only projected attributes (currently key columns) may be referenced.
+# Operators supported: =, <, <=, >, >=, IN, BETWEEN. OR and NOT are rejected.
+##############################################################################
 
-# WRITE TEST:
-# Test that if the FilterExpression happens to only use projected attributes
-# (by default this means key attributes) - or if we decide (see above) that
-# it's KeyconditionExpression, then it can be, and is, sent to the vector
-# store and performed there. We can check that this happens by noticing that
-# we get a full LIMIT of results, and not less.
+# Test that the old-style KeyConditions (non-expression API) is rejected for
+# vector search queries (just like QueryFilter is rejected).
+def test_query_vectorsearch_key_conditions_rejected(table_vs):
+    with pytest.raises(ClientError, match='ValidationException.*KeyConditions'):
+        table_vs.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [0, 0, 1]},
+            Limit=1,
+            KeyConditions={'p': {'AttributeValueList': [{'S': 'x'}], 'ComparisonOperator': 'EQ'}},
+        )
 
-# WRITE TEST:
-# Test FilterExpression for post-filtering vector search results with
-# Select=ALL_PROJECTED_ATTRIBUTES where the filter only needs projected
-# attributes (currently those are key attributes). Here it is important
-# for efficency that the vector index applies the filter and we do not need
-# to retrive the full items from the base table at all. We can verify that
-# this code path was reached by checking that we got back LIMIT results, and
-# not fewer.
+# Test that KeyConditionExpression referencing a non-projected attribute is
+# rejected with a ValidationException.
+def test_query_vectorsearch_key_condition_nonprojected(table_vs):
+    # The table 'table_vs' has only 'p' as a key column. 'v' (the vector
+    # attribute) and 'x' (a regular attribute) are not projected.
+    for bad_attr in ['v', 'x']:
+        with pytest.raises(ClientError, match='ValidationException'):
+            table_vs.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [0, 0, 1]},
+                Limit=1,
+                KeyConditionExpression=f'{bad_attr} = :val',
+                ExpressionAttributeValues={':val': 'anything'},
+            )
+
+# Test that NOT in a KeyConditionExpression is rejected for vector search
+# pre-filtering.
+def test_query_vectorsearch_key_condition_not_rejected(table_vs):
+    with pytest.raises(ClientError, match='ValidationException'):
+        table_vs.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [0, 0, 1]},
+            Limit=1,
+            KeyConditionExpression='NOT p = :p',
+            ExpressionAttributeValues={':p': 'x'},
+        )
+
+# Test that OR in a KeyConditionExpression is rejected for vector search
+# pre-filtering. This is because the vector store currently only supports
+# AND among a list of conditions given to it in the pre-filter.
+def test_query_vectorsearch_key_condition_or_rejected(table_vs):
+    with pytest.raises(ClientError, match='ValidationException'):
+        table_vs.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [0, 0, 1]},
+            Limit=1,
+            KeyConditionExpression='p = :p1 OR p = :p2',
+            ExpressionAttributeValues={':p1': 'x', ':p2': 'y'},
+        )
+
+# Test that an unsupported operator (<>) in a KeyConditionExpression is
+# rejected for vector search pre-filtering. The vector store does not
+# currently support a not-equal operator.
+def test_query_vectorsearch_key_condition_ne_rejected(table_vs):
+    with pytest.raises(ClientError, match='ValidationException'):
+        table_vs.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [0, 0, 1]},
+            Limit=1,
+            KeyConditionExpression='p <> :p',
+            ExpressionAttributeValues={':p': 'x'},
+        )
+
+# Test that a boolean function call (e.g. attribute_exists()) in a
+# KeyConditionExpression is rejected. attribute_exists() is valid in a
+# FilterExpression but not in a vector search KeyConditionExpression
+# because the vector store can't support it.
+def test_query_vectorsearch_key_condition_function_rejected(table_vs):
+    with pytest.raises(ClientError, match='ValidationException'):
+        table_vs.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [0, 0, 1]},
+            Limit=1,
+            KeyConditionExpression='attribute_exists(p)',
+        )
+
+# Test that using an unsupported value type (e.g. a list) in a
+# KeyConditionExpression pre-filter is rejected with a ValidationException.
+# Only S (string) and N (number) are valid types for pre-filter comparisons.
+# Note that we can't even pass N when the attribute is a key column of type
+# S - this will be tested below (test_query_vectorsearch_prefilter_type_mismatch).
+def test_query_vectorsearch_prefilter_bad_value_type(table_vs):
+    for bad_val in [
+        ['hello', 'world'],      # List -> DynamoDB L type
+        {'key': 'val'},          # Map -> DynamoDB M type
+        b'hello',                # bytes -> DynamoDB B type
+    ]:
+        with pytest.raises(ClientError, match='ValidationException.*KeyConditionExpression'):
+            table_vs.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [0, 0, 1]},
+                Limit=1,
+                KeyConditionExpression='p = :p',
+                ExpressionAttributeValues={':p': bad_val},
+            )
+
+# Test that passing a constant whose DynamoDB type does not match the key
+# column's declared type is rejected with a ValidationException.  table_vs
+# has a string (S) partition key 'p', so passing a numeric (N) value should
+# be rejected for all comparison operators.
+def test_query_vectorsearch_prefilter_type_mismatch(table_vs):
+    num_val = Decimal('42')
+    for kce, vals in [
+        ('p = :v',                {':v': num_val}),
+        ('p < :v',                {':v': num_val}),
+        ('p <= :v',               {':v': num_val}),
+        ('p > :v',                {':v': num_val}),
+        ('p >= :v',               {':v': num_val}),
+        ('p IN (:v)',             {':v': num_val}),
+        ('p BETWEEN :lo AND :hi', {':lo': num_val, ':hi': num_val}),
+    ]:
+        # This test doesn't request a vector store to be configured (no
+        # needs_vector_store fixture) so following query() can't succeed;
+        # But we expect to get the specific error "Type mismatch" before
+        # the query is even gets to checking if there is a vector store.
+        with pytest.raises(ClientError, match='ValidationException.*Type mismatch'):
+            table_vs.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [0, 0, 1]},
+                Limit=1,
+                KeyConditionExpression=kce,
+                ExpressionAttributeValues=vals,
+            )
+
+# Test that using a nested attribute path (e.g. "a.b") in a
+# KeyConditionExpression pre-filter is rejected with a ValidationException.
+# Only top-level attribute names are supported; nested paths would require
+# the vector store to understand DynamoDB's nested document model.
+def test_query_vectorsearch_key_condition_nested_attr_rejected(table_vs):
+    for kce, vals in [
+        ('a.b = :v',             {':v': 'x'}),
+        ('a.b < :v',             {':v': 'x'}),
+        ('a.b IN (:v)',          {':v': 'x'}),
+        ('a.b BETWEEN :lo AND :hi', {':lo': 'x', ':hi': 'z'}),
+    ]:
+        with pytest.raises(ClientError, match='ValidationException.*nested'):
+            table_vs.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [0, 0, 1]},
+                Limit=1,
+                KeyConditionExpression=kce,
+                ExpressionAttributeValues=vals,
+            )
+
+# Success-path test: KeyConditionExpression pre-filter is applied by the vector
+# store before ANN, so the result always contains exactly Limit items (if that
+# many matching items exist) regardless of how many non-matching items are
+# nearer to the query vector.
+#
+# Setup: 4 items in the table. 2 "keep" items have vectors far from the query
+# ([0,0,1]); 2 "drop" items have vectors very close to the query. With
+# Limit=2:
+#   - Without pre-filtering: ANN returns the 2 "drop" items (nearest), then a
+#     post-filter would keep 0 items.
+#   - With pre-filtering (KeyConditionExpression p IN ('keep1','keep2')): ANN
+#     only considers "keep" items and returns both -> Count=2, ScannedCount=2.
+def test_query_vectorsearch_prefilter_in(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p_keep1, p_keep2 = random_string(), random_string()
+        p_drop1, p_drop2 = random_string(), random_string()
+        # "drop" items are nearest to the query vector [0, 0, 1].
+        # "keep" items are farther away.
+        table.put_item(Item={'p': p_drop1, 'v': Vector([0, 0, 1])})
+        table.put_item(Item={'p': p_drop2, 'v': Vector([0, 0.1, 1])})
+        table.put_item(Item={'p': p_keep1, 'v': Vector([1, 0, 0])})
+        table.put_item(Item={'p': p_keep2, 'v': Vector([0.9, 0, 0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        # With Limit=2 and a pre-filter restricting to keep1/keep2, we expect
+        # exactly 2 results (both keep items), even though the 2 nearest overall
+        # items are the drop items.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([0, 0, 1])},
+            Limit=2,
+            KeyConditionExpression='p IN (:k1, :k2)',
+            ExpressionAttributeValues={':k1': p_keep1, ':k2': p_keep2},
+        )
+        assert result['Count'] == 2 and result['ScannedCount'] == 2
+        assert {item['p'] for item in result['Items']} == {p_keep1, p_keep2}
+        # Let's contrast the above pre-filter with how post-filter works:
+        # without a filter, Limit=2 returns the 2 nearest items - the "drop"
+        # items. A post-FilterExpression on 'p' asking for the keep items
+        # would then return 0 results. This demonstrates why pre-filtering is
+        # important.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([0, 0, 1])},
+            Limit=2,
+        )
+        assert {item['p'] for item in result['Items']} == {p_drop1, p_drop2}
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([0, 0, 1])},
+            Limit=2,
+            FilterExpression='p IN (:k1, :k2)',
+            ExpressionAttributeValues={':k1': p_keep1, ':k2': p_keep2},
+        )
+        assert result['Count'] == 0
+        assert result['ScannedCount'] == 2
+
+# Success-path test: KeyConditionExpression with equality on the partition key.
+# Similar to test_query_vectorsearch_prefilter_in but uses a single = condition.
+# With Limit=1, the pre-filter restricts the ANN to a single partition key, so
+# exactly 1 result is returned even though closer items exist.
+def test_query_vectorsearch_prefilter_equality(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p_keep = random_string()
+        p_drop = random_string()
+        table.put_item(Item={'p': p_drop, 'v': Vector([0, 0, 1])})   # nearest to query
+        table.put_item(Item={'p': p_keep, 'v': Vector([1, 0, 0])})   # farther
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([0, 0, 1])},
+            Limit=1,
+            KeyConditionExpression='p = :p',
+            ExpressionAttributeValues={':p': p_keep},
+        )
+        # The pre-filter restricts to p_keep only, so we get exactly 1 result
+        # even though p_drop is the nearest neighbor overall.
+        assert result['Count'] == 1 and result['Items'][0]['p'] == p_keep
+        assert result['ScannedCount'] == 1
+
+# Success-path test: KeyConditionExpression with a string inequality (<)
+# pre-filter. String comparisons in the vector store are lexicographic.
+# Also tests that when the constant is on the left-hand side of the
+# comparison (e.g. ':threshold > p'), the operator is correctly reversed
+# (treated as 'p < :threshold').
+def test_query_vectorsearch_prefilter_string_inequality(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        # All 'z_'-prefixed keys are lexicographically > 'm';
+        # the 'a_'-prefixed key is lexicographically < 'm'.
+        p_drop = 'z_' + random_string()   # nearest to query, key > 'm'
+        p_hi   = 'z_' + random_string()   # farther from query, key > 'm'
+        p_lo   = 'a_' + random_string()   # farther from query, key < 'm'
+        table.put_item(Item={'p': p_drop, 'v': Vector([0, 0, 1])})   # nearest to query
+        table.put_item(Item={'p': p_hi,   'v': Vector([1, 0, 0])})   # farther, high key
+        table.put_item(Item={'p': p_lo,   'v': Vector([0.9, 0, 0])}) # farther, low key
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        # Lexicographic inequality: p < 'm' keeps only p_lo ('a_...' < 'm').
+        # p_drop ('z_...') is nearest overall but is excluded by the pre-filter.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([0, 0, 1])},
+            Limit=1,
+            KeyConditionExpression='p < :threshold',
+            ExpressionAttributeValues={':threshold': 'm'},
+        )
+        assert result['Count'] == 1 and result['Items'][0]['p'] == p_lo
+        assert result['ScannedCount'] == 1
+        # Same inequality with the constant on the left-hand side: ':threshold > p'
+        # is equivalent to 'p < :threshold' (the operator is reversed internally).
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([0, 0, 1])},
+            Limit=1,
+            KeyConditionExpression=':threshold > p',
+            ExpressionAttributeValues={':threshold': 'm'},
+        )
+        assert result['Count'] == 1 and result['Items'][0]['p'] == p_lo
+        assert result['ScannedCount'] == 1
+
+# Success-path test: KeyConditionExpression with a AND on two conditions on
+# two projected attributes (the partition key and sort key). One of the
+# conditions is a BETWEEN condition on a number attribute.
+def test_query_vectorsearch_prefilter_and_number_between(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                       {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                   {'AttributeName': 'c', 'AttributeType': 'N'}]) as table:
+        p = random_string()
+        # c=1 and c=2 are "keep" items (c in [1,2]); c=3 and c=4 are "drop".
+        # "drop" items are nearest to the query vector.
+        table.put_item(Item={'p': p, 'c': 3, 'v': Vector([0, 0, 1])})
+        table.put_item(Item={'p': p, 'c': 4, 'v': Vector([0, 0.1, 1])})
+        table.put_item(Item={'p': p, 'c': 1, 'v': Vector([1, 0, 0])})
+        table.put_item(Item={'p': p, 'c': 2, 'v': Vector([0.9, 0, 0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([0, 0, 1])},
+            Limit=2,
+            KeyConditionExpression='p = :p AND c BETWEEN :lo AND :hi',
+            ExpressionAttributeValues={':p': p, ':lo': 1, ':hi': 2},
+        )
+        assert result['Count'] == 2 and result['ScannedCount'] == 2
+        assert {item['c'] for item in result['Items']} == {Decimal(1), Decimal(2)}
+
+# Test KeyConditionExpression pre-filter with a numeric sort key value that
+# cannot be represented exactly as a 64-bit double.
+# 2^53 + 1 = 9007199254740993 is the classic example: as a double it rounds to
+# 9007199254740992 (= 2^53). If the pre-filter RHS were converted through double,
+# the equality condition 'c = 9007199254740993' would silently become
+# 'c = 9007199254740992', which matches the wrong item (c_drop) and the ANN
+# search would return c_drop (the nearest vector) rather than c_keep.
+# By keeping the value as a decimal string the comparison is exact.
+def test_query_vectorsearch_prefilter_number_big_decimal(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                       {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                   {'AttributeName': 'c', 'AttributeType': 'N'}]) as table:
+        p = random_string()
+        c_drop = Decimal('9007199254740992')  # 2^53, representable as double, nearest to query
+        c_keep = Decimal('9007199254740993')  # 2^53+1, NOT representable as double (rounds to c_drop)
+        table.put_item(Item={'p': p, 'c': c_drop, 'v': Vector([0, 0, 1])})  # nearest to query
+        table.put_item(Item={'p': p, 'c': c_keep, 'v': Vector([1, 0, 0])})  # farther from query
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        # Pre-filter c = c_keep. If the value were converted through double it
+        # would become c_drop's value (9007199254740992), and ANN would return
+        # c_drop (the nearest item) instead of c_keep.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([0, 0, 1])},
+            Limit=1,
+            KeyConditionExpression='p = :p AND c = :c',
+            ExpressionAttributeValues={':p': p, ':c': c_keep},
+        )
+        assert result['Count'] == 1 and result['ScannedCount'] == 1
+        assert result['Items'][0]['c'] == c_keep
+
 
 # TODO: Like test_vector_projection_keys_only, write additional tests for
 # ProjectionType=INCLUDE with NonKeyAttributes and ProjectionType=ALL.
