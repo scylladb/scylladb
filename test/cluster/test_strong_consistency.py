@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from typing import Tuple
 import re
 from datetime import datetime
+from typing import Tuple
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import gather_safely, wait_for, Host
@@ -121,8 +121,17 @@ async def get_table_raft_group_id(manager: ManagerClient, ks: str, table: str):
 async def test_basic_write_read(manager: ManagerClient, build_mode: str):
 
     logger.info("Bootstrapping cluster")
-    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_commitlog=debug']
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='my_dc')
+    cmdline = DEFAULT_CMDLINE
+    # In dev mode, stretch the strongly consistent raft group tick interval to
+    # 10s so that any unwanted waiting on a raft tick during group startup shows
+    # up as a multi-second delay, caught by the <1s assertion below.
+    default_config = DEFAULT_CONFIG | {'error_injections_at_startup': []}
+    config_with_big_ticks = DEFAULT_CONFIG | {'error_injections_at_startup': [{
+        'name': 'strongly-consistent-raft-group-tick-interval-in-ms',
+        'value': '10000'
+    }]}
+    config = config_with_big_ticks if build_mode == "dev" else default_config
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     logger.info("Load host_id-s for servers")
@@ -157,19 +166,14 @@ async def test_basic_write_read(manager: ManagerClient, build_mode: str):
             leader_host_id = await wait_for_leader(manager, servers[1], group_id)
         leader_host = host_by_host_id(leader_host_id)
 
-        # Verify that SC raft group bootstrap (election + read_barrier) completed
+        # Verify that strongly consistent raft group bootstrap (election + read_barrier) completed
         # quickly on both replicas. With the start_as_candidate and retry_now
-        # optimizations, this should be nearly instant. Without them, it takes
-        # 1-2 seconds (election timeout) + 100ms (tick wait in read_barrier).
-        # Only check in dev mode — other builds have different performance.
-        #
-        # Sum the wall-clock bootstrap time across both replicas, then subtract
-        # raft log persistence (store_log_entries) which is I/O-bound and
-        # unrelated to the protocol optimization. Assert the adjusted sum < 100ms.
+        # optimizations, this should be nearly instant. Without them, the huge
+        # raft tick interval configured above makes startup depend on a 10s tick.
+        # Only check in dev mode because the test uses error injection.
         if build_mode == "dev":
             ts_pattern = r'(\d{2}:\d{2}:\d{2},\d{3})'
             total_startup_ms = 0.0
-            total_io_ms = 0.0
             replicas_checked = 0
             for i, (log, mark) in enumerate(zip(server_logs, marks)):
                 matches = await log.grep(
@@ -191,33 +195,14 @@ async def test_basic_write_read(manager: ManagerClient, build_mode: str):
                 t1 = datetime.strptime(done_ts.group(1), "%H:%M:%S,%f")
                 elapsed_ms = (t1 - t0).total_seconds() * 1000
                 total_startup_ms += elapsed_ms
-
-                # Accumulate store_log_entries persistence that falls within [t0, t1].
-                store_starts = await log.grep(
-                    f"raft_commitlog - store_log_entries: group_id={group_id}",
-                    from_mark=mark)
-                store_ends = await log.grep(
-                    "raft_commitlog - store_log_entries completed:",
-                    from_mark=mark)
-                for s, e in zip(store_starts, store_ends):
-                    s_ts = re.search(ts_pattern, s[0])
-                    e_ts = re.search(ts_pattern, e[0])
-                    if s_ts and e_ts:
-                        s_t = datetime.strptime(s_ts.group(1), "%H:%M:%S,%f")
-                        e_t = datetime.strptime(e_ts.group(1), "%H:%M:%S,%f")
-                        if s_t >= t0 and e_t <= t1:
-                            total_io_ms += (e_t - s_t).total_seconds() * 1000
-
                 replicas_checked += 1
 
             assert replicas_checked == 2, (
-                f"Expected 2 replicas with SC raft group logs, found {replicas_checked}")
-            logger.info(f"SC raft group startup: total={total_startup_ms:.0f}ms, "
-                        f"io={total_io_ms:.0f}ms, adjusted={total_startup_ms - total_io_ms:.0f}ms")
-            assert total_startup_ms - total_io_ms < 100, (
-                f"SC raft group startup took {total_startup_ms - total_io_ms:.0f}ms "
-                f"(total {total_startup_ms:.0f}ms minus {total_io_ms:.0f}ms io), "
-                f"expected <100ms (start_as_candidate + retry_now optimizations)")
+                f"Expected 2 replicas with strongly consistent raft group logs, found {replicas_checked}")
+            logger.info(f"Strongly consistent raft group startup: total={total_startup_ms:.0f}ms")
+            assert total_startup_ms < 1000, (
+                f"Strongly consistent raft group startup took {total_startup_ms:.0f}ms, "
+                f"expected <1000ms with raft tick interval set to 10s")
 
         logger.info(f"Get the non-leader replica for the group {group_id}")
         non_leader_replica_host_id = [host_id for host_id in replica_host_ids if str(host_id) != str(leader_host_id)][0]
@@ -327,7 +312,13 @@ async def test_basic_write_read(manager: ManagerClient, build_mode: str):
             for metric_name in metrics_after[host].keys():
                 assert metrics_after[host][metric_name] > metrics_before[host][metric_name]
 
-        # Check that we can restart a server with an active tablets raft group
+        # Check that we can restart a server with an active tablets raft group.
+        # A restarting replica re-creates its raft group and must rediscover a
+        # leader, which legitimately depends on raft ticks. Restore the default
+        # (short) tick interval on this server first; with the stretched 10s tick
+        # the reboot would stall for the whole leader-wait timeout.
+        if build_mode == "dev":
+            await manager.server_update_config(servers[2].server_id, config_options=default_config)
         await manager.server_restart(servers[2].server_id)
 
     # To check that the servers can be stopped gracefully. By default the test runner just kills them.
