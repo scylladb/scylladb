@@ -115,8 +115,8 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
 
         sstables::test(sst2).read_toc().get();
-        auto& sst1_c = sstables::test(sst).get_components();
-        auto& sst2_c = sstables::test(sst2).get_components();
+        auto sst1_c = sstables::test(sst).get_components();
+        auto sst2_c = sstables::test(sst2).get_components();
 
         BOOST_REQUIRE(sst1_c == sst2_c);
     });
@@ -3166,10 +3166,10 @@ future<> test_sstable_bytes_correctness(sstring tname, test_env_config cfg) {
         auto get_bytes_on_disk_from_storage = [&] (const sstables::shared_sstable& sst) {
             uint64_t bytes_on_disk = 0;
             auto& underlying_storage = const_cast<sstables::storage&>(sst->get_storage());
-            for (auto& component_type : sstables::test(sst).get_components()) {
+            sst->for_each_component([&] (auto component_type) {
                 file f = underlying_storage.open_component(*sst, component_type, open_flags::ro, file_open_options{}, true).get();
                 bytes_on_disk += f.size().get();
-            }
+            });
             return bytes_on_disk;
         };
 
