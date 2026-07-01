@@ -570,6 +570,7 @@ scylla_tests = set([
     'test/boost/dynamic_bitset_test',
     'test/boost/encrypted_file_test',
     'test/boost/encryption_at_rest_test',
+    'test/boost/http_error_classification_test',
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
     'test/boost/estimated_histogram_test',
