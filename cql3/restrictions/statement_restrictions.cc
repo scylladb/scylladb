@@ -893,7 +893,10 @@ statement_restrictions::statement_restrictions(private_tag,
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
-            _not_null_columns.insert(col);
+            if (!_not_null_columns) {
+                _not_null_columns = std::make_unique<std::unordered_set<const column_definition*>>();
+            }
+            _not_null_columns->insert(col);
 
             if (!for_view) {
                 throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", pred.filter));
@@ -1088,10 +1091,22 @@ statement_restrictions::statement_restrictions(private_tag,
         // itself, matching the behavior of the old expression-walking code which
         // only recognized column_value and tuple_constructor in the LHS.
         if (pred.equality && !pred.is_subscript) {
+            // _columns_with_eq is a vector (for memory) but is only used as a
+            // membership set by has_eq_restriction_on_column(). Preserve the
+            // set semantics of the previous unordered_set by inserting a column
+            // only if it isn't already present, so repeated equality predicates
+            // on the same column don't bloat the vector.
+            auto add_unique = [this] (const column_definition* col) {
+                if (std::find(_columns_with_eq.begin(), _columns_with_eq.end(), col) == _columns_with_eq.end()) {
+                    _columns_with_eq.push_back(col);
+                }
+            };
             if (auto* sc = std::get_if<on_column>(&pred.on)) {
-                _columns_with_eq.insert(sc->column);
+                add_unique(sc->column);
             } else if (auto* mc = std::get_if<on_clustering_key_prefix>(&pred.on)) {
-                _columns_with_eq.insert(mc->columns.begin(), mc->columns.end());
+                for (const auto* col : mc->columns) {
+                    add_unique(col);
+                }
             }
         }
     }
@@ -1319,10 +1334,19 @@ statement_restrictions::statement_restrictions(private_tag,
     _get_partition_key_ranges_fn = build_partition_key_ranges_fn();
 
     _get_clustering_bounds_fn = build_get_clustering_bounds_fn();
-    _get_global_index_clustering_ranges_fn = build_get_global_index_clustering_ranges_fn();
-    _get_global_index_token_clustering_ranges_fn = build_get_global_index_token_clustering_ranges_fn();
-    _get_local_index_clustering_ranges_fn = build_get_local_index_clustering_ranges_fn();
-    _value_for_index_partition_key_fn = build_value_for_index_partition_key_fn();
+
+    auto global_idx_ck = build_get_global_index_clustering_ranges_fn();
+    auto global_idx_token_ck = build_get_global_index_token_clustering_ranges_fn();
+    auto local_idx_ck = build_get_local_index_clustering_ranges_fn();
+    auto idx_pk_val = build_value_for_index_partition_key_fn();
+    if (global_idx_ck || global_idx_token_ck || local_idx_ck || idx_pk_val) {
+        _index_fns = std::make_unique<index_query_fns>(index_query_fns{
+            std::move(global_idx_ck),
+            std::move(global_idx_token_ck),
+            std::move(local_idx_ck),
+            std::move(idx_pk_val),
+        });
+    }
 }
 
 bool
@@ -1387,7 +1411,7 @@ statement_restrictions::ck_restrictions_need_filtering() const {
 
 bool
 statement_restrictions::is_restricted(const column_definition* cdef) const {
-    if (_not_null_columns.contains(cdef)) {
+    if (_not_null_columns && _not_null_columns->contains(cdef)) {
         return true;
     }
 
@@ -1470,7 +1494,7 @@ statement_restrictions::find_idx(const secondary_index::secondary_index_manager&
 }
 
 bool statement_restrictions::has_eq_restriction_on_column(const column_definition& column) const {
-    return _columns_with_eq.contains(&column);
+    return std::find(_columns_with_eq.begin(), _columns_with_eq.end(), &column) != _columns_with_eq.end();
 }
 
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
@@ -2501,14 +2525,14 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
         // This means that p1 and p2 can have many different values (token is a hash, can have collisions).
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
         expr::expression token_restriction = replace_partition_token(_partition_key_restrictions, token_column, *_schema);
-        _idx_tbl_ck_prefix = std::vector{to_predicate_on_column(token_restriction, token_column, _schema.get())};
+        _idx_tbl_ck_prefix = std::make_unique<std::vector<predicate>>(std::vector{to_predicate_on_column(token_restriction, token_column, _schema.get())});
 
         return;
     }
 
     // If we're here, it means the index cannot be on a partition column: process_partition_key_restrictions()
     // avoids indexing when _partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
-    _idx_tbl_ck_prefix = std::vector<predicate>(1 + _schema->partition_key_size(), predicate{
+    _idx_tbl_ck_prefix = std::make_unique<std::vector<predicate>>(1 + _schema->partition_key_size(), predicate{
         .solve_for = nullptr,  // FIXME: this is all overwritten later. Should be refactored.
         .filter = expr::expression(expr::conjunction{}),
         .on = on_column{nullptr}, // Illegal but will be overwritten
@@ -2590,7 +2614,7 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema,
     }
 
     // Local index clustering key is (indexed column, base clustering key)
-    _idx_tbl_ck_prefix = std::vector<predicate>();
+    _idx_tbl_ck_prefix = std::make_unique<std::vector<predicate>>();
     _idx_tbl_ck_prefix->reserve(1 + _clustering_prefix_restrictions.size());
 
     const column_definition& indexed_column = idx_tbl_schema.column_at(column_kind::clustering_key, 0);
@@ -2671,12 +2695,15 @@ statement_restrictions::build_get_global_index_clustering_ranges_fn() const {
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
         const query_options& options) const {
-    return _get_global_index_clustering_ranges_fn(options);
+    if (!_index_fns || !_index_fns->get_global_index_clustering_ranges_fn) {
+        on_internal_error(rlogger, "get_global_index_clustering_ranges called without index functions");
+    }
+    return _index_fns->get_global_index_clustering_ranges_fn(options);
 }
 
 get_clustering_bounds_fn_t
 statement_restrictions::build_get_global_index_token_clustering_ranges_fn() const {
-    if (!_idx_tbl_ck_prefix.has_value()) {
+    if (!_idx_tbl_ck_prefix) {
         return {};
     }
 
@@ -2697,12 +2724,15 @@ statement_restrictions::build_get_global_index_token_clustering_ranges_fn() cons
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_token_clustering_ranges(
     const query_options& options) const {
-    return _get_global_index_token_clustering_ranges_fn(options);
+    if (!_index_fns || !_index_fns->get_global_index_token_clustering_ranges_fn) {
+        on_internal_error(rlogger, "get_global_index_token_clustering_ranges called without index functions");
+    }
+    return _index_fns->get_global_index_token_clustering_ranges_fn(options);
 }
 
 get_clustering_bounds_fn_t
 statement_restrictions::build_get_local_index_clustering_ranges_fn() const {
-    if (!_idx_tbl_ck_prefix.has_value()) {
+    if (!_idx_tbl_ck_prefix) {
         return {};
     }
 
@@ -2714,7 +2744,10 @@ statement_restrictions::build_get_local_index_clustering_ranges_fn() const {
 
 std::vector<query::clustering_range> statement_restrictions::get_local_index_clustering_ranges(
         const query_options& options) const {
-    return _get_local_index_clustering_ranges_fn(options);
+    if (!_index_fns || !_index_fns->get_local_index_clustering_ranges_fn) {
+        on_internal_error(rlogger, "get_local_index_clustering_ranges called without index functions");
+    }
+    return _index_fns->get_local_index_clustering_ranges_fn(options);
 }
 
 get_singleton_value_fn_t
@@ -2749,7 +2782,10 @@ statement_restrictions::build_value_for_index_partition_key_fn() const {
 
 bytes_opt
 statement_restrictions::value_for_index_partition_key(const query_options& options) const {
-    return _value_for_index_partition_key_fn(options);
+    if (!_index_fns || !_index_fns->value_for_index_partition_key_fn) {
+        on_internal_error(rlogger, "value_for_index_partition_key called without index functions");
+    }
+    return _index_fns->value_for_index_partition_key_fn(options);
 }
 
 sstring statement_restrictions::to_string() const {
@@ -2790,7 +2826,10 @@ void statement_restrictions::validate_primary_key(const query_options& options) 
 
 
 const std::unordered_set<const column_definition*> statement_restrictions::get_not_null_columns() const {
-    return _not_null_columns;
+    if (_not_null_columns) {
+        return *_not_null_columns;
+    }
+    return {};
 }
 
 shared_ptr<const statement_restrictions>
