@@ -15,6 +15,7 @@
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/util/later.hh>
 #include <seastar/coroutine/try_future.hh>
 #include <seastar/util/defer.hh>
 #include "gms/inet_address.hh"
@@ -7515,6 +7516,13 @@ void storage_proxy::on_released(const locator::host_id& hid) {
 
 future<> storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
     gate g;
+    // Each timeout_cb() schedules a task* into the reactor's circular_buffer<task*>
+    // (threshold: 16384 entries = 128 KB).  need_preempt() is time-based and doesn't
+    // track queue depth, so we yield unconditionally every max_cancellations_per_yield
+    // to let the reactor drain — 256 entries is well below the 16384-entry threshold.
+    // See SCYLLADB-2068.
+    constexpr size_t max_cancellations_per_yield = 256;
+    size_t since_yield = 0;
     auto it = _cancellable_write_handlers_list->begin();
     while (it != _cancellable_write_handlers_list->end()) {
         // timeout_cb() may destroy the current handler. Since the list uses
@@ -7527,19 +7535,16 @@ future<> storage_proxy::cancel_write_handlers(noncopyable_function<bool(const ab
             it->attach_to(g);
             if (_response_handlers.contains(it->id())) {
                 it->timeout_cb();
+                ++since_yield;
             }
         }
         it = next;
-        if (need_preempt() && it != _cancellable_write_handlers_list->end()) {
-            // Save the iterator position. If the handler is destroyed during yield(),
-            // the iterator will be updated to point to the next item in the list.
-            //
-            // Handler destruction triggers sending a response to the client.
-            // To avoid delaying that, we don’t hold a strong reference here; instead,
-            // iterator_guard handles safe iterator updates while allowing prompt
-            // handler destruction and client response.
+        if (it != _cancellable_write_handlers_list->end() && (need_preempt() || since_yield >= max_cancellations_per_yield)) {
+            // iterator_guard re-anchors 'it' if the current handler is destroyed
+            // during yield() (destruction auto-unlinks from the list).
             cancellable_write_handlers_list::iterator_guard ig{*_cancellable_write_handlers_list, it};
-            co_await coroutine::maybe_yield();
+            co_await seastar::yield();
+            since_yield = 0;
         }
     }
     co_await g.close();
