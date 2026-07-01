@@ -210,18 +210,24 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         return;
     }
     logger.info("schedule_raft_group_deletion(): group id {}: scheduling", id);
-    state.server_control_op = futurize_invoke([this, &state, id, g = state.gate](this auto) -> future<> {
+
+    // Close the gate synchronously so state.gate->is_closed() flips immediately
+    // and a concurrent schedule_raft_group_deletion() for the same group bails
+    // out at the guard above. Closing inside the operation instead would let a
+    // second deletion slip past the guard, and both would call gate::close() on
+    // the same gate - the second call aborts the process.
+    //
+    // close() doesn't block here; the operation waits for the gate below. The
+    // gate won't drain until all holders are released, but in-flight writes may
+    // be stuck in add_entry awaiting a quorum that will never come (other nodes
+    // already destroyed their servers). Aborting the raft server releases those
+    // holders by making the stuck operations throw raft::stopped_error.
+    auto gate_fut = state.gate->close();
+    logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
+
+    state.server_control_op = futurize_invoke([this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)](this auto) -> future<> {
         co_await state.server_control_op.get_future();
         logger.debug("schedule_raft_group_deletion(): group id {}: starting", id);
-
-        // Initiate gate close, then abort the raft server, then wait for the
-        // gate. Gate close alone would block until all holders are released,
-        // but in-flight writes may be stuck in add_entry waiting for quorum
-        // that will never come (other nodes already destroyed their servers).
-        // Aborting the server causes those stuck operations to throw
-        // raft::stopped_error, releasing their holders and unblocking the gate.
-        auto gate_fut = g->close();
-        logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
 
         co_await _raft_gr.abort_server(id);
         logger.debug("schedule_raft_group_deletion(): group id {}: server aborted", id);
@@ -436,7 +442,15 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                 // we report it as started in wait_for_groups_to_start().
                 abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
                 while (true) {
-                    auto srv = raft_server(state, state.gate->hold());
+                    // Use try_hold() rather than hold(): a concurrent
+                    // schedule_raft_group_deletion() may have closed the gate
+                    // while we were waiting for a leader below. In that case the
+                    // group is being deleted, so stop trying to make it ready.
+                    auto holder = state.gate->try_hold();
+                    if (!holder) {
+                        break;
+                    }
+                    auto srv = raft_server(state, std::move(*holder));
                     auto res = srv.begin_mutate(aoe.abort_source());
                     if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
                         auto f = co_await coroutine::as_future(std::move(w->future));
@@ -479,6 +493,11 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     // schedule_raft_group_deletion). Since there's no scheduling point
     // between the column_family_exists check and try_hold below, the gate
     // cannot be closed if the table exists.
+    //
+    // Node shutdown also closes gates (groups_manager::stop() closes every gate
+    // regardless of table existence), but it cannot race with us either: the
+    // strongly consistent coordinator, the only caller of acquire_server, is
+    // destroyed before groups_manager::stop() runs.
     if (!_db.column_family_exists(table_id)) {
         return make_exception_future<raft_server>(
             replica::no_such_column_family(table_id));
