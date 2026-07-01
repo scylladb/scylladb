@@ -192,8 +192,6 @@ public:
 
     int64_t get_sstables_repaired_at() const noexcept;
 
-    future<> update_repaired_at_for_merge();
-
     void set_counter_id(counter_id cid) noexcept {
         _counter_id = cid;
     }
@@ -272,6 +270,8 @@ public:
     utils::small_vector<compaction::compaction_group_view*, 3> all_views() const;
     // Returns true iff v is the repaired view of this compaction group.
     bool is_repaired_view(const compaction::compaction_group_view* v) const noexcept;
+    // Returns true iff v is the repairing view of this compaction group.
+    bool is_repairing_view(const compaction::compaction_group_view* v) const noexcept;
     // Returns an sstable set containing only repaired sstables (those classified as repaired).
     lw_shared_ptr<sstables::sstable_set> make_repaired_sstable_set() const;
 
