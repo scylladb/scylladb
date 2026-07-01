@@ -19,6 +19,7 @@ This document highlights ScyllaDB's key data modeling features.
    Incremental Repair </features/incremental-repair/>
    Automatic Repair </features/automatic-repair/>
    Vector Search </features/vector-search/>
+   Full-Text Search </features/fulltext-search/>
 
 .. panel-box::
   :title: ScyllaDB Features
@@ -49,3 +50,5 @@ This document highlights ScyllaDB's key data modeling features.
     directly in ScyllaDB, without external schedulers.
   * :doc:`Vector Search in ScyllaDB </features/vector-search/>` enables
     similarity-based queries on vector embeddings.
+  * :doc:`Full-Text Search </features/fulltext-search/>` lets you search and
+    rank text columns by relevance using the BM25 scoring algorithm.
