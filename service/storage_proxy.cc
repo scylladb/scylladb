@@ -6762,6 +6762,19 @@ storage_proxy::query_result(schema_ptr query_schema,
     storage_proxy::coordinator_query_options query_options,
     std::optional<cas_shard> shard)
 {
+    // First we check if the table_name from injected error matches, then we 'enter' it - the latter will consume `one-shot` injections,
+    // that's why we need to validate table_name first.
+    const auto &injection_params = utils::get_local_injector().get_injection_parameters("alternator_query_result_timeout");
+    if (!injection_params.empty()) {
+        auto it = injection_params.find(sstring{ "table_name" });
+        if (it != injection_params.end() && it->second == query_schema->cf_name() && utils::get_local_injector().enter("alternator_query_result_timeout")) {
+            return make_ready_future<result<coordinator_query_result>>(
+                // Note: we don't care about the actual values of the exception fields, since this is just for testing Alternator's error handling.
+                exceptions::read_timeout_exception{ "Alternator's error injection: timeout", cl, 0, 1, false }
+            );
+        }
+
+    }
     if (slogger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;
