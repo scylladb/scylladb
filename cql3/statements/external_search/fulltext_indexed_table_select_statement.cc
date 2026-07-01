@@ -22,6 +22,11 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
+#include "exceptions/exceptions.hh"
+#include "types/types.hh"
+#include "cql3/expr/evaluate.hh"
+
+#include <seastar/core/format.hh>
 
 namespace cql3::statements {
 
@@ -43,6 +48,41 @@ expr::expression extract_search_term_from_second_argument(const expr::function_c
         throw exceptions::invalid_request_exception("Second argument to BM25() must not be a column reference");
     }
     return search_term;
+}
+
+} // anonymous namespace
+
+namespace {
+
+/// Validates that a BM25 WHERE restriction has the required form: BM25(column, term) > 0,
+/// and that the column and query term match the ORDER BY BM25 expression.
+void validate_bm25_where_restriction(const expr::binary_operator& binop, const std::string& order_col, const expr::expression& order_query_term) {
+    const auto& fc = expr::as<expr::function_call>(binop.lhs);
+    const auto& col = extract_column_from_first_argument(fc);
+    if (col->name_as_text() != order_col) {
+        throw exceptions::invalid_request_exception("Full-text search queries must reference the same column in both WHERE and ORDER BY clauses");
+    }
+
+    if (binop.op != expr::oper_t::GT) {
+        throw exceptions::invalid_request_exception(
+                seastar::format("Unsupported \"{}\" relation for scoring function restriction, only \">\" is supported", binop.op));
+    }
+    const auto* rhs_const = expr::as_if<expr::constant>(&binop.rhs);
+    if (!rhs_const || rhs_const->is_null() || rhs_const->view().deserialize<float>(*float_type) != 0.0f) {
+        throw exceptions::invalid_request_exception("Scoring function comparison value must be the literal 0");
+    }
+
+    // Validate and extract the WHERE search term; throws if it is a column reference.
+    const auto where_search_term = extract_search_term_from_second_argument(fc);
+
+    // If both query terms are literals, reject mismatches at prepare time.
+    // Bind-marker cases are caught at execute time.
+    const auto* where_const = expr::as_if<expr::constant>(&where_search_term);
+    const auto* order_const = expr::as_if<expr::constant>(&order_query_term);
+    if (where_const && order_const && *where_const != *order_const) {
+        throw exceptions::invalid_request_exception(
+                "Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
+    }
 }
 
 } // anonymous namespace
@@ -69,7 +109,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
 
     // Verify this is a BM25 function call
     auto* fc = expr::as_if<expr::function_call>(&prepared_expr);
-    if (!fc || !expr::is_bm25_function_call(*fc)) {
+    if (!fc || !expr::is_native_function_call(*fc, "bm25")) {
         throw exceptions::invalid_request_exception("Only BM25 scoring function is supported in ORDER BY");
     }
 
@@ -117,37 +157,25 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         throw exceptions::invalid_request_exception("Full-text search queries require an ORDER BY BM25() clause");
     }
 
-    const auto bm25_where_pred = [&](const expr::binary_operator& o) {
-        if (!expr::is_bm25_function_call(o.lhs)) {
-            return false;
-        }
-        const auto* fc = expr::as_if<expr::function_call>(&o.lhs);
-        if (!fc || fc->args.empty()) {
-            return false;
-        }
-        const auto* col_val = expr::as_if<expr::column_value>(&fc->args[0]);
-        return col_val && ordering_info->index.supports_bm25_expression(*col_val->col);
-    };
-    const auto* where_bm25_binop = expr::find_binop(restrictions->get_nonprimary_key_restrictions(), bm25_where_pred)
-                                           ?: expr::find_binop(restrictions->get_clustering_columns_restrictions(), bm25_where_pred);
-    if (!where_bm25_binop) {
-        throw exceptions::invalid_request_exception("Full-text search queries require a WHERE BM25() clause on the same column used in ORDER BY BM25()");
+    const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
+    if (scoring_restrictions.empty()) {
+        throw exceptions::invalid_request_exception("Full-text search queries require a WHERE BM25() > 0 clause");
+    }
+    if (scoring_restrictions.size() > 1) {
+        throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
     }
 
-    // Validate that the WHERE BM25 second argument is not a column reference.
-    const auto& where_fc = expr::as<expr::function_call>(where_bm25_binop->lhs);
-    if (where_fc.args.size() != 2) {
-        throw exceptions::invalid_request_exception("BM25() requires both a column and a query term argument");
-    }
-    extract_search_term_from_second_argument(where_fc);
+    const auto& order_col = ordering_info->index.target_column();
+    const auto& order_query_term = ordering_info->search_term;
+    validate_bm25_where_restriction(scoring_restrictions.front(), order_col, order_query_term);
 
-    // Reject any WHERE restrictions beyond the BM25 clause itself.
-    const auto is_non_bm25_binop = [](const expr::binary_operator& o) {
-        return !expr::is_bm25_function_call(o.lhs);
-    };
+    // Reject any WHERE restrictions beyond the single BM25 clause.
+    // BM25 restrictions are already extracted into _scoring_function_restrictions and never
+    // appear in the regular restriction expressions, so any remaining binop is non-BM25.
+    const auto any_binop = [] (const expr::binary_operator&) { return true; };
     if (!restrictions->partition_key_restrictions_is_empty()
-            || expr::find_binop(restrictions->get_clustering_columns_restrictions(), is_non_bm25_binop)
-            || expr::find_binop(restrictions->get_nonprimary_key_restrictions(), is_non_bm25_binop)) {
+            || expr::find_binop(restrictions->get_clustering_columns_restrictions(), any_binop)
+            || expr::find_binop(restrictions->get_nonprimary_key_restrictions(), any_binop)) {
         throw exceptions::invalid_request_exception(
                 "Full-text search queries do not support additional WHERE restrictions");
     }
@@ -199,15 +227,13 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
         co_await coroutine::return_exception(exceptions::invalid_request_exception("Full-text search query term must not be null"));
     }
 
-    const auto has_bm25_lhs = [](const expr::binary_operator& o) {
-        return expr::is_bm25_function_call(o.lhs);
-    };
-    const auto* where_binop = expr::find_binop(_restrictions->get_nonprimary_key_restrictions(), has_bm25_lhs)
-                                      ?: expr::find_binop(_restrictions->get_clustering_columns_restrictions(), has_bm25_lhs);
-    const auto& fc = expr::as<expr::function_call>(where_binop->lhs);
-    const auto where_search_term_val = expr::evaluate(fc.args[1], options);
-    if (where_search_term_val != search_term_val) {
-        throw exceptions::invalid_request_exception("Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
+    const auto order_val = expr::evaluate(_search_term, options);
+    const auto& where_restriction = _restrictions->get_scoring_function_restrictions().front();
+    const auto& fc = expr::as<expr::function_call>(where_restriction.lhs);
+    const auto where_val = expr::evaluate(fc.args[1], options);
+    if (where_val != order_val) {
+        throw exceptions::invalid_request_exception(
+                "Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
     }
 
     auto search_term_bytes = std::move(search_term_val).to_bytes();

@@ -12,13 +12,15 @@
 
 import pytest
 import re
+from test.pylib.skip_types import skip_env
 from .util import new_test_table, new_test_keyspace, new_function, unique_name
 from cassandra.protocol import InvalidRequest, SyntaxException
 
 # Fulltext search is not allowed in tables using vnodes, so all tests in this file need tablets
-@pytest.fixture(scope="function", autouse=True)
-def all_tests_are_tablets_and_scylla_only(skip_without_tablets, scylla_only):
-    pass
+@pytest.fixture(scope="module", autouse=True)
+def all_tests_are_tablets_and_scylla_only(scylla_only, has_tablets):
+    if not has_tablets:
+        skip_env("Full-Text Search needs tablets enabled")
 
 
 @pytest.mark.parametrize("column_type", ["text", "varchar", "ascii"])
@@ -475,7 +477,13 @@ def test_bm25_only_gt_allowed(cql, fulltext_table):
     """BM25 restrictions should reject all operators other than >."""
     for operator in ["=", "<", "<=", "!=", ">="]:
         with pytest.raises(InvalidRequest, match=fr'Unsupported "{operator}" relation'):
-            cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') {operator} 0 LIMIT 1")
+            cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') {operator} 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_only_zero_threshold_allowed(cql, fulltext_table):
+    """BM25 restrictions should reject any threshold value other than 0."""
+    with pytest.raises(InvalidRequest, match="Scoring function comparison value must be the literal 0"):
+        cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 67 ORDER BY BM25(content, 'hello') LIMIT 1")
 
 
 def test_bm25_like_operator_rejected(cql, fulltext_table):
@@ -506,6 +514,16 @@ def test_bm25_where_only_rejected(cql, fulltext_table):
     """WHERE BM25 without an ORDER BY BM25 clause must be rejected."""
     with pytest.raises(InvalidRequest, match="require an ORDER BY BM25"):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 1")
+
+
+def test_bm25_multiple_where_restrictions_rejected(cql, test_keyspace):
+    """More than one WHERE BM25() restriction must be rejected."""
+    schema = 'p int primary key, col1 text, col2 text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="only one WHERE BM25"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 AND BM25(col2, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 1")
 
 
 def test_bm25_order_by_only_rejected(cql, fulltext_table):
@@ -598,7 +616,7 @@ def test_bm25_different_columns_rejected(cql, test_keyspace):
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
         with pytest.raises(InvalidRequest, match="same column"):
-            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'world') LIMIT 1")
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'hello') LIMIT 1")
 
 
 def test_bm25_different_search_terms_rejected(cql, fulltext_table):

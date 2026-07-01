@@ -158,6 +158,15 @@ private:
 
     expr::expression _regular_columns_filter = expr::conjunction({});
 
+    /**
+     * Scoring-function restrictions, e.g. WHERE BM25(col, 'term') > 0.
+     *
+     * Purely declarative. They express full-text matching intent,
+     * but neither filter rows nor drive index selection themselves.
+     * Extracted early and forwarded to the FTS layer as-is.
+     */
+    std::vector<expr::binary_operator> _scoring_function_restrictions;
+
 
     std::unordered_set<const column_definition*> _not_null_columns;
 
@@ -311,7 +320,9 @@ public:
         return _uses_secondary_indexing;
     }
 
-    bool has_bm25_restriction() const;
+    const std::vector<expr::binary_operator>& get_scoring_function_restrictions() const {
+        return _scoring_function_restrictions;
+    }
 
     const expr::expression& get_partition_key_restrictions() const {
         return _partition_key_restrictions;

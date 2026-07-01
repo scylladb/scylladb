@@ -135,19 +135,13 @@ inline bool has_partition_token(const expression& e, const schema& table_schema)
     return find_binop(e, [&] (const binary_operator& o) { return is_partition_token_for_schema(o.lhs, table_schema); });
 }
 
-// Check whether the given expression represents
-// a call to the BM25() scoring function.
-bool is_bm25_function_call(const function_call&);
-bool is_bm25_function_call(const expression&);
+// Check whether the given function_call is a call to the native function with the given name.
+bool is_native_function_call(const function_call&, std::string_view name);
 
-inline bool has_bm25_function(const expression& e) {
-    return find_binop(e, [](const binary_operator& o) {
-        return is_bm25_function_call(o.lhs);
-    });
+inline bool is_native_function_call(const expression& e, std::string_view name) {
+    const function_call* fc = as_if<function_call>(&e);
+    return fc && is_native_function_call(*fc, name);
 }
-
-// Check whether the given function_call is a call to any scoring function.
-bool is_scoring_function_call(const function_call&);
 
 inline bool is_clustering_order(const binary_operator& op) {
     return op.order == comparison_order::clustering;

@@ -115,4 +115,3 @@ def test_udf_with_udt_keyspace_isolation(cql, test_keyspace, has_java_udf):
                 cql.execute(
                     f"CREATE FUNCTION {other_ks}.testfun(v text) "
                     f"CALLED ON NULL INPUT RETURNS {test_keyspace}.{udt_name} {lang_ret}")
-

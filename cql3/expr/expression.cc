@@ -2349,7 +2349,7 @@ adjust_for_collection_as_maps(const expression& e) {
     });
 }
 
-static bool is_native_function_call(const function_call& fc, const functions::function_name& native_name) {
+static bool function_call_name_equals(const function_call& fc, const functions::function_name& native_name) {
     const functions::function_name& fun_name =
         std::visit(overloaded_functor{[](const functions::function_name& fname) -> const functions::function_name& { return fname; },
                                       [](const shared_ptr<functions::function>& fun) -> const functions::function_name& { return fun->name(); }},
@@ -2360,7 +2360,11 @@ static bool is_native_function_call(const function_call& fc, const functions::fu
 bool is_token_function(const function_call& fun_call) {
     static thread_local const functions::function_name token_function_name =
         functions::function_name::native_function("token");
-    return is_native_function_call(fun_call, token_function_name);
+    return function_call_name_equals(fun_call, token_function_name);
+}
+
+bool is_native_function_call(const function_call& fc, std::string_view name) {
+    return function_call_name_equals(fc, functions::function_name::native_function(sstring(name)));
 }
 
 bool is_token_function(const expression& e) {
@@ -2413,24 +2417,6 @@ bool is_partition_token_for_schema(const expression& maybe_token, const schema& 
     }
 
     return is_partition_token_for_schema(*fun_call, table_schema);
-}
-
-bool is_bm25_function_call(const function_call& fc) {
-    static thread_local const functions::function_name bm25_function_name =
-        functions::function_name::native_function("bm25");
-    return is_native_function_call(fc, bm25_function_name);
-}
-
-bool is_bm25_function_call(const expression& e) {
-    const function_call* fc = as_if<function_call>(&e);
-    if (fc == nullptr) {
-        return false;
-    }
-    return is_bm25_function_call(*fc);
-}
-
-bool is_scoring_function_call(const function_call& fc) {
-    return is_bm25_function_call(fc);
 }
 
 void

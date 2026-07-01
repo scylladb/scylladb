@@ -2064,7 +2064,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     for (auto& ps : prepared_selectors) {
-        if (expr::is_bm25_function_call(ps.expr)) {
+        if (expr::is_native_function_call(ps.expr, "bm25")) {
             throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause");
         }
         expr::fill_prepare_context(ps.expr, ctx);
@@ -2113,7 +2113,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query || has_bm25_ordering,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()));
 
-    bool is_fts_query = restrictions->has_bm25_restriction() || has_bm25_ordering;
+    bool is_fts_query = !restrictions->get_scoring_function_restrictions().empty() || has_bm25_ordering;
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(*schema, *selection, *restrictions);
