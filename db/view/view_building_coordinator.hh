@@ -35,6 +35,7 @@ class gossiper;
 
 namespace service {
 class group0_guard;
+class group0_update_collector;
 class raft_group0;
 }
 
@@ -68,13 +69,13 @@ public:
     future<> run();
     future<> stop();
 
-    void generate_tablet_migration_updates(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, const locator::tablet_map& tmap, locator::global_tablet_id gid, const locator::tablet_transition_info& trinfo);
-    void generate_tablet_resize_updates(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+    void generate_tablet_migration_updates(service::group0_update_collector& out, const service::group0_guard& guard, const locator::tablet_map& tmap, locator::global_tablet_id gid, const locator::tablet_transition_info& trinfo);
+    void generate_tablet_resize_updates(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id, const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
-    void abort_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id);
-    void abort_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token);
-    void rollback_aborted_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id);
-    void rollback_aborted_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token);
+    void abort_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id);
+    void abort_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token);
+    void rollback_aborted_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id);
+    void rollback_aborted_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token);
 
     future<> mark_view_build_statuses_on_node_join(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, locator::host_id host_id);
     future<> remove_view_build_statuses_on_left_node(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, locator::host_id host_id);
@@ -105,7 +106,7 @@ private:
 };
 
 void abort_view_building_tasks(const db::view::view_building_state_machine& vb_sm,
-        utils::chunked_vector<canonical_mutation>& out, api::timestamp_type write_timestamp, table_id table_id, const locator::tablet_replica& replica, dht::token last_token);
+        service::group0_update_collector& out, api::timestamp_type write_timestamp, table_id table_id, const locator::tablet_replica& replica, dht::token last_token);
 
 }
 
