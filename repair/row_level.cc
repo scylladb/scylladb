@@ -2191,12 +2191,11 @@ public:
 public:
     future<> mark_sstable_as_repaired() {
         auto& sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
-        if (!_incremental_repair_meta.sst_set && !sstables.empty()) {
+        if (!_incremental_repair_meta.sst_set && sstables.empty()) {
             co_return;
         }
 
         auto& table = _db.local().find_column_family(_schema->id());
-        auto& cm = table.get_compaction_manager();
         int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
 
         // Keep the new sstables marked as being_repaired until repair_update_compaction_ctrl
@@ -2208,11 +2207,21 @@ public:
             new_sst.mark_as_being_repaired(session);
         };
 
-        std::unordered_map<compaction::compaction_group_view*, std::vector<sstables::shared_sstable>> sstables_by_group;
+        // Build the candidate set of sstables we want to mark as repaired.
+        // The actual capture of these sstables (and the membership check
+        // against each view's main sstable set) is delegated to
+        // perform_component_rewrite, which captures them while compaction is
+        // disabled on the target view.  That way:
+        //   - every captured sstable is provably in the view's compaction
+        //     group at capture time (no cross-CG routing mismatch), and
+        //   - no concurrent compaction (split bypass, regular minor compaction,
+        //     etc.) can move the inputs to a different CG mid-rewrite.
+        std::unordered_set<sstables::shared_sstable> repair_set;
         auto add_sstable = [&] (const sstables::shared_sstable& sst) {
             if (sst->should_update_repaired_at(repaired_at)) {
-                auto& view = table.compaction_group_view_for_sstable(sst);
-                sstables_by_group[&view].push_back(sst);
+                rlogger.info("Marking sstable={} repaired_at={} being_repaired={} for incremental repair",
+                             sst->toc_filename(), repaired_at, sst->being_repaired);
+                repair_set.insert(sst);
             }
         };
 
@@ -2224,14 +2233,25 @@ public:
             add_sstable(sst);
         }
 
-        for (auto& [view, ssts] : sstables_by_group) {
-            for (auto& sst : ssts) {
-                rlogger.info("Marking sstable={} repaired_at={} being_repaired={} for incremental repair",
-                        sst->toc_filename(), repaired_at, sst->being_repaired);
-            }
-            auto rewritten_sstables = co_await cm.perform_component_rewrite(*view, tasks::task_info{}, std::move(ssts),
-                    sstables::component_type::Statistics, modifier);
+        if (repair_set.empty()) {
+            co_return;
+        }
 
+        auto filter = [&repair_set] (const sstables::shared_sstable& sst) {
+            return repair_set.contains(sst);
+        };
+
+        co_await utils::get_local_injector().inject("repair_before_component_rewrite",
+                utils::wait_for_message(5min));
+
+        // Rewrite the matching sstables across every compaction group of every
+        // storage group covering the repair range, using the filter-based
+        // perform_component_rewrite which captures sstables while compaction
+        // is disabled on the target view.
+        auto rewritten_sstables = co_await table.perform_component_rewrite(
+                _range, tasks::task_info{}, filter,
+                sstables::component_type::Statistics, modifier);
+        // FIXME: indent.
             // remove the old sstables from incremental repair meta and add the new ones
             for (auto& ss : rewritten_sstables) {
                 bool erased = _incremental_repair_meta.sst_set->erase(ss.first);
@@ -2245,7 +2265,6 @@ public:
                     sstables.insert(ss.second);
                 }
             }
-        }
     }
 };
 
