@@ -1447,6 +1447,11 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
 
 SEASTAR_THREAD_TEST_CASE(per_service_level_reader_concurrency_semaphore_test) {
     cql_test_config cfg;
+    // This test distributes the whole semaphore-group memory between service
+    // levels by weight and verifies the exact split. The shared pool would
+    // reserve part of that memory, so disable it to keep the full budget
+    // weight-distributed.
+    cfg.db_config->reader_concurrency_semaphore_shared_pool_fraction.set(0);
     do_with_cql_env_thread([] (cql_test_env& e) {
         const size_t num_service_levels = 3;
         const size_t num_keys_to_insert = 10;
