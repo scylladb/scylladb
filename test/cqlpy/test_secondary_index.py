@@ -252,6 +252,40 @@ def test_index_intersection_cost_based_selection(cql, test_keyspace, scylla_only
         for got in _all_rows_all_pagings(cql, f"SELECT p FROM {table} WHERE a = 1 AND b = 7 ALLOW FILTERING", 'p'):
             assert got == matching
 
+# CUSTOMER-303 phase 4: skip-assisted intersection. The other index's posting
+# list is probed only at the current page's candidate base keys (via clustering
+# ranges that let the promoted index skip the entries in between), rather than
+# scanning the whole token span. This stresses that path with a large, scattered
+# posting list and a clustering key (so each candidate maps to a multi-column
+# clustering-range prefix and a read has many such ranges), and checks the result
+# is exactly correct - unpaged and across paging.
+def test_index_intersection_skip_large_scattered(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, a int, b int, primary key (p, c)') as table:
+        cql.execute(f"CREATE INDEX ON {table}(a)")
+        cql.execute(f"CREATE INDEX ON {table}(b)")
+        insert = cql.prepare(f"INSERT INTO {table}(p, c, a, b) VALUES (?, ?, ?, ?)")
+        n = 200
+        matching = []
+        for i in range(n):
+            # Every row has a = 1 (a large posting list); b = 9 lands on a
+            # scattered subset (~1/13 of the rows).
+            b = 9 if i % 13 == 0 else 4
+            cql.execute(insert, [i % 20, i, 1, b])
+            if b == 9:
+                matching.append((i % 20, i))
+        expected = sorted(matching)
+        query = f"SELECT p, c FROM {table} WHERE a = 1 AND b = 9 ALLOW FILTERING"
+        assert sorted((r.p, r.c) for r in cql.execute(query)) == expected
+        for page_size in [1, 3, 10]:
+            stmt = SimpleStatement(query, fetch_size=page_size)
+            got = []
+            page = cql.execute(stmt)
+            got.extend((r.p, r.c) for r in page.current_rows)
+            while page.paging_state is not None:
+                page = cql.execute(stmt, paging_state=page.paging_state)
+                got.extend((r.p, r.c) for r in page.current_rows)
+            assert sorted(got) == expected
+
 # Indexes can be created without an explicit name, in which case a default name is chosen.
 # However, due to #8620 it was possible to break the index creation mechanism by creating
 # a properly named regular table, which conflicts with the generated index name.

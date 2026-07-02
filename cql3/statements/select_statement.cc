@@ -1552,16 +1552,36 @@ view_indexed_table_select_statement::read_posting_list(query_processor& qp,
     }));
 }
 
-// CUSTOMER-303 phase 2: read the base primary keys present in an additional
-// index's posting list, restricted to the base-token span of the current page.
-// The keys come back in base-token (view clustering) order, matching the order
-// of the candidate keys produced from the primary index, so the callers can
-// intersect the two with a single merge pass.
+// Builds the clustering-key prefix that a given base key maps to in a global
+// index's view: (computed base token, base partition key, [base clustering key]).
+// The indexed (target) column is a regular column here, so the whole base key is
+// present in the view's clustering key.
+static clustering_key_prefix make_view_clustering_prefix(const schema& base_schema, const schema& view_schema,
+        const column_definition& target_cdef, const partition_key& base_pk, const clustering_key_prefix* base_ck) {
+    std::vector<managed_bytes_view> exploded;
+    exploded.reserve(view_schema.clustering_key_size());
+    bytes token_bytes = view_schema.clustering_column_at(0).get_computation().compute_value(base_schema, base_pk);
+    exploded.push_back(bytes_view(token_bytes));
+    append_base_key_to_index_ck<partition_key>(exploded, base_pk, target_cdef);
+    if (base_ck) {
+        append_base_key_to_index_ck<clustering_key>(exploded, *base_ck, target_cdef);
+    }
+    return clustering_key_prefix::from_range(exploded);
+}
+
+// CUSTOMER-303 phase 2/4: read the base primary keys present in an additional
+// index's posting list. The caller passes clustering ranges that target exactly
+// the current page's candidate base keys (phase 4), so the storage engine's
+// promoted (row) index skips over the posting-list entries between candidates
+// instead of scanning the whole token span - the "skip list" optimisation from
+// idea #2, using the SSTable index we already have. The keys come back in
+// base-token (view clustering) order, matching the candidate order, so the
+// callers can intersect the two with a single merge pass.
 future<coordinator_result<std::vector<primary_key>>>
 view_indexed_table_select_statement::read_intersection_index_keys(
         query_processor& qp, service::query_state& state, const query_options& options,
         schema_ptr view_schema, const bytes& indexed_value,
-        const partition_key& first_base_pk, const partition_key& last_base_pk,
+        std::vector<query::clustering_range> clustering_ranges,
         bool include_base_clustering_key) const {
     using ret = coordinator_result<std::vector<primary_key>>;
     auto now = gc_clock::now();
@@ -1572,21 +1592,8 @@ view_indexed_table_select_statement::read_intersection_index_keys(
     auto view_dk = dht::decorate_key(*view_schema, view_pk);
     dht::partition_range_vector partition_ranges { dht::partition_range::make_singular(view_dk) };
 
-    // Restrict the read to the base-token span [token(first), token(last)] of the
-    // current page. The view's first clustering column is the computed base
-    // token, so a single-column clustering range on it bounds the scan to that
-    // token span. It is a safe *superset* of the page's candidate keys:
-    // correctness comes from the merge-intersection in the callers and from the
-    // post-filtering that runs on the base rows regardless.
-    const column_definition& token_col = view_schema->clustering_column_at(0);
-    bytes lo_token = token_col.get_computation().compute_value(*_schema, first_base_pk);
-    bytes hi_token = token_col.get_computation().compute_value(*_schema, last_base_pk);
-    auto lo_ck = clustering_key_prefix::from_single_value(*view_schema, lo_token);
-    auto hi_ck = clustering_key_prefix::from_single_value(*view_schema, hi_token);
     query::partition_slice partition_slice = partition_slice_builder(*view_schema)
-            .with_ranges({query::clustering_range::make(
-                    query::clustering_range::bound(std::move(lo_ck), true),
-                    query::clustering_range::bound(std::move(hi_ck), true))})
+            .with_ranges(std::move(clustering_ranges))
             .build();
 
     auto cmd = ::make_lw_shared<query::read_command>(
@@ -1636,8 +1643,10 @@ view_indexed_table_select_statement::read_intersection_index_keys(
     co_return ret(std::move(keys));
 }
 
-// CUSTOMER-303 phase 2: shrink the whole-partition candidates from the primary
-// index to those that also appear in every additional index's posting list.
+// CUSTOMER-303 phase 2/4: shrink the whole-partition candidates from the primary
+// index to those that also appear in every additional index's posting list. The
+// other posting lists are probed only at the candidates' base keys (phase 4), so
+// the promoted index skips the entries in between.
 future<coordinator_result<dht::partition_range_vector>>
 view_indexed_table_select_statement::intersect_partition_ranges(
         query_processor& qp, service::query_state& state, const query_options& options,
@@ -1649,11 +1658,19 @@ view_indexed_table_select_statement::intersect_partition_ranges(
     auto candidate_dk = [] (const dht::partition_range& r) -> dht::decorated_key {
         return r.start()->value().as_decorated_key();
     };
-    const partition_key first_pk = candidate_dk(candidates.front()).key();
-    const partition_key last_pk = candidate_dk(candidates.back()).key();
     for (const auto& other : others) {
+        const column_definition* target_cdef = _schema->get_column_definition(to_bytes(other.index.target_column()));
+        // One singular clustering range per candidate partition, targeting that
+        // base partition in the other index's view (any base clustering key).
+        std::vector<query::clustering_range> ranges;
+        ranges.reserve(candidates.size());
+        for (const auto& cand : candidates) {
+            auto dk = candidate_dk(cand);
+            ranges.push_back(query::clustering_range::make_singular(
+                    make_view_clustering_prefix(*_schema, *other.view_schema, *target_cdef, dk.key(), nullptr)));
+        }
         auto keys = co_await read_intersection_index_keys(qp, state, options, other.view_schema, other.value,
-                first_pk, last_pk, /*include_base_clustering_key=*/false);
+                std::move(ranges), /*include_base_clustering_key=*/false);
         if (!keys) {
             co_return ret(std::move(keys).as_failure());
         }
@@ -1679,8 +1696,10 @@ view_indexed_table_select_statement::intersect_partition_ranges(
     co_return ret(std::move(candidates));
 }
 
-// CUSTOMER-303 phase 2: shrink the individual-row candidates from the primary
-// index to those that also appear in every additional index's posting list.
+// CUSTOMER-303 phase 2/4: shrink the individual-row candidates from the primary
+// index to those that also appear in every additional index's posting list. The
+// other posting lists are probed only at the candidates' base keys (phase 4), so
+// the promoted index skips the entries in between.
 future<coordinator_result<std::vector<primary_key>>>
 view_indexed_table_select_statement::intersect_primary_keys(
         query_processor& qp, service::query_state& state, const query_options& options,
@@ -1695,11 +1714,18 @@ view_indexed_table_select_statement::intersect_primary_keys(
         }
         return clustering_key_prefix::tri_compare(*_schema)(a.clustering, b.clustering);
     };
-    const partition_key first_pk = candidates.front().partition.key();
-    const partition_key last_pk = candidates.back().partition.key();
     for (const auto& other : others) {
+        const column_definition* target_cdef = _schema->get_column_definition(to_bytes(other.index.target_column()));
+        // One singular clustering range per candidate row, targeting that exact
+        // base row (partition + clustering key) in the other index's view.
+        std::vector<query::clustering_range> ranges;
+        ranges.reserve(candidates.size());
+        for (const auto& cand : candidates) {
+            ranges.push_back(query::clustering_range::make_singular(
+                    make_view_clustering_prefix(*_schema, *other.view_schema, *target_cdef, cand.partition.key(), &cand.clustering)));
+        }
         auto keys = co_await read_intersection_index_keys(qp, state, options, other.view_schema, other.value,
-                first_pk, last_pk, /*include_base_clustering_key=*/true);
+                std::move(ranges), /*include_base_clustering_key=*/true);
         if (!keys) {
             co_return ret(std::move(keys).as_failure());
         }

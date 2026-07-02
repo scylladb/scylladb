@@ -355,13 +355,14 @@ private:
     // CUSTOMER-303 phase 2/3: posting-list intersection helpers.
     //
     // read_intersection_index_keys() reads the base primary keys present in an
-    // additional index's posting list (partition = indexed_value) restricted to
-    // the base-token span [first_base_pk, last_base_pk] of the current page. The
-    // returned keys are in base-token (view-clustering) order.
+    // additional index's posting list (partition = indexed_value). The clustering
+    // ranges target exactly the current page's candidate base keys (phase 4), so
+    // the promoted index skips the entries in between. The returned keys are in
+    // base-token (view-clustering) order.
     future<coordinator_result<std::vector<primary_key>>> read_intersection_index_keys(
             query_processor& qp, service::query_state& state, const query_options& options,
             schema_ptr view_schema, const bytes& indexed_value,
-            const partition_key& first_base_pk, const partition_key& last_base_pk,
+            std::vector<query::clustering_range> clustering_ranges,
             bool include_base_clustering_key) const;
 
     // Filters the candidate base keys from the primary index down to those that
