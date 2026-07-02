@@ -601,6 +601,11 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
         try {
             auto guard = co_await remote_.get().mm.start_group0_operation();
             co_return co_await fn(query_state, statement, options, std::move(guard));
+        } catch (const service::group0_hard_timeout& ex) {
+            // History entry may have been GC'd — apply status unknown. Do not retry.
+            log.warn("Failed to execute statement \"{}\": group0 history GC horizon exceeded.",
+                    statement->raw_cql_statement.linearize());
+            throw exceptions::server_exception(ex.what());
         } catch (const service::group0_concurrent_modification& ex) {
             log.warn("Failed to execute statement \"{}\" due to guard conflict.{}.",
                     statement->raw_cql_statement.linearize(), retries ? " Retrying" : " Number of retries exceeded, giving up");

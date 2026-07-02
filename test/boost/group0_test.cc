@@ -10,7 +10,9 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_assertions.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/util/defer.hh>
 
+#include "clocks-impl.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 
@@ -19,6 +21,7 @@
 #include "utils/error_injection.hh"
 #include "transport/messages/result_message.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group0_client.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/metrics_api.hh>
 
@@ -105,7 +108,7 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
         co_await perform_schema_change();
         BOOST_REQUIRE_EQUAL(co_await get_history_size(), 1);
 
-        rclient.set_history_gc_duration(duration_cast<gc_clock::duration>(weeks{1}));
+        rclient.set_history_gc_duration(duration_cast<gc_clock::duration>(hours{1}));
         co_await perform_schema_change();
         BOOST_REQUIRE_EQUAL(co_await get_history_size(), 2);
 
@@ -367,6 +370,46 @@ SEASTAR_TEST_CASE(test_group0_tables_use_schema_commitlog) {
         BOOST_REQUIRE(!test_group0_tables_use_schema_commitlog2->static_props().use_schema_commitlog);
 
         return make_ready_future();
+    });
+}
+
+SEASTAR_TEST_CASE(test_group0_hard_timeout) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        auto& rclient = e.get_raft_group0_client();
+        abort_source as;
+
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.cf_name() == "test_group0_hard_timeout") {
+                builder.set_is_group0_table();
+            }
+        });
+
+        co_await e.execute_cql("CREATE TABLE test_group0_hard_timeout (key int PRIMARY KEY)");
+
+        auto insert_mut = [&] (int key) -> future<mutation> {
+            auto muts = co_await e.get_modification_mutations(format("INSERT INTO test_group0_hard_timeout (key) VALUES ({})", key));
+            co_return muts[0];
+        };
+
+        auto commit_mutation = [&] (int key) -> future<> {
+            auto guard = co_await rclient.start_operation(as);
+            service::group0_batch mc(std::move(guard));
+            mc.add_mutation(co_await insert_mut(key));
+            co_await std::move(mc).commit(rclient, as, ::service::raft_timeout{});
+        };
+
+        rclient.set_history_gc_duration(std::chrono::minutes{6});
+        co_await commit_mutation(1);
+
+        {
+            auto guard = co_await rclient.start_operation(as);
+            service::group0_batch mc(std::move(guard));
+            mc.add_mutation(co_await insert_mut(2));
+            forward_jump_clocks(std::chrono::minutes{2});
+            auto restore_clocks = defer([] { forward_jump_clocks(-std::chrono::minutes{2}); });
+            BOOST_CHECK_EXCEPTION(co_await std::move(mc).commit(rclient, as, ::service::raft_timeout{}),
+                    service::group0_hard_timeout, [] (const service::group0_hard_timeout&) { return true; });
+        }
     });
 }
 
