@@ -221,6 +221,37 @@ def test_index_intersection_reads_fewer_base_rows(cql, test_keyspace, scylla_onl
         # a = 1 rows. Allow generous slack but require it to be far below 200.
         assert base_rows_read <= 20, f"read {base_rows_read} base rows for {len(matching)} matches (intersection not applied?)"
 
+# CUSTOMER-303 phase 3: cost-based index selection. When several equality-indexed
+# columns can be intersected, the one with the smallest posting list should drive
+# the scan/paging (fewest matches -> smallest posting-list scan and fewest
+# near-empty pages), regardless of the order columns appear in the WHERE clause.
+def test_index_intersection_cost_based_selection(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int') as table:
+        cql.execute(f"CREATE INDEX cost_a ON {table}(a)")
+        cql.execute(f"CREATE INDEX cost_b ON {table}(b)")
+        insert = cql.prepare(f"INSERT INTO {table}(p, a, b) VALUES (?, ?, ?)")
+        # a = 1 matches 300 rows; only the first 3 of them also have b = 7.
+        matching = [0, 1, 2]
+        for i in range(300):
+            cql.execute(insert, [i, 1, 7 if i < 3 else 8])
+        def primary_index_desc(query):
+            events = cql.execute(query, trace=True).get_query_trace().events
+            for e in events:
+                if 'primary index is' in e.description:
+                    return e.description
+            return None
+        # The smaller posting list (cost_b, 3 entries) must be chosen over cost_a
+        # (300 entries) either way the query is written, and the result is correct.
+        for q in [f"SELECT p FROM {table} WHERE a = 1 AND b = 7 ALLOW FILTERING",
+                  f"SELECT p FROM {table} WHERE b = 7 AND a = 1 ALLOW FILTERING"]:
+            desc = primary_index_desc(q)
+            assert desc is not None and 'cost_b' in desc, f"expected cost_b to drive the query, got: {desc}"
+            assert sorted(row.p for row in cql.execute(q)) == matching
+        # The chosen primary must survive paging (it is recovered from the paging
+        # cursor on each page), so results are correct across small page sizes too.
+        for got in _all_rows_all_pagings(cql, f"SELECT p FROM {table} WHERE a = 1 AND b = 7 ALLOW FILTERING", 'p'):
+            assert got == matching
+
 # Indexes can be created without an explicit name, in which case a default name is chosen.
 # However, due to #8620 it was possible to break the index creation mechanism by creating
 # a properly named regular table, which conflicts with the generated index name.
@@ -1978,8 +2009,13 @@ def test_paging_and_create_index(cql, test_keyspace):
 
 # This test is the same as the previous one, but in this test the request
 # filters on both v1 and v2 is already using an index for column v2, and
-# now between the pages we add an index for v1. Reproduces #18992.
-@pytest.mark.xfail(reason="issue #18992")
+# now between the pages we add an index for v1. Used to reproduce #18992:
+# Scylla preferred the index for the first column in the query and switched
+# from v2 to v1 mid-paging, getting confused by the v2-based paging state.
+# CUSTOMER-303 phase 3 fixes this: the index driving a paged indexed query is
+# recovered from the paging cursor (whose partition key is that index's value),
+# so it stays consistent across pages even when another index appears between
+# pages.
 def test_paging_and_create_index2(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
