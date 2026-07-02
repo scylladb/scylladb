@@ -248,8 +248,8 @@ SEASTAR_TEST_CASE(check_toc_func) {
     auto s = make_schema_for_compressed_sstable();
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", sstables::generation_type(1), [] (shared_sstable sst1, shared_sstable sst2) {
         sstables::test(sst2).read_toc().get();
-        auto& sst1_c = sstables::test(sst1).get_components();
-        auto& sst2_c = sstables::test(sst2).get_components();
+        auto sst1_c = sstables::test(sst1).get_components();
+        auto sst2_c = sstables::test(sst2).get_components();
 
         BOOST_REQUIRE(sst1_c == sst2_c);
     });
@@ -923,9 +923,8 @@ static future<> test_component_digest_persistence(component_type component, ssta
         const auto muts = tests::generate_random_mutations(random_schema, 2).get();
         auto sst_original = make_sstable_containing(env.make_sstable(schema, version), muts).get();
 
-        auto& components = sstables::test(sst_original).get_components();
-        bool has_component = components.find(component) != components.end();
-        BOOST_REQUIRE(has_component);
+        bool has_comp = sst_original->has_component(component);
+        BOOST_REQUIRE(has_comp);
 
         auto toc_path = fmt::to_string(sst_original->toc_filename());
         auto entry_desc = sstables::parse_path(toc_path, schema->ks_name(), schema->cf_name()).value();
@@ -1023,13 +1022,24 @@ static void corrupt_sstable(sstables::shared_sstable sst, component_type compone
     auto close_f = deferred_close(f);
     const auto mem_align = f.memory_dma_alignment();
     const auto dma_align = f.disk_write_dma_alignment();
-    auto block_offset = align_down(size - 1, dma_align);
+    // For most components we corrupt the last byte. The TOC is special: it is a
+    // newline-separated list of component names, and its last byte is the trailing
+    // newline of the last entry. write_toc() emits entries via for_each_component(),
+    // i.e. in ascending component_type order, so for me-format sstables the last
+    // entry is always "Scylla.db". Flipping its trailing newline turns it into an
+    // unrecognized entry and drops the Scylla component, and read_scylla_metadata()
+    // then skips TOC digest validation altogether (it is gated on
+    // has_component(Scylla)) -- so the corruption would go undetected.
+    // Corrupt the first byte instead: that renames the first entry (the lowest
+    // component_type, never Scylla, and only needed after TOC validation) while
+    // keeping the Scylla component recognized, so the TOC digest mismatch is caught.
+    const auto corrupt_offset = component == component_type::TOC ? uint64_t(0) : size - 1;
+    const auto block_offset = align_down(corrupt_offset, uint64_t(dma_align));
     auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
     f.dma_read(block_offset, buf.get_write(), dma_align).get();
-    // Flip one bit in the last byte of the file to corrupt it minimally.
-    // Using a single-bit flip avoids creating values that overflow
-    // during parsing.
-    buf.get_write()[size - 1 - block_offset] += 1;
+    // Increment one byte to corrupt the file minimally. Keeping the change small
+    // avoids creating values that overflow during parsing.
+    buf.get_write()[corrupt_offset - block_offset] += 1;
     f.dma_write(block_offset, buf.get(), dma_align).get();
     f.truncate(size).get();
 }

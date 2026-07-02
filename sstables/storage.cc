@@ -896,9 +896,13 @@ future<> object_storage_base::destroy(const sstable& sst) {
     // destroy() is called fire-and-forget from the shared_ptr deleter.
     // Any objects that could not be deleted here will be retried on the
     // next startup via garbage_collect() which handles "removing" entries.
-    co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
+    std::vector<component_type> components;
+    sst.for_each_component([&] (component_type c) {
+        components.push_back(c);
+    });
+    co_await coroutine::parallel_for_each(components, [this, &sst] (component_type c) -> future<> {
         try {
-            co_await delete_object(make_object_name(sst, type));
+            co_await delete_object(make_object_name(sst, c));
         } catch (...) {
             sstlog.warn("Failed to delete {} object for {}: {}", _type, sst.toc_filename(), std::current_exception());
         }
