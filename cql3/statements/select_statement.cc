@@ -1315,9 +1315,10 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
     // those base rows and post-filtering is cheaper than the extra (sequential)
     // index reads the intersection would add - so we skip the intersection and
     // just use the driver as a plain index. This mirrors PostgreSQL preferring a
-    // plain index scan over a BitmapAnd for a selective-enough index. The value is
-    // a heuristic (a candidate for the statistics-based cost model follow-up).
-    constexpr uint64_t intersection_skip_max_driver_size = 100;
+    // plain index scan over a BitmapAnd for a selective-enough index. The
+    // threshold is the (live-updatable) secondary_index_intersection_skip_max_rows
+    // scylla.yaml option; 0 disables the skip (always intersect).
+    const uint64_t intersection_skip_max_driver_size = qp.get_cql_config().secondary_index_intersection_skip_max_rows.get();
     std::vector<index_candidate> candidates = build_index_candidates(options);
     const index_candidate* primary = nullptr;
     std::vector<index_candidate> others;

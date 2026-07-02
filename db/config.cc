@@ -1592,6 +1592,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Maximum number of relations allowed in a WHERE clause. Queries with too many relations can cause quadratic complexity.")
     , select_internal_page_size(this, "select_internal_page_size", liveness::LiveUpdate, value_status::Used, 10000,
             "SELECT statements with aggregation or GROUP BYs or a secondary index may use this page size for their internal reading data, not the page size specified in the query options.")
+    , secondary_index_intersection_skip_max_rows(this, "secondary_index_intersection_skip_max_rows", liveness::LiveUpdate, value_status::Used, 100,
+            "When a SELECT restricts several indexed columns with equality, ScyllaDB drives the query with the most selective index and intersects the others' posting lists. If that most selective index matches at most this many rows, the intersection is skipped and the index is used alone (its rows are read from the base table and filtered), because reading a few rows is cheaper than the extra index reads. Set to 0 to always intersect.")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port.")
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port.")
     , alternator_port_proxy_protocol(this, "alternator_port_proxy_protocol", value_status::Used, 0,

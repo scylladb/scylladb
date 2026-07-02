@@ -278,6 +278,17 @@ def test_index_intersection_cost_based_selection(cql, test_keyspace, scylla_only
         # cursor on each page), so results are correct across small page sizes too.
         for got in _all_rows_all_pagings(cql, f"SELECT p FROM {table} WHERE a = 1 AND b = 7 ALLOW FILTERING", 'p'):
             assert got == matching
+        # cost_b's posting list is tiny (3), so by default the query skips the
+        # intersection. Setting secondary_index_intersection_skip_max_rows to 0
+        # disables that skip, forcing a real intersection - and results must stay
+        # correct either way.
+        q = f"SELECT p FROM {table} WHERE a = 1 AND b = 7 ALLOW FILTERING"
+        def trace_has(query, needle):
+            return any(needle in e.description for e in cql.execute(query, trace=True).get_query_trace().events)
+        assert trace_has(q, 'skipping posting-list intersection')
+        with config_value_context(cql, 'secondary_index_intersection_skip_max_rows', '0'):
+            assert trace_has(q, 'Intersecting')
+            assert sorted(row.p for row in cql.execute(q)) == matching
 
 # CUSTOMER-303 phase 3 cost heuristic: when the cost-chosen driver already matches
 # very few rows, reading those base rows and post-filtering is cheaper than the
