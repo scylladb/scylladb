@@ -76,6 +76,18 @@ def test_simple_literal_type_inference(cql, test_keyspace, scylla_only):
     with pytest.raises(InvalidRequest, match="infer type"):
         cql.execute("SELECT :bindvar AS bv FROM system.local")
 
+# Test that count with a literal argument works with types that can be inferred,
+# and fails when the argument is a bind variable (which cannot self-type).
+def test_count_literal_args(cql, test_keyspace, scylla_only):
+    assert cql.execute("SELECT count(*) AS cnt FROM system.local").one().cnt == 1
+    assert cql.execute("SELECT count(1) AS cnt FROM system.local").one().cnt == 1
+    assert cql.execute("SELECT count('abc') AS cnt FROM system.local").one().cnt == 1
+    with pytest.raises(InvalidRequest, match="only valid when argument types are known"):
+        cql.execute("SELECT count(?) AS cnt FROM system.local")
+    with pytest.raises(InvalidRequest, match="only valid when argument types are known"):
+        stmt = cql.prepare("SELECT count(:bindvar) AS cnt FROM system.local")
+        cql.execute(stmt, {'bindvar': 1})
+
 # Map literal {'a': 1} (inferred as map<text, int>) passed to a function
 # expecting map<text, bigint>.
 def test_map_literal_widening_direct_function_arg(cql, test_keyspace, scylla_only):

@@ -20,6 +20,9 @@
 #include "utils/chunked_string.hh"
 #include <cassert>
 #include "cql3/query_options.hh"
+#include "cql3/functions/aggregate_fcts.hh"
+#include "cql3/selection/selection.hh"
+#include "cql3/selection/selector.hh"
 #include "types/set.hh"
 #include "types/user.hh"
 #include "test/lib/expr_test_utils.hh"
@@ -1431,6 +1434,48 @@ BOOST_AUTO_TEST_CASE(infer_collection_of_function_calls_keeps_narrow_overload) {
     // Inferred collections are frozen; the key point is the element type is tinyint
     // (the narrow overload), not int (the literal default).
     BOOST_REQUIRE_EQUAL(type_of(prepared)->as_cql3_type().to_string(), "frozen<list<tinyint>>");
+}
+
+// count(<non-null constant>) counts every row, exactly like countRows(), and must keep
+// the parallelized (mapreduce) count execution path: is_count() recognizes it and
+// get_reductions() ships the canonical countRows reduction (the constant could not be
+// shipped to replicas anyway - the request carries column names only - but the count
+// reduction needs no argument). count(<column>) counts non-null values and stays on
+// the aggregate reduction path instead.
+BOOST_AUTO_TEST_CASE(count_of_constant_is_a_count_reduction) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    auto count_call = [] (expression arg) {
+        return function_call{
+            .func = functions::function_name::native_function("count"),
+            .args = {std::move(arg)},
+        };
+    };
+    auto make_selection = [&] (expression call) {
+        expression prepared = prepare_expression(call, db, "test_ks", table_schema.get(), nullptr);
+        std::vector<selection::prepared_selector> selectors{
+            selection::prepared_selector{.expr = std::move(prepared), .alias = nullptr}};
+        return selection::selection::from_selectors(db, table_schema, "test_ks", selectors);
+    };
+
+    for (expression arg : {expression(make_int_untyped("0")), expression(make_int_untyped("1")),
+                           expression(make_string_untyped("abc"))}) {
+        auto sel = make_selection(count_call(std::move(arg)));
+        BOOST_REQUIRE(sel->is_count());
+        auto reductions = sel->get_reductions();
+        BOOST_REQUIRE_EQUAL(reductions.types.size(), 1);
+        BOOST_REQUIRE(reductions.types[0] == query::mapreduce_request::reduction_type::count);
+        BOOST_REQUIRE_EQUAL(reductions.infos[0].name.name, functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME);
+        BOOST_REQUIRE(reductions.infos[0].column_names.empty());
+    }
+
+    auto sel = make_selection(count_call(column_value(table_schema->get_column_definition("r"))));
+    BOOST_REQUIRE(!sel->is_count());
+    BOOST_REQUIRE(sel->is_reducible());
+    auto reductions = sel->get_reductions();
+    BOOST_REQUIRE(reductions.types[0] == query::mapreduce_request::reduction_type::aggregate);
+    BOOST_REQUIRE_EQUAL(reductions.infos[0].column_names.size(), 1);
 }
 
 // prepare_expression for a column_value should do nothing
