@@ -82,6 +82,45 @@ public:
     const log_record& record() const {
         return _record;
     }
+
+    const log_record_header& header() const {
+        return _record.header;
+    }
+};
+
+// Writer for log records that stores pre-serialized bytes.
+// Used in compaction and separator rewriting to avoid deserialization.
+class log_record_bytes_writer {
+
+    using ostream = seastar::simple_memory_output_stream;
+
+    log_record_header _header;
+    bytes_view _header_bytes;
+    bytes_view _data_bytes;
+
+public:
+    log_record_bytes_writer(log_record_header header, log_record_bytes_view record_bytes)
+        : _header(std::move(header))
+        , _header_bytes(record_bytes.header)
+        , _data_bytes(record_bytes.data)
+    {}
+
+    const log_record_header& header() const { return _header; }
+
+    size_t header_size() const { return _header_bytes.size(); }
+    size_t data_size() const { return _data_bytes.size(); }
+    size_t size() const { return header_size() + data_size(); }
+
+    void write(ostream& out) const;
+};
+
+template <typename T>
+concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_output_stream& out) {
+    { w.header() } -> std::convertible_to<const log_record_header&>;
+    { w.header_size() } -> std::convertible_to<size_t>;
+    { w.data_size() } -> std::convertible_to<size_t>;
+    { w.size() } -> std::convertible_to<size_t>;
+    { w.write(out) };
 };
 
 using log_location_with_holder = std::tuple<log_location, seastar::gate::holder>;
@@ -154,8 +193,13 @@ public:
 
     bool can_fit(size_t data_size) const noexcept;
 
-    bool can_fit(const log_record_writer& writer) const noexcept {
+    template <log_record_writer_concept Writer>
+    bool can_fit(const Writer& writer) const noexcept {
         return can_fit(writer.size());
+    }
+
+    bool can_fit(size_t header_size, size_t data_size) const noexcept {
+        return can_fit(header_size + data_size);
     }
 
     bool has_data() const noexcept;
@@ -166,7 +210,9 @@ public:
     size_t record_count() const noexcept { return _record_count; }
     segment_kind kind() const noexcept { return _segment_kind; }
 
-    append_result append(const log_record_writer& writer);
+    template <log_record_writer_concept Writer>
+    append_result append(const Writer& writer);
+
     size_t sealed_size(size_t alignment) const noexcept;
 
     static size_t estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size, segment_kind);
@@ -197,6 +243,9 @@ private:
 
     // table is set for segment_kind::full
     void write_header(segment_sequence segment_seq, std::optional<table_id> table);
+
+    template <std::invocable<ostream&> WriteRecordPayload>
+    append_result append_record(const log_record_header& header, size_t header_size, size_t data_size, WriteRecordPayload write_payload);
 
     void pad_to_alignment(size_t alignment);
     void finalize(size_t alignment);
@@ -249,7 +298,8 @@ public:
     size_t offset_in_buffer() const noexcept { return _raw.offset_in_buffer(); }
 
     bool can_fit(size_t data_size) const noexcept { return _raw.can_fit(data_size); }
-    bool can_fit(const log_record_writer& writer) const noexcept { return _raw.can_fit(writer); }
+    template <log_record_writer_concept Writer>
+    bool can_fit(const Writer& writer) const noexcept { return _raw.can_fit(writer); }
     bool has_data() const noexcept { return _raw.has_data(); }
 
     size_t max_record_size() const noexcept { return _raw.max_record_size(); }
@@ -268,7 +318,8 @@ public:
     // Returns a future that will be resolved with the log location once flushed and a gate holder
     // that keeps the write buffer open. The gate should be held for index updates after the write
     // is done.
-    future<log_location_with_holder> write(log_record_writer, write_target target = {});
+    template <log_record_writer_concept Writer>
+    future<log_location_with_holder> write(Writer writer, write_target target = {});
 
     // Complete all tracked writes with their locations when the buffer is flushed to base_location
     future<> complete_writes(log_location base_location);
@@ -285,6 +336,12 @@ private:
     friend class segment_manager_impl;
     friend struct separator_buffer;
 };
+
+extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
+extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
+
+extern template future<log_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
+extern template future<log_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
 
 class write_buffer_pool;
 

@@ -561,6 +561,7 @@ private:
         uint64_t compaction_segments_out{0};
         uint64_t compaction_records_skipped{0};
         uint64_t compaction_records_rewritten{0};
+        uint64_t compaction_bytes_read{0};
         uint64_t compaction_failures{0};
         uint64_t separator_buffer_flushed{0};
         uint64_t separator_segments_freed{0};
@@ -886,20 +887,26 @@ public:
     void on_add_record(log_location) noexcept;
     void on_free_record(log_location) noexcept;
 
+    template <record_consumer_like RecordConsumer>
     future<> for_each_record(log_segment_id segment_id,
                             std::function<want_data(log_location, const log_record_header&)> on_header,
-                            std::function<future<>(log_location, log_record)> on_record)
+                            RecordConsumer on_record)
     {
         return scan_segment(segment_id,
             [] (const segment_header&) { return make_ready_future<>(); },
             std::move(on_header), std::move(on_record));
     }
 
-    future<> for_each_record(auto&& segments,
+    template <std::ranges::input_range Segments, record_consumer_like RecordConsumer>
+        requires std::same_as<std::ranges::range_value_t<Segments>, log_segment_id>
+    future<> for_each_record(Segments&& segments,
                             std::function<want_data(log_location, const log_record_header&)> on_header,
-                            std::function<future<>(log_location, log_record)> on_record)
+                            RecordConsumer on_record)
     {
-        for (auto segment_id : segments) {
+        std::vector<log_segment_id> sorted_segments(std::ranges::begin(segments), std::ranges::end(segments));
+        std::ranges::sort(sorted_segments);
+
+        for (auto segment_id : sorted_segments) {
             co_await for_each_record(segment_id, on_header, on_record);
         }
     }
@@ -966,7 +973,6 @@ private:
     future<> run_separator_fiber();
 
     future<> write_to_separator(std::vector<write_buffer::record_in_buffer>&, segment_ref, segment_sequence);
-    future<> write_to_separator(table&, log_location prev_loc, log_record, segment_ref);
 
     future<std::optional<segment_header>> read_segment_header(log_segment_id);
 
@@ -978,10 +984,11 @@ private:
     // `on_header` is called for each record header and returns whether the record
     // payload should be read and passed to `on_record`, or skipped.
     // `on_record` is invoked only for records whose payload was requested.
+    template <record_consumer_like RecordConsumer>
     future<> scan_segment(log_segment_id segment_id,
                           std::function<future<>(const segment_header&)> header_callback,
                           std::function<want_data(log_location, const log_record_header&)> on_header,
-                          std::function<future<>(log_location, log_record)> on_record);
+                          RecordConsumer on_record);
 
     segment_ref make_segment_ref(log_segment_id seg_id) {
         auto& desc = get_segment_descriptor(seg_id);
@@ -1189,6 +1196,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of times a compaction had to wait for a write buffer to become available.")),
         sm::make_counter("compaction_buffers_dropped", _compaction_buffer_pool.get_stats().buffers_dropped,
                        sm::description("Counts number of write buffers permanently removed from the pool after they could not be reclaimed.")),
+        sm::make_counter("compaction_bytes_read", _compaction_mgr.get_stats().compaction_bytes_read,
+                        sm::description("Counts number of bytes read by compaction.")),
         sm::make_counter("compaction_failures", _compaction_mgr.get_stats().compaction_failures,
                        sm::description("Counts number of logstor compaction failures.")),
         sm::make_counter("separator_bytes_written", _stats.bytes_written[static_cast<size_t>(write_source::separator)],
@@ -1607,13 +1616,14 @@ future<std::optional<segment_header>> segment_manager_impl::read_segment_header(
     co_return result.get();
 }
 
+template <record_consumer_like RecordConsumer>
 future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
                                 std::function<future<>(const segment_header&)> header_callback,
                                 std::function<want_data(log_location, const log_record_header&)> on_header,
-                                std::function<future<>(log_location, log_record)> on_record) {
+                                RecordConsumer on_record) {
     auto in = co_await create_segment_input_stream(segment_id, seastar::file_input_stream_options {
-        .buffer_size = std::min<size_t>(_cfg.segment_size, 128 * 1024),
-        .read_ahead = 1,
+        .buffer_size = std::max<size_t>(_cfg.segment_size, 128 * 1024),
+        .read_ahead = 0,
     });
     auto scan_result = co_await coroutine::as_future(::replica::logstor::scan_segment(in, segment_id, _cfg.segment_size,
             std::move(header_callback), std::move(on_header), std::move(on_record)));
@@ -1942,10 +1952,11 @@ struct compaction_buffer {
     // Rewrite a single live record into this buffer, updating the index atomically.
     // Returns immediately after queuing the write; caller must co_await close()/flush()
     // to ensure all pending updates complete.
-    future<> rewrite_record(primary_index& index, log_location read_location, log_record record) {
+    future<> rewrite_record(primary_index& index, log_location read_location, const log_record_header& record_header, log_record_bytes_view record_bytes) {
         auto* index_ptr = &index;
-        auto key = record.header.key;
-        log_record_writer writer(std::move(record));
+        auto key = record_header.key;
+
+        auto writer = log_record_bytes_writer(record_header, record_bytes);
 
         if (!buf->can_fit(writer)) {
             co_await flush();
@@ -2002,7 +2013,8 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
             | std::views::filter([this] (log_segment_id seg_id) {
                 auto& desc = _sm.get_segment_descriptor(seg_id);
                 return desc.net_data_size(_sm.get_segment_size()) > 0;
-            });
+            })
+            | std::ranges::to<std::vector<log_segment_id>>();
 
     // with_closeable() returns the buffer to the pool on every way out, including the ones that
     // throw - a compaction that fails part way through simply discards what it had buffered.
@@ -2017,8 +2029,8 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
                 }
                 return want_data::yes;
             },
-            [&index, &cb] (log_location read_location, log_record record) -> future<> {
-                co_await cb.rewrite_record(index, read_location, std::move(record));
+            [&index, &cb] (log_location read_location, const log_record_header& record_header, log_record_bytes_view record_bytes) -> future<> {
+                co_await cb.rewrite_record(index, read_location, record_header, record_bytes);
             }
         );
         co_await cb.flush();
@@ -2049,6 +2061,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
     _stats.compaction_segments_out += compaction_segments_out;
     _stats.compaction_records_rewritten += cb_stats.records_rewritten;
     _stats.compaction_records_skipped += cb_stats.records_skipped;
+    _stats.compaction_bytes_read += nonempty_segments.size() * _sm.get_segment_size();
 }
 
 future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier, abort_source& as) {
@@ -2106,7 +2119,8 @@ future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor
                 | std::views::filter([this] (log_segment_id seg_id) {
                     auto& desc = _sm.get_segment_descriptor(seg_id);
                     return desc.net_data_size(_sm.get_segment_size()) > 0;
-                });
+                })
+                | std::ranges::to<std::vector<log_segment_id>>();
 
         auto split_buffers = co_await _sm._compaction_buffer_pool.allocate_many(2, as);
         auto batch_stats = co_await with_closeable(
@@ -2122,9 +2136,9 @@ future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor
                     }
                     return want_data::yes;
                 },
-                [&index, &bufs, &classifier] (log_location read_location, log_record record) -> future<> {
-                    auto& cb = bufs.bufs[classifier(record.header.key.dk.token())];
-                    co_await cb.rewrite_record(index, read_location, std::move(record));
+                [&index, &bufs, &classifier] (log_location read_location, const log_record_header& record_header, log_record_bytes_view record_bytes) -> future<> {
+                    auto& cb = bufs.bufs[classifier(record_header.key.dk.token())];
+                    co_await cb.rewrite_record(index, read_location, record_header, record_bytes);
                 }
             );
             co_await coroutine::parallel_for_each(bufs.bufs, &compaction_buffer::flush);
@@ -2133,6 +2147,8 @@ future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor
 
         logstor_logger.debug("Split compaction: flushed {} times from {} segments",
                              batch_stats.flush_count, batch.size());
+
+        _stats.compaction_bytes_read += nonempty_segments.size() * _sm.get_segment_size();
 
         // All records are safely written to new segments in src.
         // Await pending reads before freeing the source segments.
@@ -2193,19 +2209,6 @@ future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::reco
             );
         }
     });
-}
-
-future<> segment_manager_impl::write_to_separator(table& t, log_location prev_loc, log_record record, segment_ref seg_ref) {
-    auto key = record.header.key;
-    auto& cg = t.get_logstor_group(key.dk.token());
-    auto* index_ptr = &cg.logstor_index();
-    log_record_writer writer(std::move(record));
-
-    co_await cg.write_to_separator(std::move(writer), std::move(seg_ref), std::nullopt,
-        [index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
-            index_ptr->update_record_location(key, prev_loc, new_loc);
-        }
-    );
 }
 
 future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, logstor_group& cg) {
@@ -2484,10 +2487,19 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
                     return want_data::no;
                 }
             },
-            [this, seg_ref, &db] (log_location prev_loc, log_record record) -> future<> {
+            [seg_ref, &db] (log_location prev_loc, const log_record_header& record_header, log_record_bytes_view record_bytes) -> future<> {
                 try {
-                    auto& t = db.find_column_family(record.header.table);
-                    co_await write_to_separator(t, prev_loc, std::move(record), seg_ref);
+                    auto& t = db.find_column_family(record_header.table);
+                    auto key = record_header.key;
+                    auto& cg = t.get_logstor_group(key.dk.token());
+                    auto* index_ptr = &cg.logstor_index();
+                    auto writer = log_record_bytes_writer(record_header, record_bytes);
+
+                    co_await cg.write_to_separator(std::move(writer), seg_ref, std::nullopt,
+                        [index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
+                            index_ptr->update_record_location(key, prev_loc, new_loc);
+                        }
+                    );
                 } catch (const replica::no_such_column_family&) {
                     // ignore
                 }
@@ -2688,8 +2700,9 @@ void logstor_group::switch_active_separator_buffer() {
     _separator_flush = shared_future(logstor_compaction_manager().flush_separator_buffer(buf, *this));
 }
 
-future<> logstor_group::write_to_separator(log_record_writer writer, segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, separator_write_completion after_written) {
-    while (!active_separator_buffer().can_fit(writer.size())) {
+template <log_record_writer_concept Writer>
+future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, separator_write_completion after_written) {
+    while (!active_separator_buffer().can_fit(writer)) {
         if (!_separator_flush.available()) {
             auto f = co_await coroutine::as_future(_separator_flush.get_future());
             f.ignore_ready_future();
@@ -2701,6 +2714,9 @@ future<> logstor_group::write_to_separator(log_record_writer writer, segment_ref
 
     active_separator_buffer().write(std::move(seg_ref), segment_seq_num, std::move(writer), std::move(after_written));
 }
+
+template future<> logstor_group::write_to_separator(log_record_writer, segment_ref, std::optional<segment_sequence>, separator_write_completion);
+template future<> logstor_group::write_to_separator(log_record_bytes_writer, segment_ref, std::optional<segment_sequence>, separator_write_completion);
 
 future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num) {
     auto should_flush = [seq_num] (separator_buffer& buf) {
