@@ -11,7 +11,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.skip_types import skip_env
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
-from test.pylib.util import start_writes
+from test.pylib.util import start_writes, scale_timeout_by_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for
 import time
 import pytest
@@ -117,14 +117,20 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage):
+async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage, build_mode):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
         skip_env('Failing destination during cleanup is pointless')
     if fail_stage == 'cleanup_target' and fail_replica == 'source':
         skip_env('Failing source during target cleanup is pointless')
 
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+    request_timeout_ms = scale_timeout_by_mode(build_mode, 5000)
+    cfg = {
+        'enable_user_defined_functions': False,
+        'tablets_mode_for_new_keyspaces': 'enabled',
+        'write_request_timeout_in_ms': request_timeout_ms,
+        'read_request_timeout_in_ms': request_timeout_ms,
+    }
     host_ids = []
     servers = []
 
