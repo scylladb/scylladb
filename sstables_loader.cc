@@ -1224,9 +1224,24 @@ protected:
         auto max_tablet_count = current_schema->tablet_options().max_tablet_count;
         co_await loader._ss.local().alter_table_with_tablet_hints(_tid, _tablet_count, _tablet_count);
 
-        co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+        std::exception_ptr eptr;
+        try {
+            co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+        } catch (...) {
+            llog.error("Failed to restore tablets for table_id {}. Error: {}", _tid, std::current_exception());
+            eptr = std::current_exception();
+        }
 
-        co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false);
+        try {
+            llog.info("Restoring table with tid {} to the original schema", _tid);
+            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false);
+        } catch (...) {
+            llog.error("Failed to restore original schema for table_id {}. Error: {}", _tid, std::current_exception());
+        }
+
+        if (eptr) {
+            std::rethrow_exception(eptr);
+        }
     }
 };
 
