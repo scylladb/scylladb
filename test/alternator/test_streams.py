@@ -115,9 +115,7 @@ def wait_for_active_stream(dynamodbstreams, table, timeout=60):
             desc = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
             if not 'StreamStatus' in desc or desc.get('StreamStatus') == 'ENABLED':
                 return (arn, stream['StreamLabel']);
-        # real dynamo takes some time until a stream is usable
-        print("Stream not available. Sleep 5s...")
-        time.sleep(5)
+        time.sleep(5 if is_aws(table) else 0.05)
     assert False
 
 # Local java dynamodb server version behaves differently from 
