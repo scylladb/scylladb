@@ -1311,24 +1311,46 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
     // wire-format change. `candidates`/`others` live for the whole call (this is a
     // coroutine), so the `primary` pointer and `others` reference threaded below
     // stay valid across every co_await.
+    // When the cost-chosen driver already matches at most this many rows, reading
+    // those base rows and post-filtering is cheaper than the extra (sequential)
+    // index reads the intersection would add - so we skip the intersection and
+    // just use the driver as a plain index. This mirrors PostgreSQL preferring a
+    // plain index scan over a BitmapAnd for a selective-enough index. The value is
+    // a heuristic (a candidate for the statistics-based cost model follow-up).
+    constexpr uint64_t intersection_skip_max_driver_size = 100;
     std::vector<index_candidate> candidates = build_index_candidates(options);
     const index_candidate* primary = nullptr;
     std::vector<index_candidate> others;
     if (!candidates.empty()) {
         size_t primary_idx = 0;
+        bool skip_intersection = false;
         if (options.get_paging_state()) {
             primary_idx = recover_primary_index(candidates, *options.get_paging_state());
         } else {
-            primary_idx = co_await choose_primary_index(qp, state, options, candidates);
+            auto [idx, driver_size] = co_await choose_primary_index(qp, state, options, candidates);
+            primary_idx = idx;
+            skip_intersection = driver_size <= intersection_skip_max_driver_size;
         }
         primary = &candidates[primary_idx];
-        for (size_t i = 0; i < candidates.size(); i++) {
-            if (i != primary_idx) {
-                others.push_back(candidates[i]);
+        if (skip_intersection) {
+            // Correct regardless: post-filtering applies the other indexed
+            // restrictions to the base rows. Skipping only changes which base
+            // rows are read, never the result. Paging stays consistent because
+            // the driver is unchanged; a later page (no probe) may intersect, and
+            // mixing is still correct - the driver keys are processed in order and
+            // never skipped.
+            tracing::trace(state.get_trace_state(),
+                    "primary index is {}; selective enough, skipping posting-list intersection",
+                    primary->index.metadata().name());
+        } else {
+            for (size_t i = 0; i < candidates.size(); i++) {
+                if (i != primary_idx) {
+                    others.push_back(candidates[i]);
+                }
             }
+            tracing::trace(state.get_trace_state(), "Intersecting {} indexes; primary index is {}",
+                    candidates.size(), primary->index.metadata().name());
         }
-        tracing::trace(state.get_trace_state(), "Intersecting {} indexes; primary index is {}",
-                candidates.size(), primary->index.metadata().name());
     }
 
     // Aggregated and paged filtering needs to aggregate the results from all pages
@@ -1793,7 +1815,7 @@ view_indexed_table_select_statement::build_index_candidates(const query_options&
 // CUSTOMER-303 phase 3: probe each candidate's posting-list size (bounded, so a
 // huge list costs no more than reading the cap) and return the index of the
 // smallest - the one that should drive the scan and paging.
-future<size_t>
+future<std::pair<size_t, uint64_t>>
 view_indexed_table_select_statement::choose_primary_index(query_processor& qp, service::query_state& state,
         const query_options& options, const std::vector<index_candidate>& candidates) const {
     constexpr uint64_t probe_cap = 10001;
@@ -1828,7 +1850,7 @@ view_indexed_table_select_statement::choose_primary_index(query_processor& qp, s
             best = i;
         }
     }
-    co_return best;
+    co_return std::pair<size_t, uint64_t>(best, best_size);
 }
 
 // CUSTOMER-303 phase 3: recover which candidate drove paging on the previous

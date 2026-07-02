@@ -381,9 +381,11 @@ private:
     // sizes and returns the index of the smallest (the paging driver).
     std::vector<index_candidate> build_index_candidates(const query_options& options) const;
     // Best-effort: probe posting-list sizes and return the smallest candidate's
-    // index. Probe read errors are swallowed (that candidate is just skipped), so
-    // this never fails the query - the optimization degrades to the chosen index.
-    future<size_t> choose_primary_index(query_processor& qp, service::query_state& state,
+    // index and its (probed, capped) size. Probe read errors are swallowed (that
+    // candidate is just skipped), so this never fails the query - the optimization
+    // degrades to the chosen index. The size lets the caller decide whether the
+    // driver is already so selective that intersecting is not worth it.
+    future<std::pair<size_t, uint64_t>> choose_primary_index(query_processor& qp, service::query_state& state,
             const query_options& options, const std::vector<index_candidate>& candidates) const;
     size_t recover_primary_index(const std::vector<index_candidate>& candidates,
             const service::pager::paging_state& paging_state) const;

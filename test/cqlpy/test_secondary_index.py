@@ -147,6 +147,22 @@ def _all_rows_all_pagings(cql, query, column):
         results.append(sorted(got))
     return results
 
+# Pages `query` at several page sizes plus unpaged, returning the sorted list of
+# `column` across all pages each time. Intersection may produce short pages, so
+# paging is driven to completion by the paging_state, not by the fill level.
+def _paged_column(cql, query, column, page_sizes):
+    results = [sorted(getattr(row, column) for row in cql.execute(query))]
+    for page_size in page_sizes:
+        stmt = SimpleStatement(query, fetch_size=page_size)
+        got = []
+        page = cql.execute(stmt)
+        got.extend(getattr(row, column) for row in page.current_rows)
+        while page.paging_state is not None:
+            page = cql.execute(stmt, paging_state=page.paging_state)
+            got.extend(getattr(row, column) for row in page.current_rows)
+        results.append(sorted(got))
+    return results
+
 # CUSTOMER-303 phase 2: posting-list intersection. When a query restricts two (or
 # more) indexed columns with equality, ScyllaDB reads each index's posting list
 # and intersects them by base primary key, so it only reads the base-table rows
@@ -154,6 +170,9 @@ def _all_rows_all_pagings(cql, query, column):
 # one restriction and filtering the rest from the base table. The result set must
 # be exactly the same as plain filtering, both unpaged and across paging, for
 # tables with and without a clustering key.
+# Each single-column value here matches enough rows that its posting list exceeds
+# the phase-3 "skip intersection when the driver is tiny" threshold, so the query
+# genuinely intersects two posting lists rather than using one index alone.
 def test_index_intersection_correctness(cql, test_keyspace):
     for schema, has_ck in [
             ('p int primary key, a int, b int, d int', False),
@@ -162,46 +181,54 @@ def test_index_intersection_correctness(cql, test_keyspace):
             cql.execute(f"CREATE INDEX ON {table}(a)")
             cql.execute(f"CREATE INDEX ON {table}(b)")
             data = []
-            n = 60
+            # a and b each take 2 values (~120 rows each -> large posting lists),
+            # varied independently so a=x AND b=y is a real intersection.
+            n = 240
             if has_ck:
                 insert = cql.prepare(f"INSERT INTO {table}(p, c, a, b, d) VALUES (?, ?, ?, ?, ?)")
                 for i in range(n):
-                    cql.execute(insert, [i // 6, i, i % 3, i % 4, i])
-                    data.append((i % 3, i % 4, i))
+                    cql.execute(insert, [i % 20, i, i % 2, (i // 2) % 2, i])
+                    data.append((i % 2, (i // 2) % 2, i))
             else:
                 insert = cql.prepare(f"INSERT INTO {table}(p, a, b, d) VALUES (?, ?, ?, ?)")
                 for i in range(n):
-                    cql.execute(insert, [i, i % 3, i % 4, i])
-                    data.append((i % 3, i % 4, i))
-            for a in range(3):
-                for b in range(4):
+                    cql.execute(insert, [i, i % 2, (i // 2) % 2, i])
+                    data.append((i % 2, (i // 2) % 2, i))
+            for a in range(2):
+                for b in range(2):
                     expected = sorted(d for (ra, rb, d) in data if ra == a and rb == b)
                     query = f"SELECT d FROM {table} WHERE a = {a} AND b = {b} ALLOW FILTERING"
-                    for got in _all_rows_all_pagings(cql, query, 'd'):
+                    for got in _paged_column(cql, query, 'd', [3, 40]):
                         assert got == expected
 
 # Intersection must also work with three (or more) indexed equality restrictions,
 # i.e. more than one additional posting list intersected with the primary one.
+# Values are chosen so every single-column posting list is large (above the skip
+# threshold), forcing a genuine three-way intersection.
 def test_index_intersection_three_columns(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int, c int, d int') as table:
         for col in ['a', 'b', 'c']:
             cql.execute(f"CREATE INDEX ON {table}({col})")
         insert = cql.prepare(f"INSERT INTO {table}(p, a, b, c, d) VALUES (?, ?, ?, ?, ?)")
         data = []
-        for i in range(80):
-            cql.execute(insert, [i, i % 2, i % 3, i % 4, i])
-            data.append((i % 2, i % 3, i % 4, i))
-        for (a, b, c) in [(0, 0, 0), (1, 2, 3), (0, 1, 2), (1, 0, 1)]:
+        # a, b, c take independent bits of i (~120 rows per value).
+        for i in range(240):
+            a, b, c = i % 2, (i // 2) % 2, (i // 4) % 2
+            cql.execute(insert, [i, a, b, c, i])
+            data.append((a, b, c, i))
+        for (a, b, c) in [(0, 0, 0), (1, 1, 1), (0, 1, 0), (1, 0, 1)]:
             expected = sorted(d for (ra, rb, rc, d) in data if ra == a and rb == b and rc == c)
             query = f"SELECT d FROM {table} WHERE a = {a} AND b = {b} AND c = {c} ALLOW FILTERING"
-            for got in _all_rows_all_pagings(cql, query, 'd'):
+            for got in _paged_column(cql, query, 'd', [3, 40]):
                 assert got == expected
 
-# CUSTOMER-303 phase 2: the whole point of intersecting posting lists is to read
-# fewer base-table rows. Here every row has a = 1 but only a handful also have
-# b = 2. Intersection must read only the (few) matching base rows, not all the
-# a = 1 rows. We verify this via the filtered_rows_read_total metric, which counts
-# base rows read by filtered (ALLOW FILTERING) queries.
+# CUSTOMER-303: the point of the whole feature is to read fewer base-table rows.
+# Here every row has a = 1 but only a handful also have b = 2. Whether by
+# intersecting posting lists (phase 2) or - since the b = 2 driver is tiny - by
+# the phase-3 skip heuristic using b = 2 as a plain index, we must read only the
+# few matching base rows, not all the a = 1 rows. Verified via the
+# filtered_rows_read_total metric, which counts base rows read by filtered
+# (ALLOW FILTERING) queries.
 def test_index_intersection_reads_fewer_base_rows(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int') as table:
         cql.execute(f"CREATE INDEX ON {table}(a)")
@@ -252,14 +279,14 @@ def test_index_intersection_cost_based_selection(cql, test_keyspace, scylla_only
         for got in _all_rows_all_pagings(cql, f"SELECT p FROM {table} WHERE a = 1 AND b = 7 ALLOW FILTERING", 'p'):
             assert got == matching
 
-# CUSTOMER-303 phase 4: skip-assisted intersection. The other index's posting
-# list is probed only at the current page's candidate base keys (via clustering
-# ranges that let the promoted index skip the entries in between), rather than
-# scanning the whole token span. This stresses that path with a large, scattered
-# posting list and a clustering key (so each candidate maps to a multi-column
-# clustering-range prefix and a read has many such ranges), and checks the result
-# is exactly correct - unpaged and across paging.
-def test_index_intersection_skip_large_scattered(cql, test_keyspace):
+# CUSTOMER-303 phase 3 cost heuristic: when the cost-chosen driver already matches
+# very few rows, reading those base rows and post-filtering is cheaper than the
+# extra index reads an intersection would add, so the intersection is skipped and
+# the driver is used as a plain index (cf. PostgreSQL preferring an index scan over
+# a BitmapAnd). Every row here has a = 1 (large posting list) but only a scattered
+# ~1/13 have b = 9 (tiny posting list) - the driver - so the query must skip the
+# intersection, and must still return exactly the right rows across paging.
+def test_index_intersection_skip_when_driver_selective(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'p int, c int, a int, b int, primary key (p, c)') as table:
         cql.execute(f"CREATE INDEX ON {table}(a)")
         cql.execute(f"CREATE INDEX ON {table}(b)")
@@ -267,14 +294,17 @@ def test_index_intersection_skip_large_scattered(cql, test_keyspace):
         n = 200
         matching = []
         for i in range(n):
-            # Every row has a = 1 (a large posting list); b = 9 lands on a
-            # scattered subset (~1/13 of the rows).
             b = 9 if i % 13 == 0 else 4
             cql.execute(insert, [i % 20, i, 1, b])
             if b == 9:
                 matching.append((i % 20, i))
         expected = sorted(matching)
         query = f"SELECT p, c FROM {table} WHERE a = 1 AND b = 9 ALLOW FILTERING"
+        # The tiny driver (b = 9) makes the query skip the intersection.
+        events = cql.execute(query, trace=True).get_query_trace().events
+        assert any('skipping posting-list intersection' in e.description for e in events), \
+            "expected the selective driver to skip the intersection"
+        # Correct results regardless, unpaged and across paging.
         assert sorted((r.p, r.c) for r in cql.execute(query)) == expected
         for page_size in [1, 3, 10]:
             stmt = SimpleStatement(query, fetch_size=page_size)
