@@ -588,7 +588,7 @@ future<> view_building_coordinator::stop() {
     });
 }
 
-void view_building_coordinator::generate_tablet_migration_updates(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, const locator::tablet_map& tmap, locator::global_tablet_id gid, const locator::tablet_transition_info& trinfo) {
+void view_building_coordinator::generate_tablet_migration_updates(service::group0_update_collector& out, const service::group0_guard& guard, const locator::tablet_map& tmap, locator::global_tablet_id gid, const locator::tablet_transition_info& trinfo) {
     vbc_logger.debug("Generating updates for tablet migration for table {}", gid.table);
     
     if (!_vb_sm.building_state.tasks_state.contains(gid.table)) {
@@ -657,10 +657,10 @@ void view_building_coordinator::generate_tablet_migration_updates(utils::chunked
         }
     }
 
-    out.emplace_back(builder.build());
+    out.add_small(builder.build());
 }
 
-void view_building_coordinator::generate_tablet_resize_updates(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+void view_building_coordinator::generate_tablet_resize_updates(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id, const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
     vbc_logger.debug("Generating updates for tablet resize for table {}", table_id);
     if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
         vbc_logger.debug("No view building tasks for table {} - skipping tablet migration updates generation", table_id);
@@ -734,10 +734,10 @@ void view_building_coordinator::generate_tablet_resize_updates(utils::chunked_ve
         resize_task_map(replica_tasks.staging_tasks);
     }
 
-    out.emplace_back(builder.build());
+    out.add_small(builder.build());
 }
 
-void view_building_coordinator::abort_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id) {
+void view_building_coordinator::abort_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id) {
     if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
         return;
     }
@@ -758,15 +758,15 @@ void view_building_coordinator::abort_tasks(utils::chunked_vector<canonical_muta
         abort_task_map(replica_tasks.staging_tasks);
     }
 
-    out.emplace_back(builder.build());
+    out.add_small(builder.build());
 }
 
-void view_building_coordinator::abort_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token) {
+void view_building_coordinator::abort_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token) {
     return abort_view_building_tasks(_vb_sm, out, guard.write_timestamp(), table_id, replica, last_token);
 }
 
 void abort_view_building_tasks(const view_building_state_machine& vb_sm,
-        utils::chunked_vector<canonical_mutation>& out, api::timestamp_type write_timestamp, table_id table_id, const locator::tablet_replica& replica, dht::token last_token) {
+        service::group0_update_collector& out, api::timestamp_type write_timestamp, table_id table_id, const locator::tablet_replica& replica, dht::token last_token) {
     if (!vb_sm.building_state.tasks_state.contains(table_id) || !vb_sm.building_state.tasks_state.at(table_id).contains(replica)) {
         return;
     }
@@ -788,7 +788,7 @@ void abort_view_building_tasks(const view_building_state_machine& vb_sm,
     }
     abort_task_map(replica_tasks.staging_tasks);
 
-    out.emplace_back(builder.build());
+    out.add_small(builder.build());
 }
 
 static void rollback_task_map(view_building_task_mutation_builder& builder, const task_map& task_map) {
@@ -809,7 +809,7 @@ static void rollback_task_map(view_building_task_mutation_builder& builder, cons
     }
 }
 
-void view_building_coordinator::rollback_aborted_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id) {
+void view_building_coordinator::rollback_aborted_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id) {
     if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
         return;
     }
@@ -823,10 +823,10 @@ void view_building_coordinator::rollback_aborted_tasks(utils::chunked_vector<can
         rollback_task_map(builder, replica_tasks.staging_tasks);
     }
 
-    out.emplace_back(builder.build());
+    out.add_small(builder.build());
 }
 
-void view_building_coordinator::rollback_aborted_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token) {
+void view_building_coordinator::rollback_aborted_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token) {
     if (!_vb_sm.building_state.tasks_state.contains(table_id) || !_vb_sm.building_state.tasks_state.at(table_id).contains(replica)) {
         return;
     }
@@ -838,7 +838,7 @@ void view_building_coordinator::rollback_aborted_tasks(utils::chunked_vector<can
     }
     rollback_task_map(builder, replica_tasks.staging_tasks);
 
-    out.emplace_back(builder.build());
+    out.add_small(builder.build());
 }
 
 future<> view_building_coordinator::mark_view_build_statuses_on_node_join(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, locator::host_id host_id) {

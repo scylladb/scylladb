@@ -1160,7 +1160,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                             if (abandoning_replicas.size() != 1) {
                                                 on_internal_error(rtlogger, fmt::format("Keyspace RF abandons {} replicas for table {} and tablet id {}", abandoning_replicas.size(), table_or_mv->id(), tablet_id));
                                             }
-                                            _vb_coordinator->abort_tasks(updates.frozen_mutations(), guard, table_or_mv->id(), *abandoning_replicas.begin(), last_token);
+                                            _vb_coordinator->abort_tasks(updates, guard, table_or_mv->id(), *abandoning_replicas.begin(), last_token);
                                         }
 
                                         co_await coroutine::maybe_yield();
@@ -2161,7 +2161,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
                         auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
                         if (leaving_replica) {
-                            _vb_coordinator->abort_tasks(updates.frozen_mutations(), guard, gid.table, *leaving_replica, last_token);
+                            _vb_coordinator->abort_tasks(updates, guard, gid.table, *leaving_replica, last_token);
                         }
                         get_mutation_builder()
                             .set_stage(last_token, locator::tablet_transition_stage::write_both_read_old)
@@ -2400,7 +2400,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .del_migration_task_info(last_token, _feature_service);
                         auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
                         if (leaving_replica) {
-                            _vb_coordinator->rollback_aborted_tasks(updates.frozen_mutations(), guard, gid.table, *leaving_replica, last_token);
+                            _vb_coordinator->rollback_aborted_tasks(updates, guard, gid.table, *leaving_replica, last_token);
                         }
                     }
                     break;
@@ -2417,7 +2417,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .del_transition(last_token)
                                 .set_replicas(last_token, trinfo.next)
                                 .del_migration_task_info(last_token, _feature_service);
-                        _vb_coordinator->generate_tablet_migration_updates(updates.frozen_mutations(), guard, tmap, gid, trinfo);
+                        _vb_coordinator->generate_tablet_migration_updates(updates, guard, tmap, gid, trinfo);
                     }
                 }
                     break;
@@ -2791,7 +2791,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});
-            _vb_coordinator->generate_tablet_resize_updates(updates.frozen_mutations(), guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
+            _vb_coordinator->generate_tablet_resize_updates(updates, guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
 
             for (auto table_id : tm->tablets().all_table_groups().at(table_id)) {
                 co_await _cdc_gens.generate_tablet_resize_update(updates, table_id, new_tablet_map, guard.write_timestamp());
