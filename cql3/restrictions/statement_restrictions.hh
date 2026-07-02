@@ -234,6 +234,14 @@ private:
     get_clustering_bounds_fn_t _get_global_index_token_clustering_ranges_fn;
     get_clustering_bounds_fn_t _get_local_index_clustering_ranges_fn;
     get_singleton_value_fn_t _value_for_index_partition_key_fn;
+    /// Additional global secondary indexes (besides the chosen one) whose target
+    /// column is restricted by an equality in this query. Their posting lists can
+    /// be intersected with the chosen index's to avoid reading base-table rows
+    /// that don't satisfy every indexed restriction (CUSTOMER-303 phase 2).
+    std::vector<secondary_index::index> _intersection_indexes;
+    /// Parallel to _intersection_indexes: solves each index's equality value
+    /// (i.e. its posting-list partition key) from the query options.
+    std::vector<get_singleton_value_fn_t> _intersection_index_value_fns;
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
@@ -378,6 +386,15 @@ public:
     const column_definition& unrestricted_column(column_kind kind) const;
 
     schema_ptr get_view_schema() const { return _view_schema; }
+
+    /// Additional global indexes (besides the chosen one) that can be intersected
+    /// with the chosen index's posting list for this query (CUSTOMER-303 phase 2).
+    const std::vector<secondary_index::index>& intersection_indexes() const { return _intersection_indexes; }
+    /// The equality value (posting-list partition key) of the i-th intersection
+    /// index for these query options. std::nullopt if the value is NULL (no match).
+    bytes_opt value_for_intersection_index(size_t i, const query_options& options) const {
+        return _intersection_index_value_fns.at(i)(options);
+    }
 private:
     void process_partition_key_restrictions(bool for_view, bool allow_filtering, statements::statement_type type);
 
