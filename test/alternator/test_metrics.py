@@ -426,6 +426,7 @@ def test_query_vector_operations(vs, metrics):
 #  * scylla_alternator_vector_search_query_items_from_vs,
 #  * scylla_alternator_vector_search_query_items_from_base_table
 # are incremented as needed for a vector search query.
+# Test both global and per-table versions of these metrics.
 # This test requires a configured vector store and will be skipped otherwise.
 def test_query_vector_item_metrics(vs, metrics, needs_vector_store):
     with new_test_table(vs,
@@ -446,39 +447,59 @@ def test_query_vector_item_metrics(vs, metrics, needs_vector_store):
         vs_metric = 'scylla_alternator_vector_search_query_items_from_vs'
         returned_metric = 'scylla_alternator_vector_search_query_returned_items'
         base_metric = 'scylla_alternator_vector_search_query_items_from_base_table'
+        # The same metrics also exist per-table:
+        table_vs_metric = 'scylla_alternator_table_vector_search_query_items_from_vs'
+        table_returned_metric = 'scylla_alternator_table_vector_search_query_returned_items'
+        table_base_metric = 'scylla_alternator_table_vector_search_query_items_from_base_table'
+        table_labels = {'cf': table.name}
         the_metrics = get_metrics(metrics)
         before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        before_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='ALL_ATTRIBUTES')
         assert result['Count'] == 2
         the_metrics = get_metrics(metrics)
         after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        after_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         assert after[vs_metric] - before[vs_metric] == 2
         assert after[returned_metric] - before[returned_metric] == 2
         assert after[base_metric] - before[base_metric] == 2
+        assert after_table[table_vs_metric] - before_table[table_vs_metric] == 2
+        assert after_table[table_returned_metric] - before_table[table_returned_metric] == 2
+        assert after_table[table_base_metric] - before_table[table_base_metric] == 2
 
         # A SELECT=COUNT query doesn't return any items, so increments only
         # items_from_vs, not the other two:
         the_metrics = get_metrics(metrics)
         before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        before_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='COUNT')
         assert result['Count'] == 2
         the_metrics = get_metrics(metrics)
         after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        after_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         assert after[vs_metric] - before[vs_metric] == 2
         assert after[returned_metric] - before[returned_metric] == 0
         assert after[base_metric] - before[base_metric] == 0
+        assert after_table[table_vs_metric] - before_table[table_vs_metric] == 2
+        assert after_table[table_returned_metric] - before_table[table_returned_metric] == 0
+        assert after_table[table_base_metric] - before_table[table_base_metric] == 0
 
         # A SELECT=ALL_PROJECTED_ATTRIBUTES query increments items_from_vs
         # and returned_items, but not items_from_base_table.
         the_metrics = get_metrics(metrics)
         before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        before_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='ALL_PROJECTED_ATTRIBUTES')
         assert result['Count'] == 2
         the_metrics = get_metrics(metrics)
         after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        after_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
         assert after[vs_metric] - before[vs_metric] == 2
         assert after[returned_metric] - before[returned_metric] == 2
         assert after[base_metric] - before[base_metric] == 0
+        assert after_table[table_vs_metric] - before_table[table_vs_metric] == 2
+        assert after_table[table_returned_metric] - before_table[table_returned_metric] == 2
+        assert after_table[table_base_metric] - before_table[table_base_metric] == 0
 
 # Test counters for DescribeEndpoints:
 def test_describe_endpoints_operations(dynamodb, metrics):
