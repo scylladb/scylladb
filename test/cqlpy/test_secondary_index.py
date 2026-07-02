@@ -327,6 +327,30 @@ def test_index_intersection_skip_when_driver_selective(cql, test_keyspace, scyll
                 got.extend((r.p, r.c) for r in page.current_rows)
             assert sorted(got) == expected
 
+# CUSTOMER-303 phases 2-3, aggregate path: an aggregating query (COUNT) over an
+# intersection whose result spans several internal pages, with a cost-based
+# driver. The internal aggregation paging loop must translate the cursor through
+# the *driver's* view (not the statement's original index), or later internal
+# pages resume from the wrong position and the count is wrong.
+def test_index_intersection_aggregate_paging(cql, test_keyspace, small_select_internal_page_size):
+    with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int') as table:
+        cql.execute(f"CREATE INDEX ON {table}(a)")
+        cql.execute(f"CREATE INDEX ON {table}(b)")
+        insert = cql.prepare(f"INSERT INTO {table}(p, a, b) VALUES (?, ?, ?)")
+        # a and b each match ~120 rows (large posting lists -> real intersection);
+        # a = 0 AND b = 0 matches ~60 rows, more than one internal page (50), so
+        # the aggregation pages internally more than once.
+        n = 240
+        expected = 0
+        for i in range(n):
+            a, b = i % 2, (i // 2) % 2
+            cql.execute(insert, [i, a, b])
+            if a == 0 and b == 0:
+                expected += 1
+        assert expected > small_select_internal_page_size
+        rows = list(cql.execute(f"SELECT count(*) AS n FROM {table} WHERE a = 0 AND b = 0 ALLOW FILTERING"))
+        assert rows[0].n == expected
+
 # Indexes can be created without an explicit name, in which case a default name is chosen.
 # However, due to #8620 it was possible to break the index creation mechanism by creating
 # a properly named regular table, which conflicts with the generated index name.

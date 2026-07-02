@@ -1328,7 +1328,7 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
         if (options.get_paging_state()) {
             primary_idx = recover_primary_index(candidates, *options.get_paging_state());
         } else {
-            auto [idx, driver_size] = co_await choose_primary_index(qp, state, options, candidates);
+            auto [idx, driver_size] = co_await choose_primary_index(qp, state, options, candidates, intersection_skip_max_driver_size);
             primary_idx = idx;
             skip_intersection = driver_size <= intersection_skip_max_driver_size;
         }
@@ -1371,9 +1371,11 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
         auto internal_page_size = qp.get_cql_config().select_internal_page_size.get();
         internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_page_size));
         do {
-            auto consume_results = [this, &builder, &options, &internal_options, &state, internal_page_size] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
+            auto consume_results = [this, &builder, &options, &internal_options, &state, internal_page_size, primary] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
                 if (paging_state) {
-                    paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
+                    // Translate the cursor in the *driver* index's view (with a
+                    // cost-based primary this may not be the statement's _index).
+                    paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size, primary);
                 }
                 internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
                 if (needs_post_filtering()) {
@@ -1815,11 +1817,14 @@ view_indexed_table_select_statement::build_index_candidates(const query_options&
 
 // CUSTOMER-303 phase 3: probe each candidate's posting-list size (bounded, so a
 // huge list costs no more than reading the cap) and return the index of the
-// smallest - the one that should drive the scan and paging.
+// smallest - the one that should drive the scan and paging - together with its
+// probed size. The cap is at least skip_threshold + 1 so that a returned size
+// <= skip_threshold is exact (never a truncated count), which the caller relies
+// on to decide whether to skip the intersection.
 future<std::pair<size_t, uint64_t>>
 view_indexed_table_select_statement::choose_primary_index(query_processor& qp, service::query_state& state,
-        const query_options& options, const std::vector<index_candidate>& candidates) const {
-    constexpr uint64_t probe_cap = 10001;
+        const query_options& options, const std::vector<index_candidate>& candidates, uint64_t skip_threshold) const {
+    const uint64_t probe_cap = std::max<uint64_t>(10001, skip_threshold + 1);
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     size_t best = 0;

@@ -1447,13 +1447,14 @@ static do_find_idx_result do_find_idx(
     // secondary index gets. A collection membership restriction
     // (`col CONTAINS v` / `CONTAINS KEY v`) is typically far less selective: a
     // given element value can appear in the collections of arbitrarily many
-    // rows. When a query restricts several indexed columns we can still only
-    // use one index and must read every base-table row it points at, filtering
-    // the rest in memory - so picking the more selective index reads fewer base
-    // rows. This is a first, statistics-free step towards the multi-index
-    // handling requested in CUSTOMER-303; a cost-based choice using per-index
-    // statistics, and intersecting several posting lists instead of filtering,
-    // are left for follow-up work.
+    // rows. This operator-based estimate only breaks ties in the *deterministic*
+    // choice of a single index here at prepare time; when several indexed columns
+    // are restricted, the query executor additionally intersects their posting
+    // lists and, at execution time, drives the query with the index whose posting
+    // list is actually smallest (see the multi-index handling for CUSTOMER-303 in
+    // view_indexed_table_select_statement). Keeping this estimate a pure function
+    // of the query preserves the determinism that paged index queries rely on
+    // (see the note below and issue #7969).
     auto selectivity_rank = [] (const std::vector<predicate>& preds) -> int {
         // Higher is more selective. Scalar/map-element equality beats
         // collection membership; anything else stays in between so its relative
