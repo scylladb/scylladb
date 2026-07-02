@@ -129,6 +129,98 @@ def test_index_selection_prefers_more_selective_restriction(scylla_only, cql, te
                       f"SELECT p FROM {table} WHERE v = 1 AND s CONTAINS 1 ALLOW FILTERING"]:
             assert sorted([row.p for row in cql.execute(query)]) == expected
 
+# Helper for the intersection tests below: run a query both unpaged and with
+# several small page sizes, and return the sorted list of a single selected
+# column across all pages. Posting-list intersection can legitimately produce
+# short pages, so paging is driven to completion by the paging_state, not by the
+# page fill level.
+def _all_rows_all_pagings(cql, query, column):
+    results = [sorted(getattr(row, column) for row in cql.execute(query))]
+    for page_size in [1, 2, 7]:
+        stmt = SimpleStatement(query, fetch_size=page_size)
+        got = []
+        page = cql.execute(stmt)
+        got.extend(getattr(row, column) for row in page.current_rows)
+        while page.paging_state is not None:
+            page = cql.execute(stmt, paging_state=page.paging_state)
+            got.extend(getattr(row, column) for row in page.current_rows)
+        results.append(sorted(got))
+    return results
+
+# CUSTOMER-303 phase 2: posting-list intersection. When a query restricts two (or
+# more) indexed columns with equality, ScyllaDB reads each index's posting list
+# and intersects them by base primary key, so it only reads the base-table rows
+# matching *all* the indexed restrictions - instead of reading every row matching
+# one restriction and filtering the rest from the base table. The result set must
+# be exactly the same as plain filtering, both unpaged and across paging, for
+# tables with and without a clustering key.
+def test_index_intersection_correctness(cql, test_keyspace):
+    for schema, has_ck in [
+            ('p int primary key, a int, b int, d int', False),
+            ('p int, c int, a int, b int, d int, primary key (p, c)', True)]:
+        with new_test_table(cql, test_keyspace, schema) as table:
+            cql.execute(f"CREATE INDEX ON {table}(a)")
+            cql.execute(f"CREATE INDEX ON {table}(b)")
+            data = []
+            n = 60
+            if has_ck:
+                insert = cql.prepare(f"INSERT INTO {table}(p, c, a, b, d) VALUES (?, ?, ?, ?, ?)")
+                for i in range(n):
+                    cql.execute(insert, [i // 6, i, i % 3, i % 4, i])
+                    data.append((i % 3, i % 4, i))
+            else:
+                insert = cql.prepare(f"INSERT INTO {table}(p, a, b, d) VALUES (?, ?, ?, ?)")
+                for i in range(n):
+                    cql.execute(insert, [i, i % 3, i % 4, i])
+                    data.append((i % 3, i % 4, i))
+            for a in range(3):
+                for b in range(4):
+                    expected = sorted(d for (ra, rb, d) in data if ra == a and rb == b)
+                    query = f"SELECT d FROM {table} WHERE a = {a} AND b = {b} ALLOW FILTERING"
+                    for got in _all_rows_all_pagings(cql, query, 'd'):
+                        assert got == expected
+
+# Intersection must also work with three (or more) indexed equality restrictions,
+# i.e. more than one additional posting list intersected with the primary one.
+def test_index_intersection_three_columns(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int, c int, d int') as table:
+        for col in ['a', 'b', 'c']:
+            cql.execute(f"CREATE INDEX ON {table}({col})")
+        insert = cql.prepare(f"INSERT INTO {table}(p, a, b, c, d) VALUES (?, ?, ?, ?, ?)")
+        data = []
+        for i in range(80):
+            cql.execute(insert, [i, i % 2, i % 3, i % 4, i])
+            data.append((i % 2, i % 3, i % 4, i))
+        for (a, b, c) in [(0, 0, 0), (1, 2, 3), (0, 1, 2), (1, 0, 1)]:
+            expected = sorted(d for (ra, rb, rc, d) in data if ra == a and rb == b and rc == c)
+            query = f"SELECT d FROM {table} WHERE a = {a} AND b = {b} AND c = {c} ALLOW FILTERING"
+            for got in _all_rows_all_pagings(cql, query, 'd'):
+                assert got == expected
+
+# CUSTOMER-303 phase 2: the whole point of intersecting posting lists is to read
+# fewer base-table rows. Here every row has a = 1 but only a handful also have
+# b = 2. Intersection must read only the (few) matching base rows, not all the
+# a = 1 rows. We verify this via the filtered_rows_read_total metric, which counts
+# base rows read by filtered (ALLOW FILTERING) queries.
+def test_index_intersection_reads_fewer_base_rows(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int') as table:
+        cql.execute(f"CREATE INDEX ON {table}(a)")
+        cql.execute(f"CREATE INDEX ON {table}(b)")
+        insert = cql.prepare(f"INSERT INTO {table}(p, a, b) VALUES (?, ?, ?)")
+        total = 200
+        matching = sorted(i for i in range(total) if i % 50 == 0)  # 4 rows with b=2
+        for i in range(total):
+            cql.execute(insert, [i, 1, 2 if i % 50 == 0 else 7])
+        metric = 'scylla_query_processor_filtered_rows_read_total'
+        before = ScyllaMetrics.query(cql).get(metric) or 0
+        got = sorted(row.p for row in cql.execute(f"SELECT p FROM {table} WHERE a = 1 AND b = 2 ALLOW FILTERING"))
+        after = ScyllaMetrics.query(cql).get(metric) or 0
+        assert got == matching
+        base_rows_read = after - before
+        # With intersection we read only the ~4 matching base rows, not all 200
+        # a = 1 rows. Allow generous slack but require it to be far below 200.
+        assert base_rows_read <= 20, f"read {base_rows_read} base rows for {len(matching)} matches (intersection not applied?)"
+
 # Indexes can be created without an explicit name, in which case a default name is chosen.
 # However, due to #8620 it was possible to break the index creation mechanism by creating
 # a properly named regular table, which conflicts with the generated index name.

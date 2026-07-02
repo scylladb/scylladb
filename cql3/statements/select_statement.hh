@@ -197,6 +197,11 @@ class view_indexed_table_select_statement : public select_statement {
     schema_ptr _view_schema;
     noncopyable_function<dht::partition_range_vector(const query_options&)> _get_partition_ranges_for_posting_list;
     noncopyable_function<query::partition_slice(const query_options&)> _get_partition_slice_for_posting_list;
+    // Additional global indexes (with their view schemas) whose posting lists are
+    // intersected with the primary index's, so we only read base rows that match
+    // every indexed equality restriction (CUSTOMER-303 phase 2). Empty when the
+    // primary index is local or no additional equality-indexed columns apply.
+    std::vector<std::pair<secondary_index::index, schema_ptr>> _intersection_indexes;
 public:
     static constexpr size_t max_base_table_query_concurrency = 4096;
 
@@ -227,6 +232,7 @@ public:
                                    cql_stats &stats,
                                    const secondary_index::index& index,
                                    schema_ptr view_schema,
+                                   std::vector<std::pair<secondary_index::index, schema_ptr>> intersection_indexes,
                                    std::unique_ptr<cql3::attributes> attrs);
 
 private:
@@ -317,6 +323,28 @@ private:
             gc_clock::time_point now,
             db::timeout_clock::time_point timeout,
             bool include_base_clustering_key) const;
+
+    // CUSTOMER-303 phase 2: posting-list intersection helpers.
+    //
+    // read_intersection_index_keys() reads the base primary keys present in an
+    // additional index's posting list (partition = indexed_value) restricted to
+    // the base-token span [first_base_pk, last_base_pk] of the current page. The
+    // returned keys are in base-token (view-clustering) order.
+    future<coordinator_result<std::vector<primary_key>>> read_intersection_index_keys(
+            query_processor& qp, service::query_state& state, const query_options& options,
+            schema_ptr view_schema, const bytes& indexed_value,
+            const partition_key& first_base_pk, const partition_key& last_base_pk,
+            bool include_base_clustering_key) const;
+
+    // Filters the candidate base keys from the primary index down to those that
+    // also appear in every additional index's posting list (a streaming merge
+    // over the shared base-token order). No-op when _intersection_indexes is empty.
+    future<coordinator_result<dht::partition_range_vector>> intersect_partition_ranges(
+            query_processor& qp, service::query_state& state, const query_options& options,
+            dht::partition_range_vector candidates) const;
+    future<coordinator_result<std::vector<primary_key>>> intersect_primary_keys(
+            query_processor& qp, service::query_state& state, const query_options& options,
+            std::vector<primary_key> candidates) const;
 
     dht::partition_range_vector get_partition_ranges_for_local_index_posting_list(const query_options& options) const;
     dht::partition_range_vector get_partition_ranges_for_global_index_posting_list(const query_options& options) const;
