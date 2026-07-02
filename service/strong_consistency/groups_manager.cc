@@ -37,6 +37,7 @@ static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
 
+// Precondition: The passed group_leader must be a non-trivial raft::server_id.
 static std::optional<locator::tablet_replica_set> prepare_replicas_for_sc_tablet_version(locator::tablet_replica_set replicas, raft::server_id group_leader) {
     std::ranges::sort(replicas);
     const auto leader_host_id = locator::host_id{group_leader.uuid()};
@@ -550,6 +551,11 @@ std::optional<locator::tablet_routing_info_v2> groups_manager::check_tablet_vers
     }
 
     const raft::server_id group_leader = state.server->current_leader();
+    if (group_leader == raft::server_id{}) [[unlikely]] {
+        // The leader hasn't been elected yet. We cannot compute the tablet version.
+        return std::nullopt;
+    }
+
     const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
     auto maybe_replicas = prepare_replicas_for_sc_tablet_version(tablet_info.replicas, group_leader);
 
