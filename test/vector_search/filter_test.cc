@@ -9,6 +9,8 @@
 #include <seastar/testing/test_case.hh>
 
 #include "cql3/restrictions/statement_restrictions.hh"
+#include "exceptions/exceptions.hh"
+#include "test/lib/exception_utils.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/util.hh"
 #include "test/lib/cql_assertions.hh"
@@ -514,6 +516,37 @@ SEASTAR_TEST_CASE(to_json_varint) {
         auto options = make_query_options(std::move(bind_values));
         json = rjson::print(filter.to_json(options));
         BOOST_CHECK_EQUAL(json, expected);
+    });
+}
+
+// `single_column_restriction_to_prepared` throws when the operator is not
+// supported for serialization (e.g. LIKE is valid CQL but has no JSON filter
+// representation).
+SEASTAR_TEST_CASE(prepare_filter_throws_on_unsupported_single_column_operator) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table ks.t(pk int, ck int, s text, v vector<float, 3>, primary key(pk, ck))");
+
+        auto restr = make_restrictions("pk=1 AND s LIKE 'abc%'", e);
+        BOOST_CHECK_EXCEPTION(
+            vector_search::prepare_filter(*restr, true),
+            exceptions::invalid_request_exception,
+            exception_predicate::message_contains("Unsupported operator in restriction on column s"));
+    });
+}
+
+// Regression test: `binary_operator_to_prepared` used to silently drop
+// restrictions whose LHS was a subscript expression (e.g. map_col['key']),
+// causing the filter to be omitted from vector ANN queries instead of
+// reporting an error.
+SEASTAR_TEST_CASE(prepare_filter_throws_on_map_subscript_restriction) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table ks.t(pk text, metadata_s map<text, text>, v vector<float, 3>, primary key(pk))");
+
+        auto restr = make_restrictions("metadata_s['source']='docs'", e);
+        BOOST_CHECK_EXCEPTION(
+            vector_search::prepare_filter(*restr, true),
+            exceptions::invalid_request_exception,
+            exception_predicate::message_contains("Unsupported restriction"));
     });
 }
 
