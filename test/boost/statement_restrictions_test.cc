@@ -487,8 +487,11 @@ SEASTAR_TEST_CASE(index_selection) {
         // --- H. Double CONTAINS on same column: CollectionYes && CollectionYes = No ---
         verify(check("s1 CONTAINS 1 AND s1 CONTAINS 2"), {"", none, false, true});
 
-        // --- I. Collection + regular column tiebreak (WHERE-clause order) ---
-        verify(check("s1 CONTAINS 1 AND v1 = 1"), {"", idx("idx_s1"), true, true});
+        // --- I. Collection + regular column: the more selective restriction wins.
+        //        A scalar equality (v1 = 1) is preferred over collection membership
+        //        (s1 CONTAINS 1) regardless of the order they appear in the WHERE
+        //        clause (CUSTOMER-303 selectivity-aware selection).
+        verify(check("s1 CONTAINS 1 AND v1 = 1"), {"", idx("idx_v1"), true, true});
         verify(check("v1 = 1 AND s1 CONTAINS 1"), {"", idx("idx_v1"), true, true});
 
         // --- J. CK group beats collection in non-PK group ---
@@ -938,19 +941,25 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             } else if (full_pk && has_v3) {
                 // Local index scores 2, beats any global (score 1).
                 expected_idx = "comb_v3_local";
-            } else if (has_v1) {
+            }
+            // Among the same-score (global) non-PK indexes, CUSTOMER-303 selects
+            // the more selective restriction first: a scalar/map-element equality
+            // (v1, m3_entries, fs) beats collection membership (s1, m1_values,
+            // m2_keys). Within each selectivity tier, WHERE-clause order (== bit
+            // order here) breaks the tie: v1 < m3_entries < fs, and
+            // s1 < m1_values < m2_keys. (v3 without full_pk scores 0 and is skipped.)
+            else if (has_v1) {
                 expected_idx = "comb_v1";
+            } else if (has_m_ent) {
+                expected_idx = "comb_m3_entries";
+            } else if (has_fs) {
+                expected_idx = "comb_fs";
             } else if (has_s1) {
-                // v3 without full_pk scores 0 and is skipped.
                 expected_idx = "comb_s1";
             } else if (has_m_val) {
                 expected_idx = "comb_m1_values";
             } else if (has_m_key) {
                 expected_idx = "comb_m2_keys";
-            } else if (has_m_ent) {
-                expected_idx = "comb_m3_entries";
-            } else if (has_fs) {
-                expected_idx = "comb_fs";
             }
             // else: no indexable column (v3 alone without full_pk scores 0)
 
