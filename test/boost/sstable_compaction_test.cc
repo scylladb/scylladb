@@ -166,7 +166,7 @@ static void corrupt_sstable(sstables::shared_sstable sst, component_type type = 
     const auto wbuf_len = f.size().get();
     auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
     std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
-    auto os = output_stream<char>(sstables::test(sst).get_storage().make_component_sink(*sst, component_type::Data, open_flags::wo, {}).get());
+    auto os = output_stream<char>(sstables::test(sst).get_storage().make_component_sink(*sst, type, open_flags::wo, {}).get());
     auto close_os = deferred_close(os);
     os.write(std::move(wbuf)).get();
 }
