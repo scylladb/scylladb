@@ -978,8 +978,8 @@ private:
     // Tracks progress of the upgrade to topology coordinator.
     future<> _upgrade_to_topology_coordinator_fiber = make_ready_future<>();
 
-    future<> transit_tablet(table_id, dht::token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
-    future<bool> try_transit_tablet(table_id, dht::token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
+    future<> transit_tablet(table_id, dht::token, noncopyable_function<sstring(group0_update_collector&, const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
+    future<bool> try_transit_tablet(table_id, dht::token, noncopyable_function<sstring(group0_update_collector&, const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
     future<service::group0_guard> get_guard_for_tablet_update();
     future<bool> exec_tablet_update(service::group0_guard guard, group0_update_collector updates, sstring reason);
 public:
