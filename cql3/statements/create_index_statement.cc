@@ -566,12 +566,26 @@ void create_index_statement::validate_for_local_index(const schema& schema) cons
                 auto const is_vector_index = _idx_properties->custom_class && is_vector_capable_class(*_idx_properties->custom_class);
                 auto remaining_base_pk_columns = schema.partition_key_columns();
                 auto next_expected_base_column = remaining_base_pk_columns.begin();
+                auto used_columns = std::set<bytes>();
                 for (const auto& ident : base_pk_identifiers) {
                     auto it = schema.columns_by_name().find(ident->name());
-                    if (it == schema.columns_by_name().end() || !it->second->is_partition_key()) {
-                        if (is_vector_index) {
-                            throw exceptions::invalid_request_exception(format("Local vector index definition must contain partition key's columns only. Redundant column: {}", ident->to_string()));
+
+                    if (is_vector_index) {
+                        if (it == schema.columns_by_name().end() || !(it->second->is_primary_key() || it->second->is_regular())) {
+                            throw exceptions::invalid_request_exception(format(
+                                    "Local vector index definition must contain primary key or regular columns. Redundant column: {}", ident->to_string()));
                         }
+
+                        if (used_columns.contains(ident->name())) {
+                            throw exceptions::invalid_request_exception(format("Duplicate column definition in local vector index: {}", ident->to_string()));
+                        }
+                        used_columns.insert(ident->name());
+
+                        // For vector indexes, we only check that the proper columns exist in the table, but we don't require them to be partition key columns.
+                        continue;
+                    }
+
+                    if (it == schema.columns_by_name().end() || !it->second->is_partition_key()) {
                         throw exceptions::invalid_request_exception(format("Local index definition must contain full partition key only. Redundant column: {}", ident->to_string()));
                     }
                     if (next_expected_base_column == remaining_base_pk_columns.end()) {

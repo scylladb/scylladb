@@ -121,13 +121,45 @@ def test_create_vector_search_local_index_with_filtering_columns(cql, test_keysp
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v, f1, f2) USING 'vector_index'")
 
-def test_create_vector_search_local_index_with_part_of_partition_key(cql, test_keyspace, scylla_only, skip_without_tablets):
+def test_create_vector_search_local_index(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v1 vector<float, 3>, v2 vector<float, 3>, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
     with new_test_table(cql, test_keyspace, schema) as table:
-        with pytest.raises(InvalidRequest, match="Local vector index definition must contain partition key's columns only. Redundant column: c1"):
-            cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, c1), v, f1, f2) USING 'vector_index'")
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1), v1, f1, f2) USING 'vector_index'")
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p2), v2, f1, f2) USING 'vector_index'")
+        # The full partition key
+        cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p1, p2), v1, f1, f2) USING 'vector_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
+        # The full primary key
+        cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p1, p2, c1, c2), v1, f1, f2) USING 'vector_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
+        # The first partition key column
+        cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p1), v1, f1, f2) USING 'vector_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
+        # The not-first partition key column
+        cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p2), v2, f1, f2) USING 'vector_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
+        # The single partition key column + the single clustering key column
+        cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p2, c2), v1, f1, f2) USING 'vector_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
+        # The single clustering key column
+        cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((c1), v1, f1, f2) USING 'vector_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
+        # The single partition key column + the single filtering column
+        cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p1, f1), v1, f2) USING 'vector_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
+        # The single clustering key column + the single filtering column
+        cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((c2, f2), v1, f1) USING 'vector_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
+        # The single filtering column
+        cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((f1), v1, f2) USING 'vector_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
 
 def test_create_vector_search_local_index_with_filtering_columns_on_nonvector_column(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v int, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
@@ -138,18 +170,32 @@ def test_create_vector_search_local_index_with_filtering_columns_on_nonvector_co
 def test_create_vector_search_index_with_supported_and_unsupported_filtering_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
     supported_columns = ', '.join([f's{idx} {typ}' for idx, typ in enumerate(supported_filtering_types)])
     unsupported_columns = ', '.join([f'u{idx} {typ}' for idx, typ in enumerate(unsupported_filtering_types)])
-    schema = f'p int, c int, v vector<float, 3>, {supported_columns}, {unsupported_columns}, primary key (p, c)'
+    schema = f'p int, c int, v vector<float, 3>, {supported_columns}, {unsupported_columns}, stat INT static, primary key (p, c)'
     with new_test_table(cql, test_keyspace, schema) as table:
         for idx in range(len(supported_filtering_types)):
             cql.execute(f"CREATE CUSTOM INDEX global_idx ON {table}(v, s{idx}) USING 'vector_index'")
             cql.execute(f"DROP INDEX {test_keyspace}.global_idx")
+
             cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p), v, s{idx}) USING 'vector_index'")
             cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
+            cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((s{idx}), v) USING 'vector_index'")
+            cql.execute(f"DROP INDEX {test_keyspace}.local_idx")
+
         for idx in range(len(unsupported_filtering_types)):
             with pytest.raises(InvalidRequest, match=f"Unsupported vector index filtering column u{idx} type|Secondary indexes are not supported"):
                 cql.execute(f"CREATE CUSTOM INDEX global_idx ON {table}(v, u{idx}) USING 'vector_index'")
             with pytest.raises(InvalidRequest, match=f"Unsupported vector index filtering column u{idx} type|Secondary indexes are not supported"):
                 cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p), v, u{idx}) USING 'vector_index'")
+            with pytest.raises(InvalidRequest, match=f"Unsupported vector index filtering column u{idx} type|Secondary indexes are not supported"):
+                cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((u{idx}), v) USING 'vector_index'")
+
+        with pytest.raises(InvalidRequest, match=f"Local vector index definition must contain primary key or regular columns. Redundant column: wrongname|Secondary indexes are not supported"):
+            cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p, wrongname), v) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match=f"Local vector index definition must contain primary key or regular columns. Redundant column: stat|Secondary indexes are not supported"):
+            cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p, stat), v) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match=f"Duplicate column definition in local vector index: p|Secondary indexes are not supported"):
+            cql.execute(f"CREATE CUSTOM INDEX local_idx ON {table}((p, p), v) USING 'vector_index'")
 
 def test_create_vector_search_local_index_with_unsupported_partition_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
     for filter_type in unsupported_filtering_types:
