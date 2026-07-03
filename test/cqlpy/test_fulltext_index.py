@@ -689,3 +689,11 @@ def test_udf_named_bm25_coexists_with_system_bm25(cql, test_keyspace, fulltext_t
             cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
         # The system BM25 operator is reachable via system. qualification
         cql.prepare(f"SELECT * FROM {fulltext_table} WHERE system.bm25(content, 'hello') > 0 ORDER BY system.bm25(content, 'hello') LIMIT 10")
+
+
+def test_bm25_rejected_in_non_select_statements(cql, fulltext_table):
+    """BM25 must be rejected in non-SELECT statements."""
+    with pytest.raises(InvalidRequest, match="only supported in SELECT statements"):
+        cql.execute(f"UPDATE {fulltext_table} SET content = 'x' WHERE p = 1 AND BM25(content, 'hello') > 0")
+    with pytest.raises(InvalidRequest, match="only supported in SELECT statements"):
+        cql.execute(f"DELETE FROM {fulltext_table} WHERE p = 1 AND BM25(content, 'hello') > 0")

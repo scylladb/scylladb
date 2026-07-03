@@ -838,6 +838,9 @@ statement_restrictions::statement_restrictions(private_tag,
             // They signal full-text search intent but do not filter rows or select an index.
             // Intercept them so they never enter the generic restriction/index/filtering machinery.
             if (expr::is_native_function_call(*fc, "bm25")) {
+                if (!type.is_select()) {
+                    throw exceptions::invalid_request_exception("BM25() is only supported in SELECT statements");
+                }
                 _scoring_function_restrictions.push_back(std::move(prepared_restriction));
                 continue;
             }
