@@ -72,6 +72,7 @@
 #include "utils/user_provided_param.hh"
 #include "version.hh"
 #include "streaming/stream_blob.hh"
+#include "service/paxos/paxos_state.hh"
 #include "dht/range_streamer.hh"
 #include <boost/range/algorithm.hpp>
 #include <boost/range/join.hpp>
@@ -6793,7 +6794,8 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
         locator::tablet_replica_set read_from{streaming_info.read_from.begin(), streaming_info.read_from.end()};
-        if (trinfo->transition == locator::tablet_transition_kind::rebuild_v2) {
+        const auto transition = trinfo->transition;
+        if (transition == locator::tablet_transition_kind::rebuild_v2) {
             auto nearest_hosts = read_from | std::views::transform([] (const auto& tr) {
                 return tr.host;
             }) | std::ranges::to<host_id_vector_replica_set>();
@@ -6811,17 +6813,17 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         }
 
         streaming::stream_reason reason = std::invoke([&] {
-            switch (trinfo->transition) {
+            switch (transition) {
                 case locator::tablet_transition_kind::migration: return streaming::stream_reason::tablet_migration;
                 case locator::tablet_transition_kind::intranode_migration: return streaming::stream_reason::tablet_migration;
                 case locator::tablet_transition_kind::rebuild: return streaming::stream_reason::rebuild;
                 case locator::tablet_transition_kind::rebuild_v2: return streaming::stream_reason::rebuild;
                 default:
-                    throw std::runtime_error(fmt::format("stream_tablet(): Invalid tablet transition: {}", trinfo->transition));
+                    throw std::runtime_error(fmt::format("stream_tablet(): Invalid tablet transition: {}", transition));
             }
         });
 
-        if (trinfo->transition != locator::tablet_transition_kind::intranode_migration && _feature_service.file_stream && _db.local().get_config().enable_file_stream()) {
+        if (transition != locator::tablet_transition_kind::intranode_migration && _feature_service.file_stream && _db.local().get_config().enable_file_stream()) {
             co_await utils::get_local_injector().inject("migration_streaming_wait", [] (auto& handler) {
                 rtlogger.info("migration_streaming_wait: start");
                 return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
@@ -6829,7 +6831,6 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
             auto dst_node = trinfo->pending_replica->host;
             auto dst_shard_id = trinfo->pending_replica->shard;
-            auto transition = trinfo->transition;
 
             // Release token_metadata_ptr early so it will no block barriers for other migrations
             // Don't access trinfo after this.
@@ -6867,7 +6868,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
       } else { // Caution: following code is intentionally unindented to be in sync with OSS
 
 
-        if (trinfo->transition == locator::tablet_transition_kind::intranode_migration) {
+        if (transition == locator::tablet_transition_kind::intranode_migration) {
             if (!leaving_replica || leaving_replica->host != tm->get_my_id()) {
                 throw std::runtime_error(fmt::format("Invalid leaving replica for intra-node migration, tablet: {}, leaving: {}",
                                                      tablet, leaving_replica));
@@ -6900,7 +6901,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, std::move(tm),
                                                                 guard.get_abort_source(),
                                                                 my_id, _snitch.local()->get_location(),
-                                                                format("Tablet {}", trinfo->transition),
+                                                                format("Tablet {}", transition),
                                                                 reason,
                                                                 topo_guard,
                                                                 std::move(tables));
@@ -6919,7 +6920,6 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         }
 
       } // Traditional streaming vs file-based streaming.
-
         const auto schema = _db.local().find_column_family(tablet.table).schema();
 
         co_await utils::get_local_injector().inject("pause_after_streaming_tablet_before_fetch_column_mappings",
@@ -6932,6 +6932,25 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 slogger.info("pause_after_streaming_tablet_before_fetch_column_mappings: message received");
             }
         });
+
+        // After streaming completes, sync column mapping history from the source replicas
+        // to the destination. This ensures that if the migrated $paxos tablet contains
+        // proposals tagged with an old schema version V, the destination also holds
+        // mapping(V) so that upgrade_if_needed can decode those proposals.
+        // Only relevant for $paxos tables (identified by try_get_base_table returning
+        // a non-null result) and not for intranode migrations.
+        if (transition != locator::tablet_transition_kind::intranode_migration) {
+            const auto base_table_name = service::paxos::paxos_store::try_get_base_table(schema->cf_name());
+            if (base_table_name) {
+                co_await _migration_manager.local().fetch_column_mappings(
+                    _db.local().find_uuid(schema->ks_name(), *base_table_name),
+                    read_from
+                        | std::views::transform([] (const auto& tr) { return tr.host;})
+                        | std::ranges::to<host_id_vector_replica_set>(),
+                    false /* ignore_down_replicas */,
+                    _abort_source);
+            }
+        }
 
         // If new pending tablet replica needs splitting, streaming waits for it to complete.
         // That's to provide a guarantee that once migration is over, the coordinator can finalize

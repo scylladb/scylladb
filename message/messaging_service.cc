@@ -784,6 +784,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::PAXOS_PRUNE:
     case messaging_verb::FORWARD_CQL_EXECUTE:
     case messaging_verb::FORWARD_CQL_PREPARE:
+    case messaging_verb::FETCH_COLUMN_MAPPINGS:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:

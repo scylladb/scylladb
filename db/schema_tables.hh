@@ -14,6 +14,7 @@
 #include "schema/schema_fwd.hh"
 #include "schema_features.hh"
 #include "utils/hashing.hh"
+#include "utils/small_vector.hh"
 #include "schema/schema_mutations.hh"
 #include "types/map.hh"
 #include "query/query-result-set.hh"
@@ -318,6 +319,10 @@ std::optional<std::map<K, V>> get_map(const query::result_set_row& row, const ss
 /// Can be used to insert entries with TTL (equal to DEFAULT_GC_GRACE_SECONDS) in case we are
 /// overwriting an existing column mapping to garbage collect obsolete entries.
 future<> store_column_mapping(sharded<service::storage_proxy>& proxy, schema_ptr s, bool with_ttl);
+/// Returns the schema versions present in the local scylla_table_schema_history
+/// partition for the given table. Usually one, hence small_vector.
+using column_mapping_version_list = utils::small_vector<table_schema_version, 1>;
+future<column_mapping_version_list> get_column_mapping_versions(db::system_keyspace& sys_ks, table_id cf_id);
 /// Query column mapping for a given version of the table locally.
 future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
 /// Returns the same result as `get_column_mapping()` wrapped in optional and returns nullopt if the mapping doesn't exist.

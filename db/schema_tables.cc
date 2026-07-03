@@ -979,6 +979,22 @@ future<> store_column_mapping(sharded<service::storage_proxy>& proxy, schema_ptr
     co_await proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr());
 }
 
+future<column_mapping_version_list> get_column_mapping_versions(db::system_keyspace& sys_ks, table_id cf_id) {
+    static const auto query = format("SELECT schema_version FROM {}.{} WHERE cf_id = ? GROUP BY schema_version",
+            db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY);
+    const auto results = co_await sys_ks.query_processor().execute_internal(
+            query,
+            db::consistency_level::LOCAL_ONE,
+            {cf_id.uuid()},
+            cql3::query_processor::cache_internal::yes);
+    column_mapping_version_list versions;
+    versions.reserve(results->size());
+    for (const auto& row : *results) {
+        versions.push_back(table_schema_version(row.get_as<utils::UUID>("schema_version")));
+    }
+    co_return std::move(versions);
+}
+
 future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(sharded<service::storage_proxy>& proxy, const schema_result_value_type& partition) {
     lw_shared_ptr<query::result_set> scylla_specific_rs;
     if (proxy.local().local_db().has_schema(NAME, SCYLLA_KEYSPACES)) {
