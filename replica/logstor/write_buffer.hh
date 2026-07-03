@@ -160,7 +160,7 @@ public:
     append_result append(const log_record_writer& writer);
     size_t sealed_size(size_t alignment) const noexcept;
 
-    static size_t estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size);
+    static size_t estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size, segment_kind);
 
     bool with_segment_header() const noexcept {
         return _segment_kind == segment_kind::full;
