@@ -1597,3 +1597,110 @@ async def test_request_routing_during_replace(manager: ManagerClient):
         new_server_host = cql.cluster.metadata.get_host(new_server.ip_addr)
         for k in [K1, K2, K3, K4]:
             await _read_key(cql, ks, k, new_server_host)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_replace_rollback_during_migration(manager: ManagerClient):
+    """Verify that the topology coordinator correctly rolls back tablet map changes
+    when a node replacement fails during streaming, and that a subsequent
+    replacement succeeds.
+    """
+    num_shards = 2
+    num_tokens = 16
+
+    cfg = {'num_tokens': num_tokens}
+    cmdline = ['--smp', str(num_shards)]
+
+    logger.info("Starting a 3-node cluster (one rack per node)")
+    property_files = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+    servers = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=property_files)
+    s0, s1, s2 = servers
+    s1_host_id = str(await manager.get_host_id(s1.server_id))
+
+    logger.info(f"Pinning raft group0 leader on s0 ({s0.server_id})")
+    await ensure_group0_leader_on(manager, s0)
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager,
+            f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} "
+            f"AND tablets = {{'enabled': false}}") as ks:
+        table_name = 'test'
+        await cql.run_async(f"CREATE TABLE {ks}.{table_name} (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet map)")
+        await manager.api.create_vnode_tablet_migration(s0.ip_addr, ks)
+
+        logger.info("Taking log mark on s0 before the failed replace")
+        log = await manager.server_open_log(s0.server_id)
+        mark = await log.mark()
+
+        # --- FAILED REPLACE ---
+        logger.info(f"Stopping s1 ({s1.server_id}) — to be replaced")
+        await manager.server_stop(s1.server_id, convict=True)
+
+        logger.info("Starting replacement of dead node s1 with stream_ranges_fail injection (expected to fail)")
+        replace_cfg = ReplaceConfig(replaced_id=s1.server_id, reuse_ip_addr=False, use_host_id=True)
+        await manager.server_add(replace_cfg,
+                                 cmdline=cmdline,
+                                 property_file=s1.property_file(),
+                                 config={**cfg, 'error_injections_at_startup': ['stream_ranges_fail']},
+                                 expected_error="Replace failed. See earlier errors")
+
+        rollback_pattern = r"raft_topology - rollback.*after replacing failure, moving transition state to left token ring"
+        matches = await log.grep(rollback_pattern, from_mark=mark)
+        assert len(matches) == 1
+
+        logger.info("Verifying tablet map is clean after rollback")
+        table_id = await manager.get_table_or_view_id(ks, table_name)
+        await read_barrier(manager.api, s0.ip_addr)
+        host = manager.get_cql().cluster.metadata.get_host(s0.ip_addr)
+        tablet_rows = await manager.get_cql().run_async(
+            f"SELECT last_token, replicas, new_replicas, stage, transition "
+            f"FROM system.tablets WHERE table_id = {table_id}",
+            host=host)
+        assert tablet_rows, f"No tablet rows found for {ks}.{table_name} after rollback"
+        for row in tablet_rows:
+            replica_hosts = {str(h) for h, _ in row.replicas}
+            assert s1_host_id in replica_hosts, \
+                f"Tablet at {row.last_token}: dead node {s1_host_id} should still be in replicas after rollback, got {replica_hosts}"
+            assert row.new_replicas is None, \
+                f"Tablet at {row.last_token}: expected new_replicas=None after rollback, got {row.new_replicas}"
+            assert row.stage is None, \
+                f"Tablet at {row.last_token}: expected stage=None after rollback, got {row.stage}"
+            assert row.transition is None, \
+                f"Tablet at {row.last_token}: expected transition=None after rollback, got {row.transition}"
+
+        # --- RECOVERY: SECOND REPLACE (SUCCESSFUL) ---
+        logger.info("Starting second replacement of dead node s1 (expected to succeed)")
+        new_server = await manager.server_add(replace_cfg,
+                                              cmdline=cmdline,
+                                              property_file=s1.property_file(),
+                                              config=cfg)
+        new_host_id = str(await manager.get_host_id(new_server.server_id))
+        logger.info(f"Second replacement node started: server_id={new_server.server_id}, host_id={new_host_id}")
+
+        await reconnect_driver(manager)
+        surviving = [s0, new_server, s2]
+        cql, _ = await manager.get_ready_cql(surviving)
+
+        logger.info("Verifying final tablet map after successful second replace")
+        await read_barrier(manager.api, s0.ip_addr)
+        host = cql.cluster.metadata.get_host(s0.ip_addr)
+        table_id = await manager.get_table_or_view_id(ks, table_name)
+        tablet_rows = await cql.run_async(
+            f"SELECT last_token, replicas, new_replicas, stage, transition FROM system.tablets WHERE table_id = {table_id}",
+            host=host)
+        assert tablet_rows, f"No tablet rows found for {ks}.{table_name} after second replace"
+        for row in tablet_rows:
+            replica_hosts = {str(h) for h, _ in row.replicas}
+            assert new_host_id in replica_hosts, \
+                f"Tablet at {row.last_token}: new node {new_host_id} not in replicas {replica_hosts}"
+            assert s1_host_id not in replica_hosts, \
+                f"Tablet at {row.last_token}: dead node {s1_host_id} still in replicas {replica_hosts}"
+            assert row.new_replicas is None, \
+                f"Tablet at {row.last_token}: expected new_replicas=None, got {row.new_replicas}"
+            assert row.stage is None, \
+                f"Tablet at {row.last_token}: expected stage=None, got {row.stage}"
+            assert row.transition is None, \
+                f"Tablet at {row.last_token}: expected transition=None, got {row.transition}"
