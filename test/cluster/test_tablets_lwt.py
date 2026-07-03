@@ -982,7 +982,6 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout
         await lwt
 
 
-@pytest.mark.xfail(reason="Column mapping migration not yet implemented (CUSTOMER-509)")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_column_mapping_migrated_with_tablet(manager: ManagerClient):
     """Reproducer for CUSTOMER-509: after tablet migration, the destination node

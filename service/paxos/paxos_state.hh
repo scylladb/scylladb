@@ -123,6 +123,7 @@ class paxos_store:
     replica::database& _db;
     migration_manager& _mm;
     bool _stopped = false;
+    key_lock_map<table_id> _table_lock_map{false};
 
     template <typename... Args>
     future<cql3::untyped_result_set> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
@@ -138,7 +139,7 @@ public:
     future<> ensure_initialized(const schema& s, db::timeout_clock::time_point timeout);
     static std::optional<std::string_view> try_get_base_table(std::string_view cf_name);
 
-    future<column_mapping> get_column_mapping(table_id, table_schema_version v);
+    future<column_mapping> get_column_mapping(const schema& query_schema, dht::token token, table_schema_version version, clock_type::time_point timeout);
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
         db::timeout_clock::time_point timeout);
     future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
