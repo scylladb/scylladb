@@ -472,7 +472,7 @@ static std::unordered_set<locator::host_id> get_released_nodes(const service::to
 future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal, std::optional<std::unordered_set<locator::host_id>> prev_released) {
     nodes_to_notify_after_sync nodes_to_notify;
 
-    rtlogger.trace("Start sync_raft_topology_nodes");
+    rtlogger.debug("Start sync_raft_topology_nodes");
 
     const auto& t = _topology_state_machine._topology;
 
@@ -627,9 +627,10 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         std::copy(nodes_to_release.begin(), nodes_to_release.end(), std::back_inserter(nodes_to_notify.released));
     }
 
+    rtlogger.debug("sync_raft_topology_nodes: waiting for system keyspace updates to complete");
     co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
 
-    rtlogger.trace("End sync_raft_topology_nodes");
+    rtlogger.debug("End sync_raft_topology_nodes");
 
     co_return nodes_to_notify;
 }
@@ -670,6 +671,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     std::unordered_set<locator::host_id> tablet_hosts = co_await replica::read_required_hosts(_qp);
 
     // read topology state from disk and recreate token_metadata from it
+    rtlogger.debug("topology_state_load: loading topology state");
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
     _topology_state_machine.reload_count++;
     auto& topology = _topology_state_machine._topology;
@@ -685,7 +687,9 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
     auto saved_tmpr = get_token_metadata_ptr();
     {
+        rtlogger.debug("topology_state_load: waiting for token metadata lock");
         auto tmlock = co_await get_token_metadata_lock();
+        rtlogger.debug("topology_state_load: updating token metadata");
         auto tmptr = _shared_token_metadata.make_token_metadata_ptr();
         tmptr->invalidate_cached_rings();
 
@@ -751,7 +755,9 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             }
         }
 
+        rtlogger.debug("topology_state_load: replicating token metadata to all cores");
         co_await replicate_to_all_cores(std::move(tmptr));
+        rtlogger.debug("topology_state_load: notifying nodes after token metadata replication");
         co_await notify_nodes_after_sync(std::move(nodes_to_notify));
         rtlogger.debug("topology_state_load: token metadata replication to all cores finished");
     }
