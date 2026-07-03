@@ -143,13 +143,15 @@ ScyllaDB supports creating vector indexes on tables, allowing queries on the tab
 similarity search on vector data. Vector indexes can be a global index for indexing vectors per table or a local
 index for indexing vectors per partition.
 
-The vector index is the only custom type index supported in ScyllaDB. It is created using
-the ``CUSTOM`` keyword and specifying the index type as ``vector_index``. It is also possible to
-add additional columns to the index for filtering the search results. The partition column
-specified in the global vector index definition must be the vector column, and any subsequent
-columns are treated as filtering columns. The local vector index requires that the partition key
-of the index is a subset of the table's partition key columns and the vector column is the first
-one from the following columns.
+The vector index is one of the custom indexes supported in ScyllaDB. It is
+created using the ``CUSTOM`` keyword and specifying the index type as
+``vector_index``. It is also possible to add additional columns to the index
+for filtering the search results. The first column specified in the global
+vector index definition must be the vector column, and any subsequent columns
+are treated as filtering columns. The local vector index requires that the
+partition key of the index is of a type allowed for filtering columns and the
+vector column is the first one after the partition key definition, and any
+subsequent columns are filtering columns.
 
 ScyllaDB allows creating multiple **named** vector indexes on the same vector column.
 This can be used to create a replacement index before dropping an older one.
@@ -192,13 +194,13 @@ Example of a local vector index:
 The vector column (``embedding``) is indexed for similarity search (a local
 index) and additional columns are added for filtering the search results. The
 filtering is possible on ``category``, ``info`` and all primary key columns of
-the base table. The partition key of the base table must contains both columns
-``id`` and ``created_at``. It is allowed to create a local vector index using
-only a part of the partition key columns of the base table.
+the base table. It is allowed to create a local vector index using
+primary key columns of the base table or non-primary-key columns.
 
-Vector indexes support additional filtering columns of native data types
-(excluding counter and duration). The indexed column itself must be a vector
-column, while the extra columns can be used to filter search results.
+Vector indexes support a local index partition key or additional filtering
+columns of native data types (excluding counter and duration). The first column
+after the partition key definition must be a vector column, while the extra
+columns can be used to filter search results.
 
 The supported types are:
 
