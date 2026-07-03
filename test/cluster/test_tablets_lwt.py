@@ -963,3 +963,181 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout
 
         logger.info("Wait for the LWT to finish")
         await lwt
+
+
+@pytest.mark.xfail(reason="Column mapping migration not yet implemented (CUSTOMER-509)")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_column_mapping_migrated_with_tablet(manager: ManagerClient):
+    """Reproducer for CUSTOMER-509: after tablet migration, the destination node
+    must hold column mappings for schema versions referenced in the migrated
+    $paxos state.
+
+    The fix has two complementary mechanisms:
+    (a) Data plane fetch: when an LWT encounters a missing column mapping, it
+        fetches from the tablet's current replicas on the fly (paxos_state.cc).
+    (b) Streaming fetch: after streaming completes during tablet migration, the
+        destination proactively fetches column mappings from source replicas
+        (storage_service.cc), so future LWTs don't have to rely on the source
+        being reachable.
+
+    This test verifies both mechanisms:
+
+    Part 1 — Data plane fetch works even before streaming fetch completes:
+      1. Single node n1, rf=1, one tablet. Run an LWT that persists a paxos
+         proposal tagged with schema version V (inject error so the round fails).
+      2. ALTER TABLE to supersede V with V2.
+      3. Add node n2 (bootstraps from group0 snapshot, only stores mapping(V2)).
+      4. Start migrating the tablet n1 -> n2, but pause after streaming finishes
+         and before the column mappings fetch runs.
+      5. While the fetch is paused, run an LWT — it must succeed because the data
+         plane fetch retrieves mapping(V) from n1 (still a replica during migration).
+      6. Resume the injection, let migration complete.
+
+    Part 2 — Streaming fetch persists mappings for future use:
+      7. Inject a paxos error on n2 and run an LWT — persists a stale proposal
+         tagged with V2.
+      8. ALTER TABLE to supersede V2 with V3.
+      9. Add node n3 (only knows mapping(V3)).
+     10. Migrate the tablet n2 -> n3. The streaming fetch must copy mapping(V2)
+         from n2 to n3.
+     11. Run an LWT on n3 — must succeed. Since rf=1, data plane fetch only queries
+         n3 itself (the sole replica), so if streaming fetch hadn't persisted
+         mapping(V2) on n3, the LWT would fail.
+    """
+    logger.info("Start node n1")
+    cmdline = ['--logger-log-level', 'paxos=trace']
+    servers = [await manager.server_add(cmdline=cmdline)]
+    cql = manager.get_cql()
+    logger.info("Disable tablet balancing")
+    await manager.disable_tablet_balancing()
+    logger.info("Create keyspace with rf=1 and a single tablet")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int);")
+
+        # ──────────────────────────────────────────────────────────────────────
+        # Part 1: Data plane fetch works before streaming fetch completes
+        # ──────────────────────────────────────────────────────────────────────
+
+        # Step 1: Persist a paxos proposal tagged with schema version V, then fail the round.
+        logger.info("Inject paxos_error_after_save_proposal on n1")
+        await inject_error_on(manager, 'paxos_error_after_save_proposal', servers)
+        logger.info("Execute LWT (expect failure due to injection)")
+        with pytest.raises(WriteFailure, match="injected_error_after_save_proposal"):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (1, 1) IF NOT EXISTS")
+        logger.info("Disable injection")
+        await disable_injection_on(manager, 'paxos_error_after_save_proposal', servers)
+
+        # Step 2: ALTER TABLE to create a new schema version V2, superseding V.
+        logger.info("ALTER TABLE to supersede schema version V with V2")
+        await cql.run_async(f"ALTER TABLE {ks}.test ADD v2 int;")
+
+        # Step 3: Add node n2. It bootstraps from group0 snapshot and only stores mapping(V2).
+        logger.info("Add node n2")
+        servers += [await manager.server_add(cmdline=cmdline)]
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        # Step 4: Migrate the tablet from n1 to n2, pausing after streaming but
+        # before column mappings fetch. The injection is parameterized with the
+        # $paxos table name so it only fires for the paxos tablet (which holds
+        # the stale proposal), not for the base table tablet.
+        paxos_table = "test$paxos"
+        logger.info("Enable pause_after_streaming_tablet_before_fetch_column_mappings on n2")
+        await manager.api.enable_injection(
+            servers[1].ip_addr, 'pause_after_streaming_tablet_before_fetch_column_mappings',
+            one_shot=False, parameters={"keyspace": ks, "table": paxos_table})
+
+        logger.info("Migrate tablet n1 -> n2")
+        n1_host_id = await manager.get_host_id(servers[0].server_id)
+        n2_host_id = await manager.get_host_id(servers[1].server_id)
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        assert len(tablets) == 1
+        tablet = tablets[0]
+        n1_replica = next(r for r in tablet.replicas if r[0] == n1_host_id)
+
+        log = await manager.server_open_log(servers[1].server_id)
+        migration_task = asyncio.create_task(manager.api.move_tablet(
+            servers[0].ip_addr, ks, "test", *n1_replica, *(n2_host_id, 0), tablet.last_token))
+
+        logger.info("Wait for injection to fire ($paxos streaming done, fetch paused)")
+        await log.wait_for('pause_after_streaming_tablet_before_fetch_column_mappings: waiting for message')
+
+        # Step 5: Run an LWT while the streaming fetch is paused. The data plane
+        # fetch in paxos_state.cc retrieves mapping(V) from n1 (still a natural
+        # replica during the in-progress migration).
+        logger.info("Execute LWT (should succeed via data plane fetch from n1)")
+        result = await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (1, 1) IF NOT EXISTS")
+        logger.info(f"LWT result: {result}")
+
+        # Step 6: Release the injection and let migration complete (including the
+        # streaming fetch that proactively persists mappings on n2).
+        logger.info("Release injection, let migration complete")
+        await manager.api.message_injection(
+            servers[1].ip_addr, 'pause_after_streaming_tablet_before_fetch_column_mappings')
+        await migration_task
+        await manager.api.disable_injection(
+            servers[1].ip_addr, 'pause_after_streaming_tablet_before_fetch_column_mappings')
+
+        # Verify n2 holds the old schema version mapping after migration.
+        table_id_rows = await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'")
+        assert len(table_id_rows) == 1
+        cf_id = table_id_rows[0].id
+        history_rows = await cql.run_async(
+            f"SELECT schema_version FROM system.scylla_table_schema_history WHERE cf_id = {cf_id}",
+            host=hosts[1])
+        versions_on_n2 = set(row.schema_version for row in history_rows)
+        logger.info(f"Schema versions on n2 for table {cf_id}: {versions_on_n2}")
+        assert len(versions_on_n2) >= 2, \
+            f"Expected at least 2 schema versions on n2 (old V + current V2), got {len(versions_on_n2)}: {versions_on_n2}"
+
+        # ──────────────────────────────────────────────────────────────────────
+        # Part 2: Streaming fetch persists mappings for future use
+        # ──────────────────────────────────────────────────────────────────────
+
+        # Step 7: Persist a paxos proposal tagged with schema version V2 on n2,
+        # then fail the round.
+        logger.info("Inject paxos_error_after_save_proposal on n2")
+        await inject_error_on(manager, 'paxos_error_after_save_proposal', servers[1:])
+        logger.info("Execute LWT (expect failure due to injection)")
+        with pytest.raises(WriteFailure, match="injected_error_after_save_proposal"):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (1, 2) IF NOT EXISTS")
+        await disable_injection_on(manager, 'paxos_error_after_save_proposal', servers[1:])
+
+        # Step 8: ALTER TABLE to create schema version V3, superseding V2.
+        logger.info("ALTER TABLE to supersede schema version V2 with V3")
+        await cql.run_async(f"ALTER TABLE {ks}.test ADD v3 int;")
+
+        # Step 9: Add node n3. It bootstraps and only stores mapping(V3).
+        logger.info("Add node n3")
+        servers += [await manager.server_add(cmdline=cmdline)]
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        # Step 10: Migrate tablet n2 -> n3. The streaming fetch must copy
+        # mapping(V2) from n2 to n3.
+        logger.info("Migrate tablet n2 -> n3")
+        n3_host_id = await manager.get_host_id(servers[2].server_id)
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        assert len(tablets) == 1
+        tablet = tablets[0]
+        n2_replica = next(r for r in tablet.replicas if r[0] == n2_host_id)
+        await manager.api.move_tablet(
+            servers[0].ip_addr, ks, "test", *n2_replica, *(n3_host_id, 0), tablet.last_token)
+
+        # Step 11: Run an LWT targeting n3. The tablet is now on n3 (rf=1), so
+        # data plane fetch only queries n3 itself — it cannot retrieve mapping(V2)
+        # from n2. If the streaming fetch hadn't persisted mapping(V2) on n3,
+        # this would fail with "Failed to look up column mapping for schema version".
+        logger.info("Execute LWT on n3 (should succeed if streaming fetch persisted mapping)")
+        result = await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (1, 2) IF NOT EXISTS")
+        logger.info(f"LWT result: {result}")
+
+        # Verify n3 holds the old schema version mapping.
+        history_rows = await cql.run_async(
+            f"SELECT schema_version FROM system.scylla_table_schema_history WHERE cf_id = {cf_id}",
+            host=hosts[2])
+        versions_on_n3 = set(row.schema_version for row in history_rows)
+        logger.info(f"Schema versions on n3 for table {cf_id}: {versions_on_n3}")
+        # n3 must have at least 3 versions: V (from n1->n2 streaming fetch, then n2->n3),
+        # V2 (from n2->n3 streaming fetch), and V3 (from bootstrap).
+        assert len(versions_on_n3) >= 3, \
+            f"Expected at least 3 schema versions on n3 (V + V2 + V3), got {len(versions_on_n3)}: {versions_on_n3}"
