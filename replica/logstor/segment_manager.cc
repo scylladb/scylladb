@@ -1910,7 +1910,7 @@ std::optional<compaction_manager_impl::compaction_candidate> compaction_manager_
         accum_record_count += desc.record_count;
 
         auto estimated_segments_out = raw_write_buffer::estimate_required_segments(
-                accum_net_data_size, accum_record_count, segment_size);
+                accum_net_data_size, accum_record_count, segment_size, segment_kind::full);
 
         compaction_candidate_score score{
             .n_in = candidates.size(),
