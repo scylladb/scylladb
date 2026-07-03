@@ -5215,6 +5215,19 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
       } // Traditional streaming vs file-based streaming.
 
+        const auto schema = _db.local().find_column_family(tablet.table).schema();
+
+        co_await utils::get_local_injector().inject("pause_after_streaming_tablet_before_fetch_column_mappings",
+                [schema] (auto& handler) -> future<> {
+            const auto ks = handler.get("keyspace");
+            const auto cf = handler.get("table");
+            if (ks == schema->ks_name() && cf == schema->cf_name()) {
+                slogger.info("pause_after_streaming_tablet_before_fetch_column_mappings: waiting for message");
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
+                slogger.info("pause_after_streaming_tablet_before_fetch_column_mappings: message received");
+            }
+        });
+
         // If new pending tablet replica needs splitting, streaming waits for it to complete.
         // That's to provide a guarantee that once migration is over, the coordinator can finalize
         // splitting under the promise that compaction groups of tablets are all split, ready
