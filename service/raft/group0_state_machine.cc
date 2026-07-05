@@ -540,10 +540,32 @@ void group0_state_machine::drop_snapshot(raft::snapshot_id id) {
 }
 
 future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
-    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
+    // If transfer_snapshot() applied this snapshot to disk and left the
+    // read_apply mutex held, pick up the same holder so that the on-disk
+    // application and the in-memory reload below form a single critical
+    // section. Otherwise (e.g. loading a local snapshot on startup) acquire
+    // the mutex normally.
+    semaphore_units<> read_apply_mutex_holder;
+    if (_pending_snapshot_application && _pending_snapshot_application->id == id) {
+        read_apply_mutex_holder = std::move(_pending_snapshot_application->read_apply_mutex_holder);
+        _pending_snapshot_application.reset();
+    } else {
+        read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
+    }
     if (_in_memory_state_machine_enabled) {
         co_await reload_state();
     }
+}
+
+future<> group0_state_machine::abort_snapshot_transfer(raft::snapshot_id id) {
+    // The snapshot fetched by transfer_snapshot() will not be loaded (the Raft
+    // FSM rejected it as outdated or its application failed). Release the
+    // read_apply mutex we were holding for the deferred load_snapshot().
+    if (_pending_snapshot_application && _pending_snapshot_application->id == id) {
+        slogger.info("aborting pending group0 snapshot transfer {}, releasing read_apply mutex", id);
+        _pending_snapshot_application.reset();
+    }
+    return make_ready_future<>();
 }
 
 future<> group0_state_machine::enable_in_memory_state_machine() {
@@ -651,7 +673,21 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     // TODO ensure atomicity of snapshot application in presence of crashes (see TODO in `apply`)
 
+    // Hold the read_apply mutex across the on-disk application here and the
+    // in-memory reload in load_snapshot(), making the two atomic with respect to
+    // group0 readers and command application. The holder is kept in a local while
+    // we write to disk, so any exception below releases the mutex; on success it
+    // is moved into _pending_snapshot_application for load_snapshot() to pick up.
+    //
+    // The read_apply mutex also serializes concurrent snapshot transfers (the
+    // leader may resend install_snapshot, and each RPC runs transfer_snapshot()
+    // before the FSM-level dedup in server_impl::apply_snapshot()). A concurrent
+    // transfer_snapshot() blocks on the acquire below until the previous pending
+    // holder is consumed by load_snapshot() or released by
+    // abort_snapshot_transfer(). Since the mutex has a single unit and the pending
+    // holder owns it, at most one pending application can exist at a time.
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
+    SCYLLA_ASSERT(!_pending_snapshot_application);
 
     if (_in_memory_state_machine_enabled) {
         // Phase 1 only: persist schema mutations to disk and snapshot the
@@ -689,6 +725,10 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
 
+    // On-disk application succeeded. Hand the mutex holder off to load_snapshot()
+    // (or to abort_snapshot_transfer() if the snapshot ends up rejected).
+    _pending_snapshot_application.emplace(snp.id, std::move(read_apply_mutex_holder));
+
     slogger.info("transfer snapshot from {} index {} snp id {} completed", hid, snp.idx, snp.id);
   } catch (const abort_requested_exception&) {
     throw raft::request_aborted(fmt::format(
@@ -698,6 +738,9 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
 future<> group0_state_machine::abort() {
     _abort_source.request_abort();
+    // Release any read_apply mutex holder left pending by transfer_snapshot():
+    // on shutdown the corresponding load_snapshot() may never run.
+    _pending_snapshot_application.reset();
     return _gate.close();
 }
 

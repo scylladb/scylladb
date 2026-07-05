@@ -197,10 +197,30 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier(raft::server_id 
 }
 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
+    const auto snp_id = snp.snp.id;
     co_await _sm.transfer_snapshot(from, snp.snp);
-    co_return co_await raft_with_gate(_shutdown_gate, [&] {
-        return _client->apply_snapshot(from, std::move(snp));
-    });
+
+    raft::snapshot_reply reply{};
+    std::exception_ptr ex;
+    try {
+        reply = co_await raft_with_gate(_shutdown_gate, [&] {
+            return _client->apply_snapshot(from, std::move(snp));
+        });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (ex) {
+        // Application did not complete, so load_snapshot() will not run. Release
+        // resources held for it before propagating the error.
+        co_await _sm.abort_snapshot_transfer(snp_id);
+        std::rethrow_exception(ex);
+    }
+    if (!reply.success) {
+        // The snapshot was rejected (e.g. outdated) or its application failed, so
+        // load_snapshot() will not run. Release resources held for it.
+        co_await _sm.abort_snapshot_transfer(snp_id);
+    }
+    co_return reply;
 }
 
 future<raft::add_entry_reply> raft_rpc::execute_add_entry(raft::server_id from, raft::command cmd) {
