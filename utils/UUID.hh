@@ -223,9 +223,7 @@ struct tagged_uuid {
         return id;
     }
 
-    sstring to_sstring() const {
-        return fmt::to_string(id);
-    }
+    sstring to_sstring() const;
 };
 } // namespace utils
 
@@ -292,3 +290,13 @@ struct fmt::formatter<utils::tagged_uuid<Tag>> : fmt::formatter<string_view> {
         return fmt::format_to(ctx.out(), "{}", id.id);
     }
 };
+
+namespace utils {
+
+template <typename Tag>
+sstring
+tagged_uuid<Tag>::to_sstring() const {
+    return fmt::to_string(id);
+}
+
+} // namespace utils
