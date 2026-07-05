@@ -247,31 +247,31 @@ class TestLimits(Tester):
             self._do_test_max_batch_size(session, node, size - 1)
 
     def _create_max_cell_count_table(self, session):
-        keys_create = ""
-        for i in range(MAX_CELLS_COLUMNS):
-            keys_create += "key" + str(i) + " int, "
+        keys_create = ", ".join([f"key{i} int" for i in range(MAX_CELLS_COLUMNS)])
 
-        c = """CREATE TABLE test1 (%s blub int PRIMARY KEY,)""" % keys_create
+        c = f"CREATE TABLE test1 ({keys_create}, blub int PRIMARY KEY)"
         session.execute(c)
 
-    def _prepare_max_cell_count_insert(self, session):
-        keys = ""
-        columns = MAX_CELLS_COLUMNS
-        for i in range(columns):
-            keys += "key" + str(i) + ", "
+    def _prepare_max_cell_count_insert(self, session, columns):
+        keys = ", ".join([f"key{i}" for i in range(columns)])
+        values = ", ".join(["?"] * columns)
 
-        values = "?, " * columns
-        c = "insert into ks.test1 (%s blub) values (%s ?)" % (keys, values)
+        c = f"insert into ks.test1 ({keys}, blub) values ({values}, ?)"
         return session.prepare(c)
 
-    def _do_test_max_cell_count(self, session, stmt, cells):
+    def _do_test_max_cell_count(self, session, stmt):
+        cells = MAX_CELLS - 1
         print("Testing max cells count for %i" % cells)
-        columns = MAX_CELLS_COLUMNS
-        values = (1,) * columns
+        values = (1,) * MAX_CELLS_COLUMNS
 
-        rows = cells // columns
-        for i in range(rows):
+        full_rows = cells // MAX_CELLS_COLUMNS
+        for i in range(full_rows):
             session.execute(stmt, values + (i,))
+
+        partial_columns = MAX_CELLS_COLUMNS - 1
+        partial_stmt = self._prepare_max_cell_count_insert(session, partial_columns)
+        partial_values = (1,) * partial_columns
+        session.execute(partial_stmt, partial_values + (full_rows,))
 
         session.execute("""TRUNCATE test1""")
 
@@ -286,9 +286,5 @@ class TestLimits(Tester):
         session = self.patient_cql_connection(node)
         create_ks(session, "ks", 1)
         self._create_max_cell_count_table(session)
-        stmt = self._prepare_max_cell_count_insert(session)
-
-        cells = MAX_CELLS_COLUMNS
-        while cells <= MAX_CELLS:
-            self._do_test_max_cell_count(session, stmt, cells - 1)
-            cells <<= 1
+        stmt = self._prepare_max_cell_count_insert(session, MAX_CELLS_COLUMNS)
+        self._do_test_max_cell_count(session, stmt)
