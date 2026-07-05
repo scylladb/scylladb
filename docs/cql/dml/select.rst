@@ -15,6 +15,7 @@ Querying data from data is done using a ``SELECT`` statement:
                    : [ GROUP BY `group_by_clause` ]
                    : [ ORDER BY `ordering_clause` ]
                    : [ ORDER BY `vector_column_name` ANN OF `vector` LIMIT `integer` ]
+                   : [ WHERE BM25 '(' `column_name` ',' `term` ')' '>' 0 ORDER BY BM25 '(' `column_name` ',' `term` ')' LIMIT `integer` ]
                    : [ PER PARTITION LIMIT (`integer` | `bind_marker`) ]
                    : [ LIMIT (`integer` | `bind_marker`) ]
                    : [ ALLOW FILTERING ]
@@ -381,6 +382,77 @@ For example::
    Vector indexes do not support all ScyllaDB features (e.g., tracing, TTL, paging, and grouping). More information
    about Vector Search is available in the
    `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/stable/vector-search/>`_.
+
+.. _fulltext-queries:
+
+Full-Text Search queries (BM25) :label-note:`ScyllaDB Cloud`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. note::
+
+   Full-Text Search is supported in ScyllaDB Cloud only in clusters that have the Vector and Text Search feature enabled.
+   For more information, see the :doc:`Full-Text Search documentation </features/fulltext-search>`.
+
+The ``BM25()`` function enables full-text search queries over text columns that
+have a :ref:`full-text index <create-fulltext-index-statement>` created with
+``USING 'fulltext_index'``. ``BM25()`` takes a column name and a query string
+and scores rows using the BM25 ranking algorithm.
+
+A full-text search query must contain **both** of the following clauses,
+referencing the **same** column:
+
+* A ``WHERE`` filter of the exact form ``BM25(column, 'term') > 0``.
+* An ``ORDER BY BM25(column, 'term')`` clause that ranks the matching rows.
+
+Neither clause is accepted on its own. A query that has only ``WHERE BM25()`` or
+only ``ORDER BY BM25()`` is rejected, and the two clauses must reference the same
+column.
+
+**Syntax:**
+
+.. code-block::
+
+   fts_query: SELECT ... FROM `table_name`
+            :   WHERE BM25 '(' `column_name` ',' `term` ')' '>' 0
+            :   ORDER BY BM25 '(' `column_name` ',' `term` ')'
+            :   LIMIT `integer`
+
+In the ``WHERE`` clause, ``>`` is the only supported comparison operator, and the right-hand side must be
+the literal ``0``. The column must be of type ``text``, ``varchar``, or ``ascii``
+and have a ``fulltext_index``; it may be a regular or clustering-key column, but
+not a partition-key column.
+
+``ORDER BY BM25()`` must be the only ordering in the query - it cannot be combined
+with another ``ORDER BY`` column, a second ``BM25()`` ordering, or an ``ANN``
+ordering.
+
+**Examples:**
+
+Filter and rank by relevance::
+
+    SELECT * FROM articles
+        WHERE BM25(body, 'distributed database') > 0
+        ORDER BY BM25(body, 'distributed database')
+        LIMIT 10;
+
+Use bind markers for the query term::
+
+    SELECT * FROM articles
+        WHERE BM25(body, ?) > 0
+        ORDER BY BM25(body, ?)
+        LIMIT 10;
+
+The ``BM25()`` operator is not a reserved word. If a user-defined function named
+``bm25`` exists in a keyspace, unqualified ``BM25()`` becomes ambiguous; qualify
+the built-in operator as ``system.bm25(...)`` to disambiguate it.
+
+.. note::
+
+   ``BM25()`` is only valid in the ``WHERE`` and ``ORDER BY`` clauses.
+   It cannot be used as a selector in the ``SELECT`` clause.
+
+For the full list of query constraints and requirements, see
+:doc:`Full-Text Search </features/fulltext-search>`.
 
 .. _limit-clause:
 
