@@ -577,6 +577,7 @@ public:
 
     separator_buffer allocate_separator_buffer() override;
     future<> flush_separator_buffer(separator_buffer buf, logstor_group&) override;
+    future<> flush_all_separator_buffers(std::optional<segment_sequence>);
 
     void add(logstor_group&) override;
 
@@ -788,8 +789,6 @@ class segment_manager_impl {
     std::vector<write_buffer> _separator_buffer_pool;
     std::vector<write_buffer*> _available_separator_buffers;
 
-    std::function<void(segment_sequence)> _trigger_separator_flush_fn;
-
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
 public:
@@ -835,22 +834,12 @@ public:
     future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, std::function<void(const segment_header&)> on_header);
     future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&);
 
-    void trigger_separator_flush(segment_sequence seq) {
-        if (_trigger_separator_flush_fn) {
-            _trigger_separator_flush_fn(seq);
-        }
-    }
-
     compaction_manager& get_compaction_manager() noexcept {
         return _compaction_mgr;
     }
 
     const compaction_manager& get_compaction_manager() const noexcept {
         return _compaction_mgr;
-    }
-
-    void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
-        _trigger_separator_flush_fn = std::move(fn);
     }
 
     uint64_t get_segment_size() const noexcept {
@@ -1382,7 +1371,7 @@ future<> segment_manager_impl::switch_active_segment() {
     // trigger separator flush for separator buffers that hold old segments
     auto u = std::max<size_t>(1, _max_segments.configured / 100);
     if (_next_segment_seq.value % u == 0 && _next_segment_seq.value > 5*u) {
-        trigger_separator_flush(segment_sequence(_next_segment_seq.value - 5*u));
+        (void)_compaction_mgr.flush_all_separator_buffers(segment_sequence(_next_segment_seq.value - 5*u)).handle_exception([] (std::exception_ptr) {});
     }
 
     logstor_logger.trace("Switched active segment to {} seq {}", _active_segment->id(), _active_segment->seq_num());
@@ -1980,6 +1969,12 @@ future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor
     }
 }
 
+future<> compaction_manager_impl::flush_all_separator_buffers(std::optional<segment_sequence> seq) {
+    co_await coroutine::parallel_for_each(_groups, [seq] (auto& entry) {
+        return entry.first->flush_separator(seq);
+    });
+}
+
 separator_buffer compaction_manager_impl::allocate_separator_buffer() {
     if (_sm._available_separator_buffers.empty()) {
         throw std::runtime_error("No available separator buffers");
@@ -2377,10 +2372,6 @@ future<log_record> segment_manager::read(log_location location) {
 
 void segment_manager::free_record(log_location location) {
     _impl->free_record(location);
-}
-
-void segment_manager::set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
-    _impl->set_trigger_separator_flush_hook(std::move(fn));
 }
 
 compaction_manager& segment_manager::get_compaction_manager() noexcept {
