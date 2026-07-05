@@ -30,6 +30,7 @@ namespace s3 {
 using s3_clock = std::chrono::steady_clock;
 
 static constexpr size_t max_client_mpu_in_flight = 32;
+static constexpr size_t max_client_buffered_downloads_in_flight = 32;
 
 class range {
     friend struct fmt::formatter<range>;
@@ -109,6 +110,7 @@ class client : public enable_shared_from_this<client> {
     endpoint_config_ptr _cfg;
     semaphore _creds_sem;
     semaphore _mpus_sem{max_client_mpu_in_flight};
+    semaphore _buffered_dl_sem{max_client_buffered_downloads_in_flight};
     timer<seastar::lowres_clock> _creds_invalidation_timer;
     timer<seastar::lowres_clock> _creds_update_timer;
     aws_credentials _credentials;
@@ -131,7 +133,7 @@ class client : public enable_shared_from_this<client> {
         io_stats read_stats;
         io_stats write_stats;
         uint64_t prefetch_bytes = 0;
-        uint64_t downloads_blocked_on_memory = 0;
+        uint64_t downloads_starving_on_max_concurrency = 0;
         seastar::metrics::metric_groups metrics;
         group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn);
         void register_metrics(std::string class_name, std::string host);

@@ -420,7 +420,6 @@ SEASTAR_TEST_CASE(test_client_upload_file_single_part_proxy) {
     co_await test_client_upload_file(make_proxy_client, seastar_test::get_name(), total_size, memory_size);
 }
 
-
 void client_readable_file(const client_maker_function& client_maker) {
     const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
