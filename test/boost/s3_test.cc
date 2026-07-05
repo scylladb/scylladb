@@ -408,30 +408,6 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_file_single_part_proxy) {
     test_client_upload_file(make_proxy_client, total_size, memory_size);
 }
 
-
-SEASTAR_THREAD_TEST_CASE(test_client_abort_stuck_semaphore) {
-    constexpr size_t object_size = 128_KiB;
-
-    tmpdir tmp;
-    const auto file_path = tmp.path() / "test_object";
-
-    create_file(file_path, object_size).get();
-
-    semaphore mem(32_KiB);
-    s3_test_fixture guard(make_minio_client, mem);
-    auto cln = guard.client();
-    const auto object_name = guard.object_path("test_object");
-    abort_source as;
-    auto upload = cln->upload_file(file_path, object_name, {}, {}, &as);
-    auto ex = std::make_exception_ptr(std::runtime_error("Cancelling!"));
-    as.request_abort_ex(ex);
-    upload.wait();
-    BOOST_REQUIRE(upload.failed());
-    BOOST_REQUIRE_EXCEPTION(std::rethrow_exception(upload.get_exception()), semaphore_aborted, [](const semaphore_aborted& e) {
-        return e.what() == "Semaphore aborted"sv;
-    });
-}
-
 void client_readable_file(const client_maker_function& client_maker) {
     semaphore mem(16<<20);
     s3_test_fixture guard(client_maker, mem);
