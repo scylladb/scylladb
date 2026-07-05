@@ -16,6 +16,7 @@
 #include "service/raft/raft_state_machine.hh"
 #include "service/raft/group0_fwd.hh"
 #include "idl/raft.dist.hh"
+#include "utils/error_injection.hh"
 
 namespace service {
 
@@ -199,6 +200,15 @@ future<raft::read_barrier_reply> raft_rpc::execute_read_barrier(raft::server_id 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
     const auto snp_id = snp.snp.id;
     co_await _sm.transfer_snapshot(from, snp.snp);
+
+    // Test-only: simulate the Raft FSM rejecting the just-transferred snapshot as
+    // outdated, so that load_snapshot() is never called. Exercises the
+    // abort_snapshot_transfer() cleanup path (releasing the read_apply mutex held
+    // across transfer_snapshot()/load_snapshot()).
+    if (utils::get_local_injector().enter("group0_snapshot_transfer_force_reject")) {
+        co_await _sm.abort_snapshot_transfer(snp_id);
+        co_return raft::snapshot_reply{.current_term = snp.current_term, .success = false};
+    }
 
     raft::snapshot_reply reply{};
     std::exception_ptr ex;
