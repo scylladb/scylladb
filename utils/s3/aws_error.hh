@@ -12,7 +12,7 @@
 #include <seastar/http/reply.hh>
 #include <seastar/util/bool_class.hh>
 #include <string>
-#include "aws_error_definitions.hh"
+#include "utils/s3/aws_error_definitions_generated.hh"
 #include "utils/http_client_error_processing.hh"
 
 namespace aws {
