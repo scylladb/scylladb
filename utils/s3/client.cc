@@ -76,7 +76,7 @@ inline size_t iovec_len(const std::vector<iovec>& iov)
 
 namespace s3 {
 
-static logging::logger s3l("s3");
+logging::logger s3l("s3");
 // "Each part must be at least 5 MB in size, except the last part."
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
 static constexpr size_t aws_minimum_part_size = 5_MiB;
