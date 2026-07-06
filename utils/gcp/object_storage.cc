@@ -1181,15 +1181,15 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
     auto psep = "?";
     if (!prefix.empty()) {
         path += fmt::format("{}prefix={}", psep, prefix);
-        psep = "&&";
+        psep = "&";
     }
     if (pager.max_results != 0) {
         path += fmt::format("{}maxResults={}", psep, pager.max_results);
-        psep = "&&";
+        psep = "&";
     }
     if (!pager.token.empty()) {
         path += fmt::format("{}pageToken={}", psep, pager.token);
-        psep = "&&";
+        psep = "&";
     }
 
     co_await _impl->send_with_retry(path

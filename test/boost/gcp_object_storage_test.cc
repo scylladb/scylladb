@@ -186,7 +186,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects, local_gcs_wrapper, *che
     auto& env = *this;
     auto& c = env.client();
     std::unordered_map<std::string, uint64_t> names;
-    for (size_t i = 0; i < 10; ++i) {
+    for (size_t i = 0; i < 50; ++i) {
         auto name = make_name();
         auto size = tests::random::get_int(size_t(1), size_t(2*1024*1024));
         env.objects_to_delete.emplace_back(name);
@@ -194,24 +194,32 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects, local_gcs_wrapper, *che
         names.emplace(name, size);
     }
 
-    utils::gcp::storage::bucket_paging paging;
-    size_t n_found = 0;
 
-    for (;;) {
-        auto infos = co_await c.list_objects(env.bucket, "", paging);
+    for (size_t page_size = 4;; page_size *= 2) {
+        utils::gcp::storage::bucket_paging paging{page_size};
+        size_t n_found = 0;
 
-        for (auto& info : infos) {
-            auto i = names.find(info.name);
-            if (i != names.end()) {
-                BOOST_REQUIRE_EQUAL(info.size, i->second);
-                ++n_found;
+        for (;;) {
+            auto infos = co_await c.list_objects(env.bucket, "", paging);
+
+            for (auto& info : infos) {
+                auto i = names.find(info.name);
+                if (i != names.end()) {
+                    BOOST_REQUIRE_EQUAL(info.size, i->second);
+                    ++n_found;
+                }
+            }
+            if (infos.empty()) {
+                break;
             }
         }
-        if (infos.empty()) {
+
+        BOOST_REQUIRE_EQUAL(n_found, names.size());
+
+        if (page_size >= names.size()) {
             break;
         }
     }
-    BOOST_REQUIRE_EQUAL(n_found, names.size());
 }
 
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_delete_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
