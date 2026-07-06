@@ -6,7 +6,7 @@
 }:
 
 let
-  version = "3.25.10-scylla";
+  version = "3.25.11-scylla";
 in python3Packages.buildPythonPackage {
   pname = "scylla-driver";
   inherit version;
@@ -16,7 +16,7 @@ in python3Packages.buildPythonPackage {
     owner = "scylladb";
     repo = "python-driver";
     rev = version;
-    sha256 = "sha256-ib1XZPLcg5lCMfbUhDwjB968HYtGjt559JX5fxDADQc=";
+    sha256 = "sha256-URIKEJ879Izmcm88v2XEsvQ29DldFBuQ07Rv1jAwSZ0=";
   };
 
   postPatch = ''
