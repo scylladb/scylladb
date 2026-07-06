@@ -207,7 +207,7 @@ public:
                 , _bucket(std::move(bucket))
                 , _prefix(std::move(prefix))
                 , _filter(std::move(filter))
-                , _paging(100)
+                , _paging(1000)
                 , _pos(0)
             {}
             future<std::optional<directory_entry>> get() override {
