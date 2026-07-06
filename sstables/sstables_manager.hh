@@ -255,7 +255,7 @@ public:
     //
     // Note that close() will not complete until all references to all
     // sstables have been destroyed.
-    future<> close();
+    future<> close() noexcept;
     directory_semaphore& dir_semaphore() noexcept { return _dir_semaphore; }
 
     void plug_sstables_registry(std::unique_ptr<sstables_registry>) noexcept;

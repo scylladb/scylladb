@@ -898,7 +898,8 @@ BOOST_AUTO_TEST_CASE(test_exception_safety) {
     // test apply_monotonically()
     memory::with_allocation_failures([&] () {
         auto list = original;
-        auto d = defer([&] {
+        auto d = defer([&] noexcept {
+            // May throw, aborting the test
             memory::scoped_critical_alloc_section dfg;
             assert_that(*s, list).has_no_less_information_than(original);
         });
@@ -909,7 +910,8 @@ BOOST_AUTO_TEST_CASE(test_exception_safety) {
     // test apply_reversibly()
     memory::with_allocation_failures([&] () {
         auto list = original;
-        auto d = defer([&] () {
+        auto d = defer([&] noexcept {
+            // May throw, aborting the test
             memory::scoped_critical_alloc_section dfg;
             assert_that(*s, list).is_equal_to_either(original, expected);
         });

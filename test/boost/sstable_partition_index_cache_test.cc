@@ -44,7 +44,7 @@ static void add_entry(logalloc::region& r,
 
 static partition_index_page make_page0(logalloc::region& r, simple_schema& s) {
     partition_index_page page;
-    auto destroy_page = defer([&] {
+    auto destroy_page = defer([&] noexcept {
         with_allocator(r.allocator(), [&] {
            auto p = std::move(page);
         });
@@ -156,7 +156,7 @@ SEASTAR_THREAD_TEST_CASE(test_sparse_promoted_index) {
 
     auto page0_loader = [&] (partition_index_cache::key_type k) -> future<partition_index_page> {
         partition_index_page page;
-        auto destroy_page = defer([&] {
+        auto destroy_page = defer([&] noexcept {
             with_allocator(r.allocator(), [&] {
                 auto p = std::move(page);
             });
@@ -218,7 +218,7 @@ SEASTAR_THREAD_TEST_CASE(test_exception_while_loading) {
     partition_index_cache_stats stats;
     partition_index_cache cache(lru, r, stats);
 
-    auto clear_lru = defer([&] {
+    auto clear_lru = defer([&] noexcept {
         with_allocator(r.allocator(), [&] {
             lru.evict_all();
         });

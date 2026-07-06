@@ -1686,7 +1686,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto m12 = m1 + m2;
 
             mutation_reader_opt mt1_reader_opt;
-            auto close_mt1_reader = defer([&mt1_reader_opt] {
+            auto close_mt1_reader = defer([&mt1_reader_opt] noexcept {
                 if (mt1_reader_opt) {
                     mt1_reader_opt->close().get();
                 }
@@ -2650,13 +2650,14 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
             }
             auto rd1_v1 = assert_that(make_reader(population_range));
             mutation_reader_opt snap;
-            auto close_snap = defer([&snap] {
+            auto close_snap = defer([&snap] noexcept {
                 if (snap) {
                     snap->close().get();
                 }
             });
 
-            auto d = defer([&] {
+            auto d = defer([&] noexcept {
+                // May throw; will terminate the test.
                 memory::scoped_critical_alloc_section dfg;
                 assert_that(cache.make_reader(cache.schema(), semaphore.make_permit()))
                     .produces(orig)
@@ -3658,7 +3659,7 @@ SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
         auto update_f = cache.update(row_cache::external_updater([&] () noexcept {
             underlying.apply(m2);
         }), *mt2);
-        auto wait_for_update = defer([&] { update_f.get(); });
+        auto wait_for_update = defer([&] noexcept { update_f.get(); });
 
         // Wait for cache update to enter the partition
         while (tracker.get_stats().partition_merges == 0) {

@@ -93,7 +93,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen, std::f
         // going away after memtable was merged to cache.
         auto rd = std::make_unique<mutation_fragment_v1_stream>(
             mutation_fragment_v1_stream(make_combined_reader(s, permit, cache.make_reader(s, permit), mt->make_mutation_reader(s, permit))));
-        auto close_rd = defer([&rd] { rd->close().get(); });
+        auto close_rd = defer([&rd] noexcept { rd->close().get(); });
         rd->set_max_buffer_size(1);
         rd->fill_buffer().get();
 
@@ -312,7 +312,7 @@ int scylla_row_cache_update_main(int argc, char** argv) {
     app_template app;
     return app.run(argc, argv, [] {
         return seastar::async([&] {
-            auto stop_test = defer([] {
+            auto stop_test = defer([] noexcept {
                 cancelled = true;
             });
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();

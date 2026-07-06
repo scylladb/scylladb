@@ -2193,7 +2193,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
 
 future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor) {
     progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(table_s, use_backlog_tracker::no));
-    auto d = defer([&] { progress_monitor.reset_generator(); });
+    auto d = defer([&] noexcept { progress_monitor.reset_generator(); });
     auto res = co_await scrub_sstables_validate_mode(descriptor, cdata, table_s, *progress_monitor._generator);
     co_return res;
 }

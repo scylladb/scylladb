@@ -197,7 +197,7 @@ public:
             auto cmd_id = utils::make_random_uuid();
             SCYLLA_ASSERT(_output_channels.emplace(cmd_id, std::move(p)).second);
 
-            auto guard = defer([this, cmd_id] {
+            auto guard = defer([this, cmd_id] noexcept {
                 auto it = _output_channels.find(cmd_id);
                 if (it != _output_channels.end()) {
                     it->second.set_exception(output_channel_dropped{});
@@ -728,7 +728,7 @@ public:
             promise<raft::snapshot_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
-            auto guard = defer([this, id] { _reply_promises.erase(id); });
+            auto guard = defer([this, id] noexcept { _reply_promises.erase(id); });
 
             _send(dst, snapshot_message{
                 .ins = ins,
@@ -763,7 +763,7 @@ public:
             promise<raft::add_entry_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
-            auto guard = defer([this, id] { _reply_promises.erase(id); });
+            auto guard = defer([this, id] noexcept { _reply_promises.erase(id); });
 
             _send(dst, add_entry_message{
                 .cmd = cmd,
@@ -788,7 +788,7 @@ public:
             promise<raft::add_entry_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
-            auto guard = defer([this, id] { _reply_promises.erase(id); });
+            auto guard = defer([this, id] noexcept { _reply_promises.erase(id); });
 
             _send(dst, modify_config_message{
                 .add = add,
@@ -812,7 +812,7 @@ public:
             promise<raft::read_barrier_reply> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
-            auto guard = defer([this, id] { _reply_promises.erase(id); });
+            auto guard = defer([this, id] noexcept { _reply_promises.erase(id); });
 
             _send(dst, execute_barrier_on_leader {
                 .reply_id = id
@@ -838,7 +838,7 @@ public:
             promise<> p;
             auto f = p.get_future();
             _reply_promises.emplace(id, std::move(p));
-            auto guard = defer([this, id] { _reply_promises.erase(id); });
+            auto guard = defer([this, id] noexcept { _reply_promises.erase(id); });
             auto sub = as.subscribe([this, id] () noexcept {
                 auto it = _reply_promises.find(id);
                 if (it == _reply_promises.end()) {

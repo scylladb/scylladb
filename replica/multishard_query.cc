@@ -861,7 +861,7 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     const auto& erm = table.get_effective_replication_map();
     auto query_method = erm->get_replication_strategy().uses_tablets() ? do_query_tablets<ResultBuilder> : do_query_vnodes<ResultBuilder>;
 
-    auto account_failed_read = defer([&stats] {
+    auto account_failed_read = defer([&stats] noexcept {
         ++stats.total_reads_failed;
     });
 

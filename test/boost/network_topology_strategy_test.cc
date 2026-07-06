@@ -271,7 +271,7 @@ void simple_test() {
     cfg.broadcast_address = my_address;
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
-    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    auto stop_snitch = defer([&snitch] noexcept { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;
@@ -357,7 +357,7 @@ void heavy_origin_test() {
     cfg.broadcast_address = my_address;
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
-    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    auto stop_snitch = defer([&snitch] noexcept { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); },
@@ -441,7 +441,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     cfg.name = "RackInferringSnitch";
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
-    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    auto stop_snitch = defer([&snitch] noexcept { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;
@@ -653,7 +653,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablet_allocation_balancing_tes
     cfg.name = "RackInferringSnitch";
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
-    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    auto stop_snitch = defer([&snitch] noexcept { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     for (auto i = 0; i < 100; ++i) {
@@ -1386,7 +1386,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     cfg.name = "RackInferringSnitch";
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
-    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    auto stop_snitch = defer([&snitch] noexcept { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;

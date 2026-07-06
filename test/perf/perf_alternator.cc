@@ -82,7 +82,7 @@ static void wait_for_alternator(const test_config& c, abort_source& as) {
         as.check();
         try {
             auto cli = get_client(c);
-            auto close = defer([&] { cli.close().get(); });
+            auto close = defer([&] noexcept { cli.close().get(); });
             make_request(cli, "ListTables", "{}").get();
             return;
         } catch (...) {
@@ -393,7 +393,8 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
     wait_for_alternator(c, as->local());
 
     auto cli = get_client(c);
-    auto finally = defer([&] {
+    auto finally = defer([&] noexcept {
+        // Might throw, will terminate test
         delete_alternator_table(cli);
         cli.close().get();
     });
@@ -429,7 +430,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         cli_pool = make_client_pool(c);
     }).get();
     // Cleanup thread-local connections to avoid destruction issues at exit
-    auto close_pools = defer([] {
+    auto close_pools = defer([] noexcept {
         smp::invoke_on_all([] {
             return parallel_for_each(cli_pool, [] (auto& cli) {
                 return cli.close();

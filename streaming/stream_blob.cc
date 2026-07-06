@@ -250,7 +250,7 @@ future<> stream_blob_handler(replica::database& db,
 
     try {
         if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
-            log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] {
+            log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] noexcept {
                 blogger.info("stream_mutation_fragments: done (tablets)");
             })));
         }
@@ -879,7 +879,7 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
     // "stream_mutation_fragments: waiting" prefix that tests wait_for().
     lw_shared_ptr<std::any> log_done;
     if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
-        log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] {
+        log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] noexcept {
             blogger.info("stream_mutation_fragments: done (clone)");
         })));
     }

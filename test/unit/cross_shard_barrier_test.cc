@@ -69,7 +69,7 @@ public:
     }
 
     future<> loop_with_error() {
-        auto b = seastar::defer([this] { _barrier.abort(); });
+        auto b = seastar::defer([this] noexcept { _barrier.abort(); });
 
         while (true) {
             if (_rndgen() % 3 == 0) {

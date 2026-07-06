@@ -233,7 +233,7 @@ void utils::config_file::add(cfg_ref cfg, std::unique_ptr<any_value> value) {
         throw std::runtime_error("Can only add config_src to config_file during initialization");
     }
     _cfgs.emplace_back(cfg);
-    auto undo = defer([&] { _cfgs.pop_back(); });
+    auto undo = defer([&] noexcept { _cfgs.pop_back(); });
     cfg.get()._per_shard_values_offset = _per_shard_values[0].size();
     _per_shard_values[0].emplace_back(std::move(value));
     undo.cancel();

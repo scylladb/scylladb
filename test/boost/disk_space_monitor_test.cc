@@ -33,7 +33,7 @@ SEASTAR_THREAD_TEST_CASE(test_capacity_override) {
     auto data_dir_path = data_dir.path().string();
 
     utils::disk_space_monitor dsm(as, data_dir_path, dsm_cfg);
-    auto stop_dsm = defer([&dsm] { dsm.stop().get(); });
+    auto stop_dsm = defer([&dsm] noexcept { dsm.stop().get(); });
 
     std::filesystem::space_info orig_space = {
         .capacity = 100,
@@ -98,7 +98,7 @@ SEASTAR_THREAD_TEST_CASE(test_subscription_options) {
     auto data_dir_path = data_dir.path().string();
 
     utils::disk_space_monitor dsm(as, data_dir_path, dsm_cfg);
-    auto stop_dsm = defer([&dsm] { dsm.stop().get(); });
+    auto stop_dsm = defer([&dsm] noexcept { dsm.stop().get(); });
 
     float disk_utilization = 0.1;
     auto registration = dsm.set_space_source([&] {

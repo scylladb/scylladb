@@ -249,7 +249,7 @@ public:
     future<> evict_gently() {
         auto i = _cache.begin();
         std::optional<partition_index_page> partial_page;
-        auto clear_on_exception = defer([&] {
+        auto clear_on_exception = defer([&] noexcept {
             with_allocator(_region.allocator(), [&] {
                 partial_page.reset();
             });

@@ -68,7 +68,7 @@ public:
     future<index_list> finalize() {
         index_list result;
         // In case of exception, need to deallocate under region allocator.
-        auto delete_result = seastar::defer([&] {
+        auto delete_result = seastar::defer([&] noexcept {
             with_allocator(_region.allocator(), [&] {
                 result._entries = {};
                 result._promoted_indexes = {};

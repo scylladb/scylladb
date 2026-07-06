@@ -2169,7 +2169,7 @@ table::start() {
 }
 
 future<>
-table::stop() {
+table::stop() noexcept {
     if (_async_gate.is_closed()) {
         co_return;
     }
@@ -2537,7 +2537,7 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
     // After we are done, unconditionally remove compacted sstables from _sstables_compacted_but_not_deleted,
     // or they could stay forever in the set, resulting in deleted files remaining
     // opened and disk space not being released until shutdown.
-    auto undo_compacted_but_not_deleted = defer([&] {
+    auto undo_compacted_but_not_deleted = defer([&] noexcept {
         std::erase_if(sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) {
             return s.contains(sst);
         });
@@ -2545,7 +2545,7 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
     });
 
     _t.get_stats().pending_sstable_deletions++;
-    auto undo_stats = defer([this] {
+    auto undo_stats = defer([this] noexcept {
         _t.get_stats().pending_sstable_deletions--;
     });
 
@@ -2976,7 +2976,7 @@ future<> table::drop_quarantined_sstables() {
 
 
     _stats.pending_sstable_deletions++;
-    auto undo_stats = defer([this] {
+    auto undo_stats = defer([this] noexcept {
         _stats.pending_sstable_deletions--;
     });
 
@@ -4747,7 +4747,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     std::unordered_map<size_t, std::vector<removed_sstable>> per_cg_remove;
 
     _stats.pending_sstable_deletions++;
-    auto undo_stats = defer([this] {
+    auto undo_stats = defer([this] noexcept {
         _stats.pending_sstable_deletions--;
     });
 

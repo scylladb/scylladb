@@ -626,7 +626,7 @@ requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args) {
     auto task_executor = seastar::make_shared<TaskExecutor>(*this, do_throw_if_stopping, std::forward<Args>(args)...);
     _tasks.push_back(*task_executor);
-    auto unregister_task = defer([task_executor] {
+    auto unregister_task = defer([task_executor] noexcept {
         task_executor->unlink();
         task_executor->switch_state(compaction_task_executor::state::none);
     });
@@ -1185,7 +1185,7 @@ void compaction_manager::stop_tasks(const std::vector<shared_ptr<compaction_task
 
 future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, bool task_stopped) const noexcept {
     co_await coroutine::parallel_for_each(tasks, [task_stopped] (auto& task) -> future<> {
-        auto unlink_task = deferred_action([task, task_stopped] { if (task_stopped) { task->unlink(); } });
+        auto unlink_task = deferred_action([task, task_stopped] noexcept { if (task_stopped) { task->unlink(); } });
         try {
             co_await task->compaction_done();
         } catch (compaction_stopped_exception&) {
@@ -1276,7 +1276,7 @@ future<> compaction_manager::start(const db::config& cfg, utils::disk_space_moni
     return make_ready_future<>();
 }
 
-future<> compaction_manager::stop() {
+future<> compaction_manager::stop() noexcept {
     do_stop();
     if (_stop_future) {
         co_await std::exchange(*_stop_future, make_ready_future());

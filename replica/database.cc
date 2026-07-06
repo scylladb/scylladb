@@ -2410,7 +2410,7 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
 future<db::large_data_violation_type> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails) {
     ++_stats->total_writes;
     // assume failure until proven otherwise
-    auto update_writes_failed = defer([&] { ++_stats->total_writes_failed; });
+    auto update_writes_failed = defer([&] noexcept { ++_stats->total_writes_failed; });
 
     co_await utils::get_local_injector().inject("database_apply", [&s] (auto& handler) -> future<> {
         if (s->ks_name() != handler.get("ks_name") || s->cf_name() != handler.get("cf_name")) {
@@ -2741,7 +2741,7 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 }
 
 future<> database::close_tables(table_kind kind_to_close) {
-    auto b = defer([this] { _stop_barrier.abort(); });
+    auto b = defer([this] noexcept { _stop_barrier.abort(); });
     co_await _tables_metadata.parallel_for_each_table(coroutine::lambda([this, kind_to_close] (table_id, lw_shared_ptr<table> table) -> future<> {
         auto& s = table->schema();
         table_kind k = is_system_table(*s) || _cfg.extensions().is_extension_internal_keyspace(s->ks_name()) ? table_kind::system : table_kind::user;
@@ -2832,7 +2832,7 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
 
 future<> database::shutdown() {
     _shutdown = true;
-    auto b = defer([this] { _stop_barrier.abort(); });
+    auto b = defer([this] noexcept { _stop_barrier.abort(); });
     co_await _stop_barrier.arrive_and_wait();
     b.cancel();
 
@@ -3471,7 +3471,7 @@ future<> database::flush_system_column_families() {
 }
 
 future<> database::drain() {
-    auto b = defer([this] { _stop_barrier.abort(); });
+    auto b = defer([this] noexcept { _stop_barrier.abort(); });
     // Interrupt on going compaction and shutdown to prevent further compaction
     co_await _compaction_manager.drain();
 

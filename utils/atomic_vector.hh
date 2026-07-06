@@ -41,7 +41,7 @@ public:
     // preemption.
     void thread_for_each(seastar::noncopyable_function<void(T)> func) const {
         _vec_lock.for_read().lock().get();
-        auto unlock = seastar::defer([this] {
+        auto unlock = seastar::defer([this] noexcept {
             _vec_lock.for_read().unlock();
         });
         // We grab a lock in remove(), but not in add(), so we

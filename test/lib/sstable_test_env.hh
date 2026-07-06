@@ -188,7 +188,7 @@ public:
         return seastar::async([func = std::move(func)] {
             auto scf = make_sstable_compressor_factory_for_tests_in_thread();
             test_env env({}, *scf);
-            auto stop = defer([&] { env.stop().get(); });
+            auto stop = defer([&] noexcept { env.stop().get(); });
             return func(env);
         });
     }

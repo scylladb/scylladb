@@ -438,7 +438,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         rtlogger.debug("send {} command with term {} and index {} to {}",
             cmd.cmd, _term, cmd_index, id);
         _topology_cmd_rpc_tracker.active_dst.emplace(id);
-        auto _ = seastar::defer([this, id] { _topology_cmd_rpc_tracker.active_dst.erase(id); });
+        auto _ = seastar::defer([this, id] noexcept { _topology_cmd_rpc_tracker.active_dst.erase(id); });
 
         auto result = _db.get_token_metadata().get_topology().is_me(to_host_id(id)) ?
                     co_await _raft_topology_cmd_handler(_term, cmd_index, cmd) :
@@ -1971,7 +1971,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         bool has_transitions = false;
 
         shared_promise barrier;
-        auto fail_barrier = seastar::defer([&] {
+        auto fail_barrier = seastar::defer([&] noexcept {
             if (needs_barrier) {
                 barrier.set_exception(seastar::broken_promise());
             }

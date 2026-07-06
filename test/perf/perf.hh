@@ -237,7 +237,7 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
         sharded<executor<Func>> exec;
         Res result;
         exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard, stop_on_error, operations_count_per_iteration).get();
-        auto stop_exec = defer([&exec] {
+        auto stop_exec = defer([&exec] noexcept {
             exec.stop().get();
         });
         auto stats = exec.map_reduce0(std::mem_fn(&executor<Func>::run),

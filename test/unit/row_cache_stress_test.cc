@@ -294,7 +294,7 @@ int main(int argc, char** argv) {
             row_cache_stress_test::table t(partitions, rows);
             auto stop_t = deferred_stop(t);
 
-            auto stop_test = defer([] {
+            auto stop_test = defer([] noexcept {
                 cancelled = true;
             });
 

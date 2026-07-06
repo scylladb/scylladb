@@ -1950,7 +1950,7 @@ auto make_compaction_disabling_guard(replica::database& db, std::vector<replica:
             return f.get_future();
         });
     }
-    return seastar::defer([pr = std::move(pr)] () mutable {
+    return seastar::defer([pr = std::move(pr)] () mutable noexcept {
         pr.set_value();
     });
 }
@@ -2099,7 +2099,7 @@ int scylla_fast_forward_main(int argc, char** argv) {
 
                     sleep(1s).get(); // wait for system table flushes to quiesce
 
-                    auto stop_test = defer([] {
+                    auto stop_test = defer([] noexcept {
                         cancel = true;
                     });
 

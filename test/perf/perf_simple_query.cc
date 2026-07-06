@@ -440,10 +440,10 @@ int scylla_simple_query_main(int argc, char** argv) {
                 fmt::print("audit start failed: {}", e);
             }).get();
             audit::audit::start_storage(env.local_db().get_config()).get();
-            auto audit_stop = defer([] {
+            auto audit_stop = defer([] noexcept {
                 audit::audit::stop_audit().get();
             });
-            auto audit_storage_stop = defer([] {
+            auto audit_storage_stop = defer([] noexcept {
                 audit::audit::stop_storage().get();
             });
             audit::audit::audit_instance().invoke_on_all([] (audit::audit& a) {

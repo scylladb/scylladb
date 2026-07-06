@@ -135,7 +135,7 @@ static void with_sstable_directory(
     testlog.debug("with_sstable_directory: {}/{}", path, state);
 
     sharded<sstable_directory> sstdir;
-    auto stop_sstdir = defer([&sstdir] {
+    auto stop_sstdir = defer([&sstdir] noexcept {
         // The func is allowed to stop sstdir, and some tests actually do it
         if (sstdir.local_is_initialized()) {
             sstdir.stop().get();
@@ -162,7 +162,7 @@ static void with_sstable_directory(sharded<replica::database>& db,
     sharded<sstable_directory> sstdir;
     auto gtable = replica::get_table_on_all_shards(db, ks, cf).get();
     sstdir.start(gtable.as_sharded_parameter(), state, default_io_error_handler_gen()).get();
-    auto stop_sstdir = defer([&sstdir] { sstdir.stop().get(); });
+    auto stop_sstdir = defer([&sstdir] noexcept { sstdir.stop().get(); });
     func(sstdir);
 }
 

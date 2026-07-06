@@ -167,7 +167,7 @@ compaction::compaction_group_view& table_for_tests::as_compaction_group_view() n
     return *_data->table_s;
 }
 
-future<> table_for_tests::stop() {
+future<> table_for_tests::stop() noexcept {
     auto data = _data;
     co_await data->cf->get_compaction_manager().remove(*data->table_s);
     co_await data->cf->stop();
@@ -373,10 +373,10 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
         return seastar::async([func = std::move(func), cfg = std::move(cfg), db_cfg = std::move(db_cfg)] () mutable {
             sharded<sstables::storage_manager> sstm;
             sstm.start(std::ref(*db_cfg), sstables::storage_manager::config{}).get();
-            auto stop_sstm = defer([&] { sstm.stop().get(); });
+            auto stop_sstm = defer([&] noexcept { sstm.stop().get(); });
             auto scf = make_sstable_compressor_factory_for_tests_in_thread();
             test_env env(std::move(cfg), *scf, &sstm.local());
-            auto close_env = defer([&] { env.stop().get(); });
+            auto close_env = defer([&] noexcept { env.stop().get(); });
             env.manager().plug_sstables_registry(std::make_unique<mock_sstables_registry>());
             func(env);
         });
@@ -385,7 +385,7 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
     return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
         auto scf = make_sstable_compressor_factory_for_tests_in_thread();
         test_env env(std::move(cfg), *scf);
-        auto close_env = defer([&] { env.stop().get(); });
+        auto close_env = defer([&] noexcept { env.stop().get(); });
         func(env);
     });
 }
@@ -540,7 +540,7 @@ test_env::do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> 
         sharded<test_env> env;
         auto scf = make_sstable_compressor_factory_for_tests_in_thread();
         env.start(test_env_config{}, std::ref(*scf), nullptr, &tdir).get();
-        auto stop = defer([&] { env.stop().get(); });
+        auto stop = defer([&] noexcept { env.stop().get(); });
         func(env);
     });
 }
@@ -605,7 +605,7 @@ void test_env_compaction_manager::propagate_replacement(compaction::compaction_g
 // Test version of compaction_manager::perform_compaction<>()
 future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::compaction_task_executor> task) {
     _cm._tasks.push_back(*task);
-    auto unregister_task = defer([task] {
+    auto unregister_task = defer([task] noexcept {
         if (!task->is_linked()) {
             testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", task->compaction_data().compaction_uuid);
         }
@@ -658,7 +658,7 @@ std::pair<int, char**> scylla_tests_cmdline_options_processor::process_cmdline_o
 
     // Removes -- (intended to separate boost suite args from seastar ones) which confuses boost::program_options.
     auto [new_argc, new_argv] = rebuild_arg_list_without(argc, argv, "--");
-    auto _ = defer([argc = new_argc, argv = new_argv] {
+    auto _ = defer([argc = new_argc, argv = new_argv] noexcept {
         free_arg_list(argc, argv);
     });
 

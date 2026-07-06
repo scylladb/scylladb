@@ -363,7 +363,7 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
     auto algo = get_algo_for_next_msg(data.size);
 
     auto& stats = _tracker->_stats[algo.idx()];
-    auto update_time_stats = defer([&, nanos_before = now] {
+    auto update_time_stats = defer([&, nanos_before = now] noexcept {
         stats.compression_cpu_nanos += _tracker->get_steady_nanos() - nanos_before;
     });
 
@@ -452,7 +452,7 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     auto algo = compression_algorithm(header_byte & 0x3f);
 
     auto& stats = _tracker->_stats[algo.idx()];
-    auto update_time_stats = defer([&, nanos_before = _tracker->get_steady_nanos()] {
+    auto update_time_stats = defer([&, nanos_before = _tracker->get_steady_nanos()] noexcept {
         stats.decompression_cpu_nanos += _tracker->get_steady_nanos() - nanos_before;
     });
     auto compressed_size = data.size;

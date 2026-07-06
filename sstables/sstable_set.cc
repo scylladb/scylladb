@@ -383,7 +383,7 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
     }
     auto size_stats = sst->get_file_size_stats();
     add_file_size_stats(size_stats);
-    auto undo_all_insert = defer([&] () {
+    auto undo_all_insert = defer([&] noexcept {
         _all->erase(sst);
         sub_file_size_stats(size_stats);
     });
@@ -403,7 +403,7 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
                     sst->get_filename(), sst->run_identifier());
         sst->generate_new_run_identifier();
     }
-    auto undo_all_runs_insert = defer([&] () { _all_runs[sst->run_identifier()]->erase(sst); });
+    auto undo_all_runs_insert = defer([&] noexcept { _all_runs[sst->run_identifier()]->erase(sst); });
 
     if (store_as_unleveled(sst)) {
         _unleveled_sstables.push_back(sst);

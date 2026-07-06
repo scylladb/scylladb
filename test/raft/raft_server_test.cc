@@ -64,7 +64,7 @@ SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
     };
     auto cluster = get_default_cluster(std::move(test_config));
     cluster.start_all().get();
-    auto stop = defer([&cluster] { cluster.stop_all().get(); });
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
 
     utils::get_local_injector().enable("fsm::add_entry/test-failure", true);
     auto check_error = [](const std::runtime_error& e) {
@@ -87,7 +87,7 @@ SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
 SEASTAR_THREAD_TEST_CASE(test_aborting_wait_for_state_change) {
     auto cluster = get_default_cluster(test_case{ .nodes = 1 });
     cluster.start_all().get();
-    auto stop = defer([&cluster] { cluster.stop_all().get(); });
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
 
     auto& server = cluster.get_server(0);
     server.wait_for_leader(nullptr).get();
@@ -253,7 +253,7 @@ static void test_add_entry_load_snapshot_before_wait_aux(raft::wait_type type, b
         0, false, tick_delay, rpc_config{}
     };
     cluster.start_all().get();
-    auto stop = defer([&cluster] { cluster.stop_all().get(); });
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
 
     cluster.add_entries(5, 0).get();
 
@@ -346,7 +346,7 @@ static void test_add_entry_wait_resolved_via_drop_waiters_aux(raft::wait_type ty
         0, false, tick_delay, rpc_config{}
     };
     cluster.start_all().get();
-    auto stop = defer([&cluster] { cluster.stop_all().get(); });
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
 
     // Add a few entries so all nodes are caught up.
     cluster.add_entries(5, 0).get();

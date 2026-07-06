@@ -4147,7 +4147,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
     BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get().empty());
 
     utils::get_local_injector().enable("tablet_allocator_shuffle");
-    auto disable_injection = seastar::defer([&] {
+    auto disable_injection = seastar::defer([&] noexcept {
         utils::get_local_injector().disable("tablet_allocator_shuffle");
     });
 
@@ -6315,7 +6315,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     cfg.name = "RackInferringSnitch";
     sharded<snitch_ptr> snitch;
     snitch.start(cfg).get();
-    auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
+    auto stop_snitch = defer([&snitch] noexcept { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     static constexpr size_t tablet_count = 8;

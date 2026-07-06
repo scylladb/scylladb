@@ -482,14 +482,14 @@ public:
             if (!active.compare_exchange_strong(old_active, true)) {
                 throw std::runtime_error("Starting more than one cql_test_env at a time not supported due to singletons.");
             }
-            auto deactivate = defer([] {
+            auto deactivate = defer([] noexcept {
                 bool old_active = true;
                 auto success = active.compare_exchange_strong(old_active, false);
                 SCYLLA_ASSERT(success);
             });
 
             // FIXME: make the function storage non static
-            auto clear_funcs = defer([] {
+            auto clear_funcs = defer([] noexcept {
                 smp::invoke_on_all([] () {
                     cql3::functions::change_batch batch;
                     batch.clear_functions();
@@ -509,7 +509,7 @@ public:
 
 private:
     static auto defer_verbose_shutdown(const char* what, std::function<void()> func) {
-        return defer([what, func = std::move(func)] {
+        return defer([what, func = std::move(func)] noexcept {
             testlog.info("Shutting down {}", what);
             try {
                 func();
@@ -533,10 +533,10 @@ private:
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
             // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
-            auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
+            auto stop_abort_sources = defer([&] noexcept { abort_sources.stop().get(); });
 
             debug::the_database = &_db;
-            auto reset_db_ptr = defer([] {
+            auto reset_db_ptr = defer([] noexcept {
                 debug::the_database = nullptr;
             });
             auto cfg = cfg_in.db_config;
@@ -1200,7 +1200,7 @@ private:
                 controller.register_auth_integration(auth_service.local());
             }).get();
 
-            auto unregister_sl_controller_integration = defer([this] {
+            auto unregister_sl_controller_integration = defer([this] noexcept {
                 _sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
                     return controller.unregister_auth_integration();
                 }).get();

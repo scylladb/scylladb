@@ -1147,7 +1147,7 @@ future<tasks::task_manager::task::progress> repair::shard_repair_task_impl::get_
 future<> repair::shard_repair_task_impl::run() {
     _topology_guard = {_frozen_topology_guard};
     rs.get_repair_module().add_shard_task_id(global_repair_id.id, _status.id);
-    auto remove_shard_task_id = defer([this] {
+    auto remove_shard_task_id = defer([this] noexcept {
         rs.get_repair_module().remove_shard_task_id(global_repair_id.id);
     });
     try {
@@ -1383,7 +1383,7 @@ future<> repair::user_requested_repair_task_impl::run() {
             rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
         });
 
-        auto cleanup_repair_range_history = defer([&rs, uuid] () mutable {
+        auto cleanup_repair_range_history = defer([&rs, uuid] () mutable noexcept {
             try {
                 rs.cleanup_history(tasks::task_id{uuid.uuid()}).get();
             } catch (...) {
@@ -2399,7 +2399,7 @@ future<> repair::tablet_repair_task_impl::run() {
             rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
         });
 
-        auto cleanup_repair_range_history = defer([&rs, uuid = id.uuid()] () mutable {
+        auto cleanup_repair_range_history = defer([&rs, uuid = id.uuid()] () mutable noexcept {
             try {
                 rs.cleanup_history(tasks::task_id{uuid.uuid()}).get();
             } catch (...) {

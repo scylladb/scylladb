@@ -273,10 +273,10 @@ future<> controller::do_start_server() {
         });
 
         cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket, std::ref(_messaging)).get();
-        auto on_error = defer([&cserver] { cserver->stop().get(); });
+        auto on_error = defer([&cserver] noexcept { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();
-        auto on_error_unsub = defer([this, &cserver] {
+        auto on_error_unsub = defer([this, &cserver] noexcept {
             unsubscribe_server(*cserver).get();
         });
 

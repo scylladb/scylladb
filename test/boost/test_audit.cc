@@ -38,7 +38,7 @@ SEASTAR_TEST_CASE(test_audit_storage_stop_drains_in_flight_write) {
 
     return do_with_cql_env_thread([] (cql_test_env& env) {
         audit::audit::start_audit(env.db_config(), env.get_shared_token_metadata(), env.qp(), env.migration_manager()).get();
-        auto audit_stop = defer([] {
+        auto audit_stop = defer([] noexcept {
             audit::audit::stop_audit().get();
         });
 
@@ -90,7 +90,7 @@ SEASTAR_TEST_CASE(test_audit_storage_stop_rejects_late_write) {
 
     return do_with_cql_env_thread([] (cql_test_env& env) {
         audit::audit::start_audit(env.db_config(), env.get_shared_token_metadata(), env.qp(), env.migration_manager()).get();
-        auto audit_stop = defer([] {
+        auto audit_stop = defer([] noexcept {
             audit::audit::stop_audit().get();
         });
 
@@ -108,7 +108,7 @@ SEASTAR_TEST_CASE(test_audit_storage_stop_rejects_late_write) {
 
         std::ostringstream captured;
         seastar::logger::set_ostream(captured);
-        auto restore_ostream = defer([] {
+        auto restore_ostream = defer([] noexcept {
             seastar::logger::set_ostream(std::cerr);
         });
 
@@ -137,7 +137,7 @@ SEASTAR_TEST_CASE(test_audit_write_awaits_table_recovery) {
 
     return do_with_cql_env_thread([] (cql_test_env& env) {
         audit::audit::start_audit(env.db_config(), env.get_shared_token_metadata(), env.qp(), env.migration_manager()).get();
-        auto audit_stop = defer([] {
+        auto audit_stop = defer([] noexcept {
             audit::audit::stop_audit().get();
         });
 

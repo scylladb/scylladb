@@ -44,7 +44,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
     auto topo = topology(cfg);
 
     set_abort_on_internal_error(false);
-    auto reset_on_internal_abort = seastar::defer([] {
+    auto reset_on_internal_abort = seastar::defer([] noexcept {
         set_abort_on_internal_error(true);
     });
 
@@ -107,7 +107,7 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     auto topo = topology(cfg);
 
     set_abort_on_internal_error(false);
-    auto reset_on_internal_abort = seastar::defer([] {
+    auto reset_on_internal_abort = seastar::defer([] noexcept {
         set_abort_on_internal_error(true);
     });
 
@@ -329,7 +329,7 @@ SEASTAR_THREAD_TEST_CASE(test_left_node_is_kept_outside_dc) {
     auto topo = topology(cfg);
 
     set_abort_on_internal_error(false);
-    auto reset_on_internal_abort = seastar::defer([] {
+    auto reset_on_internal_abort = seastar::defer([] noexcept {
         set_abort_on_internal_error(true);
     });
 

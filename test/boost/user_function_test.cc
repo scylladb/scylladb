@@ -1129,7 +1129,7 @@ SEASTAR_TEST_CASE(test_user_function_filtering) {
                 LANGUAGE Lua \
                 AS 'return now - 60000 * ago';").get();
         set_abort_on_internal_error(false);
-        auto reset_on_internal_abort = defer([] {
+        auto reset_on_internal_abort = defer([] noexcept {
             set_abort_on_internal_error(true);
         });
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT val FROM my_table WHERE key = 'foo' AND t <= toTimestamp(now()) AND t >= minutesAgo(1, toTimestamp(now())) ALLOW FILTERING;").get(),

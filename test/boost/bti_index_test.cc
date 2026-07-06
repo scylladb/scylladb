@@ -951,8 +951,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         sstables::file_writer partitions_db_writer(make_file_output_stream(partitions_db).get());
         sstables::file_writer rows_db_writer(make_file_output_stream(rows_db).get());
 
-        auto close_partitions_db = defer([&] { partitions_db_writer.close(); });
-        auto close_rows_db = defer([&] { rows_db_writer.close(); });
+        auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
+        auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
 
         auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer);
         auto row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
@@ -1113,7 +1113,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_row_index_header) {
     memory_data_sink_buffers bufs;
     {
         sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
-        auto close_fw = defer([&] { fw.close(); });
+        auto close_fw = defer([&] noexcept{ fw.close(); });
         sstables::trie::write_row_index_header(
             sstables::sstable_version_types::mt,
             fw,

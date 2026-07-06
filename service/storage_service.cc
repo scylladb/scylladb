@@ -651,7 +651,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
     SCYLLA_ASSERT(!running); // The function is not re-entrant
-    auto d = defer([] {
+    auto d = defer([] noexcept {
         running = false;
     });
     running = true;
@@ -5211,7 +5211,7 @@ future<tablet_operation_result> storage_service::do_tablet_operation(locator::gl
     _tablet_ops.emplace(tablet, tablet_operation {
         op_name, seastar::shared_future<tablet_operation_result>(p.get_future())
     });
-    auto erase_registry_entry = seastar::defer([&] {
+    auto erase_registry_entry = seastar::defer([&] noexcept {
         _tablet_ops.erase(tablet);
     });
 

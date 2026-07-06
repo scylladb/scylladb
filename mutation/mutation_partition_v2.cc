@@ -211,7 +211,7 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
     // The sentinel never has a clustering key position, so it carries no row information.
     alloc_strategy_unique_ptr<rows_entry> p_sentinel;
     alloc_strategy_unique_ptr<rows_entry> this_sentinel;
-    auto insert_sentinel_back = defer([&] {
+    auto insert_sentinel_back = defer([&] noexcept {
         // Note: this lambda will be run by a destructor (of the `defer` guard),
         // so it mustn't throw, or else it will crash the node.
         //

@@ -727,9 +727,9 @@ static void wait_for_cql(const raw_cql_test_config& cfg, abort_source& as) {
 
 static void workload_main(const raw_cql_test_config& cfg, sharded<abort_source>* as) {
     fmt::print("Running test with config: {}\n", cfg);
-    auto cleanup = defer([] {
+    auto cleanup = defer([] noexcept {
         // Cleanup thread-local connections to avoid destruction issues at exit
-        smp::invoke_on_all([] {
+        smp::invoke_on_all([] noexcept {
             return parallel_for_each(tl_conns, [](std::unique_ptr<raw_cql_connection>& c) {
                     return c->stop();
             }).then([] {

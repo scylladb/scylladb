@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
             auto reads_enabled = !app.configuration().contains("no-reads");
             auto seconds = app.configuration()["seconds"].as<unsigned>();
 
-            auto stop_test = defer([] {
+            auto stop_test = defer([] noexcept {
                 cancelled = true;
             });
 

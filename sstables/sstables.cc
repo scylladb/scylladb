@@ -1906,7 +1906,7 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
                 downcast_ptr<utils::filter::bloom_filter>(optimal_filter.get())->bits().memory_size(), _origin);
 
     auto index_file = open_file(component_type::Index, open_flags::ro).get();
-    auto index_file_closer = deferred_action([&index_file] {
+    auto index_file_closer = deferred_action([&index_file] noexcept {
         try {
             index_file.close().get();
         } catch (...) {

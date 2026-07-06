@@ -25,7 +25,7 @@ namespace netw {
 seastar::logger dict_trainer_logger("dict_training");
 
 future<std::vector<dict_sampler::page_type>> dict_sampler::sample(request req, abort_source& as) {
-    auto ensure_reset = defer([this] {
+    auto ensure_reset = defer([this] noexcept {
         dict_trainer_logger.debug("Sampling finished.");
         reset();
     });

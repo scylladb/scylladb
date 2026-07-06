@@ -1317,7 +1317,7 @@ void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
         // one in-flight snapshot transfer per destination.
         SCYLLA_ASSERT(inserted);
 
-        auto cleanup = seastar::defer([this, dst, &as] {
+        auto cleanup = seastar::defer([this, dst, &as] noexcept {
             // Only erase the map entry if it still points to our abort_source.
             // A new transfer for the same dst may have already replaced it.
             auto it = _snapshot_abort_sources.find(dst);

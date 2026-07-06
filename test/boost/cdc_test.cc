@@ -955,7 +955,8 @@ static void test_collection(cql_test_env& e, data_type val_type, data_type del_t
 SEASTAR_THREAD_TEST_CASE(test_map_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, val map<text, text>, PRIMARY KEY((pk, pk2), ck)) WITH cdc = {'enabled':'true', 'preimage':'true', 'postimage':'true' }"s);
-        auto cleanup = defer([&] {
+        auto cleanup = defer([&] noexcept {
+            // Can in fact throw, will terminate test
             e.execute_cql("DROP TABLE ks.tbl").get();
         });
 
@@ -1039,7 +1040,8 @@ SEASTAR_THREAD_TEST_CASE(test_map_logging) {
 SEASTAR_THREAD_TEST_CASE(test_set_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, val set<text>, PRIMARY KEY((pk, pk2), ck)) WITH cdc = {'enabled':'true', 'preimage':'true', 'postimage':'true' }"s);
-        auto cleanup = defer([&] {
+        auto cleanup = defer([&] noexcept {
+            // Can in fact throw, will terminate test
             e.execute_cql("DROP TABLE ks.tbl").get();
         });
 
@@ -1110,7 +1112,8 @@ SEASTAR_THREAD_TEST_CASE(test_set_logging) {
 SEASTAR_THREAD_TEST_CASE(test_list_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, val list<text>, PRIMARY KEY((pk, pk2), ck)) WITH cdc = {'enabled':'true', 'preimage':'true', 'postimage':'true' }"s);
-        auto cleanup = defer([&] {
+        auto cleanup = defer([&] noexcept {
+            // Can in fact throw, will terminate test
             e.execute_cql("DROP TABLE ks.tbl").get();
         });
 
@@ -1203,7 +1206,8 @@ SEASTAR_THREAD_TEST_CASE(test_udt_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "CREATE TYPE ks.mytype (field0 int, field1 text)"s);
         cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, val mytype, PRIMARY KEY((pk, pk2), ck)) WITH cdc = {'enabled':'true', 'preimage':'true', 'postimage':'true' }"s);
-        auto cleanup = defer([&] {
+        auto cleanup = defer([&] noexcept {
+            // Can in fact throw, will terminate test
             e.execute_cql("DROP TABLE ks.tbl").get();
             e.execute_cql("DROP TYPE ks.mytype").get();
         });

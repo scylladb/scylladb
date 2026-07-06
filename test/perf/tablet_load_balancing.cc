@@ -765,7 +765,7 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(argc, argv, [] (const operation& operation, const bpo::variables_map& app_config) {
-        auto stop_test = defer([] {
+        auto stop_test = defer([] noexcept {
             aborted.request_abort();
         });
         try {

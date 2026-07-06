@@ -556,7 +556,7 @@ public:
         injection_handler handler(data->shared_data, share_messages);
         data->handlers.push_back(handler);
 
-        auto disable_one_shot = defer([this, one_shot, name = sstring(name)] {
+        auto disable_one_shot = defer([this, one_shot, name = sstring(name)] noexcept {
             if (one_shot) {
                 disable(name);
             }

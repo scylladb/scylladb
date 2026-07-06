@@ -99,7 +99,7 @@ static future<> test_memtable(void (*run_tests)(populate_fn_ex, bool)) {
                 readers.clear();
             }).get();
         };
-        auto cleanup_readers = defer([&] { clear_readers(); });
+        auto cleanup_readers = defer([&] noexcept { clear_readers(); });
         std::deque<dht::partition_range> ranges_storage;
         lw_shared_ptr<bool> finished = make_lw_shared(false);
         auto full_compaction_in_background = seastar::do_until([finished] {return *finished;}, [] {
@@ -518,7 +518,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
 
         auto mt = make_memtable(s, ms).get();
         memory::with_allocation_failures([&] {
-            auto revert = defer([&] {
+            auto revert = defer([&] noexcept {
                 mt->revert_flushed_memory();
             });
             assert_that(mt->make_flush_reader(s, semaphore.make_permit()))
@@ -561,7 +561,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
 
     auto rd1 = mt->make_mutation_reader(ss.schema(), semaphore.make_permit(), pr, s->full_slice(),
                                     nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    auto close_rd1 = defer([&] { rd1.close().get(); });
+    auto close_rd1 = defer([&] noexcept { rd1.close().get(); });
 
     rd1.fill_buffer().get();
 
@@ -571,14 +571,14 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
 
     auto rd2 = mt->make_mutation_reader(ss.schema(), semaphore.make_permit(), pr, s->full_slice(),
                                     nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    auto close_rd2 = defer([&] { rd2.close().get(); });
+    auto close_rd2 = defer([&] noexcept { rd2.close().get(); });
 
     rd2.fill_buffer().get();
 
     mt->apply(rt_m); // whatever
 
     auto flush_rd = mt->make_flush_reader(ss.schema(), semaphore.make_permit());
-    auto close_flush_rd = defer([&] { flush_rd.close().get(); });
+    auto close_flush_rd = defer([&] noexcept { flush_rd.close().get(); });
 
     while (!flush_rd.is_end_of_stream()) {
         flush_rd().get();
@@ -638,7 +638,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_multiple_versions) {
 
     auto rd1 = mt->make_mutation_reader(s, semaphore.make_permit(), pr, s->full_slice(),
                                     nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    auto close_rd1 = defer([&] { rd1.close().get(); });
+    auto close_rd1 = defer([&] noexcept { rd1.close().get(); });
 
     rd1.fill_buffer().get();
     BOOST_REQUIRE(!rd1.is_end_of_stream()); // rd1 must keep the m1 version alive
@@ -647,7 +647,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_multiple_versions) {
 
     auto rd2 = mt->make_mutation_reader(s, semaphore.make_permit(), pr, s->full_slice(),
                                     nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    auto close_r2 = defer([&] { rd2.close().get(); });
+    auto close_r2 = defer([&] noexcept { rd2.close().get(); });
 
     rd2.fill_buffer().get();
     BOOST_REQUIRE(!rd2.is_end_of_stream()); // rd2 must keep the m1 version alive
@@ -686,7 +686,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_mvcc_and_preemption) {
     std::optional<mutation_reader> rd0 = mt->make_mutation_reader(
             s, semaphore.make_permit(), pr, s->full_slice(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    auto close_rd0 = defer([&] { rd0->close().get(); });
+    auto close_rd0 = defer([&] noexcept { rd0->close().get(); });
     rd0->fill_buffer().get();
     BOOST_REQUIRE(!rd0->is_end_of_stream());
 
@@ -700,7 +700,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_mvcc_and_preemption) {
     std::optional<mutation_reader> rd1 = mt->make_mutation_reader(
             s, semaphore.make_permit(), pr, s->full_slice(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    auto close_rd1 = defer([&] { rd1->close().get(); });
+    auto close_rd1 = defer([&] noexcept { rd1->close().get(); });
     rd1->fill_buffer().get();
     BOOST_REQUIRE(!rd1->is_end_of_stream());
 

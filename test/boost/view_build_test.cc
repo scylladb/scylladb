@@ -722,7 +722,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_stop_during_process_staging_
         table->add_sstable_and_update_cache(sst).get();
 
         constexpr std::string_view injection = "view_update_generator_pause_before_processing";
-        auto disable_injection = defer([injection] {
+        auto disable_injection = defer([injection] noexcept {
             utils::get_local_injector().disable(injection);
         });
 

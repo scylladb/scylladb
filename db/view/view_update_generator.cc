@@ -80,7 +80,7 @@ public:
         _inactive_pending_work += sst->data_size();
     }
 
-    void on_sstables_deregistration(const std::vector<sstables::shared_sstable>& ssts) {
+    void on_sstables_deregistration(const std::vector<sstables::shared_sstable>& ssts) noexcept {
         for (auto& sst : ssts) {
             if (_monitors.contains(sst)) {
                 _monitors.erase(sst);
@@ -242,7 +242,7 @@ future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::
     for (auto& sst : sstables) {
         _progress_tracker->on_sstable_registration(sst);
     }
-    auto deregister_sstables = defer([this, &sstables] {
+    auto deregister_sstables = defer([this, &sstables] noexcept {
         _progress_tracker->on_sstables_deregistration(sstables);
     });
 

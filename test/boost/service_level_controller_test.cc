@@ -112,7 +112,7 @@ SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
     auto stop_tm = deferred_stop(tm);
     sharded<abort_source> as;
     as.start().get();
-    auto stop_as = defer([&as] { as.stop().get(); });
+    auto stop_as = defer([&as] noexcept { as.stop().get(); });
     sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, scheduling_supergroup(), default_scheduling_group).get();
     qos_configuration_change_suscriber_simple ccss;
     sl_controller.local().register_subscriber(&ccss);
@@ -180,7 +180,7 @@ SEASTAR_THREAD_TEST_CASE(too_many_service_levels) {
     auto stop_tm = deferred_stop(tm);
     sharded<abort_source> as;
     as.start().get();
-    auto stop_as = defer([&as] { as.stop().get(); });
+    auto stop_as = defer([&as] noexcept { as.stop().get(); });
     sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, scheduling_supergroup(), default_scheduling_group, true).get();
     sl_controller.local().set_distributed_data_accessor(test_accessor);
     int service_level_id = 0;
@@ -257,7 +257,7 @@ SEASTAR_THREAD_TEST_CASE(add_remove_bad_sequence) {
     auto stop_tm = deferred_stop(tm);
     sharded<abort_source> as;
     as.start().get();
-    auto stop_as = defer([&as] { as.stop().get(); });
+    auto stop_as = defer([&as] noexcept { as.stop().get(); });
     sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, scheduling_supergroup(), default_scheduling_group, true).get();
     service_level_options slo;
     slo.shares.emplace<int32_t>(500);
@@ -285,7 +285,7 @@ SEASTAR_THREAD_TEST_CASE(verify_unset_shares_in_cache_when_service_level_created
     sharded<abort_source> as;
 
     as.start().get();
-    auto stop_as = defer([&as] { as.stop().get(); });
+    auto stop_as = defer([&as] noexcept { as.stop().get(); });
     sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, scheduling_supergroup(), default_scheduling_group).get();
 
     using timeout_duration = typename seastar::lowres_clock::duration;

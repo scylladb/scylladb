@@ -139,7 +139,7 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
         std::vector<managed_ref<int>> allocated1;
         std::vector<managed_ref<int>> allocated2;
 
-        auto clear_vectors = defer([&] {
+        auto clear_vectors = defer([&] noexcept {
             with_allocator(reg1.allocator(), [&] {
                 allocated1.clear();
             });
@@ -554,7 +554,7 @@ SEASTAR_THREAD_TEST_CASE(test_hold_reserve) {
 
             // Fill the entire available memory with LSA objects.
             list entries;
-            auto clean_up = defer([&entries] {
+            auto clean_up = defer([&entries] noexcept {
                 entries.clear_and_dispose([] (entry *e) {current_allocator().destroy(e);});
             });
             auto alloc_entry = [] () {

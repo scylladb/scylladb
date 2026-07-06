@@ -48,7 +48,7 @@ void view_consumer::flush_fragments() {
         _fragments.emplace_front(*reader().schema(), permit(), partition_start(get_current_key(), tombstone()));
         auto base_schema = base()->schema();
         auto fragments_reader = make_mutation_reader_from_fragments(reader().schema(), permit(), std::move(_fragments));
-        auto close_reader = defer([&fragments_reader] { fragments_reader.close().get(); });
+        auto close_reader = defer([&fragments_reader] noexcept { fragments_reader.close().get(); });
         fragments_reader.upgrade_schema(base_schema);
         _gen->populate_views(
                 *base(),
