@@ -182,6 +182,9 @@ public:
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
+    bool started_group0() const {
+        return _group0_id.has_value();
+    }
 };
 
 // Implementation of `direct_failure_detector::pinger` which uses DIRECT_FD_PING verb for pinging.
