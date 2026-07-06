@@ -281,7 +281,7 @@ Cassandra SAI Compatibility for Vector Search
 
 ScyllaDB accepts the Cassandra ``StorageAttachedIndex`` (SAI) class name in ``CREATE CUSTOM INDEX``
 statements **for vector columns**. Cassandra libraries such as
-`CassIO <https://cassio.org/>`_ and `LangChain <https://www.langchain.com/>`_ use SAI to create
+`CassIO <https://github.com/CassioML>`_ and `LangChain <https://www.langchain.com/>`_ use SAI to create
 vector indexes; ScyllaDB recognizes these statements for compatibility.
 
 When ScyllaDB encounters an SAI class name on a **vector column**, the index is automatically
