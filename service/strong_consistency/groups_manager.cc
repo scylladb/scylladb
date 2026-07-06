@@ -107,6 +107,11 @@ auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
         // before the updater gets a chance to run.
         return need_wait_for_leader{wait_with_abort_source(_state.leader_info_cond, as)};
     }
+    if (utils::get_local_injector().enter("sc_begin_mutate_wait_for_leader")) {
+        // Test-only: emulate a leader whose leader_info never becomes available,
+        // so callers wait on leader_info_cond until their own deadline fires.
+        return need_wait_for_leader{wait_with_abort_source(_state.leader_info_cond, as)};
+    }
     const auto new_ts = std::max(api::new_timestamp(), _state.leader_info->last_timestamp + 1);
     _state.leader_info->last_timestamp = new_ts;
     return timestamp_with_term{new_ts, term};
@@ -353,9 +358,6 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
                 // The same will happen when the node is shutting down.
                 // There's no reason to abort this operation in any other case.
                 co_await state.server->read_barrier(nullptr);
-
-                co_await utils::get_local_injector().inject("sc_leader_info_updater_wait_before_setting_leader_info",
-                    utils::wait_for_message(5min));
 
                 state.leader_info = leader_info {
                     .term = current_term,
