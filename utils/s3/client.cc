@@ -77,7 +77,7 @@ inline size_t iovec_len(const std::vector<iovec>& iov)
 
 namespace s3 {
 
-static logging::logger s3l("s3");
+logging::logger s3l("s3");
 
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     auto in = std::move(in_);

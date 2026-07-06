@@ -14,9 +14,14 @@
 
 #include "aws_error.hh"
 #include "utils/exceptions.hh"
+#include "utils/log.hh"
 #include <seastar/util/log.hh>
 #include <seastar/http/exception.hh>
 #include <memory>
+
+namespace s3 {
+extern logging::logger s3l;
+}
 
 namespace aws {
 
@@ -70,10 +75,16 @@ std::optional<aws_error> aws_error::parse(seastar::sstring&& body) {
         if (auto found = all_errors.find(code); found != all_errors.end()) {
             ret_val = found->second;
         } else {
+            ::s3::s3l.warn("Unknown S3 error code: {}, message: {}", code, message_node->value());
             ret_val._type = aws_error_type::UNKNOWN;
         }
         ret_val._message = message_node->value();
     } else {
+        if (code_node) {
+            ::s3::s3l.warn("Malformed S3 error response: missing Message node, Code: {}", code_node->value());
+        } else if (message_node) {
+            ::s3::s3l.warn("Malformed S3 error response: missing Code node, Message: {}", message_node->value());
+        }
         ret_val._type = aws_error_type::UNKNOWN;
     }
     return ret_val;
