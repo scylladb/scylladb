@@ -996,14 +996,11 @@ async def test_timed_out_queries(manager: ManagerClient):
             await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (17, 7)")
 
     # Case 3: Waiting for the leader during a write.
-
-    # To trigger the timeout we want, we need to make sure that
-    # groups_manager::begin_mutate will want to return need_wait_for_leader,
-    # and that it will never succeed. This will do the job.
-    await manager.api.enable_injection(s1.ip_addr, "sc_leader_info_updater_wait_before_setting_leader_info", one_shot=True)
-
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            # We can only emulate the leader not being chosen yet. Otherwise, we would
+            # prolong completing creating the table (cf. groups_manager::update).
+            await manager.api.enable_injection(s1.ip_addr, "sc_begin_mutate_wait_for_leader", one_shot=False)
             with pytest.raises(WriteTimeout, match=f"Query timed out for {table}"):
                 await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (11, 13) USING TIMEOUT 100ms")
 
