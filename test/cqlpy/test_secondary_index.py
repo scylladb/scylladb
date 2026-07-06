@@ -224,29 +224,34 @@ def test_index_intersection_three_columns(cql, test_keyspace):
 
 # CUSTOMER-303: the point of the whole feature is to read fewer base-table rows.
 # Here every row has a = 1 but only a handful also have b = 2. Whether by
-# intersecting posting lists (phase 2) or - since the b = 2 driver is tiny - by
-# the phase-3 skip heuristic using b = 2 as a plain index, we must read only the
-# few matching base rows, not all the a = 1 rows. Verified via the
-# filtered_rows_read_total metric, which counts base rows read by filtered
-# (ALLOW FILTERING) queries.
+# intersecting posting lists or - since the b = 2 driver is tiny - by driving
+# with the b = 2 index alone, we must read only the few matching base rows, not
+# all the a = 1 rows. Verified via the filtered_rows_read_total metric, which
+# counts base rows read by filtered (ALLOW FILTERING) queries.
 def test_index_intersection_reads_fewer_base_rows(cql, test_keyspace, scylla_only):
-    with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int') as table:
+    with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int, c int') as table:
         cql.execute(f"CREATE INDEX ON {table}(a)")
         cql.execute(f"CREATE INDEX ON {table}(b)")
-        insert = cql.prepare(f"INSERT INTO {table}(p, a, b) VALUES (?, ?, ?)")
+        insert = cql.prepare(f"INSERT INTO {table}(p, a, b, c) VALUES (?, ?, ?, ?)")
         total = 200
         matching = sorted(i for i in range(total) if i % 50 == 0)  # 4 rows with b=2
         for i in range(total):
-            cql.execute(insert, [i, 1, 2 if i % 50 == 0 else 7])
-        metric = 'scylla_query_processor_filtered_rows_read_total'
+            cql.execute(insert, [i, 1, 2 if i % 50 == 0 else 7, 0])
+        # c is never indexed and 'c >= 0' is always true, which forces post-filtering
+        # on so filtered_rows_read_total actually counts the base rows read. With
+        # only indexed restrictions (a, b) the query needs no post-filtering and the
+        # counter would stay at 0 - passing the assertion below vacuously.
+        metric = 'scylla_cql_filtered_rows_read_total'
+        query = f"SELECT p FROM {table} WHERE a = 1 AND b = 2 AND c >= 0 ALLOW FILTERING"
         before = ScyllaMetrics.query(cql).get(metric) or 0
-        got = sorted(row.p for row in cql.execute(f"SELECT p FROM {table} WHERE a = 1 AND b = 2 ALLOW FILTERING"))
+        got = sorted(row.p for row in cql.execute(query))
         after = ScyllaMetrics.query(cql).get(metric) or 0
         assert got == matching
         base_rows_read = after - before
-        # With intersection we read only the ~4 matching base rows, not all 200
-        # a = 1 rows. Allow generous slack but require it to be far below 200.
-        assert base_rows_read <= 20, f"read {base_rows_read} base rows for {len(matching)} matches (intersection not applied?)"
+        # Read only the ~4 rows matching the selective b = 2 restriction, not all
+        # 200 a = 1 rows: the unselective a = 1 index must not be the one scanned.
+        # The lower bound guards against the metric silently reading nothing.
+        assert 0 < base_rows_read <= 20, f"read {base_rows_read} base rows for {len(matching)} matches (drove by the wrong index / full scan?)"
 
 # CUSTOMER-303 phase 3: cost-based index selection. When several equality-indexed
 # columns can be intersected, the one with the smallest posting list should drive
