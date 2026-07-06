@@ -25,16 +25,16 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Test constants
-NUM_MIGRATIONS = 10
-WARMUP_LWT_CNT = 30
-POST_LWT_CNT = 30
+NUM_MIGRATIONS = 20
+WARMUP_LWT_CNT = 100
+POST_LWT_CNT = 100
 PHASE_WARMUP = 'warmup'
 PHASE_POST = 'post'
 PHASE_MIGRATING = 'migrating'
 
 
 async def tablet_migration_ops(stop_event: asyncio.Event,
-        manager: ManagerClient, servers, tester, num_ops: int, pause_range=(0.1, 0.5)
+        manager: ManagerClient, servers, tester, num_ops: int, pause_range=(0.5, 2.0)
         ):
 
     """
@@ -116,10 +116,11 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_t
         "rf_rack_valid_keyspaces": False,
     }
 
-    servers = await manager.servers_add(4, config=cfg)
+    servers = await manager.servers_add(6, config=cfg)
     await manager.disable_tablet_balancing()
 
-    rf = 3
+    rf_max = len(servers) - 1
+    rf = random.randint(2, rf_max)
     logger.info("Using replication_factor=%d (servers=%d)", rf, len(servers))
 
     async with new_test_keyspace(
@@ -147,7 +148,7 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_t
                 NUM_MIGRATIONS,
             )
             await tester.start_workers(stop_event_)
-            # Phase 1: warmup LWT (30 applied CAS)
+            # Phase 1: warmup LWT (100 applied CAS)
             tester.set_phase(PHASE_WARMUP)
             logger.info("LWT warmup: waiting for %d applied CAS", WARMUP_LWT_CNT)
             await tester.wait_for_phase_ops(stop_event_, PHASE_WARMUP, WARMUP_LWT_CNT, timeout=60, poll=1.0)
@@ -161,7 +162,7 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_t
             )
             await asyncio.wait_for(
                 migration_task,
-                timeout=scale_timeout(NUM_MIGRATIONS * 2 + 15),  # 10*2+15 = 35s before scaling
+                timeout=scale_timeout(NUM_MIGRATIONS * 2 + 15),  # 20*2+15 = 55s before scaling
             )
             logger.info("LWT during migrating phase: %d ops", tester.get_phase_ops(PHASE_MIGRATING))
 
