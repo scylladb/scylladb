@@ -27,12 +27,16 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/sleep.hh>
 
 namespace service::strong_consistency {
 
 using namespace locator;
 
 static logging::logger logger("sc_groups_manager");
+
+// How often the leader refreshes stable_timestamp for the groups it leads.
+static constexpr auto stable_timestamp_refresh_interval = std::chrono::seconds(60);
 
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
@@ -141,6 +145,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _features(features)
     , _gossiper(gossiper)
     , _raft_replay_buffer(raft_replay_buffer)
+    , _stable_timestamp_tracker(_db, _ms, _raft_groups)
 {
     init_messaging_service();
 }
@@ -463,6 +468,133 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
     }
 }
 
+future<> groups_manager::stable_timestamp_tracker::run() {
+    while (!_as.abort_requested()) {
+        try {
+            co_await seastar::sleep_abortable(stable_timestamp_refresh_interval, _as);
+        } catch (const seastar::sleep_aborted&) {
+            co_return;
+        }
+        try {
+            co_await refresh();
+        } catch (...) {
+            logger.warn("stable_timestamp_tracker::run: unexpected error: {}", std::current_exception());
+        }
+    }
+}
+
+groups_manager::stable_timestamp_tracker::stable_timestamp_tracker(replica::database& db,
+        netw::messaging_service& ms, std::unordered_map<raft::group_id, raft_group_state>& raft_groups)
+    : _db(db)
+    , _ms(ms)
+    , _raft_groups(raft_groups)
+{}
+
+void groups_manager::stable_timestamp_tracker::start() {
+    // Idempotent: update() calls this on every token_metadata update because the
+    // strongly_consistent_tables feature may only become enabled after
+    // groups_manager::start() has run, and the fiber must be launched then.
+    if (_fiber.available()) {
+        _fiber = run();
+    }
+}
+
+future<> groups_manager::stable_timestamp_tracker::stop() {
+    _as.request_abort();
+    co_await std::move(_fiber);
+}
+
+void groups_manager::stable_timestamp_tracker::advance(raft_group_state& state, api::timestamp_type candidate) {
+    if (candidate <= state.stable_timestamp) {
+        return;
+    }
+    state.stable_timestamp = candidate;
+}
+
+future<> groups_manager::stable_timestamp_tracker::refresh() {
+    auto tm = _db.get_token_metadata_ptr();
+    const auto my_host = _db.get_token_metadata().get_my_id();
+    // Our topology version, sent with the RPCs below so a receiver can fence out
+    // this request if we turn out to be lagging behind the current topology.
+    const auto fence = service::fencing_token{tm->get_version()};
+
+    std::unordered_map<host_id, std::vector<global_tablet_id>> host_tablets;
+    auto sc_tables = tm->tablets().all_tables_ungrouped() | std::views::keys | std::views::filter([&tm] (auto table) { return tm->tablets().get_tablet_map(table).has_raft_info(); }) | std::ranges::to<std::vector<table_id>>();
+    for (const auto& table : sc_tables) {
+        _as.check();
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        co_await tmap.for_each_tablet([&, my_host = my_host](tablet_id tid, const tablet_info& ti) -> future<> {
+            auto group_id = tmap.get_tablet_raft_info(tid).group_id;
+            auto git = _raft_groups.find(group_id);
+            if (git == _raft_groups.end()) {
+                return make_ready_future<>(); // Skip stable_timestamp refresh.
+            }
+
+            auto& state = git->second;
+            if (!state.leader_info) {
+                return make_ready_future<>();  // Skip stable_timestamp refresh.
+            }
+
+            if (contains(ti.replicas, {my_host, this_shard_id()})) {
+                for (const auto& replica : ti.replicas) {
+                    host_tablets[replica.host].push_back(global_tablet_id{table, tid});
+                }
+            }
+            return make_ready_future<>();
+        });
+    }
+
+    std::unordered_map<host_id, applied_timestamp_per_tablet> host_timestamps;
+    _as.check();
+    co_await coroutine::parallel_for_each(host_tablets, [&](const auto& entry) -> future<> {
+        auto& [host, tablets] = entry;
+        if (host == my_host) {
+            host_timestamps[my_host] = co_await get_applied_timestamps(_db, std::move(tablets));
+        } else {
+            auto dst = raft::server_id(host.uuid());
+            try {
+                abort_on_expiry aoe{lowres_clock::now() + std::chrono::seconds(5)};
+                auto subscription = _as.subscribe([&aoe] () noexcept {
+                    aoe.abort_source().request_abort();
+                });
+                host_timestamps[host] = co_await ser::groups_manager_rpc_verbs::send_get_local_applied_timestamps(&_ms, host, aoe.abort_source(), dst, fence, std::move(tablets));
+            } catch (...) {
+                static thread_local logger::rate_limit rate_limit{std::chrono::seconds(5)};
+                logger.log(log_level::warn, rate_limit, "stable_timestamp_tracker::refresh: failed to get timestamps from {}: {}", host, std::current_exception());
+            }
+        }
+    });
+
+    for (const auto& table : sc_tables) {
+        _as.check();
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        co_await tmap.for_each_tablet([&](tablet_id tid, const tablet_info& ti) -> future<> {
+            auto group_id = tmap.get_tablet_raft_info(tid).group_id;
+            auto git = _raft_groups.find(group_id);
+            if (git == _raft_groups.end()) {
+                return make_ready_future<>(); // Skip stable_timestamp refresh.
+            }
+
+            auto& state = git->second;
+            if (!state.leader_info) {
+                return make_ready_future<>(); // Skip stable_timestamp refresh.
+            }
+
+            auto replica_ts = [&](const tablet_replica& r) -> api::timestamp_type {
+                auto host_it = host_timestamps.find(r.host);
+                if (host_it == host_timestamps.end()) {
+                    return api::min_timestamp;
+                }
+                auto ts_it = host_it->second.find(global_tablet_id{table, tid});
+                return ts_it == host_it->second.end() ? api::min_timestamp : ts_it->second;
+            };
+            api::timestamp_type min_ts = std::ranges::min(ti.replicas | std::views::transform(replica_ts));
+            advance(git->second, min_ts);
+            return make_ready_future<>();
+        });
+    }
+}
+
 void groups_manager::update(token_metadata_ptr new_tm) {
     if (!_features.strongly_consistent_tables) {
         return;
@@ -472,6 +604,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         _pending_tm = new_tm;
         return;
     }
+
+    // The strongly_consistent_tables feature may have become enabled only after
+    // start() ran, so launch the periodic refresh fiber here. Idempotent.
+    _stable_timestamp_tracker.start();
 
     for (auto& [id, state]: _raft_groups) {
         state.has_tablet = false;
@@ -602,6 +738,8 @@ void groups_manager::start() {
     if (_pending_tm) {
         update(std::move(_pending_tm));
     }
+
+    _stable_timestamp_tracker.start();
 }
 
 future<> groups_manager::stop() {
@@ -612,6 +750,8 @@ future<> groups_manager::stop() {
     }
 
     logger.info("stop() enter");
+
+    co_await _stable_timestamp_tracker.stop();
 
     schedule_raft_groups_deletion(true);
 
