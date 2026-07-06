@@ -1277,7 +1277,7 @@ void sstable::validate_partitioner() {
     validation_metadata& v = *static_cast<validation_metadata *>(p.get());
     if (v.partitioner.value != to_bytes(_schema->get_partitioner().name())) {
         throw std::runtime_error(
-                fmt::format(FMT_STRING("SSTable {} uses {} partitioner which is different than {} partitioner used by the database"),
+                fmt::format("SSTable {} uses {} partitioner which is different than {} partitioner used by the database",
                             get_filename(),
                             sstring(reinterpret_cast<char*>(v.partitioner.value.data()), v.partitioner.value.size()),
                             _schema->get_partitioner().name()));

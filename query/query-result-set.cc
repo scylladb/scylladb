@@ -199,7 +199,7 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
         }
         index++;
       } catch (...) {
-            throw deserialization_error(fmt::format(FMT_STRING("failed on column {}.{}#{} (version: {}, id: {}, index: {}, type: {}): {}"),
+            throw deserialization_error(fmt::format("failed on column {}.{}#{} (version: {}, id: {}, index: {}, type: {}): {}",
                 _schema->ks_name(), _schema->cf_name(), col.name_as_text(), _schema->version(), col.id, index, col.type->name(), std::current_exception()));
       }
     }
