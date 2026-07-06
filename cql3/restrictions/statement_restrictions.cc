@@ -1436,44 +1436,8 @@ static do_find_idx_result do_find_idx(
         return 1;
     };
 
-    // Estimate the relative selectivity of the restriction(s) an index would
-    // serve, based only on the restriction's operator - never on runtime data -
-    // so that the estimate is a pure function of the query. It is therefore
-    // identical on every coordinator and stable over time, which paged index
-    // queries rely on (see the determinism note below and issue #7969).
-    //
-    // A scalar equality (`col = v`, or a map element `m[k] = v`) matches a
-    // single value of a single-valued column and is the most selective a
-    // secondary index gets. A collection membership restriction
-    // (`col CONTAINS v` / `CONTAINS KEY v`) is typically far less selective: a
-    // given element value can appear in the collections of arbitrarily many
-    // rows. This operator-based estimate only breaks ties in the *deterministic*
-    // choice of a single index here at prepare time; when several indexed columns
-    // are restricted, the query executor additionally intersects their posting
-    // lists and, at execution time, drives the query with the index whose posting
-    // list is actually smallest (see the multi-index handling for CUSTOMER-303 in
-    // view_indexed_table_select_statement). Keeping this estimate a pure function
-    // of the query preserves the determinism that paged index queries rely on
-    // (see the note below and issue #7969).
-    auto selectivity_rank = [] (const std::vector<predicate>& preds) -> int {
-        // Higher is more selective. Scalar/map-element equality beats
-        // collection membership; anything else stays in between so its relative
-        // order is unchanged.
-        int rank = 1;
-        for (const auto& pred : preds) {
-            if (pred.equality) {
-                return 2;
-            }
-            if (pred.op == expr::oper_t::CONTAINS || pred.op == expr::oper_t::CONTAINS_KEY) {
-                rank = 0;
-            }
-        }
-        return rank;
-    };
-
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
-    int chosen_index_selectivity = -1;
     expr::expression chosen_index_restrictions = expr::conjunction({});
     std::vector<predicate> chosen_index_predicates;
 
@@ -1484,22 +1448,20 @@ static do_find_idx_result do_find_idx(
     // (sorted) order so the set is a pure function of the query.
     std::map<sstring, std::pair<secondary_index::index, std::vector<predicate>>> eq_global_indexes;
 
-    // Several indexes may be usable for this query. We pick one by, in order of
-    // decreasing priority: the index score (local indexes covering the full
-    // partition key are preferred over global ones), then the estimated
-    // selectivity of the restriction the index serves, and finally the order of
-    // the columns mentioned in the restriction expression. The exact tie-break
-    // order isn't important on its own, but it is critical that two coordinators
-    // - or the same coordinator over time - choose the same index for the same
-    // query; otherwise paging can break (see issue #7969). All three criteria
-    // above are pure functions of the query, so this holds.
+    // Several indexes may be usable for this query. When their score is tied,
+    // let's pick one by order of the columns mentioned in the restriction
+    // expression. This specific order isn't important, but it is critical that
+    // two coordinators - or the same coordinator over time (including across a
+    // rolling upgrade) - choose the same index for the same query. Otherwise,
+    // paging can break (see issue #7969). Any cost-based refinement of this
+    // choice must therefore be gated behind a cluster feature and pinned in the
+    // paging state; see view_indexed_table_select_statement (CUSTOMER-303).
     for (const auto& group : search_groups) {
         // Iterate columns in WHERE-clause order (from the restriction expression)
         // rather than schema-position order (from the pred_vectors map).  When
-        // score and selectivity are tied the first column visited wins (strict >),
-        // so the iteration order determines which index is chosen for otherwise
-        // equal candidates -- matching the old expression-based do_find_idx
-        // behaviour.
+        // scores are tied the first column visited wins (strict >), so the
+        // iteration order determines which index is chosen for equal-score
+        // candidates -- matching the old expression-based do_find_idx behaviour.
         expr::for_each_expression<expr::column_value>(group.restriction_expr, [&](const expr::column_value& cval) {
             auto it = group.pred_vectors.find(cval.col);
             if (it == group.pred_vectors.end()) {
@@ -1511,29 +1473,17 @@ static do_find_idx_result do_find_idx(
                         !are_predicates_supported_by(preds, index)) {
                     continue;
                 }
-                const int score = index_score(index);
-                if (score == 0) {
-                    // Unusable index (e.g. a local index without the full
-                    // partition key restricted); never pick it.
-                    continue;
-                }
-                const int selectivity = selectivity_rank(preds);
-                // Remember every global index restricted by an equality; these are
-                // the candidates for posting-list intersection once the primary
-                // index is chosen.
+                // Remember every global equality-restricted index; these become the
+                // candidates for posting-list intersection once the primary index
+                // is chosen (CUSTOMER-303). This does not influence the choice below,
+                // so the deterministic single-index selection is unchanged.
                 if (!index.metadata().local()
                         && std::ranges::any_of(preds, [] (const predicate& p) { return p.equality; })) {
                     eq_global_indexes.insert_or_assign(index.metadata().name(), std::make_pair(index, preds));
                 }
-                // Compare (score, selectivity) lexicographically. A strict '>'
-                // keeps the first candidate visited - i.e. the earliest column
-                // in WHERE-clause order - when both are equal.
-                const bool better = score > chosen_index_score
-                        || (score == chosen_index_score && selectivity > chosen_index_selectivity);
-                if (better) {
+                if (index_score(index) > chosen_index_score) {
                     chosen_index = index;
-                    chosen_index_score = score;
-                    chosen_index_selectivity = selectivity;
+                    chosen_index_score = index_score(index);
                     chosen_index_restrictions = group.restriction_expr;
                     chosen_index_predicates = preds;
                 }

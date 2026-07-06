@@ -387,8 +387,6 @@ private:
     // driver is already so selective that intersecting is not worth it.
     future<std::pair<size_t, uint64_t>> choose_primary_index(query_processor& qp, service::query_state& state,
             const query_options& options, const std::vector<index_candidate>& candidates, uint64_t skip_threshold) const;
-    size_t recover_primary_index(const std::vector<index_candidate>& candidates,
-            const service::pager::paging_state& paging_state) const;
 
     dht::partition_range_vector get_partition_ranges_for_local_index_posting_list(const query_options& options) const;
     dht::partition_range_vector get_partition_ranges_for_global_index_posting_list(const query_options& options) const;

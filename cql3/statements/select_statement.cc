@@ -968,6 +968,13 @@ view_indexed_table_select_statement::process_base_query_results(
 {
     if (paging_state) {
         paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size, primary);
+        if (primary && paging_state) {
+            // CUSTOMER-303: pin the chosen driving index so the next page (possibly
+            // on another coordinator) continues with the same plan.
+            auto ps = make_lw_shared<service::pager::paging_state>(*paging_state);
+            ps->set_query_plan_index(primary->index.metadata().name());
+            paging_state = std::move(ps);
+        }
         _selection->get_result_metadata()->maybe_set_paging_state(std::move(paging_state));
     }
     return process_results(std::move(results), std::move(cmd), options, now);
@@ -1303,54 +1310,63 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
         }
     }
 
-    // CUSTOMER-303 phase 3: when several equality-indexed columns can be
-    // intersected, pick the one with the smallest posting list to drive the scan
-    // and paging. On the first page we probe posting-list sizes; on later pages we
-    // recover the same choice from the paging cursor (whose partition key is the
-    // chosen index's indexed value), so paging stays consistent with no
-    // wire-format change. `candidates`/`others` live for the whole call (this is a
-    // coroutine), so the `primary` pointer and `others` reference threaded below
-    // stay valid across every co_await.
-    // When the cost-chosen driver already matches at most this many rows, reading
-    // those base rows and post-filtering is cheaper than the extra (sequential)
-    // index reads the intersection would add - so we skip the intersection and
-    // just use the driver as a plain index. This mirrors PostgreSQL preferring a
-    // plain index scan over a BitmapAnd for a selective-enough index. The
-    // threshold is the (live-updatable) secondary_index_intersection_skip_max_rows
-    // scylla.yaml option; 0 disables the skip (always intersect).
-    const uint64_t intersection_skip_max_driver_size = qp.get_cql_config().secondary_index_intersection_skip_max_rows.get();
+    // CUSTOMER-303: when several equality-indexed columns are restricted, drive
+    // the query with a cost-chosen index and intersect the others' posting lists.
+    // This changes the query plan, so it is gated behind the
+    // SECONDARY_INDEX_INTERSECTION cluster feature (enabled only once every node
+    // is upgraded) and the chosen plan (the driving index) is pinned in the paging
+    // state, so any coordinator continues a paged query with the same plan - even
+    // across a rolling upgrade. A query that started before the feature was
+    // enabled carries no pinned plan and stays on the legacy single-index path for
+    // its whole life. `candidates`/`others` live for the whole call (a coroutine),
+    // so the `primary` pointer and `others` reference threaded below stay valid
+    // across every co_await.
     std::vector<index_candidate> candidates = build_index_candidates(options);
     const index_candidate* primary = nullptr;
     std::vector<index_candidate> others;
+    // The driving index pinned by a previous page, if any.
+    const sstring pinned_index = options.get_paging_state()
+            ? options.get_paging_state()->get_query_plan_index() : sstring();
     if (!candidates.empty()) {
-        size_t primary_idx = 0;
+        std::optional<size_t> primary_idx;
         bool skip_intersection = false;
-        if (options.get_paging_state()) {
-            primary_idx = recover_primary_index(candidates, *options.get_paging_state());
-        } else {
-            auto [idx, driver_size] = co_await choose_primary_index(qp, state, options, candidates, intersection_skip_max_driver_size);
-            primary_idx = idx;
-            skip_intersection = driver_size <= intersection_skip_max_driver_size;
-        }
-        primary = &candidates[primary_idx];
-        if (skip_intersection) {
-            // Correct regardless: post-filtering applies the other indexed
-            // restrictions to the base rows. Skipping only changes which base
-            // rows are read, never the result. Paging stays consistent because
-            // the driver is unchanged; a later page (no probe) may intersect, and
-            // mixing is still correct - the driver keys are processed in order and
-            // never skipped.
-            tracing::trace(state.get_trace_state(),
-                    "primary index is {}; selective enough, skipping posting-list intersection",
-                    primary->index.metadata().name());
-        } else {
+        if (!pinned_index.empty()) {
+            // Continuation of a paged intersection query: reuse the pinned plan
+            // verbatim (the candidate set is a pure function of the query, so it
+            // is identical on every page/coordinator).
             for (size_t i = 0; i < candidates.size(); i++) {
-                if (i != primary_idx) {
-                    others.push_back(candidates[i]);
+                if (candidates[i].index.metadata().name() == pinned_index) {
+                    primary_idx = i;
+                    break;
                 }
             }
-            tracing::trace(state.get_trace_state(), "Intersecting {} indexes; primary index is {}",
-                    candidates.size(), primary->index.metadata().name());
+        } else if (!options.get_paging_state() && qp.proxy().features().secondary_index_intersection) {
+            // First page of a new query, cluster fully upgraded: choose the driver
+            // by probing posting-list sizes. When the driver already matches at
+            // most secondary_index_intersection_skip_max_rows rows, reading those
+            // few base rows and post-filtering is cheaper than the extra index
+            // reads, so skip the intersection (cf. PostgreSQL preferring an index
+            // scan over a BitmapAnd); the driver is still pinned so later pages
+            // continue with the same plan.
+            const uint64_t skip_max = qp.get_cql_config().secondary_index_intersection_skip_max_rows.get();
+            auto [idx, driver_size] = co_await choose_primary_index(qp, state, options, candidates, skip_max);
+            primary_idx = idx;
+            skip_intersection = driver_size <= skip_max;
+        }
+        // Otherwise (feature off on the first page, or a legacy paged query with
+        // no pinned plan) primary stays null -> today's single-index behaviour.
+        if (primary_idx) {
+            primary = &candidates[*primary_idx];
+            if (!skip_intersection) {
+                for (size_t i = 0; i < candidates.size(); i++) {
+                    if (i != *primary_idx) {
+                        others.push_back(candidates[i]);
+                    }
+                }
+            }
+            tracing::trace(state.get_trace_state(),
+                    "Secondary-index query plan: driving index {}, intersecting {} other posting list(s)",
+                    primary->index.metadata().name(), others.size());
         }
     }
 
@@ -1376,6 +1392,12 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
                     // Translate the cursor in the *driver* index's view (with a
                     // cost-based primary this may not be the statement's _index).
                     paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size, primary);
+                    if (primary && paging_state) {
+                        // Pin the chosen plan so a later client page continues identically.
+                        auto ps = make_lw_shared<service::pager::paging_state>(*paging_state);
+                        ps->set_query_plan_index(primary->index.metadata().name());
+                        paging_state = std::move(ps);
+                    }
                 }
                 internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
                 if (needs_post_filtering()) {
@@ -1799,19 +1821,9 @@ view_indexed_table_select_statement::build_index_candidates(const query_options&
         }
         candidates.push_back({_intersection_indexes[i].first, _intersection_indexes[i].second, std::move(*v)});
     }
-    // The primary is recovered on later pages by matching the paging cursor's
-    // (view) partition key against each candidate's view partition key. If two
-    // candidates would yield the same view partition key, that recovery would be
-    // ambiguous, so disable cost-based selection and fall back to the chosen index.
-    for (size_t i = 0; i < candidates.size(); i++) {
-        auto pk_i = partition_key::from_single_value(*candidates[i].view_schema, candidates[i].value);
-        for (size_t k = i + 1; k < candidates.size(); k++) {
-            auto pk_k = partition_key::from_single_value(*candidates[k].view_schema, candidates[k].value);
-            if (pk_i.representation() == pk_k.representation()) {
-                return {};
-            }
-        }
-    }
+    // The candidate set is a pure function of the query, so it is identical on
+    // every page and coordinator. On later pages the driving index is looked up
+    // here by the name pinned in the paging state.
     return candidates;
 }
 
@@ -1857,23 +1869,6 @@ view_indexed_table_select_statement::choose_primary_index(query_processor& qp, s
         }
     }
     co_return std::pair<size_t, uint64_t>(best, best_size);
-}
-
-// CUSTOMER-303 phase 3: recover which candidate drove paging on the previous
-// page. The paging cursor's partition key is the primary index's view partition
-// key (= its indexed value), so match it against the candidates.
-size_t view_indexed_table_select_statement::recover_primary_index(const std::vector<index_candidate>& candidates,
-        const service::pager::paging_state& paging_state) const {
-    const auto& cursor_pk = paging_state.get_partition_key();
-    for (size_t i = 0; i < candidates.size(); i++) {
-        auto pk = partition_key::from_single_value(*candidates[i].view_schema, candidates[i].value);
-        if (pk.representation() == cursor_pk.representation()) {
-            return i;
-        }
-    }
-    // Shouldn't happen given the collision guard in build_index_candidates; fall
-    // back to the chosen index (candidate 0) to stay correct.
-    return 0;
 }
 
 // Note: the partitions keys returned by this function are sorted

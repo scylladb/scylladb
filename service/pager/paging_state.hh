@@ -39,6 +39,13 @@ private:
     uint32_t _rows_fetched_for_last_partition_high_bits;
     bound_weight _ck_weight = bound_weight::equal;
     partition_region _region = partition_region::partition_start;
+    // CUSTOMER-303: name of the secondary index chosen to drive a multi-index
+    // (posting-list intersection) query. Pinned here so every coordinator
+    // continues a paged query with the same plan. Empty means "no such plan"
+    // (legacy single-index behaviour) - which is also what a paging state
+    // produced by a node without the SECONDARY_INDEX_INTERSECTION feature
+    // deserializes to.
+    sstring _query_plan_index;
 
 public:
     // IDL ctor
@@ -52,7 +59,8 @@ public:
             uint32_t remaining_ext,
             uint32_t rows_fetched_for_last_partition_high_bits,
             bound_weight ck_weight,
-            partition_region region);
+            partition_region region,
+            sstring query_plan_index = "");
 
     paging_state(partition_key pk,
             position_in_partition_view pos,
@@ -76,6 +84,15 @@ public:
     void set_remaining(uint64_t remaining) {
         _remaining_low_bits = static_cast<uint32_t>(remaining);
         _remaining_high_bits = static_cast<uint32_t>(remaining >> 32);
+    }
+
+    // CUSTOMER-303: the secondary index chosen to drive a multi-index query;
+    // empty for legacy single-index queries. See _query_plan_index.
+    void set_query_plan_index(sstring index_name) {
+        _query_plan_index = std::move(index_name);
+    }
+    const sstring& get_query_plan_index() const {
+        return _query_plan_index;
     }
 
     /**
