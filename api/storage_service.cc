@@ -232,7 +232,7 @@ scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::re
     info.keyspace = std::move(keyspace);
     info.column_families = table_infos | std::views::transform(&table_info::name) | std::ranges::to<std::vector>();
     auto scrub_mode_str = req->get_query_param("scrub_mode");
-    auto scrub_mode = compaction::compaction_type_options::scrub::mode::abort;
+    auto scrub_mode = compaction::compaction_type_options::scrub::mode::validate;
 
     if (scrub_mode_str.empty()) {
         const auto skip_corrupted = validate_bool_x(req->get_query_param("skip_corrupted"), false);
