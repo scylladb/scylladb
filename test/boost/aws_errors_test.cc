@@ -110,6 +110,31 @@ BOOST_AUTO_TEST_CASE(TestErrorsWithoutPrefixParse) {
     BOOST_REQUIRE_EQUAL(error.is_retryable(), utils::http::retryable::no);
 }
 
+BOOST_AUTO_TEST_CASE(TestAwsS3ModeledErrors) {
+    static const std::unordered_map<std::string_view, aws::aws_error_type> expected_errors{
+        {"AnnotationLimitExceeded", aws::aws_error_type::ANNOTATION_LIMIT_EXCEEDED},
+        {"AnnotationNameTooLong", aws::aws_error_type::ANNOTATION_NAME_TOO_LONG},
+        {"EncryptionTypeMismatch", aws::aws_error_type::ENCRYPTION_TYPE_MISMATCH},
+        {"IdempotencyParameterMismatch", aws::aws_error_type::IDEMPOTENCY_PARAMETER_MISMATCH},
+        {"InvalidAnnotationName", aws::aws_error_type::INVALID_ANNOTATION_NAME},
+        {"InvalidPrefix", aws::aws_error_type::INVALID_PREFIX},
+        {"InvalidRequest", aws::aws_error_type::INVALID_REQUEST},
+        {"InvalidWriteOffset", aws::aws_error_type::INVALID_WRITE_OFFSET},
+        {"NoSuchAnnotation", aws::aws_error_type::NO_SUCH_ANNOTATION},
+        {"TooManyParts", aws::aws_error_type::TOO_MANY_PARTS},
+        {"UnsupportedMediaType", aws::aws_error_type::UNSUPPORTED_MEDIA_TYPE},
+    };
+
+    std::string message = "Test Message";
+    std::string requestId = "Request Id";
+    for (const auto& [exception, error_type] : expected_errors) {
+        auto error = aws::aws_error::parse(build_xml_response(std::string(exception), message, requestId)).value();
+        BOOST_REQUIRE_EQUAL(error_type, error.get_error_type());
+        BOOST_REQUIRE_EQUAL(message, error.get_error_message());
+        BOOST_REQUIRE_EQUAL(error.is_retryable(), utils::http::retryable::no);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(TestHelperFunctions) {
     BOOST_REQUIRE_EQUAL(utils::http::from_http_code(seastar::http::reply::status_type::service_unavailable), utils::http::retryable::yes);
     BOOST_REQUIRE_EQUAL(utils::http::from_http_code(seastar::http::reply::status_type::unauthorized), utils::http::retryable::no);
