@@ -188,6 +188,12 @@ Summary:        Scylla configuration package for the Linux kernel
 Requires:       kmod sed
 # tuned overwrites our sysctl settings
 Obsoletes:      tuned >= 2.11.0
+# tuned-profiles-oci (preinstalled on OCI images) hard-requires an exact
+# version of tuned, which blocks the Obsoletes above unless it is removed too.
+# tuned-profiles-oci-recommend in turn hard-requires tuned-profiles-oci, so it
+# must be obsoleted in the same transaction as well.
+Obsoletes:      tuned-profiles-oci
+Obsoletes:      tuned-profiles-oci-recommend
 Provides:       scylla-enterprise-kernel-conf = %{version}-%{release}
 Obsoletes:      scylla-enterprise-kernel-conf < 2025.1.0
 
