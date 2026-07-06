@@ -124,7 +124,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Scrub (deserialize + reserialize at the latest version, resolving corruptions if any) the given keyspace asynchronously, returns uuid which can be used to check progress with task manager. If columnFamilies array is empty, all CFs are scrubbed. Scrubbed CFs will be snapshotted first, if disableSnapshot is false. Scrub has the following modes: Abort (default) - abort scrub if corruption is detected; Skip (same as `skip_corrupted=true`) skip over corrupt data, omitting them from the output; Segregate - segregate data into multiple sstables if needed, such that each sstable contains data with valid order; Validate - read (no rewrite) and validate data, logging any problems found.",
+               "summary":"Scrub (deserialize + reserialize at the latest version, resolving corruptions if any) the given keyspace asynchronously, returns uuid which can be used to check progress with task manager. If columnFamilies array is empty, all CFs are scrubbed. Scrubbed CFs will be snapshotted first, if disableSnapshot is false. Scrub has the following modes: Abort - abort scrub if corruption is detected; Skip (same as `skip_corrupted=true`) skip over corrupt data, omitting them from the output; Segregate - segregate data into multiple sstables if needed, such that each sstable contains data with valid order; Validate (default) - read (no rewrite) and validate data, logging any problems found.",
                "type": "string",
                "nickname":"scrub_async",
                "produces":[
