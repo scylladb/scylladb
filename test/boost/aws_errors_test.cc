@@ -135,6 +135,56 @@ BOOST_AUTO_TEST_CASE(TestAwsS3ModeledErrors) {
     }
 }
 
+BOOST_AUTO_TEST_CASE(TestOciObjectStorageErrors) {
+    struct expected_error {
+        aws::aws_error_type type;
+        utils::http::retryable is_retryable;
+    };
+    static const std::unordered_map<std::string_view, expected_error> expected_errors{
+        {"CannotParseRequest", {aws::aws_error_type::OCI_CANNOT_PARSE_REQUEST, utils::http::retryable::no}},
+        {"InvalidParameter", {aws::aws_error_type::INVALID_PARAMETER_VALUE, utils::http::retryable::no}},
+        {"LimitExceeded", {aws::aws_error_type::OCI_LIMIT_EXCEEDED, utils::http::retryable::no}},
+        {"MissingParameter", {aws::aws_error_type::MISSING_PARAMETER, utils::http::retryable::no}},
+        {"QuotaExceeded", {aws::aws_error_type::OCI_QUOTA_EXCEEDED, utils::http::retryable::no}},
+        {"RelatedResourceNotAuthorizedOrNotFound", {aws::aws_error_type::OCI_RELATED_RESOURCE_NOT_AUTHORIZED_OR_NOT_FOUND, utils::http::retryable::no}},
+        {"NotAuthenticated", {aws::aws_error_type::MISSING_AUTHENTICATION_TOKEN, utils::http::retryable::no}},
+        {"NotAllowed", {aws::aws_error_type::INVALID_ACTION, utils::http::retryable::no}},
+        {"NotAuthorized", {aws::aws_error_type::ACCESS_DENIED, utils::http::retryable::no}},
+        {"SignUpRequired", {aws::aws_error_type::OPT_IN_REQUIRED, utils::http::retryable::no}},
+        {"NotAuthorizedOrNotFound", {aws::aws_error_type::RESOURCE_NOT_FOUND, utils::http::retryable::no}},
+        {"NotFound", {aws::aws_error_type::RESOURCE_NOT_FOUND, utils::http::retryable::no}},
+        {"NamespaceNotFound", {aws::aws_error_type::RESOURCE_NOT_FOUND, utils::http::retryable::no}},
+        {"MethodNotAllowed", {aws::aws_error_type::INVALID_ACTION, utils::http::retryable::no}},
+        {"Conflict", {aws::aws_error_type::OCI_CONFLICT, utils::http::retryable::no}},
+        {"ExternalServerIncorrectState", {aws::aws_error_type::OCI_EXTERNAL_SERVER_INCORRECT_STATE, utils::http::retryable::yes}},
+        {"IncorrectState", {aws::aws_error_type::OCI_INCORRECT_STATE, utils::http::retryable::yes}},
+        {"InvalidatedRetryToken", {aws::aws_error_type::OCI_INVALIDATED_RETRY_TOKEN, utils::http::retryable::no}},
+        {"ResourceLocked", {aws::aws_error_type::OCI_RESOURCE_LOCKED, utils::http::retryable::no}},
+        {"NotAuthorizedOrResourceAlreadyExists", {aws::aws_error_type::OCI_NOT_AUTHORIZED_OR_RESOURCE_ALREADY_EXISTS, utils::http::retryable::no}},
+        {"NoEtagMatch", {aws::aws_error_type::OCI_NO_ETAG_MATCH, utils::http::retryable::no}},
+        {"PayloadTooLarge", {aws::aws_error_type::OCI_PAYLOAD_TOO_LARGE, utils::http::retryable::no}},
+        {"UnprocessableEntity", {aws::aws_error_type::OCI_UNPROCESSABLE_ENTITY, utils::http::retryable::no}},
+        {"TooManyRequests", {aws::aws_error_type::THROTTLING, utils::http::retryable::yes}},
+        {"RequestHeaderFieldsTooLarge", {aws::aws_error_type::OCI_REQUEST_HEADER_FIELDS_TOO_LARGE, utils::http::retryable::no}},
+        {"InternalServerError", {aws::aws_error_type::INTERNAL_FAILURE, utils::http::retryable::yes}},
+        {"MethodNotImplemented", {aws::aws_error_type::OCI_METHOD_NOT_IMPLEMENTED, utils::http::retryable::no}},
+        {"ExternalServerUnreachable", {aws::aws_error_type::OCI_EXTERNAL_SERVER_UNREACHABLE, utils::http::retryable::yes}},
+        {"ExternalServerTimeout", {aws::aws_error_type::OCI_EXTERNAL_SERVER_TIMEOUT, utils::http::retryable::yes}},
+        {"ExternalServerInvalidResponse", {aws::aws_error_type::OCI_EXTERNAL_SERVER_INVALID_RESPONSE, utils::http::retryable::yes}},
+        {"ServiceUnavailable", {aws::aws_error_type::SERVICE_UNAVAILABLE, utils::http::retryable::yes}},
+        {"InvalidStorageTier", {aws::aws_error_type::OCI_INVALID_STORAGE_TIER, utils::http::retryable::no}},
+    };
+
+    std::string message = "Test Message";
+    std::string requestId = "Request Id";
+    for (const auto& [exception, expected] : expected_errors) {
+        auto error = aws::aws_error::parse(build_xml_response(std::string(exception), message, requestId)).value();
+        BOOST_REQUIRE_EQUAL(expected.type, error.get_error_type());
+        BOOST_REQUIRE_EQUAL(message, error.get_error_message());
+        BOOST_REQUIRE_EQUAL(expected.is_retryable, error.is_retryable());
+    }
+}
+
 BOOST_AUTO_TEST_CASE(TestHelperFunctions) {
     BOOST_REQUIRE_EQUAL(utils::http::from_http_code(seastar::http::reply::status_type::service_unavailable), utils::http::retryable::yes);
     BOOST_REQUIRE_EQUAL(utils::http::from_http_code(seastar::http::reply::status_type::unauthorized), utils::http::retryable::no);
