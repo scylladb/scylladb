@@ -1144,7 +1144,7 @@ static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace,
         // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
         // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
         co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
-                                             toc_name, prefix, locator::host_id::create_null_id(), tablet_id, db::snapshot_state::remote, 
+                                             toc_name, prefix, locator::host_id::create_null_id(), tablet_id, db::snapshot_state::remote,
                                              repaired_at, data_size, index_size, cl);
     }
 
@@ -1185,14 +1185,16 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
     sharded<sstables_loader>& _loader;
     table_id _tid;
     sstring _snap_name;
+    size_t _tablet_count;
 
 public:
     tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
-            table_id tid, sstring snap_name) noexcept
+            table_id tid, sstring snap_name, size_t tablet_count) noexcept
         : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
         , _loader(loader)
         , _tid(std::move(tid))
         , _snap_name(std::move(snap_name))
+        , _tablet_count(tablet_count)
     {
         _status.progress_units = "batches";
     }
@@ -1216,7 +1218,30 @@ public:
 protected:
     virtual future<> run() override {
         auto& loader = _loader.local();
-        co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+
+        auto current_schema = loader.local_db().find_schema(_tid);
+        auto min_tablet_count = current_schema->tablet_options().min_tablet_count;
+        auto max_tablet_count = current_schema->tablet_options().max_tablet_count;
+        co_await loader._ss.local().alter_table_with_tablet_hints(_tid, _tablet_count, _tablet_count);
+
+        std::exception_ptr eptr;
+        try {
+            co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+        } catch (...) {
+            llog.error("Failed to restore tablets for table_id {}. Error: {}", _tid, std::current_exception());
+            eptr = std::current_exception();
+        }
+
+        try {
+            llog.info("Restoring table with tid {} to the original schema", _tid);
+            co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false);
+        } catch (...) {
+            llog.error("Failed to restore original schema for table_id {}. Error: {}", _tid, std::current_exception());
+        }
+
+        if (eptr) {
+            std::rethrow_exception(eptr);
+        }
     }
 };
 
@@ -1229,9 +1254,6 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     // TODO: update state when all restored...
     co_await sth.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix, db::snapshot_state::remote);
 
-    co_await container().invoke_on(0, [tid, tablet_count] (auto& sl) -> future<> {
-        co_await sl._ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
-    });
-    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name));
+    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), tablet_count);
     co_return task->id();
 }
