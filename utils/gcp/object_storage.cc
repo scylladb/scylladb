@@ -138,7 +138,7 @@ public:
         auto total = std::accumulate(_buffers.begin(), _buffers.end(), size_t{}, [](size_t s, auto& buf) {
             return s + buf.size();
         });
-        if (total == 0) {
+        if (total == 0 && !force) {
             co_return;
         }
 
