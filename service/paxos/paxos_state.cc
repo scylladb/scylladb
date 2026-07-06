@@ -92,7 +92,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
     utils::latency_counter lc;
     lc.start();
 
-    auto stats_updater = defer([&sp, schema, lc] () mutable {
+    auto stats_updater = defer([&sp, schema, lc] () mutable noexcept {
         if (auto table = sp.get_db().local().get_tables_metadata().get_table_if_exists(schema->id())) {
             auto& stats = table->get_stats();
             stats.cas_prepare.mark(lc.stop().latency());
@@ -182,7 +182,7 @@ future<bool> paxos_state::accept(storage_proxy& sp, paxos_store& paxos_store, tr
     utils::latency_counter lc;
     lc.start();
 
-    auto stats_updater = defer([&sp, schema, lc] () mutable {
+    auto stats_updater = defer([&sp, schema, lc] () mutable noexcept {
         if (auto table = sp.get_db().local().get_tables_metadata().get_table_if_exists(schema->id())) {
             auto& stats = table->get_stats();
             stats.cas_accept.mark(lc.stop().latency());
@@ -226,7 +226,7 @@ future<> paxos_state::learn(storage_proxy& sp, paxos_store& paxos_store, schema_
     utils::latency_counter lc;
     lc.start();
 
-    auto stats_updater = defer([&sp, schema, lc] () mutable {
+    auto stats_updater = defer([&sp, schema, lc] () mutable noexcept {
         if (auto table = sp.get_db().local().get_tables_metadata().get_table_if_exists(schema->id())) {
             auto& stats = table->get_stats();
             stats.cas_learn.mark(lc.stop().latency());

@@ -316,7 +316,7 @@ public:
 
     // Stop all fibers. Ongoing compactions will be waited. Should only be called
     // once, from main teardown path.
-    future<> stop();
+    future<> stop() noexcept;
     future<> start(const db::config& cfg, utils::disk_space_monitor* dsm);
 
     // cancels all running compactions and moves the compaction manager into disabled state.

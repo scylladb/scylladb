@@ -78,10 +78,10 @@ SEASTAR_THREAD_TEST_CASE(replicator_model) {
 
     seastar::sharded<map_container> c;
     c.start().get();
-    auto stop_c = seastar::defer([&c] { c.stop().get(); });
+    auto stop_c = seastar::defer([&c] noexcept { c.stop().get(); });
 
     replicator<map_type, map_container> r(c.local());
-    auto stop_r = seastar::defer([&r] { r.stop().get(); });
+    auto stop_r = seastar::defer([&r] noexcept { r.stop().get(); });
 
     r.apply_to_all(key_setter{2, 29});
     seastar::thread::yield();
@@ -116,7 +116,7 @@ SEASTAR_THREAD_TEST_CASE(replicator_stress) {
 
     seastar::sharded<map_container> c;
     c.start().get();
-    auto stop_c = seastar::defer([&c] { c.stop().get(); });
+    auto stop_c = seastar::defer([&c] noexcept { c.stop().get(); });
 
     c.invoke_on_all([] (map_container& con) {
         con._on_apply = [] {
@@ -127,7 +127,7 @@ SEASTAR_THREAD_TEST_CASE(replicator_stress) {
     }).get();
 
     replicator<map_type, map_container> r(c.local());
-    auto stop_r = seastar::defer([&r] { r.stop().get(); });
+    auto stop_r = seastar::defer([&r] noexcept { r.stop().get(); });
 
     for (int i = 0; i < 1000; ++i) {
         try {

@@ -295,7 +295,7 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
 
     utils::latency_counter lc;
     lc.start();
-    auto mark_write_latency = defer([this, &lc] { _stats.write.mark(lc.stop().latency()); });
+    auto mark_write_latency = defer([this, &lc] noexcept { _stats.write.mark(lc.stop().latency()); });
 
     locator::tablet_id tid{-1};
     raft::term_t term;
@@ -432,7 +432,7 @@ auto coordinator::query(schema_ptr schema,
 
     auto& read_stats = (rtype == read_type::linearizable)
         ? _stats.linearizable_read : _stats.non_linearizable_read;
-    auto mark_read_latency = defer([&read_stats, &lc] () mutable { read_stats.mark(lc.stop().latency()); });
+    auto mark_read_latency = defer([&read_stats, &lc] () mutable noexcept { read_stats.mark(lc.stop().latency()); });
 
     auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
         // Unfortunately, timeouts can materialize in different forms depending

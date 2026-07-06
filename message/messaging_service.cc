@@ -616,10 +616,10 @@ future<> messaging_service::stop_nontls_server() {
 }
 
 future<> messaging_service::stop_client() {
-    auto d = defer([] { mlogger.info("Stopped clients"); });
+    auto d = defer([] noexcept { mlogger.info("Stopped clients"); });
     auto stop_clients = [] (auto& clients) ->future<> {
         co_await coroutine::parallel_for_each(clients, [] (auto& m) -> future<> {
-            auto d = defer([&m] {
+            auto d = defer([&m] noexcept {
                 // no new clients should be added by get_rpc_client(), as it
                 // asserts that _shutting_down is true
                 m.clear();
@@ -1479,7 +1479,7 @@ future<> messaging_service::unregister_repair_get_full_row_hashes_with_rpc_strea
 unsigned messaging_service::add_statement_tenant(sstring tenant_name, scheduling_group sg) {
     auto idx = _clients.size();
     auto scheduling_info_for_connection_index_size = _scheduling_info_for_connection_index.size();
-    auto undo = defer([&] {
+    auto undo = defer([&] noexcept {
         _clients.resize(idx);
         _clients_with_host_id.resize(idx);
         _scheduling_info_for_connection_index.resize(scheduling_info_for_connection_index_size);

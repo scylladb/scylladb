@@ -456,7 +456,7 @@ future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_
     co_return sstables_metadata;
 }
 
-future<> sstables_manager::close() {
+future<> sstables_manager::close() noexcept {
     _closing = true;
     maybe_done();
     co_await _done.get_future();

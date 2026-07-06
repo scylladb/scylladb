@@ -963,7 +963,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         auto& desc = get_segment_descriptor(seg->id());
 
         // if we wrote a record to the segment but failed to write it to the separator, the segment should not be freed.
-        auto write_to_separator_failed = defer([seg_ref] mutable {
+        auto write_to_separator_failed = defer([seg_ref] mutable noexcept {
             seg_ref.set_flush_failure();
         });
 
@@ -1899,7 +1899,7 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
 
     if (need_separator) {
         auto seg_ref = make_segment_ref(seg_id);
-        auto write_to_separator_failed = defer([seg_ref] mutable {
+        auto write_to_separator_failed = defer([seg_ref] mutable noexcept {
             seg_ref.set_flush_failure();
         });
         co_await for_each_record(seg_id,

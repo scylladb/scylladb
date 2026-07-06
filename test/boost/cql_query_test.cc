@@ -5414,7 +5414,10 @@ SEASTAR_TEST_CASE(timeuuid_fcts_prepared_re_evaluation) {
         for (const auto& t : sub_tests) {
             BOOST_TEST_CHECKPOINT(t.first);
             e.execute_cql(seastar::format("CREATE TABLE test_{} (pk {} PRIMARY KEY)", t.first, t.second)).get();
-            auto drop_test_table = defer([&e, &t] { e.execute_cql(seastar::format("DROP TABLE test_{}", t.first)).get(); });
+            auto drop_test_table = defer([&e, &t] noexcept {
+                // May throw; will terminate test
+                e.execute_cql(seastar::format("DROP TABLE test_{}", t.first)).get();
+            });
             auto insert_stmt = e.prepare(seastar::format("INSERT INTO test_{0} (pk) VALUES ({0}())", t.first)).get();
             e.execute_prepared(insert_stmt, {}).get();
             sleep(1ms).get();

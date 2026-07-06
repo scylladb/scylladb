@@ -3500,7 +3500,7 @@ public:
                     _topo_guard,
                     repaired_at,
                     _shard_task.sched_info.incremental_mode);
-            auto auto_stop_master = defer([&master] {
+            auto auto_stop_master = defer([&master] noexcept {
                 try {
                     master.stop().get();
                 } catch (...) {
@@ -3624,7 +3624,7 @@ future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
     bool is_tablet = shard_task.db.local().find_column_family(table_id).uses_tablets();
     bool is_tablet_rebuild = shard_task.sched_info.for_tablet_rebuild;
     auto t = std::chrono::steady_clock::now();
-    auto update_time = seastar::defer([&] {
+    auto update_time = seastar::defer([&] noexcept {
         if (is_tablet && !is_tablet_rebuild) {
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t);
             _metrics.tablet_time_ms += duration.count();

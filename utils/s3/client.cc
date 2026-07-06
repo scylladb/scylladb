@@ -1966,7 +1966,7 @@ file client::make_readable_file(sstring object_name, seastar::abort_source* as) 
     return file(make_shared<readable_file>(shared_from_this(), std::move(object_name), as));
 }
 
-future<> client::close() {
+future<> client::close() noexcept {
     s3l.info("Closing S3 client...");
 
     co_await _config_update_gate.close();

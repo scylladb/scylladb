@@ -64,7 +64,7 @@ struct table_for_tests {
 
     compaction::compaction_group_view& as_compaction_group_view() noexcept;
 
-    future<> stop();
+    future<> stop() noexcept;
 
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
     void set_repair_sstable_classifier(replica::repair_classifier_func repair_sstable_classifier);

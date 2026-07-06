@@ -471,7 +471,8 @@ SEASTAR_TEST_CASE(test_notifications) {
         return seastar::async([&] {
             counting_migration_listener listener;
             e.local_mnotifier().register_listener(&listener);
-            auto listener_lease = defer([&e, &listener] { e.local_mnotifier().register_listener(&listener); });
+            // May throw, but zero probability in a test
+            auto listener_lease = defer([&e, &listener] noexcept { e.local_mnotifier().register_listener(&listener); });
 
             e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 

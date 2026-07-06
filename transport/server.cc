@@ -1059,7 +1059,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         default:                               return make_exception_future<process_fn_return_type>(exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop))));
         }
     }).then_wrapped([this, cqlop, &cql_stats, stream, &client_state, linearization_buffer = std::move(linearization_buffer), trace_state] (future<process_fn_return_type> f) {
-        auto stop_trace = defer([&] {
+        auto stop_trace = defer([&] noexcept {
             tracing::stop_foreground(trace_state);
         });
         return seastar::futurize_invoke([&] () {
@@ -1302,7 +1302,7 @@ future<> cql_server::connection::process_request() {
 
             _pending_requests_gate.enter();
             auto& sg_stats = _server.get_cql_sg_stats();
-            auto leave = defer([this, &sg_stats] {
+            auto leave = defer([this, &sg_stats] noexcept {
                 --_server._stats.requests_serving;
                 --sg_stats._requests_serving;
                 _shedding_timer.cancel();

@@ -5668,7 +5668,7 @@ void max_ongoing_compaction_fn(test_env& env) {
     constexpr size_t num_tables = 10;
     std::vector<schema_ptr> schemas;
     std::vector<table_for_tests> tables;
-    auto stop_tables = defer([&tables] {
+    auto stop_tables = defer([&tables] noexcept {
         for (auto& t : tables) {
             t->stop().get();
         }
@@ -5976,7 +5976,7 @@ void basic_ics_controller_correctness_fn(test_env& env) {
     auto backlog = [&env] (compaction::compaction_backlog_tracker backlog_tracker, uint64_t max_fragment_size) {
             auto schema = table_for_tests::make_default_schema();
         table_for_tests cf = env.make_table_for_tests(schema);
-        auto stop_cf = defer([&] { cf.stop().get(); });
+        auto stop_cf = defer([&] noexcept { cf.stop().get(); });
 
         uint64_t current_sstable_size = default_fragment_size;
         uint64_t data_set_size = 0;
@@ -6105,7 +6105,7 @@ future<> run_controller_test(compaction::compaction_strategy_type compaction_str
             .available_memory = available_memory,
         };
         auto manager = compaction::compaction_manager(std::move(cfg), as, task_manager);
-        auto stop_manager = defer([&] {
+        auto stop_manager = defer([&] noexcept {
             if (manager.is_running()) {
                 manager.stop().get();
             } else {

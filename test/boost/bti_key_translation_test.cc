@@ -428,7 +428,7 @@ static std::generator<position_in_partition_view> generate_pipvs(const schema& s
         co_yield position_in_partition_view(ckp, bound_weight(-1));
         for (const auto& ck2 : all_strings) {
             components.emplace_back(ck2);
-            auto _pop = defer([&] { components.pop_back(); });
+            auto _pop = defer([&] noexcept { components.pop_back(); });
 
             auto ck = clustering_key_prefix::from_deeply_exploded(string_pair_ck_schema, components);
             for (int weight = -1; weight <= 1; ++weight) {

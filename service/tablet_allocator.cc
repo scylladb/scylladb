@@ -1521,7 +1521,7 @@ public:
                 std::pop_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
                 auto target = nodes_by_load_dst.back();
                 auto& target_info = nodes[target];
-                auto push_back_target_node = seastar::defer([&] {
+                auto push_back_target_node = seastar::defer([&] noexcept {
                     std::push_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
                 });
 
@@ -3434,7 +3434,7 @@ public:
                 dst = sketch.get_least_loaded_shard(host);
             }
 
-            auto push_back = seastar::defer([&] {
+            auto push_back = seastar::defer([&] noexcept {
                 // When shuffling, src_shards is not a heap.
                 if (!shuffle) {
                     std::push_heap(src_shards.begin(), src_shards.end(), node_load.shards_by_load_cmp());
@@ -4031,13 +4031,13 @@ public:
                 continue;
             }
 
-            auto push_back_node_candidate = seastar::defer([&] {
+            auto push_back_node_candidate = seastar::defer([&] noexcept {
                 std::push_heap(nodes_by_load.begin(), nodes_by_load.end(), nodes_cmp);
             });
 
             tablet_replica src;
 
-            auto push_back_shard_candidate = seastar::defer([&] {
+            auto push_back_shard_candidate = seastar::defer([&] noexcept {
                 std::push_heap(src_node_info.shards_by_load.begin(), src_node_info.shards_by_load.end(), src_node_info.shards_by_load_cmp());
             });
 
@@ -4085,7 +4085,7 @@ public:
             std::pop_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
             target = nodes_by_load_dst.back();
             auto& target_info = nodes[target];
-            auto push_back_target_node = seastar::defer([&] {
+            auto push_back_target_node = seastar::defer([&] noexcept {
                 std::push_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
             });
 
@@ -4346,7 +4346,7 @@ public:
         _rack = rack;
         _location = fmt::format("{}{}", dc, rack ? fmt::format("/{}", *rack) : "");
         _current_stats = _stats.for_dc(dc);
-        auto _ = seastar::defer([&] { _current_stats = nullptr; });
+        auto _ = seastar::defer([&] noexcept { _current_stats = nullptr; });
         _migrating_candidates = 0;
 
         auto node_filter = [&] (const locator::node& node) {

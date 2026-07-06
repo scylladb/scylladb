@@ -788,7 +788,7 @@ SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
     BOOST_REQUIRE(!sem1.unregister_inactive_read(reader_concurrency_semaphore::inactive_read_handle{}));
 
     set_abort_on_internal_error(false);
-    auto reset_on_internal_abort = defer([] {
+    auto reset_on_internal_abort = defer([] noexcept {
         set_abort_on_internal_error(true);
     });
     BOOST_REQUIRE_THROW(sem1.unregister_inactive_read(std::move(sem2_h1)), std::runtime_error);
@@ -832,7 +832,7 @@ SEASTAR_THREAD_TEST_CASE(test_semaphore_mismatch) {
     // Other semaphore, other is not a "user" semaphore
     {
         bool abort = set_abort_on_internal_error(false);
-        auto reset_abort = defer([abort] {
+        auto reset_abort = defer([abort] noexcept {
             set_abort_on_internal_error(abort);
         });
         is_user_semaphore = false;

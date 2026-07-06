@@ -253,7 +253,7 @@ public:
         future<> close() noexcept override;
     };
 
-    future<> close();
+    future<> close() noexcept;
 };
 
 std::pair<unsigned, size_t> calc_part_size(size_t total_size, size_t part_size);

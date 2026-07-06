@@ -83,7 +83,7 @@ test_file make_test_file(size_t size) {
     testlog.debug("file contents: {}", contents);
 
     output_stream<char> out = make_file_output_stream(f).get();
-    auto close_out = defer([&] { out.close().get(); });
+    auto close_out = defer([&] noexcept{ out.close().get(); });
     out.write(contents.begin(), contents.size()).get();
     out.flush().get();
 

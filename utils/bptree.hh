@@ -429,7 +429,7 @@ public:
         }
 
         data* d = data::create(std::forward<Args>(args)...);
-        auto x = seastar::defer([&d] { data::destroy(*d, default_dispose<T>); });
+        auto x = seastar::defer([&d] noexcept { data::destroy(*d, default_dispose<T>); });
         n.insert(i, std::move(k), d, _less);
         SCYLLA_ASSERT(d->attached());
         x.cancel();
@@ -736,7 +736,7 @@ public:
             SCYLLA_ASSERT(i >= 0);
 
             data* d = data::create(std::forward<Args>(args)...);
-            auto x = seastar::defer([&d] { data::destroy(*d, default_dispose<T>); });
+            auto x = seastar::defer([&d] noexcept { data::destroy(*d, default_dispose<T>); });
             leaf->insert(i, std::move(key(d)), d, less);
             SCYLLA_ASSERT(d->attached());
             x.cancel();

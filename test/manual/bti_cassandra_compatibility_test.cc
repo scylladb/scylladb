@@ -496,11 +496,11 @@ void do_test(const test_config& cfg) {
             auto partitions_db = open_file_dma(bti_partitions_path.c_str(), open_flags::create | open_flags::wo | open_flags::truncate).get();
             auto partitions_db_stream = make_file_output_stream(partitions_db, file_output_stream_options{}).get();
             auto partitions_db_writer = sstables::file_writer(std::move(partitions_db_stream));
-            auto close_partitions_db = defer([&] () { partitions_db_writer.close(); });
+            auto close_partitions_db = defer([&] () noexcept { partitions_db_writer.close(); });
             auto rows_db = open_file_dma(bti_rows_path.c_str(), open_flags::create | open_flags::wo | open_flags::truncate).get();
             auto rows_db_stream = make_file_output_stream(rows_db, file_output_stream_options{}).get();
             auto rows_db_writer = sstables::file_writer(std::move(rows_db_stream));
-            auto close_rows_db = defer([&] () { rows_db_writer.close(); });
+            auto close_rows_db = defer([&] () noexcept { rows_db_writer.close(); });
 
             // Construct BTI index writers on top of the `file_writer`s.
             auto bti_partition_index_writer = sstables::trie::bti_partition_index_writer(bti_version, partitions_db_writer);

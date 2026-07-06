@@ -2681,7 +2681,7 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
         auto pkeys = ss.make_pkeys(2);
 
         set_abort_on_internal_error(false);
-        auto enable_aborts = defer([] { set_abort_on_internal_error(true); }); // FIXME: restore to previous value
+        auto enable_aborts = defer([] noexcept { set_abort_on_internal_error(true); }); // FIXME: restore to previous value
 
         for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", version);
@@ -2857,7 +2857,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 BOOST_REQUIRE(res.has_digest);
 
                 auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
-                auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                auto close_sst_file = defer([&sst_file] noexcept { sst_file.close().get(); });
 
                 testlog.info("Validating digest-corrupted {}", sst->get_filename());
                 auto valid_digest = sst->read_digest().get();
@@ -2924,7 +2924,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     testlog.info("Validating pre-load minor truncation (last byte removed) on {}", sst->get_filename());
 
                     auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
-                    auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                    auto close_sst_file = defer([&sst_file] noexcept { sst_file.close().get(); });
                     sst_file.truncate(sst_file.size().get() - 1).get();
 
                     sst->load(sst->get_schema()->get_sharder()).get();
@@ -2940,7 +2940,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     testlog.info("Validating pre-load major truncation (half of data removed) on {}", sst->get_filename());
 
                     auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
-                    auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                    auto close_sst_file = defer([&sst_file] noexcept { sst_file.close().get(); });
                     sst_file.truncate(sst_file.size().get() / 2).get();
 
                     sst->load(sst->get_schema()->get_sharder()).get();
@@ -2956,7 +2956,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     testlog.info("Validating appended {}", sst->get_filename());
 
                     auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::rw).get();
-                    auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                    auto close_sst_file = defer([&sst_file] noexcept { sst_file.close().get(); });
                     auto buf = temporary_buffer<char>::aligned(sst_file.disk_write_dma_alignment(), 2 * 64 * 1024);
                     std::fill(buf.get_write(), buf.get_write() + buf.size(), 0xba);
                     auto fsize = sst_file.size().get();

@@ -588,7 +588,7 @@ private:
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr);
         }
 
-        auto trace_done = defer([&] {
+        auto trace_done = defer([&] noexcept {
             tracing::trace(trace_state_ptr, "Mutation handling is done");
         });
 
@@ -1071,7 +1071,7 @@ private:
 
         co_await _sp.apply_fence(fence_opt, src_addr);
 
-        auto handling_done = defer([tr_state, src_addr] {
+        auto handling_done = defer([tr_state, src_addr] noexcept {
             if (tr_state) {
                 tracing::trace(tr_state, "paxos_accept: handling is done, sending a response to /{}", src_addr);
             }
@@ -1122,7 +1122,7 @@ private:
         }
 
         pruning++;
-        auto d = defer([] { pruning--; });
+        auto d = defer([] noexcept { pruning--; });
         auto schema = co_await get_schema_for_read(schema_id, src_addr, src_shard, *timeout);
         dht::token token = dht::get_token(*schema, key);
 
@@ -7019,7 +7019,7 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
     db::large_data_violation_type large_data_violations = db::large_data_violation_type::none;
 
     try {
-        auto update_stats = seastar::defer ([&] {
+        auto update_stats = seastar::defer ([&] noexcept {
             get_stats().cas_foreground--;
             write ? get_stats().cas_write.mark(lc.stop().latency()) : get_stats().cas_read.mark(lc.stop().latency());
             if (contentions > 0) {

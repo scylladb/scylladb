@@ -57,7 +57,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads)
     {
         reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
         auto stop_sem = deferred_stop(semaphore);
-        auto clear_permits = defer([&permits] { permits.clear(); });
+        auto clear_permits = defer([&permits] noexcept { permits.clear(); });
 
         for (int i = 0; i < 10; ++i) {
             permits.emplace_back(semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {}));
@@ -1400,9 +1400,9 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_shared_pool) {
     auto stop_sem = deferred_stop(sem_group);
 
     auto sg1 = create_scheduling_group("test_sg1", 1000).get();
-    auto destroy_sg1 = defer([&] { destroy_scheduling_group(sg1).get(); });
+    auto destroy_sg1 = defer([&] noexcept { destroy_scheduling_group(sg1).get(); });
     auto sg2 = create_scheduling_group("test_sg2", 1000).get();
-    auto destroy_sg2 = defer([&] { destroy_scheduling_group(sg2).get(); });
+    auto destroy_sg2 = defer([&] noexcept { destroy_scheduling_group(sg2).get(); });
 
     sem_group.add_or_update(sg1, 1000);
     sem_group.add_or_update(sg2, 1000);
@@ -1462,9 +1462,9 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_multiple_borrow
     auto stop_sem = deferred_stop(sem_group);
 
     auto sg1 = create_scheduling_group("test_sg1", 1000).get();
-    auto destroy_sg1 = defer([&] { destroy_scheduling_group(sg1).get(); });
+    auto destroy_sg1 = defer([&] noexcept { destroy_scheduling_group(sg1).get(); });
     auto sg2 = create_scheduling_group("test_sg2", 1000).get();
-    auto destroy_sg2 = defer([&] { destroy_scheduling_group(sg2).get(); });
+    auto destroy_sg2 = defer([&] noexcept { destroy_scheduling_group(sg2).get(); });
 
     sem_group.add_or_update(sg1, 1000);
     sem_group.add_or_update(sg2, 1000);
@@ -1738,7 +1738,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_shared_pool_wakes_mul
     // teardown does both in order, regardless of how the test exits.
     std::vector<reader_permit_opt> actives;
     std::vector<reader_permit_opt> admitted;
-    auto teardown = defer([&] {
+    auto teardown = defer([&] noexcept {
         actives.clear();
         admitted.clear();
         for (auto& sem : sems) {
@@ -1794,7 +1794,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_zero_shared_poo
     auto stop_sem = deferred_stop(sem_group);
 
     auto sg = create_scheduling_group("test_sg", 1000).get();
-    auto destroy_sg = defer([&] { destroy_scheduling_group(sg).get(); });
+    auto destroy_sg = defer([&] noexcept { destroy_scheduling_group(sg).get(); });
 
     sem_group.add_or_update(sg, 1000);
     sem_group.wait_adjust_complete().get();
@@ -1824,9 +1824,9 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group_shared_pool_liv
     auto stop_sem = deferred_stop(sem_group);
 
     auto sg1 = create_scheduling_group("test_sg1", 1000).get();
-    auto destroy_sg1 = defer([&] { destroy_scheduling_group(sg1).get(); });
+    auto destroy_sg1 = defer([&] noexcept { destroy_scheduling_group(sg1).get(); });
     auto sg2 = create_scheduling_group("test_sg2", 1000).get();
-    auto destroy_sg2 = defer([&] { destroy_scheduling_group(sg2).get(); });
+    auto destroy_sg2 = defer([&] noexcept { destroy_scheduling_group(sg2).get(); });
 
     sem_group.add_or_update(sg1, 1000);
     sem_group.add_or_update(sg2, 1000);

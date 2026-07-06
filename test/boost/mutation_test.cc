@@ -1199,7 +1199,8 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
             mutation m = target;
             auto m2 = mutation_partition(*m.schema(), second.partition());
             memory::with_allocation_failures([&] {
-                auto d = defer([&] {
+                auto d = defer([&] noexcept {
+                    // Might actually throw, will abort the test.
                     auto&& s = *gen.schema();
                     auto c1 = m.partition().get_continuity(s);
                     auto c2 = m2.get_continuity(s);
@@ -1306,15 +1307,16 @@ SEASTAR_TEST_CASE(test_v2_apply_monotonically_is_monotonic_on_alloc_failures) {
             auto m = mutation_partition_v2(s, target.partition());
             auto m2 = mutation_partition_v2(s, second.partition());
             memory::with_allocation_failures([&] {
-                auto reset_m = defer([&] {
+                auto reset_m = defer([&] noexcept {
                     m = mutation_partition_v2(s, target.partition());
                     m2 = mutation_partition_v2(s, second.partition());
                 });
-                auto check = defer([&] {
+                auto check = defer([&] noexcept {
                     m.apply(s, std::move(m2));
                     assert_that(target.schema(), m).is_equal_to_compacted(expected.partition());
                 });
-                auto continuity_check = defer([&] {
+                auto continuity_check = defer([&] noexcept {
+                    // Might actually throw, will abort the test.
                     auto c1 = m.get_continuity(s);
                     auto c2 = m2.get_continuity(s);
                     clustering_interval_set actual;
@@ -2445,7 +2447,7 @@ SEASTAR_TEST_CASE(test_v2_merging_in_evictable_snapshot) {
 
         tracker.insert(m1_v2);
         tracker.insert(m2_v2);
-        auto drop_entries = defer([&] {
+        auto drop_entries = defer([&] noexcept {
             // Don't let the cleaner free them. He assumes entries are allocated using its region() and they're not.
             clear(tracker, s, m1_v2);
             clear(tracker, s, m2_v2);
@@ -2453,7 +2455,7 @@ SEASTAR_TEST_CASE(test_v2_merging_in_evictable_snapshot) {
 
         auto result_v2 = mutation_partition_v2(s, m1_v2);
         tracker.insert(result_v2);
-        auto clear_result_v2 = defer([&] {
+        auto clear_result_v2 = defer([&] noexcept {
             clear(tracker, s, result_v2);
         });
         apply_resume res;
@@ -3810,7 +3812,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_detach_state) {
 
 SEASTAR_THREAD_TEST_CASE(test_compactor_validator) {
     const auto abort_ie = set_abort_on_internal_error(false);
-    auto reset_abort_ie = defer([abort_ie] {
+    auto reset_abort_ie = defer([abort_ie] noexcept {
         set_abort_on_internal_error(abort_ie);
     });
 
@@ -4283,7 +4285,7 @@ SEASTAR_THREAD_TEST_CASE(test_serialized_mutation_empty_and_nonfull_keys) {
         assert_that(fm.unfreeze(schema)).is_equal_to(mut);
     }
 
-    auto reset_abort = defer([abort = set_abort_on_internal_error(false)] {
+    auto reset_abort = defer([abort = set_abort_on_internal_error(false)] noexcept {
         set_abort_on_internal_error(abort);
     });
 
@@ -4329,7 +4331,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_empty_and_nonfull_keys) {
 
     testlog.info("Random schema:\n{}", random_schema.cql());
 
-    auto reset_abort = defer([abort = set_abort_on_internal_error(false)] {
+    auto reset_abort = defer([abort = set_abort_on_internal_error(false)] noexcept {
         set_abort_on_internal_error(abort);
     });
 
@@ -4384,7 +4386,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_partition_v2_empty_and_nonfull_keys) {
 
     testlog.info("Random schema:\n{}", random_schema.cql());
 
-    auto reset_abort = defer([abort = set_abort_on_internal_error(false)] {
+    auto reset_abort = defer([abort = set_abort_on_internal_error(false)] noexcept {
         set_abort_on_internal_error(abort);
     });
 

@@ -1270,7 +1270,7 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_selection_test) {
     cql_test_config cfg;
 
     scheduling_group unknown_scheduling_group = create_scheduling_group("unknown", 800).get();
-    auto cleanup_unknown_scheduling_group = defer([&unknown_scheduling_group] {
+    auto cleanup_unknown_scheduling_group = defer([&unknown_scheduling_group] noexcept {
         destroy_scheduling_group(unknown_scheduling_group).get();
     });
 
@@ -1316,7 +1316,7 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_query_selection_test) {
     cfg.db_config->max_memory_for_unlimited_query_hard_limit(2 * 1024 * 1024, utils::config_file::config_source::CommandLine);
 
     scheduling_group unknown_scheduling_group = create_scheduling_group("unknown", 800).get();
-    auto cleanup_unknown_scheduling_group = defer([&unknown_scheduling_group] {
+    auto cleanup_unknown_scheduling_group = defer([&unknown_scheduling_group] noexcept {
         destroy_scheduling_group(unknown_scheduling_group).get();
     });
 
@@ -1371,7 +1371,7 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_query_selection_test) {
 SEASTAR_TEST_CASE(multipage_range_scan_semaphore_mismatch) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         const auto do_abort = set_abort_on_internal_error(false);
-        auto reset_abort = defer([do_abort] {
+        auto reset_abort = defer([do_abort] noexcept {
             set_abort_on_internal_error(do_abort);
         });
         e.execute_cql("CREATE TABLE ks.tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();

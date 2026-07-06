@@ -295,9 +295,9 @@ future<> failure_detector::impl::remove_endpoint(pinger::endpoint_id ep) {
 
 void failure_detector::impl::create_worker(pinger::endpoint_id ep) {
     // To provide strong exception guarantee.
-    std::vector<deferred_action<noncopyable_function<void()>>> guards;
+    std::vector<deferred_action<noncopyable_function<void() noexcept>>> guards;
 
-    guards.emplace_back([this, ep] { _shard_workers.erase(ep); });
+    guards.emplace_back([this, ep] noexcept { _shard_workers.erase(ep); });
     auto [worker_it, inserted] = _shard_workers.try_emplace(ep, *this, ep);
     if (!inserted) {
         // `failure_detector::impl::add_endpoint` checks `_workers` before creating a worker.
@@ -308,7 +308,7 @@ void failure_detector::impl::create_worker(pinger::endpoint_id ep) {
     }
 
     for (auto& [_, l]: _listeners_liveness) {
-        guards.emplace_back([&l = l, ep] { l.endpoint_liveness.erase(ep); });
+        guards.emplace_back([&l = l, ep] noexcept { l.endpoint_liveness.erase(ep); });
         auto [it, inserted] = l.endpoint_liveness.emplace(ep, endpoint_liveness{});
         if (!inserted) {
             // `endpoint_liveness` entries in the `liveness` maps are created and destroyed together with `endpoint_workers`,

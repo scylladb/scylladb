@@ -1115,7 +1115,7 @@ public:
             std::optional<querier>* saved_querier = { });
 
     void start();
-    future<> stop();
+    future<> stop() noexcept;
     future<> flush(std::optional<db::replay_position> = {});
     bool needs_flush() const;
     future<> clear(); // discards memtable(s) without flushing them to disk.

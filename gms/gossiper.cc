@@ -316,7 +316,7 @@ future<> gossiper::handle_ack_msg(locator::host_id id, gossip_digest_ack ack_msg
     if (count_as_msg_processing) {
         _msg_processing++;
     }
-    auto mp = defer([count_as_msg_processing, this] {
+    auto mp = defer([count_as_msg_processing, this] noexcept {
         if (count_as_msg_processing) {
             _msg_processing--;
         }
@@ -425,7 +425,7 @@ future<> gossiper::handle_ack2_msg(locator::host_id from, gossip_digest_ack2 msg
     if (count_as_msg_processing) {
         _msg_processing++;
     }
-    auto mp = defer([count_as_msg_processing, this] {
+    auto mp = defer([count_as_msg_processing, this] noexcept {
         if (count_as_msg_processing) {
             _msg_processing--;
         }

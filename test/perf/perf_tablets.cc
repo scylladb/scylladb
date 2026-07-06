@@ -213,7 +213,7 @@ int scylla_tablets_main(int argc, char** argv) {
                 logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
                 logging::logger_registry().set_logger_level("testlog", testlog_level);
             }
-            auto stop_test = defer([] {
+            auto stop_test = defer([] noexcept {
                 aborted.request_abort();
             });
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();

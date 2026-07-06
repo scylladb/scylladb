@@ -143,7 +143,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             // Will log a message when streaming is done. Used to synchronize tests.
             lw_shared_ptr<std::any> log_done;
             if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
-                log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] {
+                log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] noexcept {
                     sslog.info("stream_mutation_fragments: done");
                 })));
             }

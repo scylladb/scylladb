@@ -580,7 +580,7 @@ static void checkpoint(stop_signal& stop, sstring what, bool ready = false) {
 
 template <typename Func>
 static auto defer_verbose_shutdown(const char* what, Func&& func) {
-    auto vfunc = [what, func = std::forward<Func>(func)] () mutable {
+    auto vfunc = [what, func = std::forward<Func>(func)] () mutable noexcept {
         startlog.info("Shutting down {}", what);
         try {
             func();
@@ -1723,7 +1723,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tm.set_host_id(host_id);
                 tm.init_ms_handlers(messaging.local());
             }).get();
-            auto uninit_tm_ms_handlers = defer([&task_manager] () {
+            auto uninit_tm_ms_handlers = defer([&task_manager] () noexcept {
                 task_manager.invoke_on_all([] (auto& tm) {
                     return tm.uninit_ms_handlers();
                 }).get();
@@ -1876,7 +1876,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             audit::audit::start_audit(*cfg, token_metadata, qp, mm).handle_exception([&] (auto&& e) {
                 startlog.error("audit start failed: {}", e);
             }).get();
-            auto audit_stop = defer([] {
+            auto audit_stop = defer([] noexcept {
                 audit::audit::stop_audit().get();
             });
 
@@ -2477,7 +2477,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // to create its keyspace and table.
             checkpoint(stop_signal, "starting audit storage");
             audit::audit::start_storage(*cfg).get();
-            auto audit_storage_stop = defer([] {
+            auto audit_storage_stop = defer([] noexcept {
                 audit::audit::stop_storage().get();
             });
 
@@ -2556,7 +2556,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             // Reproducer of scylladb/scylladb#24792.
-            auto i24792_reproducer = defer([] {
+            auto i24792_reproducer = defer([] noexcept {
                 if (utils::get_local_injector().enter("reload_service_level_cache_after_auth_service_is_stopped")) {
                     sl_controller.local().update_cache(qos::update_both_cache_levels::yes).get();
                 }
@@ -2590,7 +2590,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 controller.register_auth_integration(auth_service.local());
             }).get();
 
-            auto unregister_sl_controller_integration = defer([] {
+            auto unregister_sl_controller_integration = defer([] noexcept {
                 sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
                     return controller.unregister_auth_integration();
                 }).get();

@@ -198,7 +198,7 @@ int main(int ac, char ** av) {
             auto default_scheduling_group = create_scheduling_group("sl_default_sg", 1.0).get();
             sharded<abort_source> as;
             as.start().get();
-            auto stop_as = defer([&as] { as.stop().get(); });
+            auto stop_as = defer([&as] noexcept { as.stop().get(); });
             sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), qos::service_level_options{.shares = 1000}, scheduling_supergroup(), default_scheduling_group).get();
             seastar::sharded<netw::walltime_compressor_tracker> compressor_tracker;
             compressor_tracker.start([] { return netw::walltime_compressor_tracker::config{}; }).get();
@@ -219,7 +219,7 @@ int main(int ac, char ** av) {
             auto port = testers.local().port();
             test_logger.info("Messaging server listening on {} port {}", listen, port);
             testers.invoke_on_all(&tester::init_handler).get();
-            auto deinit_testers = deferred_action([&testers] {
+            auto deinit_testers = deferred_action([&testers] noexcept {
                 testers.invoke_on_all(&tester::deinit_handler).get();
             });
             messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata), [] (gms::inet_address ip){ return locator::host_id{}; }).get();

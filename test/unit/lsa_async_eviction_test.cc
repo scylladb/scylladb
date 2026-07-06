@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
             logalloc::region r;
 
             with_allocator(r.allocator(), [&] {
-                auto clear_refs = defer([&refs] { refs.clear(); });
+                auto clear_refs = defer([&refs] noexcept { refs.clear(); });
 
                 r.make_evictable([&] {
                     return with_allocator(r.allocator(), [&] {

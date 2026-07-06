@@ -38,7 +38,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
 
     auto scf = make_sstable_compressor_factory_for_tests_in_thread();
     auto env = test_env({}, *scf);
-    auto stop_env = defer([&env] { env.stop().get(); });
+    auto stop_env = defer([&env] noexcept { env.stop().get(); });
 
     sstables::sstable_generation_generator gen_generator;
     auto [ sst, cur_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), sstables::generation_type(1));
@@ -64,7 +64,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_idempotent) {
 
     auto scf = make_sstable_compressor_factory_for_tests_in_thread();
     auto env = test_env({}, *scf);
-    auto stop_env = defer([&env] { env.stop().get(); });
+    auto stop_env = defer([&env] noexcept { env.stop().get(); });
 
     auto [ sst, cur_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), sstables::generation_type(1));
     sstring old_path = sst->get_storage().prefix();
@@ -108,7 +108,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_replay) {
     tmpdir tmp;
     auto scf = make_sstable_compressor_factory_for_tests_in_thread();
     auto env = test_env({}, *scf);
-    auto stop_env = defer([&env] { env.stop().get(); });
+    auto stop_env = defer([&env] noexcept { env.stop().get(); });
 
     sstables::sstable_generation_generator gen_generator;
     auto [ sst, cur_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), sstables::generation_type(1));
@@ -131,7 +131,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_exists_failure) {
 
     auto scf = make_sstable_compressor_factory_for_tests_in_thread();
     auto env = test_env({}, *scf);
-    auto stop_env = defer([&env] { env.stop().get(); });
+    auto stop_env = defer([&env] noexcept { env.stop().get(); });
     sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
 
     // please note, the SSTables used by this test are stored under
@@ -151,7 +151,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_exists_failure) {
 SEASTAR_THREAD_TEST_CASE(test_sstable_clone_preserves_staging_state) {
     auto scf = make_sstable_compressor_factory_for_tests_in_thread();
     test_env env({}, *scf);
-    auto stop_env = defer([&env] { env.stop().get(); });
+    auto stop_env = defer([&env] noexcept { env.stop().get(); });
 
     simple_schema ss;
     auto schema = ss.schema();

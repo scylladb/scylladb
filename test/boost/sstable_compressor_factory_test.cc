@@ -34,7 +34,7 @@ void test_one_numa_topology(std::span<unsigned> shard_to_numa_mapping) {
     };
     sharded<default_sstable_compressor_factory> sstable_compressor_factory;
     sstable_compressor_factory.start(std::cref(config)).get();
-    auto stop_compressor_factory = defer([&sstable_compressor_factory] { sstable_compressor_factory.stop().get(); });
+    auto stop_compressor_factory = defer([&sstable_compressor_factory] noexcept { sstable_compressor_factory.stop().get(); });
 
     // The factory keeps recommended dicts (i.e. dicts for writing) per table ID.
     auto table = table_id::create_random_id();

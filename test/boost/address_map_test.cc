@@ -43,7 +43,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
     {
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.add_or_update_entry(id1, addr1);
@@ -62,7 +62,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // m.add_or_update_entry() adds an expiring entry
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.add_or_update_entry(id1, addr1);
@@ -77,7 +77,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // automatic rearming of expiration timer after the first one expires.
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.add_or_update_entry(id1, addr1);
@@ -97,7 +97,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // - happens when IP address changes after a node restart
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept{ m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.add_or_update_entry(id1, addr1);
@@ -110,7 +110,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // to expiring.
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept{ m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.add_or_update_entry(id1, addr1);
@@ -123,7 +123,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // Check that set_expiring() doesn't insert a new entry
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.set_expiring(id1);
@@ -134,7 +134,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // entry is missing
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.set_nonexpiring(id1);
@@ -152,7 +152,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // Check that add_or_update_entry() throws when called without an actual IP address
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         scoped_no_abort_on_internal_error abort_guard;
@@ -162,7 +162,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // Check that opt_add_entry() throws when called without an actual IP address
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         scoped_no_abort_on_internal_error abort_guard;
@@ -173,7 +173,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // with an obsolete one
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.add_or_update_entry(id1, addr1, gms::generation_type(1));
@@ -185,7 +185,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // doesn't have it regardless of the generation number
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.set_nonexpiring(id1);
@@ -196,7 +196,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // Check the basic functionality of find_by_addr()
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         BOOST_CHECK(!m.find_by_addr(addr1));
@@ -211,7 +211,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // Check that find_by_addr() properly updates timestamps of entries
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.add_or_update_entry(id1, addr1);
@@ -228,7 +228,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // Check that find_by_addr() throws when called without an actual IP address
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         scoped_no_abort_on_internal_error abort_guard;
@@ -239,7 +239,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         // but other way around works
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.add_or_update_entry(id1, addr1, gms::generation_type{2});
@@ -272,7 +272,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_replication) {
     {
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         // Add entry on both shards, replicate non-expiration
@@ -365,7 +365,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_replication_efficiency) {
 
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         std::atomic<bool> stopped;
@@ -409,7 +409,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_expiry_change_keeps_addr_mapping) {
 
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         m.add_or_update_entry(id1, addr1);
@@ -429,7 +429,7 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_exception_safety) {
 
         sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
-        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto stop_map = defer([&m_svc] noexcept { m_svc.stop().get(); });
         auto& m = m_svc.local();
 
         seastar::memory::with_allocation_failures([&] {

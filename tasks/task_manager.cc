@@ -155,7 +155,7 @@ static future<> abort_children(task_manager::module_ptr module, task_id parent_i
     if (!entered) {
         co_return;
     }
-    auto leave_gate = defer([&module] () {
+    auto leave_gate = defer([&module] () noexcept {
         module->async_gate().leave();
     });
     co_await module->get_task_manager().container().invoke_on_all([parent_id] (task_manager& tm) {

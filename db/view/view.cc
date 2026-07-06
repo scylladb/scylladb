@@ -2226,7 +2226,7 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
     auto step_fiber = make_ready_future<>();
     try {
         view_builder_init_state vbi;
-        auto fail = defer([&barrier] mutable { barrier.abort(); });
+        auto fail = defer([&barrier] mutable noexcept { barrier.abort(); });
         // Semaphore usage invariants:
         // - One unit of _sem serializes all per-shard bookkeeping that mutates view-builder state
         //   (_base_to_build_step, _built_views, build_status, reader resets).
@@ -3073,7 +3073,7 @@ public:
             _fragments.emplace_front(*reader().schema(), permit(), partition_start(get_current_key(), tombstone()));
             auto base_schema = base()->schema();
             auto fragments_reader = make_mutation_reader_from_fragments(reader().schema(), permit(), std::move(_fragments));
-            auto close_reader = defer([&fragments_reader] { fragments_reader.close().get(); });
+            auto close_reader = defer([&fragments_reader] noexcept { fragments_reader.close().get(); });
             fragments_reader.upgrade_schema(base_schema);
             _gen->populate_views(
                     *base(),

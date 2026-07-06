@@ -72,13 +72,13 @@ public:
     }
     auto pause() {
         _worker_state->merging_paused += 1;
-        return defer([this] {
+        return defer([this] noexcept {
             _worker_state->merging_paused -= 1;
             _worker_state->cv.signal();
         });
     };
     auto make_region_space_guard() {
-        return defer([&, dirty_before = _region.occupancy().total_space()] {
+        return defer([&, dirty_before = _region.occupancy().total_space()] noexcept{
             auto dirty_after = _region.occupancy().total_space();
             if (_on_space_freed && dirty_before > dirty_after) {
                 _on_space_freed(dirty_before - dirty_after);

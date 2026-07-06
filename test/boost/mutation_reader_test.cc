@@ -2959,7 +2959,7 @@ void check_evictable_reader_validation_is_triggered(
 
 SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
     set_abort_on_internal_error(false);
-    auto reset_on_internal_abort = defer([] {
+    auto reset_on_internal_abort = defer([] noexcept {
         set_abort_on_internal_error(true);
     });
 
@@ -4330,7 +4330,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_safe_to_create_with_admitted_permit) {
                         1 * 1024 * 1024));
             });
         }).get();
-        auto stop_semaphores = defer([&semaphores] {
+        auto stop_semaphores = defer([&semaphores] noexcept {
             parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [&semaphores] (shard_id shard) {
                 return smp::submit_to(shard, [&semaphores] () -> future<> {
                     auto semaphore = semaphores[this_shard_id()].release();

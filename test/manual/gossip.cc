@@ -71,20 +71,20 @@ int main(int ac, char ** av) {
             topo_sm.start().get();
 
             abort_sources.start().get();
-            auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
+            auto stop_abort_source = defer([&] noexcept { abort_sources.stop().get(); });
 
             locator::token_metadata::config tm_cfg;
             auto my_address = gms::inet_address("localhost");
             tm_cfg.topo_cfg.this_endpoint = my_address;
             tm_cfg.topo_cfg.this_cql_address = my_address;
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
-            auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
+            auto stop_token_mgr = defer([&] noexcept { token_metadata.stop().get(); });
             locator::shared_token_metadata tm({}, {});
             sharded<qos::service_level_controller> sl_controller;
             scheduling_group default_scheduling_group = create_scheduling_group("sl_default_sg", 1.0).get();
             sharded<abort_source> as;
             as.start().get();
-            auto stop_as = defer([&as] { as.stop().get(); });
+            auto stop_as = defer([&as] noexcept { as.stop().get(); });
             sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), qos::service_level_options{.shares = 1000}, scheduling_supergroup(), default_scheduling_group).get();
             compressor_tracker.start([] { return netw::walltime_compressor_tracker::config{}; }).get();
             auto stop_compressor_tracker = deferred_stop(compressor_tracker);

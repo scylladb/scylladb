@@ -553,7 +553,7 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
     };
     auto check_and_reset = [&] {
         std::vector<mutation_reader> readers;
-        auto close_readers = defer([&] {
+        auto close_readers = defer([&] noexcept {
             for (auto& rd : readers) {
                 rd.close().get();
             }

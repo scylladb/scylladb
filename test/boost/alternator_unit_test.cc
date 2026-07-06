@@ -143,7 +143,7 @@ BOOST_AUTO_TEST_CASE(test_allocator_fail_gracefully) {
     BOOST_REQUIRE_THROW(allocator.Malloc(too_large_alloc_size), rjson::error);
     // So should impossible reallocation
     void* memory = allocator.Malloc(1);
-    auto release = defer([memory] { rjson::allocator::Free(memory); });
+    auto release = defer([memory] noexcept { rjson::allocator::Free(memory); });
     BOOST_REQUIRE_THROW(allocator.Realloc(memory, 1, too_large_alloc_size), rjson::error);
     // Internal rapidjson stack should also throw
     // and also be destroyed gracefully later
