@@ -42,7 +42,7 @@ class TestCounters(Tester):
         cluster = self.cluster
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
         session = self.patient_cql_connection(nodes[0])
@@ -76,7 +76,7 @@ class TestCounters(Tester):
 
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=2)).start()
+        cluster.populate(generate_cluster_topology(rack_num=2)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
         session = self.patient_cql_connection(nodes[0])
@@ -144,7 +144,7 @@ class TestCounters(Tester):
         cluster = self.cluster
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         node1, _node2, _node3 = cluster.nodelist()
         session = self.patient_cql_connection(node1)
         create_ks(session, "counter_tests", 3)
@@ -244,7 +244,7 @@ class TestCounters(Tester):
 
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         node1, _node2, _node3 = cluster.nodelist()
         session = self.patient_cql_connection(node1)
         create_ks(session, "counter_tests", 3)
@@ -355,7 +355,7 @@ class TestCounters(Tester):
         cluster = self.cluster
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
         session = self.patient_cql_connection(nodes[0])
@@ -408,7 +408,7 @@ class TestCounters(Tester):
 
         cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
 
-        cluster.populate(generate_cluster_topology(rack_num=3)).start()
+        cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
         session = self.patient_cql_connection(nodes[0])
