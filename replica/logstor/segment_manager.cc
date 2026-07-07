@@ -664,6 +664,9 @@ class segment_manager_impl {
     static constexpr size_t trigger_compaction_threshold = 10; // percentage of max segments
     static constexpr size_t segment_pool_size = 128;
 
+    std::vector<segment_descriptor> _segment_descs;
+    seastar::circular_buffer<log_segment_id> _free_segments;
+
     seg_ptr _active_segment;
     seastar::semaphore _active_segment_write_sem{1};
     segment_pool _segment_pool;
@@ -673,9 +676,6 @@ class segment_manager_impl {
     seastar::gate _async_gate;
     future<> _reserve_replenisher{make_ready_future<>()};
     seastar::condition_variable _segment_freed_cv;
-
-    std::vector<segment_descriptor> _segment_descs;
-    seastar::circular_buffer<log_segment_id> _free_segments;
 
     static constexpr size_t separator_flush_max_concurrency = 4;
 
@@ -903,8 +903,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _cfg(config)
     , _segments_per_file(config.file_size / config.segment_size)
     , _max_segments{(config.disk_size / config.file_size) * _segments_per_file, (config.disk_size / config.file_size) * _segments_per_file}
-    , _segment_pool(segment_pool_size, config.max_segments_per_compaction)
     , _segment_descs(static_cast<size_t>(_max_segments.actual))
+    , _segment_pool(segment_pool_size, config.max_segments_per_compaction)
     {
 
     if (_segments_per_file == 0) {
