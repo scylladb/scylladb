@@ -5929,6 +5929,48 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
     });
 }
 
+future<> storage_service::abort_restore_tablets(table_id table) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.abort_restore_tablets(table);
+        });
+    }
+
+    slogger.info("Aborting tablet restore for table_id={}", table);
+    while (true) {
+        auto guard = co_await get_guard_for_tablet_update();
+
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        utils::chunked_vector<canonical_mutation> updates;
+
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
+            auto* trinfo = tmap.get_tablet_transition_info(tid);
+            if (!trinfo || trinfo->transition != locator::tablet_transition_kind::restore || !trinfo->session_id) {
+                co_return;
+            }
+            auto last_token = tmap.get_last_token(tid);
+            // Deleting the session aborts the restore: see the restore handling in the
+            // topology coordinator.
+            updates.emplace_back(tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
+                .del_session(last_token)
+                .build());
+        });
+
+        if (updates.empty()) {
+            break;
+        }
+
+        sstring reason = format("Aborting tablet restore for table_id={}", table);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            break;
+        }
+    }
+    slogger.info("Aborted tablet restore for table_id={}", table);
+}
+
 future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
     auto holder = _async_gate.hold();
 

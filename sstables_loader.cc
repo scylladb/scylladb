@@ -959,9 +959,16 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     if (!trinfo) {
         throw std::runtime_error(fmt::format("No transition info for tablet {}", tid));
     }
+    if (!trinfo->session_id) {
+        throw std::runtime_error(fmt::format("Restore of tablet {} was cancelled", tid));
+    }
     if (trinfo->snapshot_name.empty()) {
         throw std::runtime_error(format("No snapshot name for tablet {} restore transition", tid));
     }
+
+    // Aborting the restore closes the session, which fires this guard's abort source and
+    // interrupts the downloads below.
+    service::session_topology_guard session_guard(trinfo->session_id);
 
     sstring snapshot_name = trinfo->snapshot_name;
 
@@ -1016,9 +1023,15 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     using sstables_col = std::vector<sstables::shared_sstable>;
     using prefix_sstables = std::vector<sstables_col>;
 
+    // Per-shard abort sources for the object-store download pipeline (cf. download_task_impl::run).
+    // They are wired to the session abort only after the sstables are opened (see below).
+    std::vector<seastar::abort_source> shard_aborts(this_smp_shard_count());
+
     auto sstables_on_shards = co_await map_reduce(toc_names_by_prefix, [&] (auto ent) {
         return replica::distributed_loader::get_sstables_from_object_store(_db, s->ks_name(), s->cf_name(),
-                std::move(ent.second), snapshot_info.endpoint, ep_type, snapshot_info.bucket, std::move(ent.first), cfg, [&] { return nullptr; }).then_unpack([] (table_id, auto sstables) {
+                std::move(ent.second), snapshot_info.endpoint, ep_type, snapshot_info.bucket, std::move(ent.first), cfg, [&] {
+                    return &shard_aborts[this_shard_id()];
+                }).then_unpack([] (table_id, auto sstables) {
                     return make_ready_future<std::vector<sstables_col>>(std::move(sstables));
                 });
     }, std::vector<prefix_sstables>(this_smp_shard_count()), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
@@ -1033,46 +1046,80 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         return a;
     });
 
-    auto downloaded_ssts = co_await container().map_reduce0(
-        [tid, &sstables_on_shards](auto& loader) -> future<std::vector<std::vector<minimal_sst_info>>> {
-            sstables_col sst_chunk;
-            for (auto& psst : sstables_on_shards[this_shard_id()]) {
-                for (auto&& sst : psst) {
-                    sst_chunk.push_back(std::move(sst));
-                }
+    // Wire the session abort into the download sources only now, after opening: an aborted
+    // metadata read would be misreported as sstable corruption, so opening above must stay
+    // non-abortable.
+    named_gate g("sstables_loader::download_tablet_sstables");
+    std::exception_ptr ex;
+    try {
+        auto& session_as = session_guard.abort_source();
+        session_as.check();
+        auto sub = session_as.subscribe([&shard_aborts, &g, &session_as] () noexcept {
+            try {
+                auto h = g.hold();
+                (void)smp::invoke_on_all([&shard_aborts, ex = session_as.abort_requested_exception_ptr()] {
+                    shard_aborts[this_shard_id()].request_abort_ex(ex);
+                }).finally([h = std::move(h)] {});
+            } catch (...) {
             }
-            std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
-            co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos](const auto& sst) -> future<> {
-                auto& table = loader._db.local().find_column_family(tid.table);
-                auto stream_guard = table.stream_in_progress();
-                auto min_info = co_await download_sstable(loader._db.local(), table, sst, llog);
-                local_min_infos[min_info.shard].emplace_back(std::move(min_info));
-            });
-            co_return local_min_infos;
-        },
-        std::vector<std::vector<minimal_sst_info>>(this_smp_shard_count()),
-        [](auto init, auto&& item) -> std::vector<std::vector<minimal_sst_info>> {
-            for (std::size_t i = 0; i < item.size(); ++i) {
-                init[i].append_range(std::move(item[i]));
-            }
-            return init;
         });
 
-    co_await container().invoke_on_all([tid, &downloaded_ssts, snap_name = snapshot_name, keyspace_name, table_name, datacenter, rack] (auto& loader) -> future<> {
-        auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
-        db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
-        co_await max_concurrent_for_each(shard_ssts, 16, [&sth, &loader, tid, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
-            sstables::shared_sstable attached_sst = co_await loader.attach_sstable(tid.table, min_info);
-            co_await sth.update_sstable_download_status(snap_name,
-                                                        keyspace_name,
-                                                        table_name,
-                                                        datacenter,
-                                                        rack,
-                                                        *attached_sst->sstable_identifier(),
-                                                        attached_sst->get_first_decorated_key().token(),
-                                                        db::is_downloaded::yes);
+        auto downloaded_ssts = co_await container().map_reduce0(
+            [tid, &sstables_on_shards](auto& loader) -> future<std::vector<std::vector<minimal_sst_info>>> {
+                sstables_col sst_chunk;
+                for (auto& psst : sstables_on_shards[this_shard_id()]) {
+                    for (auto&& sst : psst) {
+                        sst_chunk.push_back(std::move(sst));
+                    }
+                }
+                std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
+                co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos](const auto& sst) -> future<> {
+                    auto& table = loader._db.local().find_column_family(tid.table);
+                    auto stream_guard = table.stream_in_progress();
+                    auto min_info = co_await download_sstable(loader._db.local(), table, sst, llog);
+                    local_min_infos[min_info.shard].emplace_back(std::move(min_info));
+                });
+                co_return local_min_infos;
+            },
+            std::vector<std::vector<minimal_sst_info>>(this_smp_shard_count()),
+            [](auto init, auto&& item) -> std::vector<std::vector<minimal_sst_info>> {
+                for (std::size_t i = 0; i < item.size(); ++i) {
+                    init[i].append_range(std::move(item[i]));
+                }
+                return init;
+            });
+
+        co_await container().invoke_on_all([tid, &downloaded_ssts, snap_name = snapshot_name, keyspace_name, table_name, datacenter, rack] (auto& loader) -> future<> {
+            auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
+            db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
+            co_await max_concurrent_for_each(shard_ssts, 16, [&sth, &loader, tid, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
+                sstables::shared_sstable attached_sst = co_await loader.attach_sstable(tid.table, min_info);
+                co_await sth.update_sstable_download_status(snap_name,
+                                                            keyspace_name,
+                                                            table_name,
+                                                            datacenter,
+                                                            rack,
+                                                            *attached_sst->sstable_identifier(),
+                                                            attached_sst->get_first_decorated_key().token(),
+                                                            db::is_downloaded::yes);
+            });
         });
-    });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    // Drain any in-flight abort dispatch before shard_aborts/session_as go out of scope.
+    co_await g.close();
+
+    if (ex) {
+        // An aborted download leaves unconsumed sstables in sstables_on_shards. These are
+        // lw_shared_ptr-s owned by their respective shards, so they must be released there
+        // rather than while this coroutine frame unwinds on the home shard.
+        co_await container().invoke_on_all([&sstables_on_shards] (sstables_loader&) {
+            sstables_on_shards[this_shard_id()] = {}; // clear on correct shard
+        });
+        std::rethrow_exception(ex);
+    }
 }
 
 future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_tests(const std::vector<sstables::shared_sstable>& sstables,
@@ -1212,7 +1259,18 @@ public:
     }
 
     tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable::no;
+        return tasks::is_abortable::yes;
+    }
+
+    void abort() noexcept override {
+        tasks::task_manager::task::impl::abort();
+        // Closing the restore sessions makes the in-flight download RPCs fail and the
+        // topology coordinator clear the restore transitions, which lets run() (waiting
+        // on the topology request) return. Fire-and-forget: the task's own abort source,
+        // already triggered above, surfaces the abort_requested error to the caller.
+        (void)_loader.local()._ss.local().abort_restore_tablets(_tid).handle_exception([tid = _tid] (std::exception_ptr ex) {
+            llog.warn("Failed to abort restore for table {}: {}", tid, ex);
+        });
     }
 
 protected:
