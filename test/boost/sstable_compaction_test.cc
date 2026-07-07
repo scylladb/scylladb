@@ -2910,7 +2910,9 @@ public:
     }
 };
 
-void scrub_validate_corrupted_content(compress_sstable compress) {
+void scrub_validate_corrupted_content(compress_sstable compress,
+        compaction::compaction_type_options::scrub::quarantine_invalid_sstables quarantine_sstables
+            = compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes) {
     scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
@@ -2922,23 +2924,32 @@ void scrub_validate_corrupted_content(compress_sstable compress) {
             std::uniform_int_distribution<size_t>(10, 10)).get();
     std::swap(*muts.begin(), *(muts.begin() + 1));
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [quarantine_sstables] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
         compaction::compaction_type_options::scrub opts = {
             .operation_mode = compaction::compaction_type_options::scrub::mode::validate,
+            .quarantine_sstables = quarantine_sstables,
         };
         auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
-        BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
+        const bool expect_quarantined = quarantine_sstables == compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes;
+        BOOST_REQUIRE_EQUAL(sst->is_quarantined(), expect_quarantined);
+        if (expect_quarantined) {
+            BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
+        } else {
+            BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+            BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
+        }
     });
 }
 
-void scrub_validate_corrupted_file(compress_sstable compress, component_type component = component_type::Data) {
+void scrub_validate_corrupted_file(compress_sstable compress, component_type component = component_type::Data,
+        compaction::compaction_type_options::scrub::quarantine_invalid_sstables quarantine_sstables
+            = compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes) {
     scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
@@ -2949,7 +2960,7 @@ void scrub_validate_corrupted_file(compress_sstable compress, component_type com
             tests::no_expiry_expiry_generator(),
             std::uniform_int_distribution<size_t>(10, 10)).get();
 
-    test.run(schema, muts, [component] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [component, quarantine_sstables] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2958,17 +2969,26 @@ void scrub_validate_corrupted_file(compress_sstable compress, component_type com
 
         compaction::compaction_type_options::scrub opts = {
             .operation_mode = compaction::compaction_type_options::scrub::mode::validate,
+            .quarantine_sstables = quarantine_sstables,
         };
         auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
-        BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
+        const bool expect_quarantined = quarantine_sstables == compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes;
+        BOOST_REQUIRE_EQUAL(sst->is_quarantined(), expect_quarantined);
+        if (expect_quarantined) {
+            BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
+        } else {
+            BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+            BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
+        }
     });
 }
 
-void scrub_validate_corrupted_digest(compress_sstable compress) {
+void scrub_validate_corrupted_digest(compress_sstable compress,
+        compaction::compaction_type_options::scrub::quarantine_invalid_sstables quarantine_sstables
+            = compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes) {
     scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
@@ -2979,7 +2999,7 @@ void scrub_validate_corrupted_digest(compress_sstable compress) {
             tests::no_expiry_expiry_generator(),
             std::uniform_int_distribution<size_t>(10, 10)).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [quarantine_sstables] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2999,24 +3019,33 @@ void scrub_validate_corrupted_digest(compress_sstable compress) {
 
         compaction::compaction_type_options::scrub opts = {
             .operation_mode = compaction::compaction_type_options::scrub::mode::validate,
+            .quarantine_sstables = quarantine_sstables,
         };
         auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
-        BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
+        const bool expect_quarantined = quarantine_sstables == compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes;
+        BOOST_REQUIRE_EQUAL(sst->is_quarantined(), expect_quarantined);
+        if (expect_quarantined) {
+            BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
+        } else {
+            BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+            BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
+        }
     });
 }
 
-void scrub_validate_no_digest(compress_sstable compress) {
+void scrub_validate_no_digest(compress_sstable compress,
+        compaction::compaction_type_options::scrub::quarantine_invalid_sstables quarantine_sstables
+            = compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes) {
     scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
     auto muts = tests::generate_random_mutations(test.random_schema()).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [quarantine_sstables] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -3026,6 +3055,7 @@ void scrub_validate_no_digest(compress_sstable compress) {
 
         compaction::compaction_type_options::scrub opts = {
             .operation_mode = compaction::compaction_type_options::scrub::mode::validate,
+            .quarantine_sstables = quarantine_sstables,
         };
         auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
@@ -3043,29 +3073,39 @@ void scrub_validate_no_digest(compress_sstable compress) {
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
-        BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
+        const bool expect_quarantined = quarantine_sstables == compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes;
+        BOOST_REQUIRE_EQUAL(sst->is_quarantined(), expect_quarantined);
+        if (expect_quarantined) {
+            BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
+        } else {
+            BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+            BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
+        }
     });
 }
 
-void scrub_validate_valid(compress_sstable compress) {
+void scrub_validate_valid(compress_sstable compress,
+        compaction::compaction_type_options::scrub::quarantine_invalid_sstables quarantine_sstables
+            = compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes) {
     scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
     auto muts = tests::generate_random_mutations(test.random_schema()).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [quarantine_sstables] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
         compaction::compaction_type_options::scrub opts = {
             .operation_mode = compaction::compaction_type_options::scrub::mode::validate,
+            .quarantine_sstables = quarantine_sstables,
         };
         auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
+        // A valid sstable is never quarantined regardless of the quarantine_sstables flag.
         BOOST_REQUIRE(!sst->is_quarantined());
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
@@ -3079,10 +3119,24 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_content) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_content_no_quarantine) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with content-level corruption (no quarantine)...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_corrupted_content(compress, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file) {
     for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
         testlog.info("Validating {}compressed SSTable with invalid checksums...", compress == compress_sstable::no ? "un" : "");
         scrub_validate_corrupted_file(compress);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_no_quarantine) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with invalid checksums (no quarantine)...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_corrupted_file(compress, component_type::Data, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
     }
 }
 
@@ -3093,10 +3147,24 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_index) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_index_no_quarantine) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with corrupted index (no quarantine)...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_corrupted_file(compress, component_type::Index, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_digest) {
     for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
         testlog.info("Validating {}compressed SSTable with invalid digest...", compress == compress_sstable::no ? "un" : "");
         scrub_validate_corrupted_digest(compress);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_digest_no_quarantine) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with invalid digest (no quarantine)...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_corrupted_digest(compress, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
     }
 }
 
@@ -3107,10 +3175,24 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_no_digest) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_no_digest_no_quarantine) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with no digest (no quarantine)...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_no_digest(compress, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable) {
     for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
         testlog.info("Validating {}compressed SSTable...", compress == compress_sstable::no ? "un" : "");
         scrub_validate_valid(compress);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_no_quarantine) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable (no quarantine)...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_valid(compress, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
     }
 }
 

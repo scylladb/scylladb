@@ -279,6 +279,13 @@ scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::re
         info.opts.drop_unfixable = compaction::compaction_type_options::scrub::drop_unfixable_sstables::yes;
     }
 
+    if (req->get_query_param("quarantine_invalid_sstables") != "") {
+        if (scrub_mode != compaction::compaction_type_options::scrub::mode::validate) {
+            throw httpd::bad_param_exception("The 'quarantine_invalid_sstables' parameter is only valid when 'scrub_mode' is 'VALIDATE'");
+        }
+        info.opts.quarantine_sstables = compaction::compaction_type_options::scrub::quarantine_invalid_sstables(req_param<bool>(*req, "quarantine_invalid_sstables", false));
+    }
+
     return info;
 }
 
