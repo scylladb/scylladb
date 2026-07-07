@@ -46,6 +46,11 @@ struct snapshot_sstable_entry {
     int64_t index_size;
 };
 
+struct snapshot_sstables_progress {
+    size_t nr_sstables;
+    size_t nr_downloaded_sstables;
+};
+
 // A single cluster level snapshot
 struct snapshot_entry {
     std::string name;

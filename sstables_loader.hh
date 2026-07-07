@@ -195,4 +195,9 @@ struct tablet_sstable_collection {
 future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_tests(const std::vector<sstables::shared_sstable>& sstables,
                                                                                   std::vector<dht::token_range>&& tablets_ranges);
 
-future<size_t> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+struct manifest_summary {
+    size_t tablet_count;
+    size_t nr_sstables;
+};
+
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::EACH_QUORUM);

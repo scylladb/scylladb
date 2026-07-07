@@ -619,6 +619,21 @@ future<> snapshot_table_helper::insert_snapshot_sstable(sstring snapshot_name, s
             cql3::query_processor::cache_internal::yes).discard_result();
 }
 
+future<snapshot_sstables_progress> snapshot_table_helper::get_snapshot_sstables_progress(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl) const {
+    static const sstring query = format("SELECT downloaded FROM {}.{}"
+        " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES);
+    snapshot_sstables_progress progress = {};
+    co_await _qp.query_internal(query, cl, { snapshot_name, ks, table, dc, rack }, 1000, [&] (const cql3::untyped_result_set_row& row) {
+        progress.nr_sstables++;
+        if (row.get_or<bool>("downloaded", false)) {
+            progress.nr_downloaded_sstables++;
+        }
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+    co_return progress;
+}
+
 future<utils::chunked_vector<snapshot_sstable_entry>>
 snapshot_table_helper::get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl, std::optional<dht::token> start_token, std::optional<dht::token> end_token) const {
     utils::chunked_vector<snapshot_sstable_entry> sstables;
