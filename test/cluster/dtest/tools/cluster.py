@@ -20,8 +20,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def new_node(cluster: ScyllaCluster, bootstrap: bool = True) -> ScyllaNode:
-    node = cluster.populate(1).nodelist()[-1]
+def new_node(cluster: ScyllaCluster, bootstrap: bool = True,
+             data_center: str | None = None,
+             rack: str | None = None) -> ScyllaNode:
+    if data_center and rack:
+        cluster.populate({data_center: {rack: 1}})
+    else:
+        cluster.populate(1)
+    node = cluster.nodelist()[-1]
     node.bootstrap = bootstrap
     return node
 
