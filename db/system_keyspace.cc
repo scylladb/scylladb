@@ -2509,15 +2509,17 @@ future<> system_keyspace::get_repair_history(::table_id table_id, repair_history
     });
 }
 
-future<utils::chunked_vector<canonical_mutation>> system_keyspace::get_update_repair_task_mutations(const repair_task_entry& entry, api::timestamp_type ts) {
+future<mutation> system_keyspace::get_update_repair_task_mutation(const repair_task_entry& entry, api::timestamp_type ts) {
     // Default to timeout the repair task entries in 10 days, this should be enough time for the management tools to query
     constexpr int ttl = 10 * 24 * 3600;
     sstring req = format("INSERT INTO system.{} (task_uuid, operation, first_token, last_token, timestamp, table_uuid) VALUES (?, ?, ?, ?, ?, ?) USING TTL {}", REPAIR_TASKS, ttl);
     auto muts = co_await _qp.get_mutations_internal(req, internal_system_query_state(), ts,
             {entry.task_uuid.uuid(), repair_task_operation_to_string(entry.operation),
             entry.first_token, entry.last_token, entry.timestamp, entry.table_uuid.uuid()});
-    utils::chunked_vector<canonical_mutation> cmuts(muts.begin(), muts.end());
-    co_return cmuts;
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
 }
 
 future<> system_keyspace::get_repair_task(tasks::task_id task_uuid, repair_task_consumer f) {
