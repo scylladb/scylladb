@@ -13,26 +13,70 @@
 #include "types.hh"
 #include "utils/bptree.hh"
 #include "utils/double-decker.hh"
+#include "utils/on_internal_error.hh"
 #include "utils/phased_barrier.hh"
 #include <utility>
+#include "replica/logstor/cache.hh"
 
 namespace replica::logstor {
 
+extern seastar::logger logstor_logger;
+
+// One entry in the primary index B+tree.
+//
+// In addition to the on-disk location (index_entry), each entry may hold a
+// pointer to a cached_mutation_entry that lives in the logstor_cache_tracker's
+// LSA region.  When the cache evicts the entry under memory pressure it zeroes
+// _cached_entry via the back-pointer stored inside cached_mutation_entry.
 class primary_index_entry {
     dht::decorated_key _key;
     index_entry _e;
+    // Non-owning slot pointing into the shared cache region.
+    // Empty when no cached mutation exists for this key.
+    mutable cached_entry_slot _cached_entry;
     struct {
         bool _head : 1;
         bool _tail : 1;
         bool _train : 1;
     } _flags{};
 public:
+    friend class cache_tracker;
+
     primary_index_entry(dht::decorated_key key, index_entry e)
         : _key(std::move(key))
         , _e(std::move(e))
     { }
 
-    primary_index_entry(primary_index_entry&&) noexcept = default;
+    ~primary_index_entry() {
+        if (_cached_entry) {
+            on_internal_error(logstor_logger, "primary_index_entry destroyed while having a cache entry");
+        }
+    }
+
+    primary_index_entry(primary_index_entry&& other) noexcept
+        : _key(std::move(other._key))
+        , _e(std::move(other._e))
+        , _cached_entry(std::move(other._cached_entry))
+        , _flags(other._flags)
+    {}
+
+    primary_index_entry& operator=(primary_index_entry&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        if (_cached_entry) {
+            on_internal_error(logstor_logger, "primary_index_entry move-assignment overwrote a live cached entry");
+        }
+        _key = std::move(other._key);
+        _e = std::move(other._e);
+        _cached_entry = std::move(other._cached_entry);
+        _flags = other._flags;
+        return *this;
+    }
+
+    size_t memory_usage() const noexcept {
+        return sizeof(primary_index_entry) + _key.external_memory_usage();
+    }
 
     bool is_head() const noexcept { return _flags._head; }
     void set_head(bool v) noexcept { _flags._head = v; }
@@ -58,8 +102,54 @@ private:
     partitions_type _partitions;
     schema_ptr _schema;
     size_t _key_count = 0;
+    size_t _memory_usage = 0;
 
     mutable utils::phased_barrier _reads_phaser{"logstor_primary_index"};
+
+    // Non-owning pointer to the cache tracker; null when the cache is not set up.
+    // Mutable so that logically-const methods (lookup_cache, populate_cache) can
+    // call non-const methods on the tracker (touch, insert) for LRU accounting.
+    mutable cache_tracker* _cache_tracker = nullptr;
+
+    void on_entry_added(const primary_index_entry& e) noexcept {
+        _memory_usage += e.memory_usage();
+        ++_key_count;
+    }
+
+    void on_entry_removed(const primary_index_entry& e) noexcept {
+        _memory_usage -= e.memory_usage();
+        --_key_count;
+    }
+
+    auto make_entry_disposer() noexcept {
+        return [this] (primary_index_entry* e) noexcept {
+            if (_cache_tracker) {
+                _cache_tracker->evict(*e);
+            }
+            on_entry_removed(*e);
+        };
+    }
+
+    future<> erase_range_gently(partitions_type::iterator begin, auto&& end_fn) {
+        static constexpr size_t chunk_size = 1024;
+        auto dispose = make_entry_disposer();
+        while (true) {
+            auto end = end_fn();
+
+            auto chunk_end = begin;
+            for (size_t i = 0; i < chunk_size && chunk_end != end; ++i, ++chunk_end);
+
+            if (chunk_end == end) {
+                _partitions.erase_and_dispose(begin, chunk_end, dispose);
+                co_return;
+            }
+
+            auto next_key = chunk_end->key();
+            _partitions.erase_and_dispose(begin, chunk_end, dispose);
+            co_await coroutine::maybe_yield();
+            begin = _partitions.lower_bound(next_key, dht::ring_position_comparator(*_schema));
+        }
+    }
 
 public:
     explicit primary_index(schema_ptr schema)
@@ -71,9 +161,21 @@ public:
         _schema = std::move(s);
     }
 
-    void clear() {
-        _partitions.clear();
-        _key_count = 0;
+    void set_cache_tracker(cache_tracker* ct) noexcept {
+        _cache_tracker = ct;
+    }
+
+    cache_tracker* cache_tracker() const noexcept {
+        return _cache_tracker;
+    }
+
+    future<> drain_cache() {
+        if (_cache_tracker) {
+            for (auto& pie : _partitions) {
+                _cache_tracker->evict(pie);
+                co_await coroutine::maybe_yield();
+            }
+        }
     }
 
     utils::phased_barrier::operation start_read() const {
@@ -106,6 +208,8 @@ public:
         if (it != _partitions.end()) {
             if (it->_e.location == old_location) {
                 it->_e.location = new_location;
+                // The cached mutation is still valid (same data, new location on
+                // disk after compaction moved it) — do not evict the cache here.
                 return true;
             }
         }
@@ -123,6 +227,10 @@ public:
         auto i = _partitions.lower_bound(key.dk, dht::ring_position_comparator(*_schema), hint);
         if (hint.match) {
             if (cmp(i->_e, new_entry) <= 0) {
+                // Overwriting with newer data: evict stale cached mutation.
+                if (_cache_tracker) {
+                    _cache_tracker->evict(*i);
+                }
                 auto old_entry = i->_e;
                 i->_e = std::move(new_entry);
                 return {true, std::make_optional(old_entry)};
@@ -130,8 +238,8 @@ public:
                 return {false, std::make_optional(i->_e)};
             }
         } else {
-            _partitions.emplace_before(i, key.dk.token().raw(), hint, key.dk, std::move(new_entry));
-            ++_key_count;
+            auto it = _partitions.emplace_before(i, key.dk.token().raw(), hint, key.dk, std::move(new_entry));
+            on_entry_added(*it);
             return {true, std::nullopt};
         }
     }
@@ -139,8 +247,7 @@ public:
     bool erase(const primary_index_key& key, log_location loc) {
         auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
         if (it != _partitions.end() && it->_e.location == loc) {
-            it.erase(dht::raw_token_less_comparator{});
-            --_key_count;
+            it.erase_and_dispose(dht::raw_token_less_comparator{}, make_entry_disposer());
             return true;
         }
         return false;
@@ -148,14 +255,23 @@ public:
 
     future<> erase(const dht::partition_range& pr) {
         dht::ring_position_comparator cmp(*_schema);
-        auto it = _partitions.lower_bound(dht::ring_position_view::for_range_start(pr), cmp);
-        auto end_it = _partitions.lower_bound(dht::ring_position_view::for_range_end(pr), cmp);
-        while (it != end_it) {
-            auto prev = it;
-            ++it;
-            prev.erase(dht::raw_token_less_comparator{});
-            --_key_count;
-            co_await coroutine::maybe_yield();
+        auto begin_pos = dht::ring_position_view::for_range_start(pr);
+        auto end_pos = dht::ring_position_view::for_range_end(pr);
+
+        co_await erase_range_gently(
+                _partitions.lower_bound(begin_pos, cmp),
+                [this, &cmp, end_pos] { return _partitions.lower_bound(end_pos, cmp); }
+            );
+    }
+
+    future<> clear() {
+        co_await erase_range_gently(
+                _partitions.begin(),
+                [this] { return _partitions.end(); }
+            );
+
+        if (_key_count != 0 || _memory_usage != 0) {
+            on_internal_error(logstor_logger, format("primary_index::clear ended with key_count {} and memory_usage {}", _key_count, _memory_usage));
         }
     }
 
@@ -163,10 +279,12 @@ public:
     auto end() const noexcept { return _partitions.end(); }
 
     bool empty() const noexcept { return _partitions.empty(); }
-
     size_t get_key_count() const noexcept { return _key_count; }
+    size_t get_memory_usage() const noexcept { return _memory_usage; }
 
-    size_t get_memory_usage() const noexcept { return _key_count * sizeof(index_entry); }
+    partitions_type::const_iterator find(const dht::decorated_key& key) const {
+        return _partitions.find(key, dht::ring_position_comparator(*_schema));
+    }
 
     // First entry with key >= pos (for positioning at range start)
     partitions_type::const_iterator lower_bound(const dht::ring_position_view& pos) const {
