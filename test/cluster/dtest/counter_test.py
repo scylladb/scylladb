@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from cassandra import ConsistencyLevel, InvalidRequest, Unauthorized
+from cassandra.policies import RetryPolicy
 from cassandra.query import SimpleStatement
 
 from dtest_class import Tester, create_cf, create_ks
@@ -28,6 +29,19 @@ from tools.data import rows_to_list
 from tools.misc import ImmutableMapping
 
 logger = logging.getLogger(__name__)
+
+
+class NoCounterMutationRetryPolicy(RetryPolicy):
+    """Disable retries on WriteTimeout to prevent double-applying counter updates.
+
+    Counter mutations are not idempotent, so retrying a timed-out write
+    that was actually applied results in overcounting.
+    """
+    def on_write_timeout(self, query, consistency, write_type, required_responses, received_responses, retry_num):
+        return self.RETHROW, None
+
+    def on_request_error(self, query, consistency, error, retry_num):
+        return self.RETHROW, None
 
 
 class TestCounters(Tester):
@@ -146,7 +160,7 @@ class TestCounters(Tester):
 
         cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         node1, _node2, _node3 = cluster.nodelist()
-        session = self.patient_cql_connection(node1)
+        session = self.patient_cql_connection(node1, retry_policy=NoCounterMutationRetryPolicy())
         create_ks(session, "counter_tests", 3)
 
         stmt = """
@@ -358,11 +372,11 @@ class TestCounters(Tester):
         cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
-        session = self.patient_cql_connection(nodes[0])
+        session = self.patient_cql_connection(nodes[0], retry_policy=NoCounterMutationRetryPolicy())
         create_ks(session, "ks", 3)
         create_cf(session, "cf", validation="CounterColumnType", columns={"c": "counter"})
 
-        sessions = [self.patient_cql_connection(node, "ks") for node in nodes]
+        sessions = [self.patient_cql_connection(node, "ks", retry_policy=NoCounterMutationRetryPolicy()) for node in nodes]
         nb_increment = 500
         if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
             nb_increment //= 10
@@ -411,11 +425,11 @@ class TestCounters(Tester):
         cluster.populate(generate_cluster_topology(rack_num=3)).start(wait_for_binary_proto=True)
         nodes = cluster.nodelist()
 
-        session = self.patient_cql_connection(nodes[0])
+        session = self.patient_cql_connection(nodes[0], retry_policy=NoCounterMutationRetryPolicy())
         create_ks(session, "ks", 3)
         create_cf(session, "cf", validation="CounterColumnType", columns={"c": "counter"})
 
-        sessions = [self.patient_cql_connection(node, "ks") for node in nodes]
+        sessions = [self.patient_cql_connection(node, "ks", retry_policy=NoCounterMutationRetryPolicy()) for node in nodes]
         nb_increment = 500
         if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
             nb_increment //= 10
