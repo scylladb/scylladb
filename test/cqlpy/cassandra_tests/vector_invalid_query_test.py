@@ -233,10 +233,11 @@ def test_ann_ordering_not_allowed_without_index_where_indexed_column_exists_in_q
             "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
         )
 
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/VECTOR-374",
-    reason="Restricted queries are passed to vector store and pytest does not support vector store",
-)
+# This test is skipped because although Scylla does support vector indexes,
+# this test framework doesn't run the vector store, so the request will fail
+# with "Vector Store is disabled" and not the error message that the test
+# expects to see.
+@pytest.mark.skip_env(reason="Vector store is disabled in this test framework")
 def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_keyspace):
     ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = (
         SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE
