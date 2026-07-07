@@ -14,9 +14,14 @@
 
 #include "aws_error.hh"
 #include "utils/exceptions.hh"
+#include "utils/log.hh"
 #include <seastar/util/log.hh>
 #include <seastar/http/exception.hh>
 #include <memory>
+
+namespace s3 {
+extern logging::logger s3l;
+}
 
 namespace aws {
 
@@ -70,10 +75,16 @@ std::optional<aws_error> aws_error::parse(seastar::sstring&& body) {
         if (auto found = all_errors.find(code); found != all_errors.end()) {
             ret_val = found->second;
         } else {
+            ::s3::s3l.warn("Unknown S3 error code: {}, message: {}", code, message_node->value());
             ret_val._type = aws_error_type::UNKNOWN;
         }
         ret_val._message = message_node->value();
     } else {
+        if (code_node) {
+            ::s3::s3l.warn("Malformed S3 error response: missing Message node, Code: {}", code_node->value());
+        } else if (message_node) {
+            ::s3::s3l.warn("Malformed S3 error response: missing Code node, Message: {}", message_node->value());
+        }
         ret_val._type = aws_error_type::UNKNOWN;
     }
     return ret_val;
@@ -218,6 +229,36 @@ const aws_errors& aws_error::get_errors() {
         {"RequestTimeTooSkewed", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
         {"RequestTimeoutException", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
         {"RequestTimeout", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
+        // OCI common API errors returned by Object Storage through S3-compatible endpoints.
+        {"CannotParseRequest", aws_error(aws_error_type::OCI_CANNOT_PARSE_REQUEST, retryable::no)},
+        {"InvalidParameter", aws_error(aws_error_type::INVALID_PARAMETER_VALUE, retryable::no)},
+        {"LimitExceeded", aws_error(aws_error_type::OCI_LIMIT_EXCEEDED, retryable::no)},
+        {"QuotaExceeded", aws_error(aws_error_type::OCI_QUOTA_EXCEEDED, retryable::no)},
+        {"RelatedResourceNotAuthorizedOrNotFound", aws_error(aws_error_type::OCI_RELATED_RESOURCE_NOT_AUTHORIZED_OR_NOT_FOUND, retryable::no)},
+        {"NotAuthenticated", aws_error(aws_error_type::MISSING_AUTHENTICATION_TOKEN, retryable::no)},
+        {"NotAllowed", aws_error(aws_error_type::INVALID_ACTION, retryable::no)},
+        {"NotAuthorized", aws_error(aws_error_type::ACCESS_DENIED, retryable::no)},
+        {"SignUpRequired", aws_error(aws_error_type::OPT_IN_REQUIRED, retryable::no)},
+        {"NotAuthorizedOrNotFound", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
+        {"NotFound", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
+        {"NamespaceNotFound", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
+        {"MethodNotAllowed", aws_error(aws_error_type::INVALID_ACTION, retryable::no)},
+        {"Conflict", aws_error(aws_error_type::OCI_CONFLICT, retryable::no)},
+        {"ExternalServerIncorrectState", aws_error(aws_error_type::OCI_EXTERNAL_SERVER_INCORRECT_STATE, retryable::yes)},
+        {"IncorrectState", aws_error(aws_error_type::OCI_INCORRECT_STATE, retryable::yes)},
+        {"InvalidatedRetryToken", aws_error(aws_error_type::OCI_INVALIDATED_RETRY_TOKEN, retryable::no)},
+        {"ResourceLocked", aws_error(aws_error_type::OCI_RESOURCE_LOCKED, retryable::no)},
+        {"NotAuthorizedOrResourceAlreadyExists", aws_error(aws_error_type::OCI_NOT_AUTHORIZED_OR_RESOURCE_ALREADY_EXISTS, retryable::no)},
+        {"NoEtagMatch", aws_error(aws_error_type::OCI_NO_ETAG_MATCH, retryable::no)},
+        {"PayloadTooLarge", aws_error(aws_error_type::OCI_PAYLOAD_TOO_LARGE, retryable::no)},
+        {"UnprocessableEntity", aws_error(aws_error_type::OCI_UNPROCESSABLE_ENTITY, retryable::no)},
+        {"TooManyRequests", aws_error(aws_error_type::THROTTLING, retryable::yes)},
+        {"RequestHeaderFieldsTooLarge", aws_error(aws_error_type::OCI_REQUEST_HEADER_FIELDS_TOO_LARGE, retryable::no)},
+        {"MethodNotImplemented", aws_error(aws_error_type::OCI_METHOD_NOT_IMPLEMENTED, retryable::no)},
+        {"ExternalServerUnreachable", aws_error(aws_error_type::OCI_EXTERNAL_SERVER_UNREACHABLE, retryable::yes)},
+        {"ExternalServerTimeout", aws_error(aws_error_type::OCI_EXTERNAL_SERVER_TIMEOUT, retryable::yes)},
+        {"ExternalServerInvalidResponse", aws_error(aws_error_type::OCI_EXTERNAL_SERVER_INVALID_RESPONSE, retryable::yes)},
+        {"InvalidStorageTier", aws_error(aws_error_type::OCI_INVALID_STORAGE_TIER, retryable::no)},
         {"HTTP_UNAUTHORIZED", aws_error(aws_error_type::HTTP_UNAUTHORIZED, retryable::no)},
         {"HTTP_FORBIDDEN", aws_error(aws_error_type::HTTP_FORBIDDEN, retryable::no)},
         {"HTTP_NOT_FOUND", aws_error(aws_error_type::HTTP_NOT_FOUND, retryable::no)},
@@ -231,12 +272,23 @@ const aws_errors& aws_error::get_errors() {
         {"HTTP_GATEWAY_TIMEOUT", aws_error(aws_error_type::HTTP_GATEWAY_TIMEOUT, retryable::yes)},
         {"HTTP_NETWORK_CONNECT_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_CONNECT_TIMEOUT, retryable::yes)},
         {"HTTP_NETWORK_READ_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_READ_TIMEOUT, retryable::yes)},
+        {"AnnotationLimitExceeded", aws_error(aws_error_type::ANNOTATION_LIMIT_EXCEEDED, retryable::no)},
+        {"AnnotationNameTooLong", aws_error(aws_error_type::ANNOTATION_NAME_TOO_LONG, retryable::no)},
         {"NoSuchUpload", aws_error(aws_error_type::NO_SUCH_UPLOAD, retryable::no)},
         {"BucketAlreadyOwnedByYou", aws_error(aws_error_type::BUCKET_ALREADY_OWNED_BY_YOU, retryable::no)},
+        {"EncryptionTypeMismatch", aws_error(aws_error_type::ENCRYPTION_TYPE_MISMATCH, retryable::no)},
+        {"IdempotencyParameterMismatch", aws_error(aws_error_type::IDEMPOTENCY_PARAMETER_MISMATCH, retryable::no)},
+        {"InvalidAnnotationName", aws_error(aws_error_type::INVALID_ANNOTATION_NAME, retryable::no)},
+        {"InvalidPrefix", aws_error(aws_error_type::INVALID_PREFIX, retryable::no)},
+        {"InvalidRequest", aws_error(aws_error_type::INVALID_REQUEST, retryable::no)},
+        {"InvalidWriteOffset", aws_error(aws_error_type::INVALID_WRITE_OFFSET, retryable::no)},
+        {"NoSuchAnnotation", aws_error(aws_error_type::NO_SUCH_ANNOTATION, retryable::no)},
         {"ObjectAlreadyInActiveTierError", aws_error(aws_error_type::OBJECT_ALREADY_IN_ACTIVE_TIER, retryable::no)},
         {"NoSuchBucket", aws_error(aws_error_type::NO_SUCH_BUCKET, retryable::no)},
         {"NoSuchKey", aws_error(aws_error_type::NO_SUCH_KEY, retryable::no)},
         {"ObjectNotInActiveTierError", aws_error(aws_error_type::OBJECT_NOT_IN_ACTIVE_TIER, retryable::no)},
+        {"TooManyParts", aws_error(aws_error_type::TOO_MANY_PARTS, retryable::no)},
+        {"UnsupportedMediaType", aws_error(aws_error_type::UNSUPPORTED_MEDIA_TYPE, retryable::no)},
         {"BucketAlreadyExists", aws_error(aws_error_type::BUCKET_ALREADY_EXISTS, retryable::no)},
         {"InvalidObjectState", aws_error(aws_error_type::INVALID_OBJECT_STATE, retryable::no)},
         {"ExpiredTokenException", aws_error(aws_error_type::EXPIRED_TOKEN, retryable::no)},
