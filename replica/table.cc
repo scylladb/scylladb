@@ -569,7 +569,13 @@ compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, 
 }
 
 void compaction_group::add_sstable(sstables::shared_sstable sstable) {
+    const auto old_ptr = _main_sstables.get();
+    const auto old_size = _main_sstables->size();
+    const auto& fname = sstable->get_filename();
     _main_sstables = do_add_sstable(_main_sstables, std::move(sstable), enable_backlog_tracker::yes);
+    tlogger.info("[sst-mutation] add_sstable table={}.{} cg@{}(id={}) main_ptr={}->{} main_size={}->{} added_sst={}",
+            _t.schema()->ks_name(), _t.schema()->cf_name(), fmt::ptr(this), _group_id,
+            fmt::ptr(old_ptr), fmt::ptr(_main_sstables.get()), old_size, _main_sstables->size(), fname);
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() const noexcept {
@@ -583,11 +589,23 @@ sstables::sstable_set compaction_group::make_main_sstable_set() const {
 }
 
 void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables) {
+    const auto old_ptr = _main_sstables.get();
+    const auto old_size = _main_sstables->size();
+    const auto new_size = new_main_sstables->size();
     _main_sstables = std::move(new_main_sstables);
+    tlogger.info("[sst-mutation] set_main_sstables table={}.{} cg@{}(id={}) main_ptr={}->{} main_size={}->{} caller={}",
+            _t.schema()->ks_name(), _t.schema()->cf_name(), fmt::ptr(this), _group_id,
+            fmt::ptr(old_ptr), fmt::ptr(_main_sstables.get()), old_size, new_size, current_backtrace());
 }
 
 void compaction_group::add_maintenance_sstable(sstables::shared_sstable sst) {
+    const auto old_ptr = _maintenance_sstables.get();
+    const auto old_size = _maintenance_sstables->size();
+    const auto& fname = sst->get_filename();
     _maintenance_sstables = do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
+    tlogger.info("[sst-mutation] add_maintenance_sstable table={}.{} cg@{}(id={}) maint_ptr={}->{} maint_size={}->{} added_sst={}",
+            _t.schema()->ks_name(), _t.schema()->cf_name(), fmt::ptr(this), _group_id,
+            fmt::ptr(old_ptr), fmt::ptr(_maintenance_sstables.get()), old_size, _maintenance_sstables->size(), fname);
 }
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstables() const noexcept {
@@ -595,7 +613,13 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstabl
 }
 
 void compaction_group::set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables) {
+    const auto old_ptr = _maintenance_sstables.get();
+    const auto old_size = _maintenance_sstables->size();
+    const auto new_size = new_maintenance_sstables->size();
     _maintenance_sstables = std::move(new_maintenance_sstables);
+    tlogger.info("[sst-mutation] set_maintenance_sstables table={}.{} cg@{}(id={}) maint_ptr={}->{} maint_size={}->{} caller={}",
+            _t.schema()->ks_name(), _t.schema()->cf_name(), fmt::ptr(this), _group_id,
+            fmt::ptr(old_ptr), fmt::ptr(_maintenance_sstables.get()), old_size, new_size, current_backtrace());
 }
 
 void table::add_sstable(compaction_group& cg, sstables::shared_sstable sstable) {
@@ -1061,12 +1085,17 @@ bool storage_group::set_split_mode() {
     // Also, a race can happen if new groups are added while old ones are being stopped,
     // so the new ones can be left unstopped, potentially resulting in use-after-free.
     if (_async_gate.is_closed()) {
+        tlogger.info("[split-trace] set_split_mode sg@{}(id={}) async_gate closed -> false",
+                fmt::ptr(this), _main_cg->group_id());
         return false;
     }
+    const bool was_splitting_mode = splitting_mode();
     if (!splitting_mode()) {
         // Don't create new compaction groups if the main cg has compaction disabled
         if (_main_cg->compaction_disabled()) {
             tlogger.debug("storage_group::set_split_mode: split ready groups not created due to compaction disabled on the main group");
+            tlogger.info("[split-trace] set_split_mode sg@{}(id={}) main_cg compaction_disabled -> false",
+                    fmt::ptr(this), _main_cg->group_id());
             return false;
         }
         auto create_cg = [this] () -> compaction_group_ptr {
@@ -1078,11 +1107,20 @@ bool storage_group::set_split_mode() {
         std::vector<compaction_group_ptr> split_ready_groups(2);
         split_ready_groups[to_idx(locator::tablet_range_side::left)] = create_cg();
         split_ready_groups[to_idx(locator::tablet_range_side::right)] = create_cg();
+        tlogger.info("[split-trace] set_split_mode sg@{}(id={}) main_cg@{} creating split_ready_groups: left@{} right@{}",
+                fmt::ptr(this), _main_cg->group_id(), fmt::ptr(_main_cg.get()),
+                fmt::ptr(split_ready_groups[to_idx(locator::tablet_range_side::left)].get()),
+                fmt::ptr(split_ready_groups[to_idx(locator::tablet_range_side::right)].get()));
         _split_ready_groups = std::move(split_ready_groups);
     }
 
     // The storage group is considered "split ready" if all split unready groups (main + merging) are empty.
-    return split_unready_groups_are_empty();
+    const bool ret = split_unready_groups_are_empty();
+    tlogger.info("[split-trace] set_split_mode sg@{}(id={}) was_splitting_mode={} main_cg_empty={} main_cg_main_size={} main_cg_maint_size={} main_cg_memtables_empty={} main_cg_add_gate_count={} -> {}",
+            fmt::ptr(this), _main_cg->group_id(), was_splitting_mode, _main_cg->empty(),
+            _main_cg->main_sstables()->size(), _main_cg->maintenance_sstables()->size(),
+            _main_cg->memtables()->empty(), _main_cg->sstable_add_gate().get_count(), ret);
+    return ret;
 }
 
 void storage_group::add_merging_group(compaction_group_ptr cg) {
@@ -1104,6 +1142,8 @@ future<> storage_group::remove_empty_merging_groups() {
 }
 
 future<> compaction_group::split(compaction::compaction_type_options::split opt, tasks::task_info tablet_split_task_info) {
+    tlogger.info("[split-trace] compaction_group::split enter cg@{}(id={}) main_size={} maint_size={}",
+            fmt::ptr(this), _group_id, _main_sstables->size(), _maintenance_sstables->size());
     auto& cm = get_compaction_manager();
 
     for (auto view : all_views()) {
@@ -1117,10 +1157,16 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
                     "split_pause_before_repairing_view_iteration",
                     utils::wait_for_message{std::chrono::minutes{5}});
         }
+        tlogger.info("[split-trace] compaction_group::split cg@{}(id={}) view={} main_size_before_offstrategy={}",
+                fmt::ptr(this), _group_id, is_repairing_view(view) ? "repairing" : "other", _main_sstables->size());
         auto lock_holder = co_await cm.get_incremental_repair_read_lock(*view, "storage_group_split");
         // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
         co_await cm.perform_offstrategy(*view, tablet_split_task_info);
+        tlogger.info("[split-trace] compaction_group::split cg@{}(id={}) after offstrategy main_size={}",
+                fmt::ptr(this), _group_id, _main_sstables->size());
         co_await cm.perform_split_compaction(*view, opt, tablet_split_task_info);
+        tlogger.info("[split-trace] compaction_group::split cg@{}(id={}) after perform_split_compaction main_size={}",
+                fmt::ptr(this), _group_id, _main_sstables->size());
         // Injection point: pause after the first view's split compaction
         // completes (sstables moved and deregistered). This gives a concurrent
         // regular compaction time to run its completion phase before the next
@@ -1135,6 +1181,8 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
     if (_t.uses_logstor()) {
         co_await get_logstor_compaction_manager().split_compaction(_t, *this, opt.classifier);
     }
+    tlogger.info("[split-trace] compaction_group::split exit cg@{}(id={}) main_size={}",
+            fmt::ptr(this), _group_id, _main_sstables->size());
 }
 
 future<> compaction_group::discard_logstor_segments() {
@@ -1176,23 +1224,43 @@ future<utils::chunked_vector<logstor::segment_snapshot>> compaction_group::take_
 }
 
 future<> storage_group::split(compaction::compaction_type_options::split opt, tasks::task_info tablet_split_task_info) {
+    tlogger.info("[split-trace] storage_group::split enter sg@{}(id={}) main_cg@{} main_size={} maint_size={} memtables_empty={}",
+            fmt::ptr(this), _main_cg->group_id(), fmt::ptr(_main_cg.get()),
+            _main_cg->main_sstables()->size(), _main_cg->maintenance_sstables()->size(),
+            _main_cg->memtables()->empty());
     if (set_split_mode()) {
+        tlogger.info("[split-trace] storage_group::split sg@{}(id={}) set_split_mode returned true, returning early",
+                fmt::ptr(this), _main_cg->group_id());
         co_return;
     }
     co_await utils::get_local_injector().inject("delay_split_compaction", 5s);
 
     if (split_unready_groups_are_empty()) {
+        tlogger.info("[split-trace] storage_group::split sg@{}(id={}) split_unready_groups_are_empty after delay, returning",
+                fmt::ptr(this), _main_cg->group_id());
         co_return;
     }
     for (auto cg : split_unready_groups()) {
         if (cg->async_gate().is_closed()) {
+            tlogger.info("[split-trace] storage_group::split sg@{}(id={}) skipping cg@{}(id={}) - async_gate closed",
+                    fmt::ptr(this), _main_cg->group_id(), fmt::ptr(cg.get()), cg->group_id());
             continue;
         }
         auto holder = cg->async_gate().hold();
+        tlogger.info("[split-trace] storage_group::split sg@{}(id={}) about to flush+split cg@{}(id={}) main_size={} memtables_empty={}",
+                fmt::ptr(this), _main_cg->group_id(), fmt::ptr(cg.get()), cg->group_id(),
+                cg->main_sstables()->size(), cg->memtables()->empty());
         co_await cg->flush();
+        tlogger.info("[split-trace] storage_group::split sg@{}(id={}) after flush cg@{}(id={}) main_size={}",
+                fmt::ptr(this), _main_cg->group_id(), fmt::ptr(cg.get()), cg->group_id(),
+                cg->main_sstables()->size());
         co_await cg->flush_separator();
         co_await cg->split(opt, tablet_split_task_info);
+        tlogger.info("[split-trace] storage_group::split sg@{}(id={}) after cg->split cg@{}(id={}) main_size={}",
+                fmt::ptr(this), _main_cg->group_id(), fmt::ptr(cg.get()), cg->group_id(),
+                cg->main_sstables()->size());
     }
+    tlogger.info("[split-trace] storage_group::split exit sg@{}(id={})", fmt::ptr(this), _main_cg->group_id());
 }
 
 lw_shared_ptr<const sstables::sstable_set> storage_group::make_sstable_set() const {
@@ -2077,6 +2145,8 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
 
 future<>
 table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit_) {
+    tlogger.info("[split-trace] try_flush_memtable_to_sstable enter table={}.{} target_cg@{}(id={}) memtable_partitions={}",
+            _schema->ks_name(), _schema->cf_name(), fmt::ptr(&cg), cg.group_id(), old->partition_count());
     co_await utils::get_local_injector().inject("flush_memtable_to_sstable_wait", utils::wait_for_message(60s));
 
     auto permit = make_lw_shared(std::move(permit_));
@@ -2142,6 +2212,9 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
             return update_cache(cg, old, newtabs);
         });
+        tlogger.info("[split-trace] try_flush_memtable_to_sstable added table={}.{} target_cg@{}(id={}) newtabs=[{}]",
+                _schema->ks_name(), _schema->cf_name(), fmt::ptr(&cg), cg.group_id(),
+                fmt::join(newtabs | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
 
         for (const auto& sst : newtabs) {
             _large_data_guardrail->register_sstable(sst);
@@ -2518,6 +2591,28 @@ compaction_group::merge_logstor_segments_from(compaction_group& group) {
 
 future<>
 compaction_group::update_sstable_sets_on_compaction_completion(compaction::compaction_completion_desc desc) {
+    // Injection point for reproducers of the "input sstable missing at completion" race
+    // (SCYLLADB-2531 sibling assertions). Pauses BEFORE the sstable-list mutation permit is acquired,
+    // allowing tests to sequence other operations (e.g., split, flush) to run first.
+    // If parameter "table_name" is provided, only pauses when the current table matches.
+    co_await utils::get_local_injector().inject("update_sstable_sets_on_compaction_completion_pause",
+            [this] (auto& handler) -> future<> {
+                const auto want = handler.get("table_name");
+                const auto here = fmt::format("{}.{}", _t.schema()->ks_name(), _t.schema()->cf_name());
+                if (want && *want != here) {
+                    co_return;
+                }
+                tlogger.info("[split-trace] update_sstable_sets_on_compaction_completion_pause: parked table={} cg@{}(id={})",
+                        here, fmt::ptr(this), _group_id);
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                tlogger.info("[split-trace] update_sstable_sets_on_compaction_completion_pause: released table={} cg@{}(id={})",
+                        here, fmt::ptr(this), _group_id);
+            });
+    tlogger.info("[split-trace] update_sstable_sets_on_compaction_completion enter table={}.{} source_cg@{}(id={}) main_size={} maint_size={} old=[{}] new=[{}]",
+            _t.schema()->ks_name(), _t.schema()->cf_name(), fmt::ptr(this), _group_id,
+            _main_sstables->size(), _maintenance_sstables->size(),
+            fmt::join(desc.old_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+            fmt::join(desc.new_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
     // Build a new list of _sstables: We remove from the existing list the
     // tables we compacted (by now, there might be more sstables flushed
     // later), and we add the new tables generated by the compaction.
@@ -2578,6 +2673,24 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
         explicit sstable_list_updater(compaction_group& cg, table::sstable_list_builder& builder, compaction::compaction_completion_desc& d)
             : _t(cg._t), _cg(cg), _builder(builder), _desc(d) {}
         virtual future<> prepare() override {
+            // Injection point for reproducers of the "input sstable missing at completion" race
+            // (SCYLLADB-2531 sibling assertions). By the time we get here, the compaction has picked
+            // its input sstables and the _sstable_set_mutation_sem is held via the outer sstable_list_builder.
+            // A test can pause here to force other operations to complete first and observe the interleaving.
+            // If parameter "table_name" is provided, only pauses when the current table matches.
+            co_await utils::get_local_injector().inject("sstable_list_updater_prepare_pause",
+                    [this] (auto& handler) -> future<> {
+                        const auto want = handler.get("table_name");
+                        const auto here = fmt::format("{}.{}", _t.schema()->ks_name(), _t.schema()->cf_name());
+                        if (want && *want != here) {
+                            co_return;
+                        }
+                        tlogger.info("[split-trace] sstable_list_updater_prepare_pause: parked table={} source_cg@{}(id={})",
+                                here, fmt::ptr(&_cg), _cg.group_id());
+                        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                        tlogger.info("[split-trace] sstable_list_updater_prepare_pause: released table={} source_cg@{}(id={})",
+                                here, fmt::ptr(&_cg), _cg.group_id());
+                    });
             // Segregate output sstables according to their owner compaction group.
             // If not in splitting mode, then all output sstables will belong to the same group.
             for (auto& sst : _desc.new_sstables) {
@@ -2617,6 +2730,56 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
                 // the group at which the sstable belongs to.
                 if (removed_sstables != d.desc.old_sstables.size()) {
                     auto compaction_type = d.desc.new_sstables.size() ? d.desc.new_sstables.front()->get_origin() : "unknown";
+                    // Forensic dump for debugging the "input sstable missing at completion" race
+                    // (see cb8b363b0 / SCYLLADB-2531 sibling assertions). Log the contents of the
+                    // source group's main and maintenance sets, the expected inputs, and the routing
+                    // decisions for every output sstable, so we can determine WHICH sstable is missing
+                    // and WHERE it might have been moved.
+                    std::vector<sstables::shared_sstable> main_snapshot;
+                    cg->main_sstables()->for_each_sstable([&] (const sstables::shared_sstable& sst) {
+                        main_snapshot.push_back(sst);
+                    });
+                    std::vector<sstables::shared_sstable> maintenance_snapshot;
+                    cg->maintenance_sstables()->for_each_sstable([&] (const sstables::shared_sstable& sst) {
+                        maintenance_snapshot.push_back(sst);
+                    });
+                    std::unordered_set<sstables::shared_sstable> present_in_main(main_snapshot.begin(), main_snapshot.end());
+                    std::unordered_set<sstables::shared_sstable> present_in_maintenance(maintenance_snapshot.begin(), maintenance_snapshot.end());
+                    std::vector<sstables::shared_sstable> missing;
+                    for (auto& sst : d.desc.old_sstables) {
+                        if (!present_in_main.contains(sst) && !present_in_maintenance.contains(sst)) {
+                            missing.push_back(sst);
+                        }
+                    }
+                    // Which compaction groups did outputs go to?
+                    std::vector<sstring> routing_info;
+                    routing_info.reserve(_cg_desc.size());
+                    for (const auto& [other_cg, other_d] : _cg_desc) {
+                        routing_info.push_back(fmt::format("cg@{}(id={}, is_source={}, new={}, old={})",
+                                fmt::ptr(other_cg), other_cg->group_id(), other_cg == &_cg,
+                                other_d.desc.new_sstables.size(), other_d.desc.old_sstables.size()));
+                    }
+                    tlogger.error("Input SSTable missing at compaction completion. "
+                                  "table={}.{} source_cg@{}(id={}) failing_cg@{}(id={}) same_as_source={} "
+                                  "compaction_type={} "
+                                  "old_sstables.size={} removed_sstables.size={} "
+                                  "main_snapshot.size={} maintenance_snapshot.size={} "
+                                  "missing.size={} missing_sstables=[{}] "
+                                  "expected_old=[{}] "
+                                  "current_main=[{}] "
+                                  "current_maintenance=[{}] "
+                                  "output_routing=[{}]",
+                            _t.schema()->ks_name(), _t.schema()->cf_name(),
+                            fmt::ptr(&_cg), _cg.group_id(),
+                            fmt::ptr(cg), cg->group_id(), cg == &_cg,
+                            compaction_type,
+                            d.desc.old_sstables.size(), removed_sstables,
+                            main_snapshot.size(), maintenance_snapshot.size(),
+                            missing.size(), fmt::join(missing | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                            fmt::join(d.desc.old_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                            fmt::join(main_snapshot | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                            fmt::join(maintenance_snapshot | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                            fmt::join(routing_info, ", "));
                     on_internal_error(tlogger, fmt::format("Unable to remove input SSTable {} that belongs to group id {} for compaction of type {}",
                                                            d.desc.old_sstables, cg->group_id(), compaction_type));
                 }
@@ -3256,10 +3419,17 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _logstor_segments(make_lw_shared<logstor::segment_set>())
     , _lowest_rp(db::replay_position::max)
 {
+    tlogger.info("[split-trace] compaction_group ctor table={}.{} cg@{}(id={}) main_ptr={} maint_ptr={} token_range={}",
+            t.schema()->ks_name(), t.schema()->cf_name(), fmt::ptr(this), group_id,
+            fmt::ptr(_main_sstables.get()), fmt::ptr(_maintenance_sstables.get()), _token_range);
 }
 
 compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
-    return make_lw_shared<compaction_group>(base._t, base._group_id, base._token_range, base._repair_sstable_classifier);
+    auto ret = make_lw_shared<compaction_group>(base._t, base._group_id, base._token_range, base._repair_sstable_classifier);
+    tlogger.info("[split-trace] make_empty_group table={}.{} base_cg@{}(id={}) -> new_cg@{}(id={})",
+            base._t.schema()->ks_name(), base._t.schema()->cf_name(),
+            fmt::ptr(&base), base._group_id, fmt::ptr(ret.get()), ret->_group_id);
+    return ret;
 }
 
 bool compaction_group::stopped() const noexcept {
@@ -3324,8 +3494,17 @@ const schema_ptr& compaction_group::schema() const {
 }
 
 void compaction_group::clear_sstables() {
+    const auto old_main_ptr = _main_sstables.get();
+    const auto old_main_size = _main_sstables->size();
+    const auto old_maint_ptr = _maintenance_sstables.get();
+    const auto old_maint_size = _maintenance_sstables->size();
     _main_sstables = make_lw_shared<sstables::sstable_set>(make_main_sstable_set());
     _maintenance_sstables = make_maintenance_sstable_set();
+    tlogger.info("[sst-mutation] clear_sstables table={}.{} cg@{}(id={}) main_ptr={}->{} main_size={}->0 maint_ptr={}->{} maint_size={}->0 caller={}",
+            _t.schema()->ks_name(), _t.schema()->cf_name(), fmt::ptr(this), _group_id,
+            fmt::ptr(old_main_ptr), fmt::ptr(_main_sstables.get()), old_main_size,
+            fmt::ptr(old_maint_ptr), fmt::ptr(_maintenance_sstables.get()), old_maint_size,
+            current_backtrace());
 }
 
 void storage_group::clear_sstables() {
@@ -3564,6 +3743,8 @@ void tablet_storage_group_manager::handle_tablet_split_completion(const locator:
             auto sstables_repaired_at = new_tmap.get_tablet_info(locator::tablet_id(group_id)).sstables_repaired_at;
             tlogger.debug("Setting sstables_repaired_at={} for split tablet_id={} old_tid={} new_tid={} old_range={} new_range={} idx={}",
                     sstables_repaired_at, table_id, id, group_id, old_range, new_range, i);
+            tlogger.info("[split-trace] handle_tablet_split_completion update_id_and_range cg@{} old_id={} -> new_id={} new_range={}",
+                    fmt::ptr(split_ready_groups[i].get()), split_ready_groups[i]->group_id(), group_id, new_range);
             split_ready_groups[i]->update_id_and_range(group_id, new_range);
             new_storage_groups[group_id] = make_lw_shared<storage_group>(std::move(split_ready_groups[i]));
         }
@@ -4639,6 +4820,8 @@ future<> compaction_group::flush(std::optional<db::replay_position> pos) noexcep
     // set the flush function, I guess it is ok. Retaining low until then
     // for logging purposes as well.
     try {
+        tlogger.info("[split-trace] compaction_group::flush cg@{}(id={}) memtables_empty={}",
+                fmt::ptr(this), _group_id, _memtables->empty());
         return _memtables->flush();
     } catch (...) {
         return current_exception_as_future<>();

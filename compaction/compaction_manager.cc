@@ -422,7 +422,12 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         // Off-strategy, for example, waits until the sstables move out of staging state.
         return t.make_sstable(sstables::sstable_state::normal);
     };
-    descriptor.replacer = [this, &t, &on_replace, offstrategy] (compaction_completion_desc desc) {
+    descriptor.replacer = [this, &t, &cdata, &on_replace, offstrategy] (compaction_completion_desc desc) {
+        cmlog.info("[split-trace] replacer called table={} compaction_uuid={} task={} old=[{}] new=[{}] offstrategy={}",
+                t, cdata.compaction_uuid, fmt::ptr(this),
+                fmt::join(desc.old_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                fmt::join(desc.new_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                bool(offstrategy));
         utils::get_local_injector().inject("split_pause_before_replacer",
                 [this, &t] (auto& handler) -> future<> {
             if (is_system_keyspace(t.schema()->ks_name()) || _type != compaction_type::Split) {
@@ -455,6 +460,8 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         auto old_sstables = desc.old_sstables;
         _cm.on_compaction_completion(t, std::move(desc), offstrategy).get();
         on_replace.on_removal(old_sstables);
+        cmlog.info("[split-trace] replacer done table={} old=[{}]", t,
+                fmt::join(old_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
     };
 
     // retrieve owned_ranges if_required
@@ -1473,6 +1480,11 @@ protected:
             cmlog.debug("Started minor compaction sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
                     descriptor.sstables, compacting_table()->get_sstables_repaired_at(),
                     compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
+            if (!descriptor.sstables.empty()) {
+                cmlog.info("[split-trace] regular_compaction picked table={} compaction_uuid={} sstables=[{}]",
+                        t, _compaction_data.compaction_uuid,
+                        fmt::join(descriptor.sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
+            }
 
             auto old_sstables = ::format("{}", descriptor.sstables);
 
@@ -1989,6 +2001,8 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
             return a->data_size() > b->data_size();
         });
     }, std::move(reason));
+    cmlog.info("[split-trace] perform_task_on_all_files table={} sstables_captured=[{}]",
+            t, fmt::join(sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
     if (sstables.empty()) {
         co_return std::nullopt;
     }
