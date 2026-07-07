@@ -17,7 +17,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
-    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, find_server_by_host_id
+    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -797,7 +797,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
     await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
 
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
 
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
@@ -870,7 +870,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
     await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});") for k in range(10)])
 
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
 
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
@@ -944,7 +944,7 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
     await asyncio.gather(*[cql.run_async(f"INSERT INTO ks2.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
 
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
 
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
@@ -1014,7 +1014,7 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
     await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
 
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
 
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
@@ -1104,7 +1104,7 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
     [await manager.api.disable_injection(s.ip_addr, numeric_injection) for s in servers]
 
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
     s1_log = await manager.server_open_log(coord_serv.server_id)
     s1_mark = await s1_log.mark()
 
@@ -1158,7 +1158,7 @@ async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, 
     await asyncio.gather(*[cql.run_async(f"INSERT INTO ks1.t (pk) VALUES ({pk});") for pk in range(16)])
 
     coord = await get_topology_coordinator(manager)
-    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
     log = await manager.server_open_log(coord_serv.server_id)
     mark = await log.mark()
 
@@ -1661,7 +1661,7 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
             await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id, ignore_dead=[replaced_host_id])
 
         logger.info(f"Replacing {node_to_replace} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True,
+        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True,
                                     ignore_dead_nodes=[replaced_host_id])
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
@@ -1781,7 +1781,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
                                 expected_error="Removenode failed")
 
         logger.info(f"Replacing {node_to_remove} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+        replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True)
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
 @pytest.mark.nightly
@@ -1822,12 +1822,12 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient,
             await manager.server_stop_gracefully(node.server_id)
 
         logger.info(f"Replacing {nodes_to_replace[0]} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[0].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True,
+        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[0].server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True,
                                     ignore_dead_nodes=[replaced_host_id])
         await manager.server_add(replace_cfg=replace_cfg, property_file=nodes_to_replace[0].property_file())
 
         logger.info(f"Replacing {nodes_to_replace[1]} with a new node")
-        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[1].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+        replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[1].server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True)
         await manager.server_add(replace_cfg=replace_cfg, property_file=nodes_to_replace[1].property_file())
 
         logger.info("Verifying data")

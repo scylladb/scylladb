@@ -20,7 +20,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, wait_for
 
 from test.pylib import nodetool
-from test.cluster.util import get_topology_coordinator, find_server_by_host_id, keyspace_has_tablets, new_test_keyspace, new_test_table
+from test.cluster.util import get_topology_coordinator, keyspace_has_tablets, new_test_keyspace, new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -218,7 +218,7 @@ async def test_hints_consistency_during_decommission(manager: ManagerClient):
 
         async with asyncio.TaskGroup() as tg:
             coord = await get_topology_coordinator(manager)
-            coord_srv = await find_server_by_host_id(manager, [server1, server2, server3], coord)
+            coord_srv = await manager.find_server_by_host_id([server1, server2, server3], coord)
 
             # Make sure topology coordinator will pause right after streaming
             logger.info("Enabling injection on the topology coordinator that will tell it to pause streaming")
@@ -478,7 +478,7 @@ async def test_hint_to_leaving_when_reducing_rf(manager: ManagerClient):
         await manager.server_start(servers[2].server_id)
 
         coord = await get_topology_coordinator(manager)
-        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        coord_serv = await manager.find_server_by_host_id(servers, coord)
         await manager.api.enable_injection(coord_serv.ip_addr, "stream_tablet_wait", one_shot=False)
 
         alter_rf_fut = cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{'class' : 'NetworkTopologyStrategy', 'dc1': ['r2']}}")
