@@ -49,6 +49,12 @@ class TestCounters(Tester):
     def fixture_add_additional_log_patterns(self, fixture_dtest_setup):
         fixture_dtest_setup.ignore_log_patterns += [
             r"raft_topology - raft_topology_cmd wait_for_ip failed with: seastar::sleep_aborted",
+            r"raft_topology - raft_topology_cmd stream_ranges failed with",
+            r"raft - .* applier fiber stopped because of the error: seastar::named_gate_closed_exception",
+            r"Startup failed: seastar::rpc::remote_verb_error \(seastar::abort_requested_exception",
+            r"Startup failed: seastar::rpc::closed_error",
+            r"raft::transport_error.*connection is closed",
+            r"CDC generation publisher fiber got error",
         ]
 
     def test_simple_increment(self):
@@ -632,6 +638,18 @@ class TestCounters(Tester):
 
 
 class TestCountersOnMultipleNodes(Tester):
+    @pytest.fixture(autouse=True)
+    def fixture_add_additional_log_patterns(self, fixture_dtest_setup):
+        fixture_dtest_setup.ignore_log_patterns += [
+            r"raft_topology - raft_topology_cmd wait_for_ip failed with: seastar::sleep_aborted",
+            r"raft_topology - raft_topology_cmd stream_ranges failed with",
+            r"raft - .* applier fiber stopped because of the error: seastar::named_gate_closed_exception",
+            r"Startup failed: seastar::rpc::remote_verb_error \(seastar::abort_requested_exception",
+            r"Startup failed: seastar::rpc::closed_error",
+            r"raft::transport_error.*connection is closed",
+            r"CDC generation publisher fiber got error",
+        ]
+
     @pytest.fixture(scope="function", autouse=True)
     def fixture_dtest_setup_overrides(self, dtest_config):
         dtest_setup_overrides = DTestSetupOverrides()
