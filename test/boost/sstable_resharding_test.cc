@@ -74,7 +74,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
                 mt->apply(std::move(m));
             }
         }
-        return make_sstable_containing(env.make_sstable(s, version), mt);
+        return make_sstable_containing(env.make_sstable(s, version), mt).get();
     });
 
     // FIXME: sstable write has a limitation in which it will generate sharding metadata only
@@ -185,7 +185,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
                 muts.push_back(get_mutation(s, k, 0));
             }
 
-            auto sst = make_sstable_containing(sst_gen, muts);
+            auto sst = make_sstable_containing(sst_gen, muts).get();
             BOOST_REQUIRE(!sst->is_shared());
             assert_sstable_computes_correct_owners(env, sst).get();
         }
@@ -205,7 +205,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
                 }
             }
 
-            auto sst = make_sstable_containing(sst_gen, muts);
+            auto sst = make_sstable_containing(sst_gen, muts).get();
             BOOST_REQUIRE(!sst->is_shared());
 
             auto all_shards_s = get_schema(smp::count, cfg->murmur3_partitioner_ignore_msb_bits());

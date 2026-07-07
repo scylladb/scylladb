@@ -23,20 +23,16 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
-lw_shared_ptr<replica::memtable> make_memtable(schema_ptr s, const utils::chunked_vector<mutation>& muts) {
+future<lw_shared_ptr<replica::memtable>> make_memtable(schema_ptr s, const utils::chunked_vector<mutation>& muts) {
     auto mt = make_lw_shared<replica::memtable>(s);
 
-    std::size_t i{0};
     for (auto&& m : muts) {
         mt->apply(m);
         // Give the reactor some time to breathe
-        if (++i == 10) {
-            seastar::thread::yield();
-            i = 0;
-        }
+        co_await coroutine::maybe_yield();
     }
 
-    return mt;
+    co_return mt;
 }
 
 std::vector<replica::memtable*> active_memtables(replica::table& t) {
@@ -47,27 +43,24 @@ std::vector<replica::memtable*> active_memtables(replica::table& t) {
     return active_memtables;
 }
 
-sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt) {
+future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt) {
     return make_sstable_containing(sst_factory(), std::move(mt));
 }
 
-sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt) {
-    write_memtable_to_sstable(*mt, sst).get();
+future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt) {
+    co_await write_memtable_to_sstable(*mt, sst);
     sstable_open_config cfg { .load_first_and_last_position_metadata = true };
-    sst->open_data(cfg).get();
-    return sst;
+    co_await sst->open_data(cfg);
+    co_return sst;
 }
 
-sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, utils::chunked_vector<mutation> muts, validate do_validate) {
-    return make_sstable_containing(sst_factory(), std::move(muts), do_validate);
-}
-
-sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate) {
+future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate) {
     schema_ptr s = muts[0].schema();
-    make_sstable_containing(sst, make_memtable(s, muts));
+    co_await make_sstable_containing(sst, co_await make_memtable(s, muts));
 
     if (do_validate) {
-        tests::reader_concurrency_semaphore_wrapper semaphore;
+        reader_concurrency_semaphore sem(
+            reader_concurrency_semaphore::no_limits{}, "make_sstable_containing", reader_concurrency_semaphore::register_metrics::no);
 
         std::set<mutation, mutation_decorated_key_less_comparator> merged;
         for (auto&& m : muts) {
@@ -79,16 +72,25 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, u
                 old.value().apply(std::move(m));
                 merged.insert(std::move(old));
             }
+            co_await coroutine::maybe_yield();
         }
 
         // validate the sstable
-        auto rd = assert_that(sst->as_mutation_source().make_mutation_reader(s, semaphore.make_permit()));
+        auto rd = sst->as_mutation_source().make_mutation_reader(s, sem.make_tracking_only_permit(nullptr, "test", db::no_timeout, {}));
         for (auto&& m : merged) {
-            rd.produces(m);
+            auto mo = co_await read_mutation_from_mutation_reader(rd);
+            BOOST_REQUIRE(mo);
+            assert_that(*mo).is_equal_to_compacted(m);
+            co_await coroutine::maybe_yield();
         }
-        rd.produces_end_of_stream();
+        co_await rd.close();
+        co_await sem.stop();
     }
-    return sst;
+    co_return sst;
+}
+
+future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, utils::chunked_vector<mutation> muts, validate do_validate) {
+    return make_sstable_containing(sst_factory(), std::move(muts), do_validate);
 }
 
 shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writer_config cfg,
@@ -154,34 +156,34 @@ future<> run_compaction_task(test_env& env, sstables::run_id output_run_id, comp
     co_await tcm.perform_compaction(std::move(task));
 }
 
-shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify) {
-    auto sstp = make_sstable_containing(std::move(sst), mt);
-    return verify_mutation(env, std::move(sstp), std::move(key), std::move(verify));
+future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify) {
+    auto sstp = co_await make_sstable_containing(std::move(sst), mt);
+    co_return co_await verify_mutation(env, std::move(sstp), std::move(key), std::move(verify));
 }
 
-shared_sstable verify_mutation(test_env& env, shared_sstable sstp, bytes key, std::function<void(mutation_opt&)> verify) {
+future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sstp, bytes key, std::function<void(mutation_opt&)> verify) {
     auto s = sstp->get_schema();
     auto pr = dht::partition_range::make_singular(make_dkey(s, key));
     auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
-    auto close_rd = deferred_close(rd);
-    auto mopt = read_mutation_from_mutation_reader(rd).get();
+    auto mopt = co_await read_mutation_from_mutation_reader(rd);
     verify(mopt);
-    return sstp;
+    co_await rd.close();
+    co_return sstp;
 }
 
-shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {
-    auto sstp = make_sstable_containing(std::move(sst), mt);
-    return verify_mutation(env, std::move(sstp), std::move(pr), std::move(verify));
+future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {
+    auto sstp = co_await make_sstable_containing(std::move(sst), mt);
+    co_return co_await verify_mutation(env, std::move(sstp), std::move(pr), std::move(verify));
 }
 
-shared_sstable verify_mutation(test_env& env, shared_sstable sstp, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {
+future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable sstp, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {
     auto s = sstp->get_schema();
     auto rd = sstp->make_reader(s, env.make_reader_permit(), std::move(pr), s->full_slice());
-    auto close_rd = deferred_close(rd);
-    while (auto mopt = read_mutation_from_mutation_reader(rd).get()) {
+    while (auto mopt = co_await read_mutation_from_mutation_reader(rd)) {
         if (verify(mopt) == stop_iteration::yes) {
             break;
         }
     }
-    return sstp;
+    co_await rd.close();
+    co_return sstp;
 }

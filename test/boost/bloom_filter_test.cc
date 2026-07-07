@@ -122,7 +122,7 @@ SEASTAR_TEST_CASE(test_reclaimed_bloom_filter_deletion_from_disk) {
 
         auto mut1 = mutation(s, pks[0]);
         mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
         auto sst_test = sstables::test(sst);
 
         const auto filter_path = (env.tempdir().path() / sst_test.filename(component_type::Filter)).native();
@@ -269,7 +269,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
         mut.partition().apply_insert(*schema, ss.make_ckey(1), ss.new_timestamp());
 
         // bloom filter will be reclaimed automatically due to low memory
-        auto sst = make_sstable_containing(env.make_sstable(schema), {mut});
+        auto sst = make_sstable_containing(env.make_sstable(schema), {mut}).get();
         auto& sst_mgr = env.manager();
         BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), 0);
 
@@ -325,7 +325,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         }
 
         // create one sst; there is sufficient memory for the bloom filter, so it won't be reclaimed
-        auto sst1 = make_sstable_containing(env.make_sstable(schema), mutations);
+        auto sst1 = make_sstable_containing(env.make_sstable(schema), mutations).get();
         auto& sst_mgr = env.manager();
         auto sst1_filename = sst1->get_filename();
         BOOST_REQUIRE(sst1->filter_memory_size() != 0);
@@ -358,7 +358,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
 
         // create another sst and unlink it to trigger reload of components.
         // the reload should not attempt to load sst'1 bloom filter into memory depsite its presence in the _active list.
-        auto sst2 = make_sstable_containing(env.make_sstable(schema), {mutations[0]});
+        auto sst2 = make_sstable_containing(env.make_sstable(schema), {mutations[0]}).get();
         sst2->unlink().get();
         sst2.release();
 
