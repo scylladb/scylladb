@@ -308,11 +308,27 @@ async def test_remove_is_canceled_if_there_is_node_down(manager: ManagerClient):
                         " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
 
-        await manager.server_stop_gracefully(servers[3].server_id)
+        # Submit the removenode while servers[3] is still alive to avoid
+        # the initiator-side liveness check. Pause the coordinator so that
+        # it doesn't process the removenode before we stop servers[3].
         await manager.server_stop_gracefully(servers[2].server_id)
 
+        coord_log = await manager.server_open_log(coord_serv.server_id)
+        inj = 'topology_coordinator_pause_before_processing_backlog'
+        await manager.api.enable_injection(coord_serv.ip_addr, inj, one_shot=True)
+        await coord_log.wait_for(f"{inj}: waiting")
+
+        remove_task = asyncio.create_task(
+            manager.remove_node(coord_serv.server_id, servers[2].server_id))
+
+        # Ensure the removenode is queued before stopping servers[3].
+        await coord_log.wait_for("raft_topology - removenode: waiting for completion")
+
+        await manager.server_stop_gracefully(servers[3].server_id)
+        await manager.api.message_injection(coord_serv.ip_addr, inj)
+
         with pytest.raises(Exception, match="Canceled. Dead nodes: "):
-            await manager.remove_node(coord_serv.server_id, servers[2].server_id)
+            await remove_task
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
