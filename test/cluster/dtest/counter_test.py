@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 class TestCounters(Tester):
+    @pytest.fixture(autouse=True)
+    def fixture_add_additional_log_patterns(self, fixture_dtest_setup):
+        fixture_dtest_setup.ignore_log_patterns += [
+            r"raft_topology - raft_topology_cmd wait_for_ip failed with: seastar::sleep_aborted",
+        ]
+
     def test_simple_increment(self):
         """Simple incrementation test (Created for #3465, that wasn't a bug)"""
         cluster = self.cluster
