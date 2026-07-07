@@ -21,6 +21,7 @@
 #include <seastar/util/log.hh>
 
 #include "utils/overloaded_functor.hh"
+#include "utils/UUID.hh"
 #include "test_utils.hh"
 
 using namespace seastar;
@@ -199,13 +200,11 @@ future<std::tuple<tests::proc::process_fixture, int>> tests::proc::start_docker_
         throw std::runtime_error("Could not find docker or podman.");
     }
 
-    static int counter = 0;
-
     struct in_use{};
     constexpr auto max_retries = 8;
 
     for (int retries = 0;; ++retries) {
-        container_name = fmt::format("{}-{}-{}", name, ::getpid(), ++counter);
+        container_name = fmt::format("{}-{}-{}", name, ::getpid(), utils::make_random_uuid());
 
         // publish port ephemeral, allows parallel instances
         std::vector<std::string> params = {
