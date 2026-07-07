@@ -474,7 +474,7 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
         timeout_config{d, d, d, d, d, d, d});
     service::query_state qs(client_state, empty_service_permit());
 
-    const auto cache_key = qp.compute_id(req, "", cql3::internal_dialect());
+    const auto cache_key = qp.compute_id(req, client_state.get_raw_keyspace(), cql3::internal_dialect());
     auto ps_ptr = qp.get_prepared(cache_key);
     shared_ptr<cql_transport::messages::result_message::prepared> prepared_msg;
     if (!ps_ptr) {
