@@ -1,6 +1,6 @@
 #
 # Copyright (C) 2011-present The Apache Software Foundation
-# Copyright (C) 2025-present ScyllaDB
+# Copyright (C) 2026-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
