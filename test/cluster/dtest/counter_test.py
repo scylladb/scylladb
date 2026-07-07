@@ -17,8 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from cassandra import ConsistencyLevel, InvalidRequest, Unauthorized
-from cassandra.protocol import ConfigurationException
-from cassandra.query import UNSET_VALUE, SimpleStatement
+from cassandra.query import SimpleStatement
 
 from dtest_class import Tester, create_cf, create_ks
 from dtest_setup_overrides import DTestSetupOverrides
@@ -26,16 +25,11 @@ from tools.assertions import assert_invalid, assert_one
 from tools.cluster import new_node
 from tools.cluster_topology import generate_cluster_topology, generate_cluster_topology_based_rf
 from tools.data import rows_to_list
-from tools.marks import issue_open, with_feature
 from tools.misc import ImmutableMapping
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.next_gating
 
-
-@pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
-@pytest.mark.dtest_full
 class TestCounters(Tester):
     def test_simple_increment(self):
         """Simple incrementation test (Created for #3465, that wasn't a bug)"""
@@ -236,7 +230,6 @@ class TestCounters(Tester):
             assert counter_one_actual == counter_dict[counter_id]["counter_one"]
             assert counter_two_actual == counter_dict[counter_id]["counter_two"]
 
-    @pytest.mark.dtest_debug
     def test_multi_counter_update(self):
         """
         Test for singlular update statements that will affect multiple counters.
@@ -618,8 +611,6 @@ class TestCounters(Tester):
             assert rows_to_list(row)[0][0] == 5
 
 
-@pytest.mark.dtest_full
-@pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
 class TestCountersOnMultipleNodes(Tester):
     @pytest.fixture(scope="function", autouse=True)
     def fixture_dtest_setup_overrides(self, dtest_config):
@@ -737,7 +728,6 @@ class TestCountersOnMultipleNodes(Tester):
         self.node2.stop(wait_other_notice=True)
         self.node1.nodetool("removenode %s" % node2_hostid)
 
-    @pytest.mark.dtest_debug
     def test_counter_consistency_node_add(self):
         """
         Cluster: 3 nodes, keyspace RF=2
@@ -823,18 +813,3 @@ class TestCountersOnMultipleNodes(Tester):
         else:
             self.node3.nodetool("cluster repair")
         self._verify_data_rebuild()
-
-
-@pytest.mark.dtest_full
-@pytest.mark.skip_if(with_feature("tablets") & issue_open("#18180"))
-class TestCountersStress(Tester):
-    @pytest.fixture(scope="function", autouse=True)
-    def setup(self):
-        cluster = self.cluster
-
-        cluster.set_configuration_options(values={"cache_hit_rate_read_balancing": False})
-        cluster.populate(generate_cluster_topology(rack_num=2)).start(wait_other_notice=True, wait_for_binary_proto=True)
-        self.node = cluster.nodelist()[0]
-        self._op_cnt = 100000
-        if hasattr(self.cluster, "scylla_mode") and self.cluster.scylla_mode == "debug":
-            self._op_cnt //= 10
