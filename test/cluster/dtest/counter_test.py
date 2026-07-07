@@ -719,7 +719,7 @@ class TestCountersOnMultipleNodes(Tester):
         self._populate_data(rf=2)
         logger.debug("Stop node3 and create new node to replace it")
         self.node3.stop(gently=True, wait_other_notice=True)
-        node4 = new_node(self.cluster, bootstrap=True, token=None, remote_debug_port="0", data_center=self.node3.data_center, rack=self.node3.rack)
+        node4 = new_node(self.cluster, bootstrap=True, data_center=self.node3.data_center, rack=self.node3.rack)
         logger.debug("Start the new node")
         node4.start(replace_node_host_id=self.node3.hostid(), wait_for_binary_proto=True)
 
@@ -748,7 +748,7 @@ class TestCountersOnMultipleNodes(Tester):
         self.node1, self.node2, self.node3 = self.cluster.nodelist()
         self._populate_data(rf=2)
         logger.debug("Add a new node")
-        node4 = new_node(self.cluster, bootstrap=True, token=None, remote_debug_port="0", data_center=self.node3.data_center, rack=self.node3.rack)
+        node4 = new_node(self.cluster, bootstrap=True, data_center=self.node3.data_center, rack=self.node3.rack)
         node4.start(wait_for_binary_proto=True)
 
     def test_counter_consistency_node_decommission(self):
