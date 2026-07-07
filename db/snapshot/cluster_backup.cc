@@ -28,6 +28,7 @@
 #include "sstables/component_type.hh"
 #include "utils/error_injection.hh"
 #include "utils/upload_progress.hh"
+#include "utils/memory_data_sink.hh"
 #include "idl/snapshot_backup.dist.hh"
 
 extern logging::logger snap_log;
@@ -488,6 +489,16 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
         co_await coroutine::parallel_for_each(chunk | std::views::values, [&](const gen_info& info) -> future<>{
             auto& id = info.sstable.sstable_id;
             auto table_prefix = fmt::format("{}/{}", prefix, id);
+
+            auto gen_info = sstables::parse_path(std::filesystem::path(info.sstable.toc_name), ksname, cfname);
+            if (!gen_info) {
+                throw std::runtime_error(fmt::format("Could not parse sstable generation for {}", id));
+            }
+
+            auto gen = (*gen_info).generation;
+            auto ref_name = sstables::object_name(bucket, table_prefix, fmt::format("refs/snapshot-{}/{}", tag, gen));
+            co_await client->put_object(ref_name, memory_data_sink_buffers{}); // any exception here can just propagate
+
             bool any_failed = false;
             co_await coroutine::parallel_for_each(info.filenames, [&](std::string_view name) -> future<> {
                 auto units = co_await manager.dir_semaphore().get_units(1);
@@ -533,6 +544,11 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
             });
 
             if (any_failed) {
+                try {
+                    co_await client->delete_object(ref_name);
+                } catch (...) {
+                    // nothing to do here...
+                }
                 co_return; // don't update status.
             }
 
