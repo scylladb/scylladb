@@ -340,11 +340,8 @@ The feature is identified by the `TABLETS_ROUTING_V2_EXPERIMENTAL` key, which is
 meant to be sent in the SUPPORTED message.
 
 Unlike `TABLETS_ROUTING_V1`, the server advertises
-`TABLETS_ROUTING_V2_EXPERIMENTAL` only once the `STRONGLY_CONSISTENT_TABLES`
-cluster feature is enabled — that is, once every node in the cluster supports it.
-Gating on the cluster feature rather than on a single node's local configuration
-ensures that, during a rolling upgrade, connections to different nodes cannot
-negotiate the extension inconsistently. The `_EXPERIMENTAL` suffix indicates the
+`TABLETS_ROUTING_V2_EXPERIMENTAL` only when the `strongly-consistent-tables`
+experimental feature is enabled. The `_EXPERIMENTAL` suffix indicates the
 feature is still under development and its format may change.
 
 ## Negotiate sending metadata id
