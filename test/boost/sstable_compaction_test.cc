@@ -11,7 +11,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
-#include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
@@ -19,7 +18,6 @@
 
 #include "sstables/generation_type.hh"
 #include "sstables/sstables.hh"
-#include "sstables/compress.hh"
 #include "compaction/compaction.hh"
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
@@ -33,8 +31,6 @@
 #include "sstables/sstable_writer.hh"
 #include <memory>
 #include "test/boost/sstable_test.hh"
-#include <seastar/core/seastar.hh>
-#include <seastar/core/do_with.hh>
 #include "compaction/compaction_manager.hh"
 #include "test/lib/tmpdir.hh"
 #include "utils/interval.hh"
@@ -44,9 +40,7 @@
 #include "compaction/incremental_backlog_tracker.hh"
 #include "compaction/size_tiered_backlog_tracker.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "mutation/counters.hh"
 #include "test/lib/simple_schema.hh"
-#include "replica/memtable-sstable.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/sstable_run_based_compaction_strategy_for_tests.hh"
 #include "test/lib/random_schema.hh"
@@ -54,7 +48,6 @@
 #include "db/config.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
 #include "compaction/compaction_group_view.hh"
-#include "mutation/mutation_rebuilder.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "mutation/mutation_partition.hh"
 
