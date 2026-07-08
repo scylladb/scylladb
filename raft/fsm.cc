@@ -143,7 +143,11 @@ const log_entry& fsm::add_entry(T command) {
     utils::get_local_injector().inject("fsm::add_entry/test-failure",
                                        [] { throw std::runtime_error("fsm::add_entry/test-failure"); });
 
-    _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
+    // LeaseGuard: stamp the entry with the leader's current time interval so
+    // that future leaders can reason about this lease's age. Empty when leases
+    // are disabled or the clock is unsynchronized.
+    _log.emplace_back(seastar::make_lw_shared<log_entry>(
+            {_current_term, _log.next_idx(), std::move(command), lease_time_now()}));
     _sm_events.signal();
 
     if constexpr (std::is_same_v<T, configuration>) {

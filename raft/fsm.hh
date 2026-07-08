@@ -70,6 +70,19 @@ struct fsm_config {
     // selects the smallest-id voter. When unset (the default), fast bootstrap is
     // disabled and a bare fsm starts as a follower; raft::server sets it.
     std::optional<uint64_t> fast_bootstrap_seed;
+    // LeaseGuard leader-lease parameters. Absent unless leases are enabled for
+    // this server. When present, the leader records `clock.interval_now()` in
+    // each log entry it creates, defers committing writes until a deposed
+    // leader's lease has expired, and may serve linearizable reads locally
+    // while its own lease is valid.
+    struct leaseguard_config {
+        // Source of bounded-uncertainty time readings. Non-owning: must outlive
+        // the fsm.
+        bounded_clock& clock;
+        // Lease duration (Δ). Should be on the order of the election timeout.
+        std::chrono::system_clock::duration delta;
+    };
+    std::optional<leaseguard_config> leaseguard;
 };
 
 class fsm;
@@ -267,6 +280,19 @@ private:
 
     // A helper to update the FSM's current term.
     void update_current_term(term_t current_term);
+
+    // True if LeaseGuard leader leases are enabled for this fsm.
+    bool leaseguard_enabled() const noexcept {
+        return _config.leaseguard.has_value();
+    }
+    // The bounded-uncertainty time interval to stamp on a new log entry, or
+    // nullopt when leases are disabled or the clock is unsynchronized.
+    std::optional<time_bounds> lease_time_now() const {
+        if (!_config.leaseguard) {
+            return std::nullopt;
+        }
+        return _config.leaseguard->clock.interval_now();
+    }
 
     void check_is_leader() const {
         if (!is_leader()) {
