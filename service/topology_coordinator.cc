@@ -647,6 +647,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             used_bytes += table_updates_size;
             updates.emplace_back(std::move(table_mutation));
 
+            if (utils::get_local_injector().enter("topology_coordinator/generate_vnodes_to_tablets_replace_updates/one_table_per_command")) {
+                co_return more_tablet_updates::yes;
+            }
+
             co_await coroutine::maybe_yield();
         }
 

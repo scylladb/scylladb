@@ -1358,6 +1358,89 @@ async def test_replace_during_migration(manager: ManagerClient, rbno_enabled: bo
             "Keyspace is still using vnodes after migration finalization"
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_replace_during_migration_chunked_updates(manager: ManagerClient):
+    """Verify that tablet-map updates for migrating tables can be chunked.
+
+    If the number of migrating tables is large, the tablet-map updates for node
+    replacement may be too large to fit in a single group0 command. In this
+    case, it is split into multiple commands. This test verifies that with an
+    injection that forces each tablet map to be updated in a separate command.
+    """
+    num_shards = 2
+    num_tokens = 16
+    injection = 'topology_coordinator/generate_vnodes_to_tablets_replace_updates/one_table_per_command'
+
+    cfg = {'num_tokens': num_tokens}
+    cmdline = ['--smp', str(num_shards)]
+
+    logger.info("Starting a 3-node cluster (one rack per node)")
+    property_files = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+    servers = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=property_files)
+    s0, s1, s2 = servers
+
+    logger.info(f"Pinning raft group0 leader on s0 ({s0.server_id})")
+    await ensure_group0_leader_on(manager, s0)
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'enabled': false}") as ks:
+        table_names = ['t1', 't2']
+        for table_name in table_names:
+            await cql.run_async(f"CREATE TABLE {ks}.{table_name} (pk int PRIMARY KEY, c int)")
+
+        s1_host_id = str(await manager.get_host_id(s1.server_id))
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(s0.ip_addr, ks)
+
+        logger.info(f"Enabling injection {injection!r} on s0")
+        await manager.api.enable_injection(s0.ip_addr, injection, one_shot=False)
+
+        logger.info(f"Stopping s1 ({s1.server_id}) to replace it")
+        await manager.server_stop(s1.server_id, convict=True)
+
+        logger.info("Starting replacement of dead node s1")
+        replace_cfg = ReplaceConfig(replaced_id=s1.server_id, reuse_ip_addr=False, use_host_id=True)
+        new_server = await manager.server_add(replace_cfg,
+                                              cmdline=cmdline,
+                                              property_file=s1.property_file(),
+                                              config=cfg)
+        new_host_id = str(await manager.get_host_id(new_server.server_id))
+        logger.info(f"Replacement node started: server_id={new_server.server_id}, host_id={new_host_id}")
+
+        # The injection should be triggered 6 times, 3 topology transitions * 2 tables.
+        await manager.api.wait_for_injection_enter(s0.ip_addr, injection, threshold=6)
+
+        await reconnect_driver(manager)
+        live_servers = [s0, new_server, s2]
+        cql, _ = await manager.get_ready_cql(live_servers)
+
+        logger.info("Verifying both tablet maps were finalized with the replacement host")
+        await read_barrier(manager.api, s0.ip_addr)
+        host = cql.cluster.metadata.get_host(s0.ip_addr)
+        for table_name in table_names:
+            table_id = await manager.get_table_or_view_id(ks, table_name)
+            tablet_rows = await cql.run_async(
+                f"SELECT last_token, replicas, new_replicas, stage, transition FROM system.tablets WHERE table_id = {table_id}",
+                host=host)
+            assert tablet_rows, f"No tablet rows found for {ks}.{table_name} after replace"
+            for row in tablet_rows:
+                replica_hosts = {str(h) for h, _ in row.replicas}
+                assert new_host_id in replica_hosts, \
+                    f"Tablet at {row.last_token} in {table_name}: new node {new_host_id} not in replicas {replica_hosts}"
+                assert s1_host_id not in replica_hosts, \
+                    f"Tablet at {row.last_token} in {table_name}: dead node {s1_host_id} still in replicas {replica_hosts}"
+                assert row.new_replicas is None, \
+                    f"Tablet at {row.last_token} in {table_name}: expected new_replicas=None, got {row.new_replicas}"
+                assert row.stage is None, \
+                    f"Tablet at {row.last_token} in {table_name}: expected stage=None, got {row.stage}"
+                assert row.transition is None, \
+                    f"Tablet at {row.last_token} in {table_name}: expected transition=None, got {row.transition}"
+
+
 async def _check_migrating_tablet_map(manager: ManagerClient, server: ServerInfo, ks: str, table_name: str,
                                       expected_stage: str, expected_replicas_host_ids: set,
                                       expected_new_replicas_host_ids: set) -> None:
