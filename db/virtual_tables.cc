@@ -1505,8 +1505,8 @@ class large_partitions_virtual_table : public streaming_virtual_table {
 
     // Extract partition_size records from a single table's SSTables on the local shard.
     // Called on each shard via map() to collect records cross-shard.
-    static future<std::vector<record>> collect_local_records(replica::table& table) {
-        std::vector<record> records;
+    static future<utils::chunked_vector<record>> collect_local_records(replica::table& table) {
+        utils::chunked_vector<record> records;
         auto table_schema = table.schema();
         auto sstables = co_await table.take_sstable_set_snapshot();
         for (const auto& sst : sstables) {
@@ -1621,13 +1621,13 @@ public:
         size_t emitted = 0;
 
         for (auto& ti : owned_tables) {
-            auto per_shard = co_await _db.map([tid = ti.tid] (replica::database& db) -> future<std::vector<record>> {
+            auto per_shard = co_await _db.map([tid = ti.tid] (replica::database& db) -> future<utils::chunked_vector<record>> {
                 if (auto table = db.get_tables_metadata().get_table_if_exists(tid)) {
                     co_return co_await collect_local_records(*table);
                 }
-                co_return std::vector<record>{};
+                co_return utils::chunked_vector<record>{};
             });
-            std::vector<record> records;
+            utils::chunked_vector<record> records;
             for (auto& shard_records : per_shard) {
                 records.insert(records.end(),
                     std::make_move_iterator(shard_records.begin()),
@@ -1695,8 +1695,8 @@ class large_rows_virtual_table : public streaming_virtual_table {
     };
 
     // Extract row_size records from a single table's SSTables on the local shard.
-    static future<std::vector<record>> collect_local_records(replica::table& table) {
-        std::vector<record> records;
+    static future<utils::chunked_vector<record>> collect_local_records(replica::table& table) {
+        utils::chunked_vector<record> records;
         auto table_schema = table.schema();
         auto sstables = co_await table.take_sstable_set_snapshot();
         for (const auto& sst : sstables) {
@@ -1800,13 +1800,13 @@ public:
         size_t emitted = 0;
 
         for (auto& ti : owned_tables) {
-            auto per_shard = co_await _db.map([tid = ti.tid] (replica::database& db) -> future<std::vector<record>> {
+            auto per_shard = co_await _db.map([tid = ti.tid] (replica::database& db) -> future<utils::chunked_vector<record>> {
                 if (auto table = db.get_tables_metadata().get_table_if_exists(tid)) {
                     co_return co_await collect_local_records(*table);
                 }
-                co_return std::vector<record>{};
+                co_return utils::chunked_vector<record>{};
             });
-            std::vector<record> records;
+            utils::chunked_vector<record> records;
             for (auto& shard_records : per_shard) {
                 records.insert(records.end(),
                     std::make_move_iterator(shard_records.begin()),
@@ -1859,8 +1859,8 @@ class large_cells_virtual_table : public streaming_virtual_table {
     };
 
     // Extract cell_size records from a single table's SSTables on the local shard.
-    static future<std::vector<record>> collect_local_records(replica::table& table) {
-        std::vector<record> records;
+    static future<utils::chunked_vector<record>> collect_local_records(replica::table& table) {
+        utils::chunked_vector<record> records;
         auto table_schema = table.schema();
         auto sstables = co_await table.take_sstable_set_snapshot();
         for (const auto& sst : sstables) {
@@ -1974,13 +1974,13 @@ public:
         size_t emitted = 0;
 
         for (auto& ti : owned_tables) {
-            auto per_shard = co_await _db.map([tid = ti.tid] (replica::database& db) -> future<std::vector<record>> {
+            auto per_shard = co_await _db.map([tid = ti.tid] (replica::database& db) -> future<utils::chunked_vector<record>> {
                 if (auto table = db.get_tables_metadata().get_table_if_exists(tid)) {
                     co_return co_await collect_local_records(*table);
                 }
-                co_return std::vector<record>{};
+                co_return utils::chunked_vector<record>{};
             });
-            std::vector<record> records;
+            utils::chunked_vector<record> records;
             for (auto& shard_records : per_shard) {
                 records.insert(records.end(),
                     std::make_move_iterator(shard_records.begin()),
