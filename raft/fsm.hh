@@ -131,6 +131,33 @@ struct leader {
     bool last_read_id_changed = false;
     read_id max_read_id_with_quorum{0};
 
+    // LeaseGuard: index of the newest log entry that predates this leader's
+    // term (i.e. the deposed leader's lease), captured at election time as
+    // last_idx(). Non-zero whenever the group has any prior entry -- including
+    // when the in-memory log is empty but a snapshot covers earlier entries, in
+    // which case it equals the snapshot index. Zero only for a genesis cluster
+    // with no entries at all (in memory or snapshot), where there is no deposed
+    // lease to wait for.
+    index_t last_prev_term_idx{0};
+    // LeaseGuard: a bounded-uncertainty time reading taken at or shortly after
+    // this node became leader. Every prior-term entry was created before the
+    // election, so once this reading is more than delta old the deposed lease is
+    // guaranteed expired. Used as the age reference when the deposed leader's
+    // entry is not available in memory (folded into a snapshot, empty log at
+    // election, or no recorded interval of its own). Set lazily on the first
+    // available clock reading, so it may be empty until then.
+    std::optional<time_bounds> lease_wait_start;
+    // LeaseGuard: set once the deferred-commit restriction no longer applies
+    // for this leadership term -- either because there was no deposed lease to
+    // wait for (no prior-term entry at election) or because that lease has
+    // expired.
+    bool lease_wait_done = false;
+    // LeaseGuard: logical time at which the clock first became unsynchronized
+    // while a commit was deferred, or empty while the clock is available. If the
+    // clock stays unavailable for an election timeout the leader steps down, so
+    // that a node with a healthy clock can take over instead of stalling.
+    std::optional<logical_clock::time_point> clock_unavailable_since;
+
     leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(std::make_unique<seastar::semaphore>(max_log_size)) {}
     leader(leader&&) = default;
     ~leader();
@@ -265,6 +292,13 @@ private:
     // Signals _sm_events. May resign leadership if we committed
     // a configuration change.
     void maybe_commit();
+    // LeaseGuard: true if the deposed leader's lease is known to be more than
+    // delta old, so it is safe to advance the commit index past all prior-term
+    // entries. Uses the deposed entry's own recorded interval when it is still
+    // in the in-memory log, otherwise a delta wait since this node became
+    // leader. Returns false (defer) when the clock is unsynchronized.
+    // Precondition: is_leader(), leases enabled, last_prev_term_idx > 0.
+    bool prev_term_lease_expired();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;

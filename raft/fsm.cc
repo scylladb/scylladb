@@ -221,6 +221,19 @@ void fsm::become_leader() {
 
     _last_election_time = _clock.now();
     _ping_leader = false;
+
+    // LeaseGuard: at election time every existing log entry predates this
+    // leader's term, so the newest of them is the deposed leader's lease. Record
+    // its index (before we append our own dummy entry below) and the current
+    // time, so we can defer committing until that lease is more than delta old.
+    if (leaseguard_enabled()) {
+        leader_state().last_prev_term_idx = _log.last_idx();
+        leader_state().lease_wait_start = lease_time_now();
+        // No prior-term entry means no deposed lease to wait for, so the
+        // deferred-commit restriction does not apply for this leadership term.
+        leader_state().lease_wait_done = leader_state().last_prev_term_idx == index_t{0};
+    }
+
     // a new leader needs to commit at least one entry to make sure that
     // all existing entries in its log are committed as well. Also it should
     // send append entries RPC as soon as possible to establish its leadership
@@ -508,6 +521,23 @@ void fsm::maybe_commit() {
             _tag, _log[new_commit_idx.value()]->term, _current_term);
         return;
     }
+
+    // LeaseGuard deferred commit: committing this current-term entry would
+    // indirectly commit all prior-term entries, including the deposed leader's
+    // lease. Do not advance the commit index until that lease is more than delta
+    // old, so the deposed leader can no longer serve linearizable reads from
+    // stale data. The writes stay replicated and durable meanwhile; a later
+    // tick retries this commit once the lease expires.
+    if (leaseguard_enabled() && !leader_state().lease_wait_done) {
+        if (prev_term_lease_expired()) {
+            leader_state().lease_wait_done = true;
+        } else {
+            logger.trace("maybe_commit[{}]: deferring commit to {}, deposed leader's lease "
+                "not yet expired", _tag, new_commit_idx);
+            return;
+        }
+    }
+
     logger.trace("maybe_commit[{}]: commit {}", _tag, new_commit_idx);
 
     _commit_idx = new_commit_idx;
@@ -570,6 +600,38 @@ void fsm::maybe_commit() {
             broadcast_read_quorum(leader_state().last_read_id);
         }
     }
+}
+
+bool fsm::prev_term_lease_expired() {
+    const auto now = _config.leaseguard->clock.interval_now();
+    if (!now) {
+        // The clock is unsynchronized: we cannot bound any time, so we cannot
+        // prove the deposed leader's lease has expired. Defer conservatively;
+        // tick_leader() steps down if this persists.
+        return false;
+    }
+    const auto delta = _config.leaseguard->delta;
+    auto& state = leader_state();
+    // Record the first available clock reading since becoming leader. Every
+    // prior-term entry was created before the election, so this is a safe upper
+    // bound on their age when the deposed leader's own entry is unavailable.
+    if (!state.lease_wait_start) {
+        state.lease_wait_start = now;
+    }
+    // Prefer the deposed leader's own recorded interval when its entry is still
+    // present in the in-memory log (above the snapshot); this lets us commit as
+    // soon as that specific entry is more than delta old.
+    const auto prev_idx = state.last_prev_term_idx;
+    if (prev_idx > _log.get_snapshot().idx) {
+        const auto& lease_entry = *_log[prev_idx.value()];
+        if (lease_entry.lease_time) {
+            return lease_entry.lease_time->older_than(delta, *now);
+        }
+    }
+    // The deposed leader's entry is folded into a snapshot, the log was empty at
+    // election, or the entry carries no interval of its own. Fall back to
+    // waiting a full delta since we became leader.
+    return state.lease_wait_start->older_than(delta, *now);
 }
 
 void fsm::tick_leader() {
@@ -643,6 +705,29 @@ void fsm::tick_leader() {
             logger.trace("tick[{}]: resend timeout_now", _tag);
             // resend timeout now in case it was lost
             send_to(*state.timeout_now_sent, timeout_now{_current_term});
+        }
+    }
+
+    // LeaseGuard: while a deposed leader's lease may still be valid we defer
+    // committing. Retry now that physical time has advanced; once the lease has
+    // expired this commits the pending, already-replicated entries without
+    // needing any new messages from followers. If the clock stays unavailable we
+    // cannot bound the lease, so step down to let a node with a healthy clock
+    // take over instead of stalling here indefinitely.
+    if (leaseguard_enabled() && !leader_state().lease_wait_done) {
+        auto& state = leader_state();
+        if (_config.leaseguard->clock.interval_now()) {
+            state.clock_unavailable_since.reset();
+            maybe_commit();
+        } else if (!state.clock_unavailable_since) {
+            state.clock_unavailable_since = _clock.now();
+            logger.warn("[{}]: LeaseGuard clock is unsynchronized while a commit is deferred; "
+                "commits are stalled and this leader will step down if it persists", _tag);
+        } else if (_clock.now() - *state.clock_unavailable_since >= ELECTION_TIMEOUT) {
+            logger.error("[{}]: LeaseGuard clock has been unsynchronized for over an election "
+                "timeout; stepping down so a node with a healthy clock can lead", _tag);
+            become_follower(server_id{});
+            return;
         }
     }
 }
