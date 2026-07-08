@@ -7311,7 +7311,21 @@ void unsealed_sstable_compaction_fn(test_env& env) {
     sst_cfg.leave_unsealed = true;
     auto unsealed_sstable = make_sstable_easy(env, make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(mut)), sst_cfg);
 
-    BOOST_REQUIRE(unsealed_sstable->get_storage().exists(*unsealed_sstable, sstables::component_type::TemporaryTOC).get());
+    if (env.get_storage_options().is_local_type()) {
+        BOOST_REQUIRE(unsealed_sstable->get_storage().exists(*unsealed_sstable, sstables::component_type::TemporaryTOC).get());
+    } else {
+        env.manager()
+            .sstables_registry()
+            .sstables_registry_list(s->id(),
+                                    env.manager().get_local_host_id(),
+                                    [&unsealed_sstable](sstring status, sstable_state, entry_descriptor desc) {
+                                        if (desc.generation == unsealed_sstable->generation()) {
+                                            BOOST_REQUIRE_EQUAL(status, "creating");
+                                        }
+                                        return make_ready_future();
+                                    })
+            .get();
+    }
 
     auto sst_gen = env.make_sst_factory(s);
     auto info = compact_sstables(env, compaction::compaction_descriptor({ unsealed_sstable }), t, sst_gen).get();
@@ -7323,23 +7337,13 @@ SEASTAR_TEST_CASE(unsealed_sstable_compaction_test) {
 }
 
 SEASTAR_TEST_CASE(unsealed_sstable_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
-    // TODO: Needs deeper investigation to figure out why the TemporaryTOC is missing
-    testlog.info("unsealed_sstable_compaction_test_s3 is not supported for S3 storage yet, skipping test");
-    return make_ready_future();
-#if 0
     return test_env::do_with_async([](test_env& env) { unsealed_sstable_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
-#endif
 }
 
 SEASTAR_FIXTURE_TEST_CASE(unsealed_sstable_compaction_test_gcs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
-    // TODO: Needs deeper investigation to figure out why the TemporaryTOC is missing
-    testlog.info("unsealed_sstable_compaction_test_gcs is not supported for S3 storage yet, skipping test");
-    return make_ready_future();
-#if 0
     return test_env::do_with_async([](test_env& env) { unsealed_sstable_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
-#endif
 }
 
 void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
