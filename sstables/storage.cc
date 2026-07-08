@@ -962,9 +962,10 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
 
     try {
         auto f = make_readable_file(object_name(_bucket, prefix(), desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
-        auto [components, digest] = co_await with_closeable(std::move(f), [] (file& f) {
+        auto [toc_components, digest] = co_await with_closeable(std::move(f), [] (file& f) {
             return sstable::read_and_parse_toc(f);
         });
+        components = std::move(toc_components);
     } catch (const storage_io_error& e) {
         if (e.code().value() != ENOENT) {
             throw;
