@@ -634,6 +634,23 @@ bool fsm::prev_term_lease_expired() {
     return state.lease_wait_start->older_than(delta, *now);
 }
 
+bool fsm::can_serve_lease_read() {
+    if (!leaseguard_enabled()) {
+        return false;
+    }
+    // The committed entry must be present in the in-memory log (not folded into
+    // a snapshot) for its recorded interval to be available.
+    if (_commit_idx <= _log.get_snapshot().idx) {
+        return false;
+    }
+    const auto now = _config.leaseguard->clock.interval_now();
+    if (!now) {
+        return false;
+    }
+    const auto& entry = *_log[_commit_idx.value()];
+    return entry.lease_time && entry.lease_time->younger_than(_config.leaseguard->delta, *now);
+}
+
 void fsm::tick_leader() {
     if (election_elapsed() >= ELECTION_TIMEOUT) {
         // 6.2 Routing requests to the leader
@@ -1265,6 +1282,22 @@ std::optional<std::pair<read_id, index_t>> fsm::start_read_barrier(server_id req
     }
 
     read_id id = next_read_id();
+
+    if (can_serve_lease_read()) {
+        // We hold a valid lease. LeaseGuard guarantees no other leader is
+        // committing writes while our lease is valid, so our committed state is
+        // the most recent in the group and this read is linearizable without
+        // contacting followers. Resolve it locally by marking its id as having
+        // reached quorum, and suppress the read_quorum broadcast that
+        // next_read_id() would otherwise trigger in get_output().
+        leader_state().last_read_id_changed = false;
+        leader_state().max_read_id_with_quorum = id;
+        _output.max_read_id_with_quorum = id;
+        logger.trace("start_read_barrier[{}] lease read, resolving id {} locally at commit idx {}",
+            _tag, id, _commit_idx);
+        return std::make_pair(id, _commit_idx);
+    }
+
     logger.trace("start_read_barrier[{}] starting read barrier with id {}", _tag, id);
     return std::make_pair(id, _commit_idx);
 }

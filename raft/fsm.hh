@@ -299,6 +299,12 @@ private:
     // leader. Returns false (defer) when the clock is unsynchronized.
     // Precondition: is_leader(), leases enabled, last_prev_term_idx > 0.
     bool prev_term_lease_expired();
+    // LeaseGuard: true if this leader currently holds a valid lease, i.e. its
+    // newest committed entry (which the caller has verified is in the current
+    // term) is present in memory, carries a recorded interval, and is less than
+    // delta old. When true the leader may serve a linearizable read locally
+    // without a quorum round-trip. Precondition: is_leader().
+    bool can_serve_lease_read();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
