@@ -7277,21 +7277,11 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
 }
 
 SEASTAR_TEST_CASE(splitting_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
-    // TODO: Needs deeper investigation to figure out why the test fails, looks like some scheduling problem
-    testlog.info("splitting_compaction_test_s3 is not supported for S3 storage yet, skipping test");
-    return make_ready_future();
-#if 0
     return test_env::do_with_async([](test_env& env) { splitting_compaction_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
-#endif
 }
 
 SEASTAR_FIXTURE_TEST_CASE(splitting_compaction_test_gcs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
-    // TODO: Needs deeper investigation to figure out why the test fails, looks like some scheduling problem
-    testlog.info("splitting_compaction_test_gcs is not supported for GCP storage yet, skipping test");
-    return make_ready_future();
-#if 0
     return test_env::do_with_async([](test_env& env) { splitting_compaction_fn(env); }, test_env_config{.storage = make_test_object_storage_options("GS")});
-#endif
 }
 
 void unsealed_sstable_compaction_fn(test_env& env) {
