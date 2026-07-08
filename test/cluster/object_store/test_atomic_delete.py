@@ -72,7 +72,12 @@ async def test_crash_after_compaction_prepare(manager: ManagerClient, object_sto
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        # Cap the table at a single tablet (one compaction group) so a major compaction
+        # deletes both input sstables in a single delete_atomically batch
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'max_tablet_count': 1}};")
+        # Disable auto-compaction so the input sstables are not merged/deleted before
+        # the major compaction below marks them for deletion.
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
         await populate_and_flush(cql, manager, server, ks, flushes=2)
 
         table_id = await get_table_id(cql, ks)
@@ -81,25 +86,28 @@ async def test_crash_after_compaction_prepare(manager: ManagerClient, object_sto
         logger.info("Registry entries before compaction: %d sealed", len(sealed_before))
         assert len(sealed_before) >= 2, "Need at least 2 sstables for compaction"
 
-        # The injection throws after marking entries as 'removing' but before unlinking S3 objects.
-        # Compaction handles the error internally (the REST API does not propagate it), but the
-        # entries are left in 'removing' state with S3 objects still present.
-        await inject_error_one_shot(manager.api, server.ip_addr, "delete_atomically_after_prepare")
-        await manager.api.keyspace_compaction(server.ip_addr, ks)
+        # The injection throws after atomic_delete_prepare marks entries 'removing' but before
+        # unlinking the objects. Compaction handles the error internally (the REST API does not
+        # propagate it), so the entries are left in 'removing' with their objects still present.
+        # A persistent (not one-shot) injection is required: the injection point is process-global,
+        # so a one-shot could be consumed by an unrelated background system-table compaction before
+        # the test table's own deletion runs.
+        async with inject_error(manager.api, server.ip_addr, "delete_atomically_after_prepare"):
+            await manager.api.keyspace_compaction(server.ip_addr, ks)
 
-        # Verify atomicity of the batch status change: after the failed compaction, the input sstables
-        # should ALL be in 'removing' state. If some inputs were 'removing' and others still
-        # 'sealed', the batch wasn't atomic. Compaction outputs (new generations) are excluded.
-        entries_after_fail = await get_registry_entries(cql, table_id)
-        removing_from_original = sealed_before & {gen for status, gen in entries_after_fail if status == 'removing'}
-        still_sealed_from_original = sealed_before & {gen for status, gen in entries_after_fail if status == 'sealed'}
-        logger.info("After failed compaction: %d original entries now 'removing', %d still 'sealed'",
-                    len(removing_from_original), len(still_sealed_from_original))
-        assert len(removing_from_original) >= 2, \
-            f"Expected at least 2 original entries in 'removing', got {len(removing_from_original)}"
-        assert len(still_sealed_from_original) == 0, \
-            f"Atomicity violation: {len(still_sealed_from_original)} original entries still 'sealed' " \
-            f"while {len(removing_from_original)} are 'removing'"
+            # Verify atomicity of the batch status change: after the failed compaction, the input sstables
+            # should ALL be in 'removing' state. If some inputs were 'removing' and others still
+            # 'sealed', the batch wasn't atomic. Compaction outputs (new generations) are excluded
+            entries_after_fail = await get_registry_entries(cql, table_id)
+            removing_from_original = sealed_before & {gen for status, gen in entries_after_fail if status == 'removing'}
+            still_sealed_from_original = sealed_before & {gen for status, gen in entries_after_fail if status == 'sealed'}
+            logger.info("After failed compaction: %d original entries now 'removing', %d still 'sealed'",
+                        len(removing_from_original), len(still_sealed_from_original))
+            assert len(removing_from_original) >= 2, \
+                f"Expected at least 2 original entries in 'removing', got {len(removing_from_original)}"
+            assert len(still_sealed_from_original) == 0, \
+                f"Atomicity violation: {len(still_sealed_from_original)} original entries still 'sealed' " \
+                f"while {len(removing_from_original)} are 'removing'"
 
         cql, _ = await assert_registry_clean_after_restart(manager, server, table_id)
 
