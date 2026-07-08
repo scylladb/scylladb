@@ -143,7 +143,11 @@ const log_entry& fsm::add_entry(T command) {
     utils::get_local_injector().inject("fsm::add_entry/test-failure",
                                        [] { throw std::runtime_error("fsm::add_entry/test-failure"); });
 
-    _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
+    // LeaseGuard: stamp the entry with the leader's current time interval so
+    // that future leaders can reason about this lease's age. Empty when leases
+    // are disabled or the clock is unsynchronized.
+    _log.emplace_back(seastar::make_lw_shared<log_entry>(
+            {_current_term, _log.next_idx(), std::move(command), lease_time_now()}));
     _sm_events.signal();
 
     if constexpr (std::is_same_v<T, configuration>) {
@@ -521,7 +525,12 @@ void fsm::maybe_commit() {
             configuration cfg(_log.get_configuration());
             cfg.leave_joint();
             logger.trace("[{}] appending non-joint config entry at {}: {}", _tag, _log.next_idx(), cfg);
-            _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
+            // LeaseGuard: stamp it like any other entry we create (add_entry()
+            // does the same). An unstamped entry would silently drop our lease
+            // once it becomes the newest committed entry, and would force the
+            // next leader onto the conservative full-delta wait.
+            _log.emplace_back(seastar::make_lw_shared<log_entry>(
+                    {_current_term, _log.next_idx(), std::move(cfg), lease_time_now()}));
             leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
             // Leaving joint configuration may commit more entries
             // even if we had no new acks. Imagine the cluster is
