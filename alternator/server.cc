@@ -29,6 +29,7 @@
 #include <cctype>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
@@ -800,7 +801,8 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             ex = std::current_exception();
         }
         if (audit_info) {
-            co_await audit::inspect(*audit_info, client_state, ex != nullptr);
+            bool error = ex != nullptr || std::holds_alternative<api_error>(ret);
+            co_await audit::inspect(*audit_info, client_state, error);
         }
         if (ex) {
             co_return coroutine::exception(std::move(ex));
@@ -1077,4 +1079,3 @@ const char* api_error::what() const noexcept {
 }
 
 }
-
