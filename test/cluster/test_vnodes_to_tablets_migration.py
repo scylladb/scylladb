@@ -1358,6 +1358,44 @@ async def test_replace_during_migration(manager: ManagerClient, rbno_enabled: bo
             "Keyspace is still using vnodes after migration finalization"
 
 
+async def test_replace_during_migration_rejects_shard_count_mismatch(manager: ManagerClient):
+    """Verify that node replacement during vnodes-to-tablets migration fails if shard counts do not match."""
+    cfg = {'num_tokens': 1}
+    replaced_cmdline = ['--smp', '2']
+    replacing_cmdline = ['--smp', '1']
+
+    logger.info("Starting a 3-node cluster")
+    property_files = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+    servers = await manager.servers_add(3, cmdline=replaced_cmdline, config=cfg, property_file=property_files)
+    s0, s1, _ = servers
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet map)")
+        await manager.api.create_vnode_tablet_migration(s0.ip_addr, ks)
+
+        logger.info(f"Stopping s1 ({s1.server_id}) to replace it")
+        await manager.server_stop(s1.server_id, convict=True)
+
+        logger.info("Starting replacement of s1 with a different shard count (expected to fail)")
+        replace_cfg = ReplaceConfig(replaced_id=s1.server_id, reuse_ip_addr=False, use_host_id=True)
+        new_server = await manager.server_add(replace_cfg,
+                                              cmdline=replacing_cmdline,
+                                              property_file=s1.property_file(),
+                                              config=cfg,
+                                              expected_error="during vnode-to-tablet migration: shard_count mismatch")
+
+        log = await manager.server_open_log(new_server.server_id)
+        rollback_pattern = r"Cannot replace node .* during vnode-to-tablet migration: shard_count mismatch \(replacing=1, replaced=2\)"
+        matches = await log.grep(rollback_pattern)
+        assert len(matches) == 1
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replace_during_migration_chunked_updates(manager: ManagerClient):
     """Verify that tablet-map updates for migrating tables can be chunked.
