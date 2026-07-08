@@ -2600,3 +2600,210 @@ BOOST_AUTO_TEST_CASE(test_no_resend_to_responded_peer) {
     }
     BOOST_CHECK(resent_to_c);
 }
+
+// ---------------------------------------------------------------------------
+// LeaseGuard leader-lease tests.
+// ---------------------------------------------------------------------------
+
+using namespace std::chrono_literals;
+
+namespace {
+
+// A fixed reference point well after the epoch, so we can subtract the
+// uncertainty without underflowing.
+const auto lease_t0 = std::chrono::system_clock::time_point(std::chrono::hours(24 * 365));
+const auto lease_err = 1ms;
+const auto lease_delta = 10s;
+
+raft::time_bounds make_bounds(std::chrono::system_clock::time_point center,
+        std::chrono::system_clock::duration error = lease_err) {
+    return raft::time_bounds{center - error, center + error};
+}
+
+raft::fsm_config make_lease_cfg(raft::bounded_clock& clock) {
+    return raft::fsm_config{
+        .append_request_threshold = 1,
+        .enable_prevoting = false,
+        .leaseguard = raft::fsm_config::leaseguard_config{.clock = clock, .delta = lease_delta},
+    };
+}
+
+} // anonymous namespace
+
+// The conservative interval comparisons underpinning LeaseGuard's safety, plus
+// the mock clock used by the remaining tests.
+BOOST_AUTO_TEST_CASE(test_leaseguard_time_bounds) {
+    const raft::time_bounds e = make_bounds(lease_t0);
+
+    // At creation the entry is provably younger than delta and not provably older.
+    raft::time_bounds now = make_bounds(lease_t0);
+    BOOST_CHECK(e.younger_than(lease_delta, now));
+    BOOST_CHECK(!e.older_than(lease_delta, now));
+
+    // Exactly delta later, uncertainty means we cannot yet prove it is older.
+    now = make_bounds(lease_t0 + lease_delta);
+    BOOST_CHECK(!e.older_than(lease_delta, now));
+
+    // Well past delta plus twice the uncertainty: provably older, and no longer
+    // provably younger. There is deliberately no instant where both hold.
+    now = make_bounds(lease_t0 + lease_delta + 1s);
+    BOOST_CHECK(e.older_than(lease_delta, now));
+    BOOST_CHECK(!e.younger_than(lease_delta, now));
+
+    // The mock clock reports what it is set to, and nullopt when unsynchronized.
+    raft::bounded_clock_mock clock;
+    BOOST_CHECK(!clock.interval_now());
+    clock.set(lease_t0, lease_err);
+    const auto iv = clock.interval_now();
+    BOOST_REQUIRE(iv);
+    BOOST_CHECK(iv->earliest == lease_t0 - lease_err);
+    BOOST_CHECK(iv->latest == lease_t0 + lease_err);
+    clock.set_unsynchronized();
+    BOOST_CHECK(!clock.interval_now());
+}
+
+// A newly elected leader must not commit (and thus apply) its writes until the
+// deposed leader's lease has expired.
+BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+
+    server_id id1 = id();
+    raft::configuration cfg = config_from_ids({id1});
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
+
+    // A deposed leader's lease: an entry from a previous term stamped with a
+    // recent time interval, already durable in this node's log.
+    log.emplace_back(seastar::make_lw_shared<raft::log_entry>(
+            raft::log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}, make_bounds(lease_t0)}));
+    log.stable_to(log.last_idx());
+
+    // A single-node cluster elects itself on construction, in term 2.
+    fsm_debug fsm(id1, term_t{1}, server_id{}, std::move(log), trivial_failure_detector, make_lease_cfg(clock));
+    BOOST_REQUIRE(fsm.is_leader());
+
+    // Draining the output stabilizes the leader's dummy entry and attempts to
+    // commit, but the commit is deferred while the deposed leader's lease (entry
+    // 1) is still less than delta old.
+    (void)fsm.get_output();
+    BOOST_CHECK(fsm.get_output().committed.empty());
+    for (int i = 0; i < 5; i++) {
+        fsm.tick();
+        BOOST_CHECK(fsm.get_output().committed.empty());
+    }
+
+    // Once the lease is more than delta old, a tick commits the deferred,
+    // already-durable entries without any further messages.
+    clock.set(lease_t0 + lease_delta + 1s, lease_err);
+    fsm.tick();
+    const auto output = fsm.get_output();
+    BOOST_CHECK(!output.committed.empty());
+    BOOST_CHECK(output.messages.empty());
+}
+
+// When the clock is unsynchronized the age of the deposed leader's lease cannot
+// be bounded, so the commit stays deferred until the clock recovers.
+BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit_unsynchronized) {
+    raft::bounded_clock_mock clock;
+    clock.set_unsynchronized();
+
+    server_id id1 = id();
+    raft::configuration cfg = config_from_ids({id1});
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
+    log.emplace_back(seastar::make_lw_shared<raft::log_entry>(
+            raft::log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}, make_bounds(lease_t0)}));
+    log.stable_to(log.last_idx());
+
+    fsm_debug fsm(id1, term_t{1}, server_id{}, std::move(log), trivial_failure_detector, make_lease_cfg(clock));
+    BOOST_REQUIRE(fsm.is_leader());
+
+    (void)fsm.get_output();
+    for (int i = 0; i < 5; i++) {
+        fsm.tick();
+        BOOST_CHECK(fsm.get_output().committed.empty());
+    }
+
+    // Clock recovers and enough time has passed: commit proceeds.
+    clock.set(lease_t0 + lease_delta + 1s, lease_err);
+    fsm.tick();
+    BOOST_CHECK(!fsm.get_output().committed.empty());
+}
+
+// A leader holding a valid lease serves reads locally, with no read_quorum
+// round-trip; once the lease expires it falls back to the quorum read barrier.
+BOOST_AUTO_TEST_CASE(test_leaseguard_local_lease_read) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+
+    server_id id1 = id(), id2 = id();
+    raft::configuration cfg = config_from_ids({id1, id2});
+    fsm_debug fsm1(id1, term_t{}, server_id{}, raft::log{raft::snapshot_descriptor{.config = cfg}},
+            trivial_failure_detector, make_lease_cfg(clock));
+    fsm_debug fsm2(id2, term_t{}, server_id{}, raft::log{raft::snapshot_descriptor{.config = cfg}},
+            trivial_failure_detector, make_lease_cfg(clock));
+
+    // Elect fsm1 and commit its dummy entry (in its own term), establishing a
+    // lease.
+    election_timeout(fsm1);
+    communicate(fsm1, fsm2);
+    BOOST_REQUIRE(fsm1.is_leader());
+    (void)fsm1.get_output();
+
+    auto has_read_quorum = [](const raft::fsm_output& o) {
+        return std::ranges::any_of(o.messages, [](const auto& m) {
+            return std::holds_alternative<raft::read_quorum>(m.second);
+        });
+    };
+
+    // Valid lease: the read is resolved locally (its id reaches quorum
+    // immediately) and no read_quorum message is broadcast.
+    auto rid = fsm1.start_read_barrier(id1);
+    BOOST_REQUIRE(rid);
+    auto output = fsm1.get_output();
+    BOOST_REQUIRE(output.max_read_id_with_quorum);
+    BOOST_CHECK_EQUAL(*output.max_read_id_with_quorum, rid->first);
+    BOOST_CHECK(!has_read_quorum(output));
+
+    // Expired lease: the read falls back to the quorum barrier, broadcasting a
+    // read_quorum to the follower and not resolving locally.
+    clock.set(lease_t0 + lease_delta + 1s, lease_err);
+    auto rid2 = fsm1.start_read_barrier(id1);
+    BOOST_REQUIRE(rid2);
+    output = fsm1.get_output();
+    BOOST_CHECK(!output.max_read_id_with_quorum);
+    BOOST_CHECK(has_read_quorum(output));
+}
+
+// A leader whose clock stays unsynchronized while a commit is deferred cannot
+// bound the deposed leader's lease, so instead of stalling forever it steps down
+// after an election timeout to let a node with a healthy clock take over.
+BOOST_AUTO_TEST_CASE(test_leaseguard_steps_down_on_clock_loss) {
+    raft::bounded_clock_mock clock;
+    clock.set_unsynchronized();
+
+    server_id id1 = id(), id2 = id();
+    raft::configuration cfg = config_from_ids({id1, id2});
+    // Both nodes carry a prior-term entry, so the new leader has a deposed lease
+    // to wait for and will defer committing.
+    auto make_log = [&] {
+        raft::log log{raft::snapshot_descriptor{.config = cfg}};
+        log.emplace_back(seastar::make_lw_shared<raft::log_entry>(
+                raft::log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}, make_bounds(lease_t0)}));
+        log.stable_to(log.last_idx());
+        return log;
+    };
+    fsm_debug fsm1(id1, term_t{1}, server_id{}, make_log(), trivial_failure_detector, make_lease_cfg(clock));
+    fsm_debug fsm2(id2, term_t{1}, server_id{}, make_log(), trivial_failure_detector, make_lease_cfg(clock));
+
+    election_timeout(fsm1);
+    communicate(fsm1, fsm2);
+    BOOST_REQUIRE(fsm1.is_leader());
+
+    // With the clock unsynchronized the deposed lease's age cannot be bounded,
+    // so the deferred commit never proceeds. After an election timeout worth of
+    // ticks the leader steps down instead of stalling indefinitely.
+    for (int i = 0; i < 3 * 10 && fsm1.is_leader(); i++) {
+        fsm1.tick();
+    }
+    BOOST_CHECK(!fsm1.is_leader());
+}
