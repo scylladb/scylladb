@@ -260,8 +260,6 @@ public:
 
     virtual void add(logstor_group&) = 0;
 
-    virtual void submit_all() = 0;
-
     virtual void submit(logstor_group&) = 0;
 
     virtual future<> submit_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group) = 0;
