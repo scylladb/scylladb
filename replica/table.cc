@@ -1135,7 +1135,7 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
     }
 
     if (_t.uses_logstor()) {
-        co_await get_logstor_compaction_manager().split_compaction(_t, as_logstor_group(), opt.classifier);
+        co_await get_logstor_compaction_manager().submit_split_compaction(_t, as_logstor_group(), opt.classifier);
     }
 }
 

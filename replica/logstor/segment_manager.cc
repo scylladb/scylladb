@@ -33,6 +33,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/future.hh>
@@ -466,7 +467,11 @@ private:
     segment_manager_impl& _sm;
     compaction_config _cfg;
 
-    seastar::gate _async_gate;
+    bool _admission_closed{false};
+
+    bool can_submit_compaction() const noexcept {
+        return !_admission_closed && _cfg.compaction_enabled;
+    }
 
     struct stats {
         uint64_t segments_compacted{0};
@@ -484,15 +489,20 @@ private:
     seastar::semaphore _compaction_sem{1};
 
     struct group_compaction_state {
-        bool running{false};
         shared_future<> completion{make_ready_future<>()};
         abort_source as;
         int compaction_disabled_counter{0};
 
-        bool is_empty() const noexcept {
-            return !running && compaction_disabled_counter == 0 && completion.available();
+        bool running() const noexcept {
+            return !completion.available();
         }
     };
+
+    struct compaction_candidate {
+        logstor_group* group;
+        std::vector<log_segment_id> segments;
+    };
+
     using group_compaction_state_map = absl::flat_hash_map<logstor_group*, std::unique_ptr<group_compaction_state>>;
     group_compaction_state_map _groups;
 
@@ -533,13 +543,17 @@ public:
     future<> remove(logstor_group&) override;
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
     compaction_reenabler disable_compaction_no_wait(logstor_group&) override;
-    future<> split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group) override;
+    future<> submit_normal_compaction(logstor_group&);
+    future<> submit_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group) override;
 
 private:
 
-    std::vector<log_segment_id> select_segments_for_compaction(const segment_descriptor_hist&);
-    future<> do_compact(logstor_group&, abort_source&);
-    future<> compact_segments(logstor_group&, std::vector<log_segment_id>);
+    std::optional<compaction_candidate> select_segments_for_compaction(logstor_group&);
+
+    future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>);
+    future<> do_compaction(logstor_group&, abort_source&);
+    future<> do_split_compaction(replica::table&, logstor_group&, mutation_writer::classify_by_token_group, abort_source&);
+
     group_compaction_state& get_group_state(logstor_group&);
     group_compaction_state* find_group_state(logstor_group&) noexcept;
 
@@ -550,16 +564,23 @@ future<> compaction_manager_impl::start() {
 }
 
 future<> compaction_manager_impl::stop() {
-    if (_async_gate.is_closed()) {
+    if (_admission_closed) {
         co_return;
     }
-    co_await _shares_controller.shutdown();
+    _admission_closed = true;
+
     for (auto& [cg, state] : _groups) {
         state->as.request_abort();
     }
+    co_await coroutine::parallel_for_each(_groups, [] (auto& entry) -> future<> {
+        co_await entry.second->completion.get_future().handle_exception([] (std::exception_ptr) {});
+    });
+
     _separator_flush_sem.broken();
     _compaction_sem.broken();
-    co_await _async_gate.close();
+
+    co_await _shares_controller.shutdown();
+
     _groups.clear();
 }
 
@@ -934,7 +955,7 @@ void compaction_manager_impl::add(logstor_group& cg) {
 }
 
 void compaction_manager_impl::submit_all() {
-    if (_async_gate.is_closed() || !_cfg.compaction_enabled) {
+    if (!can_submit_compaction()) {
         return;
     }
     for (const auto& [cg, _] : _groups) {
@@ -1379,37 +1400,69 @@ future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
     co_await in.close();
 }
 
-void compaction_manager_impl::submit(logstor_group& cg) {
-    if (_async_gate.is_closed() || !_cfg.compaction_enabled) {
-        return;
-    }
-    auto& state = get_group_state(cg);
-    if (state.running || state.compaction_disabled_counter > 0) {
-        return;
-    }
-    state.running = true;
-    state.as = {};
-    state.completion = shared_future(with_gate(_async_gate,
-        [this, &cg, &state] -> future<> {
-            return do_compact(cg, state.as).finally([&state] {
-                state.running = false;
-            });
+future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std::function<future<>(group_compaction_state&)> op) {
+    while (can_submit_compaction()) {
+        auto* state = find_group_state(cg);
+        if (!state) {
+            co_await coroutine::return_exception(std::runtime_error("logstor group submitted for compaction but it is not registered"));
         }
-    ));
+
+        auto completion = state->completion;
+        if (!completion.available()) {
+            co_await completion.get_future().handle_exception([] (std::exception_ptr) {});
+            continue;
+        }
+
+        if (state->compaction_disabled_counter > 0) {
+            co_await coroutine::return_exception(std::runtime_error("logstor group submitted for compaction but compaction is disabled"));
+        }
+
+        state->as = {};
+        state->completion = shared_future(with_scheduling_group(_cfg.compaction_sg, [state, op = std::move(op)] {
+            return op(*state);
+        }).handle_exception([] (std::exception_ptr ep) {
+            logstor_logger.warn("logstor compaction failed: {}", ep);
+            return make_exception_future<>(std::move(ep));
+        }));
+        co_return co_await state->completion.get_future();
+    }
+
+    co_await coroutine::return_exception(std::runtime_error("logstor compaction submission is closed"));
+}
+
+future<> compaction_manager_impl::submit_normal_compaction(logstor_group& cg) {
+    co_await submit_group_compaction(cg, [this, &cg] (group_compaction_state& state) {
+        return do_compaction(cg, state.as);
+    });
+}
+
+future<> compaction_manager_impl::submit_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier) {
+    co_await submit_group_compaction(src, [this, &t, &src, classifier = std::move(classifier)] (group_compaction_state& state) mutable {
+        return do_split_compaction(t, src, std::move(classifier), state.as);
+    });
+}
+
+void compaction_manager_impl::submit(logstor_group& cg) {
+    (void)submit_normal_compaction(cg).handle_exception([table_id = cg.table_id()] (std::exception_ptr ep) {
+        logstor_logger.warn("logstor compaction for table {} failed: {}. Ignored", table_id, ep);
+    });
 }
 
 future<> compaction_manager_impl::stop_ongoing_compactions(logstor_group& cg) {
-    auto* state = find_group_state(cg);
-    if (!state) {
-        co_return;
-    }
-    state->as.request_abort();
-    co_await state->completion.get_future().handle_exception([] (std::exception_ptr) {});
+    auto reenabler = co_await disable_compaction(cg);
 }
 
 future<> compaction_manager_impl::remove(logstor_group& cg) {
-    auto disabler = co_await disable_compaction(cg);
-    _groups.erase(&cg);
+    auto it = _groups.find(&cg);
+    if (it == _groups.end()) {
+        co_return;
+    }
+
+    auto state = std::move(it->second);
+    _groups.erase(it);
+
+    state->as.request_abort();
+    co_await state->completion.get_future().handle_exception([] (std::exception_ptr) {});
 }
 
 future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor_group& cg) {
@@ -1441,13 +1494,14 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
     });
 }
 
-std::vector<log_segment_id> compaction_manager_impl::select_segments_for_compaction(const segment_descriptor_hist& segments) {
+std::optional<compaction_manager_impl::compaction_candidate> compaction_manager_impl::select_segments_for_compaction(logstor_group& cg) {
     uint64_t accum_net_data_size = 0;
     uint64_t accum_record_count = 0;
     int64_t max_gain = 0;
     uint64_t best_count = 0;
     std::vector<log_segment_id> candidates;
     const auto segment_size = _sm.get_segment_size();
+    const auto& segments = cg.logstor_segments()._segments;
 
     for (const auto& desc : segments) {
         if (candidates.size() >= _cfg.max_segments_per_compaction) {
@@ -1475,28 +1529,16 @@ std::vector<log_segment_id> compaction_manager_impl::select_segments_for_compact
 
     logstor_logger.debug("Selected {} segments for compaction for estimated gain of {} segments", best_count, max_gain);
 
-    return candidates
+    if (best_count == 0 || max_gain <= 0) {
+        return std::nullopt;
+    }
+
+    return compaction_candidate{
+        .group = &cg,
+        .segments = candidates
             | std::views::take(best_count)
-            | std::ranges::to<std::vector<log_segment_id>>();
-}
-
-future<> compaction_manager_impl::do_compact(logstor_group& cg, abort_source& as) {
-    auto sem_units = co_await get_units(_compaction_sem, 1, as);
-
-    if (as.abort_requested() || !_cfg.compaction_enabled) {
-        co_return;
-    }
-
-    auto candidates = select_segments_for_compaction(cg.logstor_segments()._segments);
-    if (candidates.size() == 0) {
-        co_return;
-    }
-
-    auto holder = _async_gate.hold();
-
-    co_await with_scheduling_group(_cfg.compaction_sg, [this, &cg, candidates = std::move(candidates)] mutable {
-        return compact_segments(cg, std::move(candidates));
-    });
+            | std::ranges::to<std::vector<log_segment_id>>()
+    };
 }
 
 // A single buffer used by compaction for rewriting records into new segments in a single compaction group.
@@ -1586,7 +1628,15 @@ struct compaction_buffer {
     }
 };
 
-future<> compaction_manager_impl::compact_segments(logstor_group& cg, std::vector<log_segment_id> segments) {
+future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source& as) {
+    auto sem_units = co_await get_units(_compaction_sem, 1, as);
+
+    auto candidate = select_segments_for_compaction(cg);
+    if (!candidate) {
+        co_return;
+    }
+    auto segments = std::move(candidate->segments);
+
     logstor_logger.trace("Starting compaction of segments {} in compaction group {}", segments, cg.table_id());
 
     compaction_buffer cb(_sm, cg);
@@ -1639,19 +1689,17 @@ future<> compaction_manager_impl::compact_segments(logstor_group& cg, std::vecto
     _stats.compaction_records_skipped += cb.stats.records_skipped;
 }
 
-future<> compaction_manager_impl::split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier) {
+future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier, abort_source& as) {
     static constexpr size_t batch_size = 32;
 
-    // Disable compaction on src for the duration of the split.
-    // This waits for any running compaction on src to finish first.
-    auto compaction_disable_guard = co_await disable_compaction(src);
+    auto sem_units = co_await get_units(_compaction_sem, 1, as);
 
     auto& src_segments = src.logstor_segments();
 
     // the src and target groups both share the table index
     auto& index = t.logstor_index();
 
-    while (!src_segments._segments.empty()) {
+    while (!src_segments._segments.empty() && !as.abort_requested()) {
         // Collect candidate IDs without yielding to avoid iterator invalidation.
         std::vector<log_segment_id> candidates;
         candidates.reserve(batch_size);
@@ -1693,9 +1741,6 @@ future<> compaction_manager_impl::split_compaction(replica::table& t, logstor_gr
         // Slow path: rewrite live records from straddling segments into two compaction_buffers
         // (one per target group). Both buffers write back into src; the next outer loop
         // iteration will fast-path the resulting single-group segments to the correct child group.
-
-        // Acquire _compaction_sem to be mutually exclusive with background compaction.
-        auto sem_units = co_await get_units(_compaction_sem, 1);
 
         std::array<compaction_buffer, 2> bufs{compaction_buffer{_sm, src}, compaction_buffer{_sm, src}};
 
