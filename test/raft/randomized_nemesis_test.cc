@@ -1668,6 +1668,10 @@ class environment : public seastar::weakly_referencable<environment<M>> {
         // so it survives crash/stop/restart, keeping the reference stored in
         // `_cfg.leaseguard` valid across server instances.
         raft::bounded_clock_mock _clock;
+        // LeaseGuard: when true, the clock-failure nemesis has made this node's
+        // clock unsynchronized; update_lease_clocks() reports nullopt for it
+        // until it is healed.
+        bool _clock_broken = false;
     };
 
     // Passed to newly created failure detectors.
@@ -1772,8 +1776,27 @@ public:
         const auto ticks = (now - raft::logical_clock::min()).count();
         const auto t = _leaseguard->epoch + ticks * _leaseguard->tick_duration;
         for (auto& [id, r] : _routes) {
-            r._clock.set(t, _leaseguard->error);
+            if (r._clock_broken) {
+                // Simulated clock failure: the node cannot bound the current
+                // time. LeaseGuard must fall back to the safe path (defer / no
+                // lease reads / step down).
+                r._clock.set_unsynchronized();
+            } else {
+                r._clock.set(t, _leaseguard->error);
+            }
         }
+    }
+
+    // LeaseGuard clock-failure nemesis: make (or restore) a node's simulated
+    // clock unsynchronized. The node's `route` (and thus this flag) persists
+    // across crash/stop/restart, so it is safe to call even if no server is
+    // currently running on the node.
+    void break_clock(raft::server_id id) {
+        _routes.at(id)._clock_broken = true;
+    }
+
+    void heal_clock(raft::server_id id) {
+        _routes.at(id)._clock_broken = false;
     }
 
     // A 'node' is a container for a Raft server, its storage ('persistence') and failure detector.
@@ -2800,6 +2823,80 @@ struct fmt::formatter<network_majority_grudge<M>> : fmt::formatter<string_view> 
     }
 };
 
+// LeaseGuard clock-failure nemesis: make a single node's simulated clock
+// unsynchronized for a while, then restore it. Biases toward the current leader
+// so we exercise a leaseholder losing its clock: while a freshly elected leader
+// is still deferring the deposed lease this forces it to step down (a node with
+// a healthy clock then takes over); a leader that has already committed in its
+// term instead falls back to quorum read barriers. Only one node's clock is
+// broken at a time (the op sleeps for the whole failure and is pinned to a
+// dedicated generator thread), so a healthy-clock quorum always remains and the
+// cluster keeps making progress. `nullopt` bounds only degrade availability, not
+// correctness, so this must never cause a linearizability violation.
+// Distinct (empty) result type so the operation result variant does not collide
+// with other monostate-returning nemeses.
+struct clock_failure_result {};
+
+template <>
+struct fmt::formatter<clock_failure_result> : fmt::formatter<string_view> {
+    auto format(clock_failure_result, fmt::format_context& ctx) const {
+        return ctx.out();
+    }
+};
+
+template <PureStateMachine M>
+class clock_failure {
+    raft::logical_clock::duration _duration;
+
+    friend fmt::formatter<clock_failure>;
+
+public:
+    struct state_type {
+        environment<M>& env;
+        const std::unordered_set<raft::server_id>& known;
+        logical_timer& timer;
+        std::mt19937 rnd;
+    };
+
+    using result_type = clock_failure_result;
+
+    clock_failure(raft::logical_clock::duration d) : _duration(d) {
+        static_assert(operation::Executable<clock_failure<M>>);
+    }
+
+    future<result_type> execute(state_type& s, const operation::context& ctx) {
+        SCYLLA_ASSERT(s.known.size() > 0);
+
+        // Prefer the current leader; otherwise pick a random known node.
+        auto leader_it = std::find_if(s.known.begin(), s.known.end(),
+                [&env = s.env] (raft::server_id id) { return env.is_leader(id); });
+        raft::server_id target;
+        if (leader_it != s.known.end()) {
+            target = *leader_it;
+        } else {
+            auto it = s.known.begin();
+            std::advance(it, std::uniform_int_distribution<size_t>{0, s.known.size() - 1}(s.rnd));
+            target = *it;
+        }
+
+        tlogger.debug("clock_failure start tid {} time {} target {} duration {}",
+                ctx.thread, s.timer.now(), target, _duration);
+        s.env.break_clock(target);
+        co_await s.timer.sleep(_duration);
+        s.env.heal_clock(target);
+        tlogger.debug("clock_failure end tid {} time {} target {}", ctx.thread, s.timer.now(), target);
+
+        co_return clock_failure_result{};
+    }
+};
+
+template <PureStateMachine M>
+struct fmt::formatter<clock_failure<M>> : fmt::formatter<string_view> {
+    auto format(const clock_failure<M>& c, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "clock_failure{{duration:{}}}", c._duration);
+    }
+};
+
 // Must be executed sequentially.
 template <PureStateMachine M>
 struct reconfiguration {
@@ -3339,7 +3436,8 @@ static future<> run_basic_generator_test(
             raft_read<AppendReg>,
             network_majority_grudge<AppendReg>,
             reconfiguration<AppendReg>,
-            stop_crash<AppendReg>
+            stop_crash<AppendReg>,
+            clock_failure<AppendReg>
         >>;
     using history_t = utils::chunked_vector<std::variant<op_type, operation::completion<op_type>>>;
 
@@ -3389,6 +3487,9 @@ static future<> run_basic_generator_test(
         bool nemesis_partitions = true;
         bool nemesis_reconfigurations = true;
         bool nemesis_crashes = true;
+        // LeaseGuard clock-failure nemesis is only meaningful (and only enabled)
+        // when leases are on.
+        bool nemesis_clock_failures = leaseguard.has_value();
 
         // TODO: randomize the snapshot thresholds between different servers for more chaos.
         const auto max_command_size = 2 * sizeof(raft::log_entry);
@@ -3449,8 +3550,8 @@ static future<> run_basic_generator_test(
             co_await env.reconfigure(leader_id,
                 std::vector<raft::server_id>{known_config.begin(), known_config.end()}, timer.now() + 100_t, timer)));
 
-        auto threads = operation::make_thread_set(all_servers.size() + 3);
-        auto [partition_thread, reconfig_thread, crash_thread] = take<3>(threads);
+        auto threads = operation::make_thread_set(all_servers.size() + 4);
+        auto [partition_thread, reconfig_thread, crash_thread, clock_thread] = take<4>(threads);
 
 
         raft_call<AppendReg>::state_type db_call_state {
@@ -3487,12 +3588,20 @@ static future<> run_basic_generator_test(
             .rnd = std::mt19937{seed}
         };
 
+        clock_failure<AppendReg>::state_type clock_failure_state {
+            .env = env,
+            .known = known_config,
+            .timer = timer,
+            .rnd = std::mt19937{seed}
+        };
+
         auto init_state = op_type::state_type{
             std::move(db_call_state),
             std::move(read_state),
             std::move(network_majority_grudge_state),
             std::move(reconfiguration_state),
-            std::move(crash_state)
+            std::move(crash_state),
+            std::move(clock_failure_state)
         };
 
         using namespace generator;
@@ -3534,18 +3643,40 @@ static future<> run_basic_generator_test(
                                 })
                             )
                         ),
-                        either(
-                            stagger(seed, timer.now(), 0_t, 50_t,
-                                sequence(1, [] (int32_t i) {
-                                    SCYLLA_ASSERT(i > 0);
-                                    return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
-                                })
-                            ),
-                            op_limit(forwarding ? num_ops : 0 /* only produce raft_reads in forwarding mode */,
-                                stagger(seed, timer.now(), 0_t, 200_t,
-                                    sequence(1, [] (int32_t i) {
-                                        return op_type{raft_read<AppendReg>{i, 200_t}};
+                        pin(clock_thread,
+                            op_limit(nemesis_clock_failures ? num_ops : 0,
+                                // Space clock failures at least a full failover apart. A newly
+                                // elected leader must defer committing for delta (400_t) before it
+                                // can make progress; if clock failures arrived faster than that
+                                // (and they always target the current leader), every new leader's
+                                // clock would break mid-deferral and it would step down, livelocking
+                                // the group with no progress. With ~1000-1600_t between failures and
+                                // durations <= 300_t, there is a contiguous healthy window well above
+                                // election-timeout + delta for a healthy-clock leader to commit.
+                                stagger(seed, timer.now() + 200_t, 1000_t, 1600_t,
+                                    random(seed, [] (std::mt19937& engine) {
+                                        // Durations span both sides of the step-down threshold
+                                        // (~100_t): short failures cause a brief defer-and-recover
+                                        // on a leaseholder, long ones make a deferring leader step
+                                        // down so a healthy-clock node can take over.
+                                        static std::uniform_int_distribution<raft::logical_clock::rep> dist{0, 300};
+                                        return op_type{clock_failure<AppendReg>{raft::logical_clock::duration{dist(engine)}}};
                                     })
+                                )
+                            ),
+                            either(
+                                stagger(seed, timer.now(), 0_t, 50_t,
+                                    sequence(1, [] (int32_t i) {
+                                        SCYLLA_ASSERT(i > 0);
+                                        return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
+                                    })
+                                ),
+                                op_limit(forwarding ? num_ops : 0 /* only produce raft_reads in forwarding mode */,
+                                    stagger(seed, timer.now(), 0_t, 200_t,
+                                        sequence(1, [] (int32_t i) {
+                                            return op_type{raft_read<AppendReg>{i, 200_t}};
+                                        })
+                                    )
                                 )
                             )
                         )
