@@ -34,7 +34,7 @@ using is_live = bool_class<struct is_live_tag>;
 
 template <typename T>
 requires std::is_trivial_v<T>
-static void set_field(atomic_cell_value_mutable_view& out, unsigned offset, T val) {
+void set_field(atomic_cell_value_mutable_view& out, unsigned offset, T val) {
     auto out_view = managed_bytes_mutable_view(out);
     out_view.remove_prefix(offset);
     write<T>(out_view, val);
@@ -42,13 +42,13 @@ static void set_field(atomic_cell_value_mutable_view& out, unsigned offset, T va
 
 template <typename T>
 requires std::is_trivial_v<T>
-static void set_field(atomic_cell_value& out, unsigned offset, T val) {
+void set_field(atomic_cell_value& out, unsigned offset, T val) {
     auto out_view = atomic_cell_value_mutable_view(out);
     set_field(out_view, offset, val);
 }
 
 template <FragmentRange Buffer>
-static void set_value(atomic_cell_value_mutable_view b, unsigned value_offset, const Buffer& value) {
+void set_value(atomic_cell_value_mutable_view b, unsigned value_offset, const Buffer& value) {
     auto v = b.substr(value_offset, value.size_bytes());
     for (auto frag : value) {
         write_fragmented(v, single_fragmented_view(frag));
@@ -57,7 +57,7 @@ static void set_value(atomic_cell_value_mutable_view b, unsigned value_offset, c
 
 template <typename T, FragmentedView Input>
 requires std::is_trivial_v<T>
-static T get_field(Input in, unsigned offset = 0) {
+T get_field(Input in, unsigned offset = 0) {
     in.remove_prefix(offset);
     return read_simple<T>(in);
 }

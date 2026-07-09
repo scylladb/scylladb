@@ -108,23 +108,6 @@ float node_ops_metrics::removenode_finished_percentage() {
     return removenode_total_ranges == 0 ? 1 : float(removenode_finished_ranges) / float(removenode_total_ranges);
 }
 
-template <typename T1, typename T2>
-inline
-static std::ostream& operator<<(std::ostream& os, const std::unordered_map<T1, T2>& v) {
-    bool first = true;
-    os << "{";
-    for (auto&& elem : v) {
-        if (!first) {
-            os << ", ";
-        } else {
-            first = false;
-        }
-        os << elem.first << "=" << elem.second;
-    }
-    os << "}";
-    return os;
-}
-
 std::string_view format_as(row_level_diff_detect_algorithm algo) {
     using enum row_level_diff_detect_algorithm;
     switch (algo) {

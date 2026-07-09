@@ -134,13 +134,6 @@ void push_userdata(lua_State* l, Arg&&... arg) {
     luaL_setmetatable(l, get_metatable_name<T>());
 }
 
-// Push userdata with default constructed T in it.
-template <typename T>
-void push_userdata(lua_State* l) {
-    new (alloc_userdata<T>(l)) T;
-    luaL_setmetatable(l, get_metatable_name<T>());
-}
-
 template <typename T>
 T* get_userdata_ptr(lua_State* l, int i) {
     auto p = luaL_checkudata(l, i, get_metatable_name<T>());
