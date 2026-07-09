@@ -77,6 +77,97 @@ either set one up, or set up the client library to do the load balancing
 itself. Instructions, code and examples for doing this can be found in the
 [Alternator Load Balancing project](https://github.com/scylladb/alternator-load-balancing/).
 
+### Mutual TLS (mTLS) for Alternator
+
+In addition to the usual SigV4 signature authentication, Alternator also
+supports mutual TLS (mTLS) authentication, where the client presents a
+certificate that the server validates. By default, the CN (Common Name) of
+the certificate's Subject DN is used as the role name. This mapping is
+configurable via the `auth_certificate_role_queries` option (described
+below), which also supports matching Subject Alternative Names (SANs).
+
+To configure mTLS, use the `alternator-encryption-options` configuration.
+Two settings control the behavior:
+
+* **`truststore`**: Path to a CA certificate file. The server uses this to
+  validate client certificates.
+
+* **`require_client_auth`**: Controls how strictly client certificates are
+  enforced. There are three modes:
+
+  * **`require_client_auth=true`** — The server *requires* a valid client
+    certificate. Clients without one (or with an untrusted certificate) are
+    rejected at the TLS handshake level. The certificate is mapped to a role
+    via `auth_certificate_role_queries`; if the mapping fails or the role
+    does not exist with `LOGIN=true`, the request is rejected. SigV4
+    authentication is not used. Example configuration:
+
+    ```
+    --alternator-https-port 8043
+    --alternator-encryption-options certificate=/path/to/server.crt
+    --alternator-encryption-options keyfile=/path/to/server.key
+    --alternator-encryption-options truststore=/path/to/ca.crt
+    --alternator-encryption-options require_client_auth=true
+    ```
+
+  * **`require_client_auth=optional`** — The server *requests* a client
+    certificate but does not require one. Clients that present no certificate
+    fall back to SigV4 authentication. This allows both mTLS and SigV4 clients
+    to connect to the same HTTPS port. Clients that present a valid (CA-signed)
+    certificate must authenticate via mTLS: their certificate is mapped to a
+    role, and if the mapping fails or the role does not exist with `LOGIN=true`,
+    the request is rejected — there is no SigV4 fallback for certificate-bearing
+    clients. Example configuration:
+
+    ```
+    --alternator-https-port 8043
+    --alternator-encryption-options certificate=/path/to/server.crt
+    --alternator-encryption-options keyfile=/path/to/server.key
+    --alternator-encryption-options truststore=/path/to/ca.crt
+    --alternator-encryption-options require_client_auth=optional
+    ```
+
+  * **`require_client_auth=false`** (default) — The server does not request
+    a client certificate at all. Only SigV4 authentication is used.
+
+When a client certificate is presented on a connection, SigV4 authentication
+is not needed, and if a SigV4 signature appears on any request sent over this
+connection, it is silently ignored. This means that when a connection uses
+mTLS, the same role applies to all requests on that connection and cannot be
+overridden on a per-request basis.
+
+**Mapping a certificate to a role** is controlled by the
+`auth_certificate_role_queries` configuration option (documented in detail in
+[Certificate-based Authentication](../operating-scylla/security/certificate-authentication)).
+Each entry in the list has a `source` and a `query` (a regular expression
+with exactly one capture group). The first matching entry determines the
+role name.
+
+* **`source: SUBJECT`** — matches against the certificate's Subject DN
+  string (e.g. `"CN=alice,O=MyOrg"`). The default configuration uses this
+  source with the pattern `CN=([^,]+)` to extract the Common Name.
+
+* **`source: ALTNAME`** — matches against the certificate's Subject
+  Alternative Names (SANs), formatted as a comma-separated list of
+  `TYPE=value` entries (e.g. `"EMAIL=alice@example.com,DNS=host.example.com"`).
+  EMAIL SANs are the standard way to carry user identity in enterprise PKI.
+
+Example: to authenticate using an email SAN of the form `user@example.com`
+and map the local part to a role:
+
+```yaml
+auth_certificate_role_queries:
+  - source: ALTNAME
+    query: 'EMAIL=([^@,]+)@'
+```
+
+When using mTLS, set `alternator_enforce_authorization: true` and configure
+`authorizer: CassandraAuthorizer` so that the certificate-derived username is
+looked up and authorized against the role system (see the Authentication and
+Authorization section in compatibility.md). If SigV4 authentication is also
+used (i.e., `require_client_auth=optional`), additionally configure
+`authenticator: PasswordAuthenticator`.
+
 ## Alternator design and implementation
 
 This section provides only a very brief introduction to Alternator's
