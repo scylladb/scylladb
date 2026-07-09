@@ -729,6 +729,7 @@ raft_tests = set([
     'test/raft/raft_sys_table_storage_test',
     'test/raft/discovery_test',
     'test/raft/failure_detector_test',
+    'test/raft/bounded_clock_adjtimex_test',
 ])
 
 vector_search_tests = set([
@@ -1377,6 +1378,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/raft/group0_state_machine_merger.cc',
                 'service/raft/group0_voter_handler.cc',
                 'service/raft/raft_sys_table_storage.cc',
+                'service/raft/bounded_clock_adjtimex.cc',
                 'serializer.cc',
                 'release.cc',
                 'service/raft/raft_rpc.cc',
@@ -1817,6 +1819,7 @@ deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.
 deps['test/raft/failure_detector_test'] = ['test/raft/failure_detector_test.cc', 'service/direct_failure_detector/failure_detector.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/many_test'] = ['test/raft/many_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc', 'test/lib/eventually.cc'] + scylla_raft_dependencies
 deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
+deps['test/raft/bounded_clock_adjtimex_test'] = ['test/raft/bounded_clock_adjtimex_test.cc', 'service/raft/bounded_clock_adjtimex.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
     scylla_core + alternator + scylla_tests_generic_dependencies
