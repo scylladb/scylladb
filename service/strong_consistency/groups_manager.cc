@@ -153,6 +153,16 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
     return ok{};
 }
 
+// A lease of zero duration is never valid, so it serves no local reads, while
+// read traffic still makes the leader append a renewal no-op on every tick.
+static void check_lease_duration(const db::config& db_config) {
+    if (db_config.strongly_consistent_raft_leader_leases_enabled()
+            && db_config.strongly_consistent_raft_leader_lease_duration_in_ms() == 0) {
+        throw std::invalid_argument("strongly_consistent_raft_leader_lease_duration_in_ms must be positive "
+                                    "when strongly_consistent_raft_leader_leases_enabled is set");
+    }
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
@@ -167,6 +177,19 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _gossiper(gossiper)
     , _raft_replay_buffer(raft_replay_buffer)
 {
+    const auto& db_config = _db.get_config();
+    check_lease_duration(db_config);
+    // Log once per node (not once per shard or per raft group): the options are
+    // MustRestart, so every group on the node uses the same setting.
+    if (this_shard_id() == 0) {
+        if (db_config.strongly_consistent_raft_leader_leases_enabled()) {
+            logger.info("LeaseGuard leader leases enabled (lease duration {}ms)",
+                        db_config.strongly_consistent_raft_leader_lease_duration_in_ms());
+        } else {
+            logger.info("LeaseGuard leader leases disabled");
+        }
+    }
+
     init_messaging_service();
 }
 
@@ -260,6 +283,20 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // table starts with many tablets).
         .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
     };
+
+    // LeaseGuard leader leases. Off by default: leases require synchronized
+    // clocks on all nodes; when enabled, the leader serves local linearizable
+    // reads while its lease is valid and defers committing after a leadership
+    // change until the previous lease has expired. The clock is owned by this
+    // manager (per shard) and outlives the server.
+    const auto& db_config = _db.get_config();
+    if (db_config.strongly_consistent_raft_leader_leases_enabled()) {
+        config.leaseguard = raft::server::configuration::leaseguard_configuration {
+            .delta = std::chrono::milliseconds(db_config.strongly_consistent_raft_leader_lease_duration_in_ms()),
+            .clock = _bounded_clock,
+        };
+    }
+
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
 
