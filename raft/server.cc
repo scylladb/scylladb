@@ -408,6 +408,8 @@ future<> server_impl::start() {
             .clock = _config.leaseguard->clock.get(),
             .delta = _config.leaseguard->delta,
         });
+        logger.info("[{}] LeaseGuard leader leases enabled, delta={}", _id,
+                std::chrono::duration_cast<std::chrono::milliseconds>(_config.leaseguard->delta));
     }
 
     _fsm = std::make_unique<fsm>(_id, _tag, term, vote, std::move(log), commit_idx, *_failure_detector,

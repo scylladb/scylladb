@@ -1141,6 +1141,17 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Timeout for CQL server requests on shutdown. After this timeout the server will shutdown all connections.")
     , group0_raft_op_timeout_in_ms(this, "group0_raft_op_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 60000,
             "The time in milliseconds that group0 allows a Raft operation to complete.")
+    , strongly_consistent_raft_leader_leases_enabled(this, "strongly_consistent_raft_leader_leases_enabled", liveness::MustRestart, value_status::Used, false,
+            "Enable Raft leader leases (LeaseGuard) for strongly-consistent tables. When enabled, "
+            "a leader serves linearizable reads locally without a quorum round-trip while its lease "
+            "is valid, and defers committing writes until a deposed leader's lease has expired. "
+            "This REQUIRES synchronized clocks on all nodes (e.g. NTP or PTP): a node whose clock is "
+            "unsynchronized falls back to the safe path (deferring commits and possibly stepping "
+            "down), which can reduce availability. Read once when a raft group starts.")
+    , strongly_consistent_raft_leader_lease_duration_in_ms(this, "strongly_consistent_raft_leader_lease_duration_in_ms", liveness::MustRestart, value_status::Used, 1000,
+            "Duration (Delta) in milliseconds of a Raft leader lease for strongly-consistent tables, "
+            "used when strongly_consistent_raft_leader_leases_enabled is true. Should be on the order "
+            "of the Raft election timeout (~1 second by default).")
     /**
     * @Group Inter-node settings
     */
