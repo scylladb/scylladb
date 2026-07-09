@@ -202,6 +202,22 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // table starts with many tablets).
         .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
     };
+
+    // LeaseGuard leader leases. Off by default: leases require synchronized
+    // clocks on all nodes; when enabled, the leader serves local linearizable
+    // reads while its lease is valid and defers committing after a leadership
+    // change until the previous lease has expired. The clock is owned by this
+    // manager (per shard) and outlives the server.
+    const auto& db_config = _db.get_config();
+    if (db_config.strongly_consistent_raft_leader_leases_enabled()) {
+        // emplace(): the leaseguard_configuration reference member makes the
+        // optional non-assignable.
+        config.leaseguard.emplace(raft::server::configuration::leaseguard_configuration {
+            .delta = std::chrono::milliseconds(db_config.strongly_consistent_raft_leader_lease_duration_in_ms()),
+            .clock = _bounded_clock,
+        });
+    }
+
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
 
