@@ -10,7 +10,7 @@ from typing import Tuple
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, wait_for, Host
-from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
+from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table, reconnect_driver
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
@@ -103,6 +103,26 @@ def leaseguard_config(request):
         if not usable:
             skip_env("host clock is not NTP/PTP synchronized, so LeaseGuard cannot hold a lease")
     return {'strongly_consistent_raft_leader_leases_enabled': request.param}
+
+
+# A lease is usable only while `elapsed_since_lease + 2*maxerror < lease_duration`
+# (raft::time_bounds::younger_than, raft/bounded_clock.hh). Demand that 2*maxerror
+# leave most of the budget free, so the lease still covers the CQL round trips
+# between stamping it and the read whose locality we assert. maxerror is volatile
+# -- it grows between NTP polls and collapses on each one -- so a bare
+# "is it synchronized" bit is not a sufficient precondition.
+LEASE_CLOCK_MAX_ERROR_FRACTION = 0.25
+
+
+def require_lease_capable_clock(lease_duration_ms: int):
+    """Skip unless the host clock can actually sustain a lease of this length."""
+    usable, maxerror_us = host_clock_bounds()
+    if not usable:
+        skip_env("host clock is not NTP/PTP synchronized, so LeaseGuard cannot hold a lease")
+    budget_us = lease_duration_ms * 1000 * LEASE_CLOCK_MAX_ERROR_FRACTION
+    if 2 * maxerror_us > budget_us:
+        skip_env(f"host clock uncertainty is too wide for a {lease_duration_ms}ms lease: "
+                 f"2*maxerror={2 * maxerror_us}us exceeds the {int(budget_us)}us budget")
 
 
 async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str,
@@ -3348,3 +3368,209 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
         logger.info("Dropping the table removes the series of that node too")
         await cql.run_async(f"DROP TABLE {ks}.test")
         await wait_for_sc_raft_series_gone(manager, src)
+
+
+async def test_leader_leases_write_read_and_leader_change(
+        manager: ScyllaClusterManager, leaseguard_config):
+    """
+    End-to-end test of strongly-consistent tablet raft groups, parametrized over
+    LeaseGuard leader leases on/off (strongly_consistent_raft_leader_leases_enabled,
+    adjtimex bounded-clock backend).
+
+    In both modes it verifies that:
+      - each node reports the expected lease mode (checked via its startup log),
+      - normal writes and linearizable (CL=QUORUM) reads work from a leader and a
+        follower replica,
+      - linearizable reads on the leader are served LOCALLY when leases are on
+        (no quorum read barrier), and via a quorum read barrier when they are off
+        -- asserted by grepping the leader's raft trace log,
+      - after the leader is killed a new leader is elected and resumes committing
+        writes and serving reads (with leases on this exercises the
+        deferred-commit path that waits for the deposed lease to expire),
+      - a node restart preserves data,
+      - with leases on, a node configured with a zero lease duration fails to
+        start.
+
+    The leases_on variant drives the real adjtimex-backed clock, so it asserts
+    read locality where the host clock can sustain a lease: 2*maxerror must fit
+    well inside the lease duration. The check runs just before the locality
+    assertions, against the lease duration the servers use, and skips
+    (skip_env) the variant otherwise.
+
+    This test exercises the real clock end to end. The bounded-clock discipline
+    itself is covered deterministically, with synthetic samples, by
+    test/raft/bounded_clock_adjtimex_test.cc.
+    """
+    leases_on = leaseguard_config.get('strongly_consistent_raft_leader_leases_enabled', False)
+    logger.info(f"Bootstrapping 3-node cluster (leases {'on' if leases_on else 'off'})")
+    # raft trace logs let us assert whether leader reads take the local lease path
+    # or the quorum read-barrier path (see the locality check below).
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft=trace']
+    # A lease long enough for the locality check to run on a host whose chrony
+    # updates the kernel rarely: the kernel's maxerror grows by 0.5ms/s between
+    # updates, to ~0.5s at chrony's default maxpoll of 1024s, and the check
+    # needs 2*maxerror within LEASE_CLOCK_MAX_ERROR_FRACTION of the lease.
+    config = DEFAULT_CONFIG | leaseguard_config | {
+        'strongly_consistent_raft_leader_lease_duration_in_ms': 5000,
+    }
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    def host_by_host_id(host_id):
+        for hid, host in zip(host_ids, hosts):
+            if hid == host_id:
+                return host
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
+            replica_host_ids = [str(replica[0]) for replica in tablet_replicas]
+            assert len(replica_host_ids) == 3
+
+            for i in range(3):
+                if str(host_ids[i]) in replica_host_ids:
+                    leader_host_id = await wait_for_leader(manager, servers[i], group_id)
+                    break
+            leader_idx = next(i for i in range(3) if str(host_ids[i]) == str(leader_host_id))
+            leader_server = servers[leader_idx]
+            leader_host = host_by_host_id(leader_host_id)
+            follower_host_id = [hid for hid in host_ids if str(hid) != str(leader_host_id)][0]
+            follower_host = host_by_host_id(follower_host_id)
+
+            # Confirm each node reports the expected lease mode. The line is
+            # logged once per node at startup.
+            expected = ("LeaseGuard leader leases enabled" if leases_on
+                        else "LeaseGuard leader leases disabled")
+            for s in servers:
+                log = await manager.server_open_log(s.server_id)
+                matches = await log.grep(expected)
+                assert matches, f"Server {s.server_id} did not log {expected!r}"
+
+            # Writes and (linearizable, CL=QUORUM) reads from leader and follower.
+            logger.info("Write/read from leader and follower")
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (1, 100)", host=leader_host)
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1", consistency_level=ConsistencyLevel.QUORUM),
+                host=leader_host)
+            assert len(rows) == 1 and rows[0].c == 100
+
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (2, 200)", host=follower_host)
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 2", consistency_level=ConsistencyLevel.QUORUM),
+                host=follower_host)
+            assert len(rows) == 1 and rows[0].c == 200
+
+            # Read-locality check. With leases ON, a linearizable read on the
+            # leader is served locally from its valid lease; with leases OFF every
+            # linearizable read takes the quorum read barrier. The assertions
+            # below check both counts. The lease was warmed by the write+read
+            # above (a committed entry with a lease_time now exists in the current
+            # term).
+            #
+            # We grep the leader's raft trace log, scoped to the SC group's tag
+            # ("sc-<group_id>", set in groups_manager; group0 uses a different tag)
+            # and to a fresh mark, so the counts cover this group's reads in this
+            # window. This greps trace-level log text (not a stable API), which
+            # is acceptable for keeping the locality check entirely in the test.
+            #
+            # With leases on, check the clock's uncertainty against the lease
+            # duration the servers use HERE, before the mark and the reads below,
+            # so the verdict qualifies the very operations we are about to
+            # measure. The fixture checked only synchronization, ~10-20s ago
+            # (cluster bootstrap), and maxerror moves in both directions: it
+            # creeps upward between NTP polls at ~500ppm, far inside our margin
+            # over this short window, and an NTP poll drops it instantly and by a
+            # large factor. Checking before the reads keeps the verdict tied to
+            # the clock the leader used for them.
+            if leases_on:
+                rows = await cql.run_async(
+                    "SELECT value FROM system.config "
+                    "WHERE name = 'strongly_consistent_raft_leader_lease_duration_in_ms'",
+                    host=leader_host)
+                require_lease_capable_clock(int(rows[0].value))
+            tag = f"sc-{group_id}"
+            leader_log = await manager.server_open_log(leader_server.server_id)
+            mark = await leader_log.mark()
+            for _ in range(5):
+                await cql.run_async(
+                    SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1", consistency_level=ConsistencyLevel.QUORUM),
+                    host=leader_host)
+            lease_reads = await leader_log.grep(
+                rf"start_read_barrier\[{re.escape(tag)}\] lease read, resolving id", from_mark=mark)
+            quorum_reads = await leader_log.grep(
+                rf"broadcast_read_quorum\[{re.escape(tag)}\]", from_mark=mark)
+            logger.info(f"Leader read locality (leases_{'on' if leases_on else 'off'}): "
+                        f"{len(lease_reads)} local lease reads, {len(quorum_reads)} quorum broadcasts")
+            if leases_on:
+                assert len(lease_reads) > 0, "expected local lease reads on the leader with leases on"
+                assert len(quorum_reads) == 0, "leader reads must not contact a quorum while the lease is valid"
+            else:
+                assert len(lease_reads) == 0, "no local lease reads expected with leases off"
+                assert len(quorum_reads) > 0, "leader reads must take the quorum read barrier with leases off"
+
+            # Kill the leader. A new leader must be elected and resume committing.
+            # With leases on this exercises the deferred-commit path (the new
+            # leader waits for the deposed leader's lease to expire first).
+            logger.info(f"Stopping leader {leader_host_id}")
+            await manager.server_stop(leader_server.server_id, convict=True)
+            await manager.others_not_see_server(leader_server.ip_addr)
+
+            surviving = [(i, s) for i, s in enumerate(servers) if i != leader_idx]
+            probe_idx, _ = surviving[0]
+
+            async def wait_for_new_leader():
+                new_leader = await wait_for_leader(manager, servers[probe_idx], group_id)
+                return None if str(new_leader) == str(leader_host_id) else new_leader
+            new_leader_host_id = await wait_for(wait_for_new_leader, time.time() + 60)
+            new_leader_host = host_by_host_id(new_leader_host_id)
+
+            # Writes/reads must succeed under the new leader (with leases on, the
+            # deferred-commit wait for the old lease to expire may delay them by
+            # up to the lease duration).
+            logger.info(f"Write/read under new leader {new_leader_host_id}")
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (3, 300)", host=new_leader_host)
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 3", consistency_level=ConsistencyLevel.QUORUM),
+                host=new_leader_host)
+            assert len(rows) == 1 and rows[0].c == 300
+
+            # Earlier data is still readable under the new leader.
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1", consistency_level=ConsistencyLevel.QUORUM),
+                host=new_leader_host)
+            assert len(rows) == 1 and rows[0].c == 100
+
+            # Restart a surviving follower and verify the group keeps working.
+            # Picking the follower keeps the write below targeting a live leader
+            # coordinator and preserves quorum once it is back.
+            restart_idx = next(i for i, _ in surviving if str(host_ids[i]) != str(new_leader_host_id))
+            logger.info(f"Restarting server {servers[restart_idx].server_id}")
+            await manager.server_restart(servers[restart_idx].server_id)
+            await reconnect_driver(manager)
+            cql = manager.get_cql()
+
+            # Unpinned write: reconnect_driver() returns a fresh session, so a
+            # query pinned to a pre-reconnect Host object can hit a transient
+            # "host marked down" (python-driver#295). Let the driver route it; the
+            # SC coordinator forwards it to the current leader.
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (4, 400)")
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 4", consistency_level=ConsistencyLevel.QUORUM))
+            assert len(rows) == 1 and rows[0].c == 400
+
+    # A zero lease duration is rejected at startup.
+    if leases_on:
+        logger.info("Adding a node with a zero lease duration, expecting it to fail to start")
+        await manager.server_add(
+            config=config | {'strongly_consistent_raft_leader_lease_duration_in_ms': 0},
+            cmdline=cmdline, expected_error='strongly_consistent_raft_leader_lease_duration_in_ms must be positive')
+
+    await gather_safely(*[manager.server_stop_gracefully(s.server_id)
+                          for i, s in enumerate(servers) if i != leader_idx])
