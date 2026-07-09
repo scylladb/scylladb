@@ -147,6 +147,17 @@ key ID, and the _salted hash_ of the role's password is the secret key.
 This secret key for role XYZ can be retrieved by the CQL request
 `SELECT salted_hash from system.roles WHERE role = XYZ;`.
 
+Alternator also supports mutual TLS (mTLS) as an alternative authentication
+method. When the HTTPS port is configured with `require_client_auth=true` or
+`require_client_auth=optional` (via `--alternator-encryption-options`), clients
+that present a valid certificate are authenticated using the subject fields
+(DN or SAN) of that certificate as the username — no SigV4 signature is
+required or checked. With `require_client_auth=true` client certificates are
+mandatory; with `require_client_auth=optional` they are optional, allowing both
+mTLS and SigV4 clients to share the same port. See the
+[Mutual TLS (mTLS) for Alternator](alternator.md#mutual-tls-mtls-for-alternator)
+section for full configuration details.
+
 Alternator also implements authorization, or _access control_ - defining
 which authenticated user is allowed to do which operation, such as reading
 or writing to a specific table. The way this is supported in Alternator is
