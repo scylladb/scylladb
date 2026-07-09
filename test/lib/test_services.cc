@@ -377,7 +377,7 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
             auto scf = make_sstable_compressor_factory_for_tests_in_thread();
             test_env env(std::move(cfg), *scf, &sstm.local());
             auto close_env = defer([&] { env.stop().get(); });
-            env.manager().plug_sstables_registry(std::make_unique<mock_sstables_registry>());
+            env.plug_mock_sstables_registry();
             func(env);
         });
     }
@@ -388,6 +388,10 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
         auto close_env = defer([&] { env.stop().get(); });
         func(env);
     });
+}
+
+void test_env::plug_mock_sstables_registry() {
+    _impl->mgr.plug_sstables_registry(std::make_unique<mock_sstables_registry>());
 }
 
 sstables::generation_type

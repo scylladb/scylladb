@@ -112,6 +112,14 @@ public:
 
     void maybe_start_compaction_manager(bool enable = true);
 
+    // Plug a mock sstables_registry into the underlying sstables_manager.
+    // Required when running against object storage: sstable creation asserts
+    // that a registry is plugged. do_with_async() does this automatically for
+    // the non-local storage path; callers that construct test_env manually
+    // (e.g. to share a storage_manager with cql_test_env) must call this
+    // themselves after construction.
+    void plug_mock_sstables_registry();
+
     explicit test_env(test_env_config cfg, sstable_compressor_factory&, sstables::storage_manager* sstm = nullptr, tmpdir* tmp = nullptr);
     ~test_env();
     test_env(test_env&&) noexcept;
