@@ -49,6 +49,9 @@ class object_name {
 public:
     object_name(const object_name&);
     object_name(object_name&&);
+    // Designed for consumers that already hold a full "/bucket/object" location and
+    // therefore have nothing to format, e.g. sstables::storage::exists(const std::string&).
+    explicit object_name(std::string object_location);
     // Used by native backup/restore with externally supplied prefixes
     // following the foreign Scylla Manager bucket layout.
     object_name(std::string_view bucket, std::string_view prefix, std::string_view type);
