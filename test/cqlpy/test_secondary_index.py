@@ -13,6 +13,8 @@ import pytest
 import os
 from contextlib import ExitStack
 from . import rest_api
+from . import nodetool
+from test.pylib.skip_types import skip_env
 from cassandra.protocol import InvalidRequest, ConfigurationException, ReadFailure
 from cassandra.query import SimpleStatement
 from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order
@@ -2393,3 +2395,112 @@ def test_regular_row_update_with_static_set_index(cql, test_keyspace):
         cql.execute(f"UPDATE {table} SET x = 4 WHERE pk = 1 AND ck = 2")
         assert [(1, 2, {'test'}, 4)] == list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1 AND ck = 2"))
         assert [(1, 2, {'test'}, 4)] == list(cql.execute(f"SELECT * FROM {table} WHERE s CONTAINS 'test'"))
+
+# Reproducer for SCYLLADB-2817: force the index (a materialized view) to
+# diverge from the base table, then check that an indexed query still returns
+# only rows matching the WHERE clause. The orchestration, via error injections:
+#  1. Write rows and flush BEFORE creating the index - backfill reads the
+#     sstable snapshot, which has (1,1,1,1) = v3.
+#  2. Create the index and step the builder with two pauses, pinning the
+#     ordering: it scans the flushed snapshot now (before the overwrites
+#     below), but holds the generated postings unapplied.
+#  3. Overwrite (1,1,1,1) to v=4 then v=5, with the v=4 view update dropped
+#     by an injected, swallowed failure - so no tombstone will cover the
+#     builder's stale v=3 posting. Re-insert the other v=3 rows normally.
+#  4. Query (correct), release the builder: the stale v=3 -> (1,1,1,1)
+#     posting lands, pointing at a base row that has v=5.
+#  5. Query again: the stale posting must not produce a v=5 row for "v = 3".
+@pytest.mark.xfail(reason="SCYLLADB-2817: the index read does not re-validate the indexed column against the base row", strict=True)
+def test_index_query_with_stale_index_entry(cql, test_keyspace, scylla_only):
+    def inj_enable(err, one_shot=False):
+        rest_api.post_request(cql, f'v2/error_injection/injection/{err}?one_shot={one_shot}')
+        if err not in rest_api.get_request(cql, 'v2/error_injection/injection'):
+            skip_env("error injection not enabled in this build")
+    def inj_disable(err):
+        rest_api.delete_request(cql, f'v2/error_injection/injection/{err}')
+    def inj_message(err):
+        rest_api.post_request(cql, f'v2/error_injection/injection/{err}/message')
+    def inj_enters(err):
+        try:
+            return int(rest_api.get_request(cql, f'v2/error_injection/injection/{err}/enters'))
+        except Exception:
+            return -1
+    def wait_for(what, cond):
+        deadline = time.time() + 60
+        while not cond():
+            assert time.time() < deadline, f"timed out waiting for {what}"
+            time.sleep(0.2)
+
+    pause_scan = "view_building_worker_pause_build_range_task"
+    pause_apply = "populate_views_pause_before_apply"
+    fail_update = "view_update_generation_failure"
+
+    schema = 'pk int, c1 int, c2 int, c3 int, v int, PRIMARY KEY (pk, c1, c2, c3)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        ins = f"INSERT INTO {table} (pk, c1, c2, c3, v) VALUES"
+        q_range = f"SELECT * FROM {table} WHERE pk = 1 AND c1 > 0 AND c1 < 5 AND c2 = 1 AND v = 3 ALLOW FILTERING"
+        q_in = f"SELECT * FROM {table} WHERE pk = 1 AND c1 IN(0,1,2) AND c2 = 1 AND v = 3 ALLOW FILTERING"
+        expected = [(1, 1, 1, 3, 3)]
+        try:
+            # (1) data before the index exists; flush - backfill reads sstables.
+            for i in (1, 2, 3):
+                cql.execute(f"{ins} (1, 1, 1, 1, {i})")
+                cql.execute(f"{ins} (1, 1, 1, {i}, {i})")
+                cql.execute(f"{ins} (1, 1, {i}, {i}, {i})")
+                cql.execute(f"{ins} (1, {i}, {i}, {i}, {i})")
+            nodetool.flush(cql, table)
+
+            # (2) create the index; pause the builder before its scan...
+            inj_enable(pause_scan)
+            inj_enable(pause_apply)
+            cql.execute(f"CREATE INDEX v_idx_2817 ON {table} (v)")
+            wait_for("builder to reach the scan pause", lambda: inj_enters(pause_scan) >= 1)
+
+            # ...release the scan; generation runs and parks before apply.
+            inj_message(pause_scan)
+            inj_disable(pause_scan)
+            wait_for("builder to reach the apply pause", lambda: inj_enters(pause_apply) >= 1)
+
+            # (3) legit v3 rows via the regular write path...
+            cql.execute(f"{ins} (1, 1, 1, 3, 3)")
+            cql.execute(f"{ins} (1, 1, 3, 3, 3)")
+            cql.execute(f"{ins} (1, 3, 3, 3, 3)")
+            # ...and the overwrites; the v=4 write's view update is swallowed.
+            inj_enable(fail_update, one_shot=True)
+            cql.execute(f"{ins} (1, 1, 1, 1, 4)")
+            cql.execute(f"{ins} (1, 1, 1, 4, 4)")
+            cql.execute(f"{ins} (1, 1, 4, 4, 4)")
+            cql.execute(f"{ins} (1, 4, 4, 4, 4)")
+            for i in (5,):
+                cql.execute(f"{ins} (1, 1, 1, 1, {i})")
+                cql.execute(f"{ins} (1, 1, 1, {i}, {i})")
+                cql.execute(f"{ins} (1, 1, {i}, {i}, {i})")
+                cql.execute(f"{ins} (1, {i}, {i}, {i}, {i})")
+
+            # The base is correct: (1,1,1,1) has v=5.
+            assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE pk=1 AND c1=1 AND c2=1 AND c3=1")] == [5]
+
+            # (4) before the stale posting lands, both queries are correct.
+            assert sorted(tuple(r) for r in cql.execute(q_range)) == expected
+            assert sorted(tuple(r) for r in cql.execute(q_in)) == expected
+
+            # (5) release the apply; wait until the stale v=3 posting for
+            # (1,1,1,1) is in the index view.
+            inj_message(pause_apply)
+            inj_disable(pause_apply)
+            ks = table.split('.')[0]
+            viewq = f'SELECT pk, c1, c2, c3 FROM {ks}."v_idx_2817_index" WHERE v = 3'
+            wait_for("stale posting to land",
+                     lambda: (1, 1, 1, 1) in [tuple(r) for r in cql.execute(viewq)])
+
+            # The index has now diverged from the base: it claims (1,1,1,1)
+            # has v=3, the base says v=5. The queries must still be correct -
+            # a returned row must match the WHERE clause.
+            assert sorted(tuple(r) for r in cql.execute(q_in)) == expected
+            assert sorted(tuple(r) for r in cql.execute(q_range)) == expected
+        finally:
+            for err in (pause_scan, pause_apply, fail_update):
+                try:
+                    inj_disable(err)
+                except Exception:
+                    pass
