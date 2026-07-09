@@ -1631,9 +1631,10 @@ struct environment_config {
     // with leader leases, backed by a per-node simulated bounded-uncertainty
     // clock. The clocks are driven from simulated (logical) time by
     // environment::update_lease_clocks(), mapping one logical tick to
-    // `tick_duration` of physical time. All nodes report the same interval
-    // [now - error, now + error], so the bounds always contain the true
-    // simulated time and leases are safe.
+    // `tick_duration` of physical time. Each node is given a fixed skew drawn
+    // from [-error, +error] and reports [now + skew - error, now + skew + error],
+    // so nodes genuinely disagree about the current time while their bounds still
+    // contain the true simulated time -- exactly the model LeaseGuard assumes.
     struct leaseguard_config {
         raft::lease_clock::duration delta;
         raft::lease_clock::duration error;
@@ -1664,10 +1665,26 @@ class environment : public seastar::weakly_referencable<environment<M>> {
         raft::server::configuration _cfg;
         lw_shared_ptr<persistence<state_t>> _persistence;
         std::unique_ptr<raft_server<M>> _server;
+        // LeaseGuard: per-node simulated bounded-uncertainty clock. Node-scoped
+        // so it survives crash/stop/restart, keeping the reference stored in
+        // `_cfg.leaseguard` valid across server instances.
+        raft::bounded_clock_mock _clock;
+        // LeaseGuard: this node's fixed clock skew, drawn once from
+        // [-error, +error]. Node-scoped like the clock itself, so a restart does
+        // not silently resynchronize the node.
+        raft::lease_clock::duration _clock_skew{0};
     };
 
     // Passed to newly created failure detectors.
     const raft::logical_clock::duration _fd_convict_threshold;
+
+    // LeaseGuard configuration applied to every node, if enabled.
+    const std::optional<environment_config::leaseguard_config> _leaseguard;
+
+    // LeaseGuard: draws each node's fixed clock skew. Separate from the network's
+    // generator so that adding/removing skew does not reshuffle network delays.
+    // Declared (and so initialized) before `_network`, which consumes cfg.rnd.
+    std::mt19937 _clock_skew_rnd;
 
     // Used to deliver messages coming from the network to appropriate servers and their failure detectors.
     // Also keeps the servers and the failure detectors alive (owns them).
@@ -1705,6 +1722,8 @@ class environment : public seastar::weakly_referencable<environment<M>> {
 public:
     environment(environment_config cfg)
             : _fd_convict_threshold(cfg.fd_convict_threshold)
+            , _leaseguard(cfg.leaseguard)
+            , _clock_skew_rnd(cfg.rnd)
             , _network(std::move(cfg.network_delay), std::move(cfg.rnd),
         [this] (raft::server_id src, raft::server_id dst, const message_t& m) {
             auto& n = _routes.at(dst);
@@ -1751,6 +1770,24 @@ public:
         tick_crashing_servers();
     }
 
+    // LeaseGuard: advance every node's simulated physical clock to match the
+    // current simulated (logical) time. Called from the ticker each iteration.
+    // Each node reports [t + skew - error, t + skew + error] for its own fixed
+    // skew in [-error, +error]; since |skew| <= error the interval always
+    // contains the true simulated time t, so these are valid bounded-uncertainty
+    // clocks -- but nodes disagree about "now" by up to 2*error, which is what
+    // exercises the earliest/latest asymmetry LeaseGuard relies on.
+    void update_lease_clocks(raft::logical_clock::time_point now) {
+        if (!_leaseguard) {
+            return;
+        }
+        const auto ticks = (now - raft::logical_clock::min()).count();
+        const auto t = _leaseguard->epoch + ticks * _leaseguard->tick_duration;
+        for (auto& [id, r] : _routes) {
+            r._clock.set(t + r._clock_skew, _leaseguard->error);
+        }
+    }
+
     // A 'node' is a container for a Raft server, its storage ('persistence') and failure detector.
     // At a given point in time at most one Raft server instance can be running on a node.
     // Different instances may be running at different points in time, but they will all have
@@ -1771,6 +1808,20 @@ public:
             ._server = nullptr,
         });
         SCYLLA_ASSERT(inserted);
+
+        // LeaseGuard: point the node's lease configuration at its own stable,
+        // node-scoped clock (emplace: the reference member makes the optional
+        // non-assignable), and give it a fixed clock skew within its declared
+        // error bound so that nodes disagree about the current time.
+        if (_leaseguard) {
+            const auto err = _leaseguard->error.count();
+            it->second._clock_skew = raft::lease_clock::duration{
+                    std::uniform_int_distribution<raft::lease_clock::rep>{-err, err}(_clock_skew_rnd)};
+            it->second._cfg.leaseguard.emplace(raft::server::configuration::leaseguard_configuration{
+                .delta = _leaseguard->delta,
+                .clock = it->second._clock,
+            });
+        }
 
         return id;
     }
@@ -3323,6 +3374,9 @@ static future<> run_basic_generator_test(
         t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
             env.tick_network();
             timer.tick();
+            // LeaseGuard: advance every node's simulated physical clock to the
+            // current simulated time (no-op unless leases are enabled).
+            env.update_lease_clocks(timer.now());
             env.for_each_server([&] (raft::server_id, raft_server<AppendReg>* srv) {
                 // Tick each server with probability 1/10.
                 // Thus each server is ticked, on average, once every 10 timer/network ticks.
@@ -3368,7 +3422,8 @@ static future<> run_basic_generator_test(
                 .enable_forwarding = forwarding,
             };
 
-        tlogger.info("basic_generator_test: forwarding: {}, frequent snapshotting: {}", forwarding, frequent_snapshotting);
+        tlogger.info("basic_generator_test: seed: {}, forwarding: {}, frequent snapshotting: {}, leaseguard: {}",
+                seed, forwarding, frequent_snapshotting, leaseguard.has_value());
 
         auto leader_id = co_await env.new_server(true, srv_cfg);
 
@@ -3678,4 +3733,31 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             50_t /* fd_convict_threshold */,
             std::nullopt /* leaseguard */,
             std::nullopt /* force_forwarding */);
+}
+
+SEASTAR_TEST_CASE(basic_generator_test_leaseguard) {
+    // LeaseGuard: run the full nemesis (partitions/failovers, crashes+restarts,
+    // reconfigurations, snapshotting) with leader leases enabled and a per-node
+    // simulated bounded-uncertainty clock, and check linearizability. Leases
+    // being safe means the existing model must never observe a stale read, even
+    // when a deposed leader serves local lease reads during a partition.
+    //
+    // Δ must exceed the cluster's failover time so that a deposed leader still
+    // holds a valid lease (and may serve local reads) while a newly elected
+    // leader defers committing -- otherwise the old lease always expires before
+    // a new leader appears and neither the deferred-commit nor the concurrent
+    // lease-read path is exercised. We therefore shorten failure detection for
+    // this test and pick Δ above the resulting failover time. 1_t maps to 10ms
+    // of simulated physical time.
+    constexpr auto tick = std::chrono::milliseconds{10};
+    co_await run_basic_generator_test(
+            tests::random::get_int<int32_t>(),
+            20_t /* fd_convict_threshold */,
+            environment_config::leaseguard_config{
+                .delta = 400 * tick,
+                .error = 20 * tick,
+                .tick_duration = tick,
+                .epoch = raft::lease_clock::time_point{std::chrono::hours{24 * 365}},
+            },
+            true /* force_forwarding */);
 }
