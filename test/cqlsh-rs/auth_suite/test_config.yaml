@@ -1,0 +1,4 @@
+type: Python
+extra_scylla_cmdline_options:
+  - --authenticator=PasswordAuthenticator
+  - --authorizer=CassandraAuthorizer

@@ -12,6 +12,7 @@
 [submodule "scylla-python3"]
 	path = tools/python3
 	url = ../scylla-python3
-[submodule "tools/cqlsh"]
-	path = tools/cqlsh
-	url = ../scylla-cqlsh
+[submodule "tools/cqlsh-rs"]
+	path = tools/cqlsh-rs
+	url = ../cqlsh-rs
+	branch = main

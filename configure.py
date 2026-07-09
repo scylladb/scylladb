@@ -2979,13 +2979,13 @@ def write_build_file(f,
         rule build-submodule-deb
           command = cd $dir && ./reloc/build_deb.sh --reloc-pkg $artifact
 
-        build tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
-          reloc_dir = tools/cqlsh
-        build dist-cqlsh-rpm: build-submodule-rpm tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
-          dir = tools/cqlsh
+        build tools/cqlsh-rs-pkg/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
+          reloc_dir = tools/cqlsh-rs-pkg
+        build dist-cqlsh-rpm: build-submodule-rpm tools/cqlsh-rs-pkg/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
+          dir = tools/cqlsh-rs-pkg
           artifact = build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
-        build dist-cqlsh-deb: build-submodule-deb tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
-          dir = tools/cqlsh
+        build dist-cqlsh-deb: build-submodule-deb tools/cqlsh-rs-pkg/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
+          dir = tools/cqlsh-rs-pkg
           artifact = build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build dist-cqlsh-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz'.format(mode=mode, scylla_product=scylla_product, scylla_version=scylla_version, scylla_release=scylla_release, arch=arch) for mode in default_modes])}
         build dist-cqlsh: phony dist-cqlsh-tar dist-cqlsh-rpm dist-cqlsh-deb
@@ -3041,8 +3041,8 @@ def write_build_file(f,
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz: copy tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz: copy tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz: copy tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
-        build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
-        build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-package.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
+        build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz: copy tools/cqlsh-rs-pkg/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
+        build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-package.tar.gz: copy tools/cqlsh-rs-pkg/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
 
         build $builddir/{mode}/dist/rpm: collect_pkgs | $builddir/dist/{mode}/redhat dist-cqlsh-rpm dist-python3-rpm
           pkgs = {' '.join(all_rpms)}

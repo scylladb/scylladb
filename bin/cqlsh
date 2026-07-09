@@ -6,5 +6,12 @@
 trap 'echo "error $? in $0 line $LINENO"' ERR
 
 here=$(dirname "$0")
-exec "$here/../tools/cqlsh/bin/cqlsh.py" "$@"
+
+# Prefer built cqlsh-rs binary; fall back to cargo-built location
+if [ -x "$here/../tools/cqlsh-rs/target/release/cqlsh-rs" ]; then
+    exec "$here/../tools/cqlsh-rs/target/release/cqlsh-rs" "$@"
+fi
+
+echo "cqlsh-rs binary not found. Build it with: cd tools/cqlsh-rs && cargo build --release" >&2
+exit 1
 
