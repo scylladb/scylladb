@@ -1177,6 +1177,23 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Timeout for CQL server requests on shutdown. After this timeout the server will shutdown all connections.")
     , group0_raft_op_timeout_in_ms(this, "group0_raft_op_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 60000,
             "The time in milliseconds that group0 allows a Raft operation to complete.")
+    , strongly_consistent_raft_leader_leases_enabled(this, "strongly_consistent_raft_leader_leases_enabled", liveness::MustRestart, value_status::Used, false,
+            "Enable Raft leader leases (LeaseGuard) for strongly-consistent tables. When enabled, "
+            "a leader serves linearizable reads locally without a quorum round-trip while its lease "
+            "is valid, and defers committing writes until a deposed leader's lease has expired. "
+            "This REQUIRES synchronized clocks on all nodes (e.g. NTP or PTP): a node whose clock is "
+            "unsynchronized falls back to the safe path (deferring commits and possibly stepping "
+            "down), which can reduce availability. Read once when a raft group starts.")
+    , strongly_consistent_raft_leader_lease_duration_in_ms(this, "strongly_consistent_raft_leader_lease_duration_in_ms", liveness::MustRestart, value_status::Used, 1000,
+            "Duration (Delta) in milliseconds of a Raft leader lease for strongly-consistent tables, "
+            "used when strongly_consistent_raft_leader_leases_enabled is true. Must be positive; the node "
+            "fails to start otherwise. Should be on the order "
+            "of the Raft election timeout (~1 second by default). A leader serves reads locally only "
+            "while its lease is younger than this duration minus twice the clock's error bound. With "
+            "the adjtimex clock that bound is the kernel's maximum error, which grows by 0.5ms per "
+            "second between NTP daemon updates (to ~0.5s at chrony's default maxpoll of 1024s), so "
+            "configure the daemon to update the kernel often: several sources, or a low maxpoll "
+            "(maxpoll 6 keeps it under ~40ms).")
     /**
     * @Group Inter-node settings
     */
