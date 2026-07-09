@@ -14,7 +14,7 @@
 namespace lua {
 
 template <typename T>
-static T* aligned_user_data(lua_State* l) {
+T* aligned_user_data(lua_State* l) {
     constexpr size_t alignment = alignof(T);
     // We know lua_newuserdata aligns allocations to 8, so we need a
     // padding of at most alignment - 8 to find a sufficiently aligned

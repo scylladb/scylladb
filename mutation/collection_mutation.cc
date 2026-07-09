@@ -166,9 +166,6 @@ auto fmt::formatter<collection_mutation_view::printer>::format(const collection_
     return fmt::format_to(out, "}}");
 }
 
-template <typename Adaptor, typename Iterator>
-static collection_mutation serialize_collection_mutation(const tombstone& tomb, std::ranges::subrange<Iterator> cells);
-
 collection_mutation_compact_and_expire_result compact_and_expire(
         collection_mutation_view cmv,
         column_id id,

@@ -30,15 +30,6 @@
 #include "test/lib/test_utils.hh"
 #include "test/boost/total_order_check.hh"
 
-template <typename... Args>
-static
-void
-debug(Args&&... args) {
-    if (false) {
-        print(std::forward<Args>(args)...);
-    }
-}
-
 static dht::token token_from_long(uint64_t value) {
     return dht::token(value);
 }

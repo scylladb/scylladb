@@ -869,17 +869,6 @@ public:
     }
 };
 
-template <typename T>
-static size_t calculate_serialized_size(const T& v) {
-    struct {
-        size_t _size = 0;
-        void write(bytes_view v) { _size += v.size(); }
-        void write(const char*, size_t size) { _size += size; }
-    } os;
-    ser::serialize(os, v);
-    return os._size;
-}
-
 struct blob_header {
     uint32_t size;
     bool includes_pk;
@@ -888,37 +877,6 @@ struct blob_header {
 };
 
 } // anonymous namespace
-
-namespace ser {
-
-template <>
-struct serializer<blob_header> {
-    template <typename Input>
-    static blob_header read(Input& in) {
-        blob_header head;
-        head.size = ser::deserialize(in, std::type_identity<int>{});
-        head.includes_pk = ser::deserialize(in, std::type_identity<bool>{});
-        head.has_ck = ser::deserialize(in, std::type_identity<bool>{});
-        head.includes_ck = ser::deserialize(in, std::type_identity<bool>{});
-        return head;
-    }
-    template <typename Output>
-    static void write(Output& out, blob_header head) {
-        ser::serialize(out, head.size);
-        ser::serialize(out, head.includes_pk);
-        ser::serialize(out, head.has_ck);
-        ser::serialize(out, head.includes_ck);
-    }
-    template <typename Input>
-    static void skip(Input& in) {
-        ser::skip(in, std::type_identity<int>{});
-        ser::skip(in, std::type_identity<bool>{});
-        ser::skip(in, std::type_identity<bool>{});
-        ser::skip(in, std::type_identity<bool>{});
-    }
-};
-
-} // namespace ser
 
 namespace {
 

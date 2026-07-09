@@ -29,7 +29,6 @@
 #include <json/json.h>
 
 template <typename Func>
-static
 void time_it(Func func, int iterations = 5, int iterations_between_clock_readings = 1000) {
     using clk = std::chrono::steady_clock;
 
@@ -224,7 +223,6 @@ template <> struct fmt::formatter<perf_result_with_aio_writes> : fmt::formatter<
  */
 template <typename Res, typename Func, typename UpdateFunc = void(*)(const Res&, const executor_shard_stats&)>
 requires (std::is_base_of_v<perf_result, Res> && std::is_invocable_v<UpdateFunc, Res&, const executor_shard_stats&>)
-static
 std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, bool stop_on_error = true, UpdateFunc uf = [](const auto&, const auto&) {}, unsigned operations_count_per_iteration = 1) {
     using clk = std::chrono::steady_clock;
     if (operations_per_shard) {
@@ -262,7 +260,6 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
 }
 
 template <typename Func>
-static
 std::vector<perf_result> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, bool stop_on_error = true, unsigned operations_count_per_iteration = 1) {
     return time_parallel_ex<perf_result>(std::move(func), concurrency_per_core, iterations, operations_per_shard, stop_on_error, [](const auto&, const auto&) {}, operations_count_per_iteration);
 }
