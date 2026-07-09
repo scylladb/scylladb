@@ -332,6 +332,8 @@ public:
     named_value<uint32_t> request_timeout_in_ms;
     named_value<uint32_t> request_timeout_on_shutdown_in_seconds;
     named_value<uint32_t> group0_raft_op_timeout_in_ms;
+    named_value<bool> strong_consistency_enable_leases;
+    named_value<uint32_t> strong_consistency_lease_duration_in_ms;
     named_value<bool> cross_node_timeout;
     named_value<uint32_t> internode_send_buff_size_in_bytes;
     named_value<uint32_t> internode_recv_buff_size_in_bytes;

@@ -1180,6 +1180,27 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Timeout for CQL server requests on shutdown. After this timeout the server will shutdown all connections.")
     , group0_raft_op_timeout_in_ms(this, "group0_raft_op_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 60000,
             "The time in milliseconds that group0 allows a Raft operation to complete.")
+    , strong_consistency_enable_leases(this, "strong_consistency_enable_leases", liveness::MustRestart, value_status::Used, false,
+            "Enable Raft leader leases (LeaseGuard) for strongly-consistent tables. When enabled, "
+            "a leader serves linearizable reads locally without a quorum round-trip while its lease "
+            "is valid, and defers committing writes until a deposed leader's lease has expired. "
+            "This REQUIRES synchronized clocks on all nodes (e.g. NTP or PTP): a node whose clock is "
+            "unsynchronized falls back to the safe path (deferring commits and possibly stepping "
+            "down), which can reduce availability. Read once when a raft group starts.")
+    , strong_consistency_lease_duration_in_ms(this, "strong_consistency_lease_duration_in_ms", liveness::MustRestart, value_status::Used, 0,
+            "Duration (Delta) in milliseconds of a Raft leader lease for strongly-consistent tables, "
+            "used when strong_consistency_enable_leases is true. 0, the default, derives it "
+            "from the Raft election timeout (10 ticks of 100ms, i.e. 1s), the longest lease a crashed "
+            "leader's successor never has to wait out. Values below three ticks (300ms) are rejected at "
+            "startup; above 8s a warning is logged, since every leader change stalls a group's writes for "
+            "up to the lease duration. All nodes must use the same value: a deposed leader with a longer "
+            "lease than the new leader's would serve reads past the point where the new leader commits, "
+            "so change it only while leases are disabled on all nodes. A leader serves reads locally only "
+            "while its lease is younger than this duration minus twice the clock's error bound. With "
+            "the adjtimex clock that bound is the kernel's maximum error, which grows by 0.5ms per "
+            "second between NTP daemon updates (to ~0.5s at chrony's default maxpoll of 1024s), so "
+            "configure the daemon to update the kernel often: several sources, or a low maxpoll "
+            "(maxpoll 6 keeps it under ~40ms).")
     /**
     * @Group Inter-node settings
     */
