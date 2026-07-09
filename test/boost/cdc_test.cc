@@ -2123,8 +2123,9 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
             cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (1, 1, null, 1)");
             cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (2, 2, null, 2)");
 
-            // These are the queried columns:
-            sstring query_string = "select \"cdc$operation\", pk, ck, v, \"cdc$deleted_v\", \"cdc$deleted_v2\" from tbl_scylla_cdc_log";
+            auto query_pk = [] (int32_t pk_value) -> sstring {
+                return fmt::format("select \"cdc$operation\", pk, ck, v, \"cdc$deleted_v\", \"cdc$deleted_v2\" from tbl_scylla_cdc_log where pk = {} allow filtering", pk_value);
+            };
 
             // Perform an insert that does not affect v column.
             // Pre-image: v=NULL, cdc$deleted_v=NULL
@@ -2137,6 +2138,11 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
             std::vector<data_value> postimage1 = 
                 { oper_ut(cdc::operation::post_image), int32_t(1), int32_t(1), data_value::make_null(int32_type), data_value::make_null(boolean_type), data_value::make_null(boolean_type) };
 
+            auto pk1_result = get_result(e, {oper_type, int32_type, int32_type, int32_type, boolean_type, boolean_type}, query_pk(1));
+            BOOST_REQUIRE_EQUAL(pk1_result.size(), 5);
+            BOOST_REQUIRE_EQUAL(pk1_result[2], preimage1);
+            BOOST_REQUIRE_EQUAL(pk1_result[4], postimage1);
+
             // Perform an insert that affects v column.
             // Pre-image: v=NULL, cdc$deleted_v=true
             // Pre-image ('full' mode): v=NULL, cdc$deleted_v=true
@@ -2147,12 +2153,10 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
             std::vector<data_value> postimage2 = 
                 { oper_ut(cdc::operation::post_image), int32_t(2), int32_t(2), int32_t(2), data_value::make_null(boolean_type), data_value::make_null(boolean_type) };
 
-            auto result = get_result(e, {oper_type, int32_type, int32_type, int32_type, boolean_type, boolean_type}, query_string);
-            BOOST_REQUIRE_EQUAL(result.size(), 10);
-            BOOST_REQUIRE_EQUAL(result[2], preimage1);
-            BOOST_REQUIRE_EQUAL(result[4], postimage1);
-            BOOST_REQUIRE_EQUAL(result[7], preimage2);
-            BOOST_REQUIRE_EQUAL(result[9], postimage2);
+            auto pk2_result = get_result(e, {oper_type, int32_type, int32_type, int32_type, boolean_type, boolean_type}, query_pk(2));
+            BOOST_REQUIRE_EQUAL(pk2_result.size(), 5);
+            BOOST_REQUIRE_EQUAL(pk2_result[2], preimage2);
+            BOOST_REQUIRE_EQUAL(pk2_result[4], postimage2);
 
             auto test_table_with_collection = [&](bool frozen_collection) {
                 // Create a table and insert data with v = NULL
@@ -2167,9 +2171,6 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
                 cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (1, 1, null, {1})");
                 cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (2, 2, null, {2})");
 
-                // These are the queried columns:
-                sstring query_string = "select \"cdc$operation\", pk, ck, v, \"cdc$deleted_v\", \"cdc$deleted_v2\" from tbl_scylla_cdc_log";
-
                 // Perform an insert that does not affect v column.
                 // Pre-image: v=NULL, cdc$deleted_v=NULL
                 // Pre-image ('full' mode): v=NULL, cdc$deleted_v=true
@@ -2179,6 +2180,11 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
                     { oper_ut(cdc::operation::pre_image), int32_t(1), int32_t(1), data_value::make_null(int32_set_type), deleted_v, data_value::make_null(boolean_type) };
                 std::vector<data_value> postimage1 = 
                     { oper_ut(cdc::operation::post_image), int32_t(1), int32_t(1), data_value::make_null(int32_set_type), data_value::make_null(boolean_type), data_value::make_null(boolean_type) };
+
+                auto pk1_result = get_result(e, {oper_type, int32_type, int32_type, int32_set_type, boolean_type, boolean_type}, query_pk(1));
+                BOOST_REQUIRE_EQUAL(pk1_result.size(), 5);
+                BOOST_REQUIRE_EQUAL(pk1_result[2], preimage1);
+                BOOST_REQUIRE_EQUAL(pk1_result[4], postimage1);
 
                 // Perform an insert that affects v column.
                 // Pre-image: v=NULL, cdc$deleted_v=true
@@ -2190,12 +2196,10 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
                 std::vector<data_value> postimage2 = 
                     { oper_ut(cdc::operation::post_image), int32_t(2), int32_t(2), make_int32_set(2), data_value::make_null(boolean_type), data_value::make_null(boolean_type) };
 
-                auto result = get_result(e, {oper_type, int32_type, int32_type, int32_set_type, boolean_type, boolean_type}, query_string);
-                BOOST_REQUIRE_EQUAL(result.size(), 10);
-                BOOST_REQUIRE_EQUAL(result[2], preimage1);
-                BOOST_REQUIRE_EQUAL(result[4], postimage1);
-                BOOST_REQUIRE_EQUAL(result[7], preimage2);
-                BOOST_REQUIRE_EQUAL(result[9], postimage2);
+                auto pk2_result = get_result(e, {oper_type, int32_type, int32_type, int32_set_type, boolean_type, boolean_type}, query_pk(2));
+                BOOST_REQUIRE_EQUAL(pk2_result.size(), 5);
+                BOOST_REQUIRE_EQUAL(pk2_result[2], preimage2);
+                BOOST_REQUIRE_EQUAL(pk2_result[4], postimage2);
             };
 
             test_table_with_collection(false);
