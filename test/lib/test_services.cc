@@ -28,6 +28,7 @@
 #include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
 #include "sstables/generation_type.hh"
+#include "sstables/storage.hh"
 
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
@@ -524,6 +525,19 @@ test_env::tempdir() noexcept {
 data_dictionary::storage_options
 test_env::get_storage_options() const noexcept {
     return _impl->storage;
+}
+
+std::unique_ptr<sstables::storage>
+test_env::make_storage(schema_ptr s, sstring dir, sstables::sstable_state state) {
+    auto storage_opts = _impl->storage;
+    if (dir.empty()) {
+        dir = _impl->dir.path().native();
+    }
+    std::visit(overloaded_functor{
+        [&dir] (data_dictionary::storage_options::local& loc) { loc.dir = dir; },
+        [] (data_dictionary::storage_options::object_storage& os) { os.location = std::nullopt; },
+    }, storage_opts.value);
+    return sstables::make_storage(_impl->mgr, s, storage_opts, state);
 }
 
 reader_permit

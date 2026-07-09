@@ -32,6 +32,8 @@ class compaction_task_executor;
 
 namespace sstables {
 
+class storage;
+
 class test_env_sstables_manager : public sstables_manager {
     using sstables_manager::sstables_manager;
     std::optional<size_t> _promoted_index_block_size;
@@ -181,6 +183,16 @@ public:
     db::config& db_config();
     tmpdir& tempdir() noexcept;
     data_dictionary::storage_options get_storage_options() const noexcept;
+
+    // Build a standalone storage instance from the env's storage options,
+    // patching in the fields that would normally be filled by
+    // init_table_storage (schema id -> object_storage.location) and by
+    // per-sstable factories (dir -> local.dir). Useful for tests that need
+    // to query sstable files/objects after all sstables (and their owned
+    // per-sstable storage) have been destroyed. If `dir` is empty, the env's
+    // tempdir is used for the local variant.
+    std::unique_ptr<sstables::storage> make_storage(schema_ptr s, sstring dir = "",
+            sstables::sstable_state state = sstables::sstable_state::normal);
 
     reader_permit make_reader_permit(const schema_ptr &s, const char* n, db::timeout_clock::time_point timeout);
     reader_permit make_reader_permit(db::timeout_clock::time_point timeout = db::no_timeout);
