@@ -1626,6 +1626,21 @@ struct environment_config {
     std::mt19937 rnd;
     std::uniform_int_distribution<raft::logical_clock::rep> network_delay;
     raft::logical_clock::duration fd_convict_threshold;
+
+    // LeaseGuard: when set, every node created in this environment is configured
+    // with leader leases, backed by a per-node simulated bounded-uncertainty
+    // clock. The clocks are driven from simulated (logical) time by
+    // environment::update_lease_clocks(), mapping one logical tick to
+    // `tick_duration` of physical time. All nodes report the same interval
+    // [now - error, now + error], so the bounds always contain the true
+    // simulated time and leases are safe.
+    struct leaseguard_config {
+        std::chrono::system_clock::duration delta;
+        std::chrono::system_clock::duration error;
+        std::chrono::system_clock::duration tick_duration;
+        std::chrono::system_clock::time_point epoch;
+    };
+    std::optional<leaseguard_config> leaseguard;
 };
 
 // A set of `raft_server`s connected by a `network`.
@@ -3279,7 +3294,11 @@ template <> struct fmt::formatter<AppendReg::ret> : fmt::formatter<string_view> 
     }
 };
 
-SEASTAR_TEST_CASE(basic_generator_test) {
+static future<> run_basic_generator_test(
+        int32_t seed,
+        raft::logical_clock::duration fd_convict_threshold,
+        std::optional<environment_config::leaseguard_config> leaseguard,
+        std::optional<bool> force_forwarding) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
             raft_read<AppendReg>,
@@ -3291,14 +3310,14 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
     static_assert(operation::Invocable<op_type>);
 
-    auto seed = tests::random::get_int<int32_t>();
     std::mt19937 random_engine{seed};
 
     logical_timer timer;
     environment_config cfg {
         .rnd{random_engine},
         .network_delay{0, 6},
-        .fd_convict_threshold = 50_t,
+        .fd_convict_threshold = fd_convict_threshold,
+        .leaseguard = leaseguard,
     };
     co_await with_env_and_ticker<AppendReg>(cfg, [&] (environment<AppendReg>& env, ticker& t) -> future<> {
         t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
@@ -3320,8 +3339,9 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
         // With probability 1/2 enable forwarding: when we send a command to a follower, it automatically
         // forwards it to the known leader or waits for learning about a leader instead of returning
-        // `not_a_leader`.
-        bool forwarding = bdist(random_engine);
+        // `not_a_leader`. The lease variant forces this on so that `raft_read` operations are generated
+        // (they require forwarding) and thus exercise the lease read path.
+        bool forwarding = force_forwarding.value_or(bdist(random_engine));
 
         // With probability 1/2, run the servers with a configuration which causes frequent snapshotting.
         // Note: with the default configuration we won't observe any snapshots at all, since the default
@@ -3650,4 +3670,12 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         tlogger.error("Failed to obtain a final successful response at the end of the test. Number of attempts: {}", cnt);
         SCYLLA_ASSERT(false);
     });
+}
+
+SEASTAR_TEST_CASE(basic_generator_test) {
+    co_await run_basic_generator_test(
+            tests::random::get_int<int32_t>(),
+            50_t /* fd_convict_threshold */,
+            std::nullopt /* leaseguard */,
+            std::nullopt /* force_forwarding */);
 }
