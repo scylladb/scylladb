@@ -10,13 +10,15 @@ import requests
 import json
 import urllib.parse
 
+from .util import get_cert
+
 # Test that the "/localnodes" request works, returning at least the one node.
 # See more elaborate tests for /localnodes, requiring multiple nodes,
 # datacenters, or different configurations, in
 # test_topology_experimental_raft/test_alternator.py
 def test_localnodes(scylla_only, dynamodb):
     url = dynamodb.meta.client._endpoint.host
-    response = requests.get(url + '/localnodes', verify=False)
+    response = requests.get(url + '/localnodes', verify=False, cert=get_cert(dynamodb))
     assert response.ok
     j = json.loads(response.content.decode('utf-8'))
     assert isinstance(j, list)
@@ -51,13 +53,13 @@ def this_rack(dynamodb, scylla_only):
 def test_localnodes_option_dc(scylla_only, dynamodb, this_dc):
     url = dynamodb.meta.client._endpoint.host
     # Using dc={this_dc} should work and return at least this node:
-    response = requests.get(url + f'/localnodes?dc={this_dc}', verify=False)
+    response = requests.get(url + f'/localnodes?dc={this_dc}', verify=False, cert=get_cert(dynamodb))
     assert response.ok
     j = json.loads(response.content.decode('utf-8'))
     assert isinstance(j, list)
     assert len(j) >= 1
     # Using dc=nonexistent_dc should return an empty list (not an error)
-    response = requests.get(url + f'/localnodes?dc=nonexistent_dc', verify=False)
+    response = requests.get(url + f'/localnodes?dc=nonexistent_dc', verify=False, cert=get_cert(dynamodb))
     assert response.ok
     j = json.loads(response.content.decode('utf-8'))
     assert isinstance(j, list)
@@ -69,13 +71,13 @@ def test_localnodes_option_dc(scylla_only, dynamodb, this_dc):
 def test_localnodes_option_rack(scylla_only, dynamodb, this_rack):
     url = dynamodb.meta.client._endpoint.host
     # Using rack={this_rack} should work and return at least this node:
-    response = requests.get(url + f'/localnodes?rack={this_rack}', verify=False)
+    response = requests.get(url + f'/localnodes?rack={this_rack}', verify=False, cert=get_cert(dynamodb))
     assert response.ok
     j = json.loads(response.content.decode('utf-8'))
     assert isinstance(j, list)
     assert len(j) >= 1
     # Using rack=nonexistent_rack should return an empty list (not an error)
-    response = requests.get(url + f'/localnodes?rack=nonexistent_rack', verify=False)
+    response = requests.get(url + f'/localnodes?rack=nonexistent_rack', verify=False, cert=get_cert(dynamodb))
     assert response.ok
     j = json.loads(response.content.decode('utf-8'))
     assert isinstance(j, list)
