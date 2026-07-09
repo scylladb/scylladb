@@ -13,6 +13,7 @@
 #include "locator/tablet_metadata_guard.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
+#include "service/raft/bounded_clock_adjtimex.hh"
 #include "service/strong_consistency/table_metrics.hh"
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
@@ -193,6 +194,14 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Ask table `id` to flush, in the background. `pos` only decides whether the
     // table skips the request.
     void request_flush(db::cf_id_type id, db::replay_position pos);
+
+    // LeaseGuard clock backend, shared by all raft groups on this shard. Reads
+    // bounded-uncertainty time from the kernel NTP state. It is stateless and
+    // outlives every raft::server this manager creates (servers are stopped in
+    // stop()/schedule_raft_group_deletion() before the manager is destroyed),
+    // so passing a reference to it in each server's leaseguard configuration is
+    // safe. Only consulted when leader leases are enabled via db::config.
+    service::bounded_clock_adjtimex _bounded_clock;
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
