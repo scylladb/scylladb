@@ -134,7 +134,9 @@ public:
     virtual future<size_t> num_references(const sstable& sst) const = 0;
 
     virtual std::string_view prefix() const  = 0;
+    virtual sstring component_fqn(const sstable& sst, component_type type) const  = 0;
     virtual future<bool> exists(const sstable& sst, component_type type) const = 0;
+    virtual future<bool> exists(const std::string& component_location) const = 0;
 
     // Returns true if this storage backend uses object storage (S3/GCS).
     // Used to decide per-SSTable whether to clone or byte-stream during tablet migration.

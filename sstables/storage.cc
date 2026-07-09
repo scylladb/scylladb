@@ -113,9 +113,15 @@ public:
     future<size_t> num_references(const sstable& sst) const override;
 
     virtual std::string_view prefix() const override { return _dir.native(); }
+    sstring component_fqn(const sstable& sst, component_type type) const override {
+        return sst.get_filename(type).format();
+    }
     bool is_object_storage() const override { return false; }
     future<bool> exists(const sstable& sst, component_type type) const override {
-        return file_exists(sst.get_filename(type).format());
+        return exists(sst.get_filename(type).format());
+    }
+    future<bool> exists(const std::string& component_location) const override {
+        return file_exists(component_location);
     }
 };
 
@@ -725,8 +731,16 @@ public:
         return _prefix;
     }
 
+    sstring component_fqn(const sstable& sst, component_type type) const override {
+        return make_object_name(sst, type).str();
+    }
+
     future<bool> exists(const sstable& sst, component_type type) const override {
-        return _client->object_exists(make_object_name(sst, type), abort_source());
+        return exists(make_object_name(sst, type));
+    }
+
+    future<bool> exists(const std::string& component_location) const override {
+        return _client->object_exists(object_name(component_location), abort_source());
     }
 
     future<size_t> num_references(sstable_id sid) const;
