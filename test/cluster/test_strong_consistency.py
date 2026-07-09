@@ -1631,3 +1631,177 @@ async def test_write_from_non_replica_after_leader_down(manager: ManagerClient, 
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 2", host=non_replica_host)
             assert len(rows) == 1
             assert rows[0].c == 2
+
+
+# Enable LeaseGuard leader leases (off by default) for strongly-consistent tables.
+
+
+async def test_leader_leases_write_read_and_leader_change(manager: ManagerClient, leaseguard_config):
+    """
+    End-to-end test of strongly-consistent tablet raft groups, parametrized over
+    LeaseGuard leader leases on/off (strongly_consistent_raft_leader_leases_enabled,
+    adjtimex bounded-clock backend).
+
+    In both modes it verifies that:
+      - the SC raft servers report the expected lease mode (checked via the log),
+      - normal writes and linearizable (CL=QUORUM) reads work from a leader and a
+        follower replica,
+      - linearizable reads on the leader are served LOCALLY when leases are on
+        (no quorum read barrier), and via a quorum read barrier when they are off
+        -- asserted by grepping the leader's raft trace log,
+      - after the leader is killed a new leader is elected and resumes committing
+        writes and serving reads (with leases on this exercises the
+        deferred-commit path that waits for the deposed lease to expire),
+      - a node restart preserves data.
+
+    LeaseGuard REQUIRES synchronized clocks; the leases_on variant uses the real
+    adjtimex-backed clock and therefore assumes the test host clock is
+    NTP/PTP-synchronized. On a host with an unsynchronized clock the leader would
+    fall back to quorum reads / deferred commits and the leases_on assertions
+    would fail.
+    """
+    leases_on = leaseguard_config.get('strongly_consistent_raft_leader_leases_enabled', False)
+    logger.info(f"Bootstrapping 3-node cluster (leases {'on' if leases_on else 'off'})")
+    # raft trace logs let us assert whether leader reads take the local lease path
+    # or the quorum read-barrier path (see the locality check below).
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft=trace']
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG | leaseguard_config, cmdline=cmdline, auto_rack_dc='my_dc')
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    def host_by_host_id(host_id):
+        for hid, host in zip(host_ids, hosts):
+            if hid == host_id:
+                return host
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
+            replica_host_ids = [str(replica[0]) for replica in tablet_replicas]
+            assert len(replica_host_ids) == 3
+
+            for i in range(3):
+                if str(host_ids[i]) in replica_host_ids:
+                    leader_host_id = await wait_for_leader(manager, servers[i], group_id)
+                    break
+            leader_idx = next(i for i in range(3) if str(host_ids[i]) == str(leader_host_id))
+            leader_server = servers[leader_idx]
+            leader_host = host_by_host_id(leader_host_id)
+            follower_host_id = [hid for hid in host_ids if str(hid) != str(leader_host_id)][0]
+            follower_host = host_by_host_id(follower_host_id)
+
+            # Confirm each node reports the expected lease mode for the
+            # strongly-consistent raft group (the group0 server does not use
+            # leases, so this line only appears once the SC tablet group's server
+            # starts).
+            expected = ("LeaseGuard leader leases enabled" if leases_on
+                        else "LeaseGuard leader leases disabled")
+            for s in servers:
+                log = await manager.server_open_log(s.server_id)
+                matches = await log.grep(expected)
+                assert matches, f"Server {s.server_id} did not log {expected!r}"
+
+            # Writes and (linearizable, CL=QUORUM) reads from leader and follower.
+            logger.info("Write/read from leader and follower")
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (1, 100)", host=leader_host)
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1", consistency_level=ConsistencyLevel.QUORUM),
+                host=leader_host)
+            assert len(rows) == 1 and rows[0].c == 100
+
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (2, 200)", host=follower_host)
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 2", consistency_level=ConsistencyLevel.QUORUM),
+                host=follower_host)
+            assert len(rows) == 1 and rows[0].c == 200
+
+            # Read-locality check. With leases ON, a linearizable read on the
+            # leader is served locally from its valid lease and never broadcasts a
+            # read_quorum; with leases OFF every linearizable read takes the quorum
+            # read barrier. The lease was warmed by the write+read above (a
+            # committed entry with a lease_time now exists in the current term).
+            #
+            # We grep the leader's raft trace log, scoped to the SC group's tag
+            # ("sc-<group_id>", set in groups_manager; group0 uses a different tag)
+            # and to a fresh mark, so group0 / background / startup barriers don't
+            # interfere. This greps trace-level log text (not a stable API), which
+            # is acceptable for keeping the locality check entirely in the test.
+            tag = f"sc-{group_id}"
+            leader_log = await manager.server_open_log(leader_server.server_id)
+            mark = await leader_log.mark()
+            for _ in range(5):
+                await cql.run_async(
+                    SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1", consistency_level=ConsistencyLevel.QUORUM),
+                    host=leader_host)
+            lease_reads = await leader_log.grep(
+                rf"start_read_barrier\[{re.escape(tag)}\] lease read, resolving id", from_mark=mark)
+            quorum_reads = await leader_log.grep(
+                rf"broadcast_read_quorum\[{re.escape(tag)}\]", from_mark=mark)
+            logger.info(f"Leader read locality (leases_{'on' if leases_on else 'off'}): "
+                        f"{len(lease_reads)} local lease reads, {len(quorum_reads)} quorum broadcasts")
+            if leases_on:
+                assert len(lease_reads) > 0, "expected local lease reads on the leader with leases on"
+                assert len(quorum_reads) == 0, "leader reads must not contact a quorum while the lease is valid"
+            else:
+                assert len(lease_reads) == 0, "no local lease reads expected with leases off"
+                assert len(quorum_reads) > 0, "leader reads must take the quorum read barrier with leases off"
+
+            # Kill the leader. A new leader must be elected and resume committing.
+            # With leases on this exercises the deferred-commit path (the new
+            # leader waits for the deposed leader's lease to expire first).
+            logger.info(f"Stopping leader {leader_host_id}")
+            await manager.server_stop(leader_server.server_id, convict=True)
+            await manager.others_not_see_server(leader_server.ip_addr)
+
+            surviving = [(i, s) for i, s in enumerate(servers) if i != leader_idx]
+            probe_idx, _ = surviving[0]
+
+            async def wait_for_new_leader():
+                new_leader = await wait_for_leader(manager, servers[probe_idx], group_id)
+                return None if str(new_leader) == str(leader_host_id) else new_leader
+            new_leader_host_id = await wait_for(wait_for_new_leader, time.time() + 60)
+            new_leader_host = host_by_host_id(new_leader_host_id)
+
+            # Writes/reads must succeed under the new leader (the deferred-commit
+            # wait for the old lease to expire may add a small delay).
+            logger.info(f"Write/read under new leader {new_leader_host_id}")
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (3, 300)", host=new_leader_host)
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 3", consistency_level=ConsistencyLevel.QUORUM),
+                host=new_leader_host)
+            assert len(rows) == 1 and rows[0].c == 300
+
+            # Earlier data is still readable under the new leader.
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1", consistency_level=ConsistencyLevel.QUORUM),
+                host=new_leader_host)
+            assert len(rows) == 1 and rows[0].c == 100
+
+            # Restart a surviving FOLLOWER (never the new leader) and verify the
+            # group keeps working. Picking the non-leader survivor keeps the write
+            # below targeting a live leader coordinator and preserves quorum once
+            # the follower is back. With leases on, uncommitted entries carry their
+            # lease time through the commitlog and are reloaded on restart.
+            restart_idx = next(i for i, _ in surviving if str(host_ids[i]) != str(new_leader_host_id))
+            logger.info(f"Restarting server {servers[restart_idx].server_id}")
+            await manager.server_restart(servers[restart_idx].server_id)
+            await reconnect_driver(manager)
+            cql = manager.get_cql()
+
+            # Unpinned write: reconnect_driver() returns a fresh session, so a
+            # query pinned to a pre-reconnect Host object can hit a transient
+            # "host marked down" (python-driver#295). Let the driver route it; the
+            # SC coordinator forwards it to the current leader.
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (4, 400)")
+            rows = await cql.run_async(
+                SimpleStatement(f"SELECT * FROM {table} WHERE pk = 4", consistency_level=ConsistencyLevel.QUORUM))
+            assert len(rows) == 1 and rows[0].c == 400
+
+    await gather_safely(*[manager.server_stop_gracefully(s.server_id)
+                          for i, s in enumerate(servers) if i != leader_idx])
