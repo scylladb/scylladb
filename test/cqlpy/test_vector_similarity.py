@@ -57,7 +57,7 @@ def compute_similarity(similarity_function, v1, v2):
         return (1 + dot_product) / 2
 
 def assert_similarity(actual, expected):
-    assert isclose(actual, expected, abs_tol=1e-5)
+    assert isclose(actual, expected, rel_tol=1e-6)
 
 
 @pytest.mark.parametrize("similarity_function", similarity_functions)

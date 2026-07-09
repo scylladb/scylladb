@@ -206,7 +206,7 @@ class Source(object):
 
 def default_target_arch():
     if platform.machine() in ['i386', 'i686', 'x86_64']:
-        return 'westmere'   # support PCLMUL
+        return 'x86-64-v3'   # support PCLMUL
     elif platform.machine() == 'aarch64':
         return 'armv8-a+crc+crypto'
     else:
@@ -2002,6 +2002,9 @@ user_cflags += ' -fextend-variable-liveness=none'
 if args.target != '':
     user_cflags += ' -march=' + args.target
 
+if platform.machine() == 'x86_64':
+    user_cflags += ' -mpclmul'
+
 if args.time_trace:
     user_cflags += ' -ftime-trace'
 
@@ -2208,7 +2211,7 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
 
     dpdk = args.dpdk
     if dpdk:
-        seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=westmere']
+        seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=x86-64-v3']
     if args.split_dwarf:
         seastar_cmake_args += ['-DSeastar_SPLIT_DWARF=ON']
     if args.alloc_failure_injector:

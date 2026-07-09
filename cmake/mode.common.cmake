@@ -27,7 +27,7 @@ add_compile_options(
 function(default_target_arch arch)
   set(x86_instruction_sets i386 i686 x86_64)
   if(CMAKE_SYSTEM_PROCESSOR IN_LIST x86_instruction_sets)
-    set(${arch} "westmere" PARENT_SCOPE)
+    set(${arch} "x86-64-v3" PARENT_SCOPE)
   elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     # we always use intrinsics like vmull.p64 for speeding up crc32 calculations
     # on the aarch64 architectures, and they require the crypto extension, so
@@ -124,6 +124,11 @@ add_compile_options("-fextend-variable-liveness=none")
 default_target_arch(target_arch)
 if(target_arch)
   add_compile_options("-march=${target_arch}")
+  # Add -mpclmul for x86-64 architectures
+  set(x86_instruction_sets i386 i686 x86_64)
+  if(CMAKE_SYSTEM_PROCESSOR IN_LIST x86_instruction_sets)
+    add_compile_options("-mpclmul")
+  endif()
 endif()
 
 function(maybe_limit_stack_usage_in_KB stack_usage_threshold_in_KB config)
