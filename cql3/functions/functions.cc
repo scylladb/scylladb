@@ -389,6 +389,22 @@ functions::get(data_dictionary::database db,
         const sstring& receiver_ks,
         std::optional<const std::string_view> receiver_cf,
         const column_specification* receiver) const {
+    return try_get(db, keyspace, name, provided_args, receiver_ks, receiver_cf, receiver).value();
+}
+
+static function_resolution resolution_failed(sstring message) {
+    return utils::exception_container<exceptions::invalid_request_exception>(
+            exceptions::invalid_request_exception(std::move(message)));
+}
+
+function_resolution
+functions::try_get(data_dictionary::database db,
+        const sstring& keyspace,
+        const function_name& name,
+        const std::vector<shared_ptr<assignment_testable>>& provided_args,
+        const sstring& receiver_ks,
+        std::optional<const std::string_view> receiver_cf,
+        const column_specification* receiver) const {
 
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
@@ -406,7 +422,9 @@ functions::get(data_dictionary::database db,
     if (SIMILARITY_FUNCTIONS.contains(func_name)) {
         auto arg_types = retrieve_vector_arg_types(func_name, provided_args);
         auto fun = ::make_shared<vector_similarity_fct>(func_name.name, arg_types);
-        validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
+        if (auto err = check_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf)) {
+            return resolution_failed(std::move(*err));
+        }
         return fun;
     }
 
@@ -415,13 +433,15 @@ functions::get(data_dictionary::database db,
                 : name.name == TOKEN_FUNCTION_NAME.name) {
 
         if (!receiver_cf.has_value()) {
-            throw exceptions::invalid_request_exception("functions::get for token doesn't have a known column family");
+            return resolution_failed("functions::get for token doesn't have a known column family");
         }
         if (schema == nullptr) {
-            throw exceptions::invalid_request_exception(seastar::format("functions::get for token cannot find {} table", *receiver_cf));
+            return resolution_failed(seastar::format("functions::get for token cannot find {} table", *receiver_cf));
         }
         auto fun = ::make_shared<token_fct>(schema);
-        validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
+        if (auto err = check_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf)) {
+            return resolution_failed(std::move(*err));
+        }
         return fun;
     }
 
@@ -429,11 +449,11 @@ functions::get(data_dictionary::database db,
                 ? name == TO_JSON_FUNCTION_NAME
                 : name.name == TO_JSON_FUNCTION_NAME.name) {
         if (provided_args.size() != 1) {
-            throw exceptions::invalid_request_exception("toJson() accepts 1 argument only");
+            return resolution_failed("toJson() accepts 1 argument only");
         }
         auto arg_type_opt = provided_args[0]->assignment_testable_type_opt();
         if (!arg_type_opt) {
-            throw exceptions::invalid_request_exception("toJson() is only valid when its argument type is known");
+            return resolution_failed("toJson() is only valid when its argument type is known");
         }
         return make_to_json_function(*arg_type_opt);
     }
@@ -442,10 +462,10 @@ functions::get(data_dictionary::database db,
                 ? name == FROM_JSON_FUNCTION_NAME
                 : name.name == FROM_JSON_FUNCTION_NAME.name) {
         if (provided_args.size() != 1) {
-            throw exceptions::invalid_request_exception("fromJson() accepts 1 argument only");
+            return resolution_failed("fromJson() accepts 1 argument only");
         }
         if (!receiver) {
-            throw exceptions::invalid_request_exception("fromJson() can only be called if receiver type is known");
+            return resolution_failed("fromJson() can only be called if receiver type is known");
         }
         return make_from_json_function(db, keyspace, receiver->type);
     }
@@ -486,23 +506,26 @@ functions::get(data_dictionary::database db,
     }
 
     if (candidates.empty()) {
-        return {};
+        return shared_ptr<function>{};
     }
 
     // Fast path if there is only one choice
     if (candidates.size() == 1) {
         auto fun = std::move(candidates[0]);
-        validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
+        if (auto err = check_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf)) {
+            return resolution_failed(std::move(*err));
+        }
         return fun;
     }
 
+    std::vector<shared_ptr<function>> exact_matches;
     std::vector<shared_ptr<function>> compatibles;
     for (auto&& to_test : candidates) {
         auto r = match_arguments(db, keyspace, schema.get(), to_test, provided_args, receiver_ks, receiver_cf);
         switch (r) {
             case assignment_testable::test_result::EXACT_MATCH:
-                // We always favor exact matches
-                return to_test;
+                exact_matches.push_back(std::move(to_test));
+                break;
             case assignment_testable::test_result::WEAKLY_ASSIGNABLE:
                 compatibles.push_back(std::move(to_test));
                 break;
@@ -511,19 +534,24 @@ functions::get(data_dictionary::database db,
         };
     }
 
-    if (compatibles.empty()) {
-        throw exceptions::invalid_request_exception(
+    // We favor exact matches over merely-assignable ones, but several exact matches - for
+    // example a native function and a user function of the same signature - are just as
+    // ambiguous as several assignable ones.
+    auto& matches = !exact_matches.empty() ? exact_matches : compatibles;
+
+    if (matches.empty()) {
+        return resolution_failed(
                 seastar::format("Invalid call to function {}, none of its type signatures match (known type signatures: {})",
                                                         name, fmt::join(candidates, ", ")));
     }
 
-    if (compatibles.size() > 1) {
-        throw exceptions::invalid_request_exception(
+    if (matches.size() > 1) {
+        return resolution_failed(
                 seastar::format("Ambiguous call to function {} (can be matched by following signatures: {}): use type casts to disambiguate",
-                    name, fmt::join(compatibles, ", ")));
+                    name, fmt::join(matches, ", ")));
     }
 
-    return std::move(compatibles[0]);
+    return std::move(matches[0]);
 }
 
 template<typename F>
@@ -599,8 +627,8 @@ functions::mock_get(const function_name &name, const std::vector<data_type>& arg
 
 // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common
 // case where there is no override for a given function. This is thus probably worth the minor code duplication.
-void
-functions::validate_types(data_dictionary::database db,
+std::optional<sstring>
+functions::check_types(data_dictionary::database db,
                           const sstring& keyspace,
                           const schema* schema_opt,
                           shared_ptr<function> fun,
@@ -608,9 +636,8 @@ functions::validate_types(data_dictionary::database db,
                           const sstring& receiver_ks,
                           std::optional<const std::string_view> receiver_cf) const {
     if (provided_args.size() != fun->arg_types().size()) {
-        throw exceptions::invalid_request_exception(
-                format("Invalid number of arguments in call to function {}: {:d} required but {:d} provided",
-                        fun->name(), fun->arg_types().size(), provided_args.size()));
+        return format("Invalid number of arguments in call to function {}: {:d} required but {:d} provided",
+                        fun->name(), fun->arg_types().size(), provided_args.size());
     }
 
     for (size_t i = 0; i < provided_args.size(); ++i) {
@@ -624,10 +651,23 @@ functions::validate_types(data_dictionary::database db,
 
         auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
         if (!is_assignable(provided->test_assignment(db, keyspace, schema_opt, *expected))) {
-            throw exceptions::invalid_request_exception(
-                    format("Type error: {} cannot be passed as argument {:d} of function {} of type {}",
-                            provided, i, fun->name(), expected->type->as_cql3_type()));
+            return format("Type error: {} cannot be passed as argument {:d} of function {} of type {}",
+                            provided, i, fun->name(), expected->type->as_cql3_type());
         }
+    }
+    return std::nullopt;
+}
+
+void
+functions::validate_types(data_dictionary::database db,
+                          const sstring& keyspace,
+                          const schema* schema_opt,
+                          shared_ptr<function> fun,
+                          const std::vector<shared_ptr<assignment_testable>>& provided_args,
+                          const sstring& receiver_ks,
+                          std::optional<const std::string_view> receiver_cf) const {
+    if (auto err = check_types(db, keyspace, schema_opt, fun, provided_args, receiver_ks, receiver_cf)) {
+        throw exceptions::invalid_request_exception(std::move(*err));
     }
 }
 

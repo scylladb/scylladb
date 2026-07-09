@@ -87,13 +87,17 @@ def test_cast_int_func_result_to_blob_implicit(cql, table1):
     cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, blobasint(0xdeadbeef))")
     assert list(cql.execute(f"SELECT pk, blob_col FROM {table1} WHERE pk = {pk}")) == [(pk, 0xdeadbeef.to_bytes(4, 'big'))]
 
-# An int can't be cast to bigint because the binary representation is different.
-def test_cast_int_to_bigint(cql, table1):
+# An int widens losslessly to bigint - the value is converted, not reinterpreted - so an
+# int can be stored in a bigint column, both implicitly and via a (bigint) type hint.
+# scylla_only: Cassandra rejects assigning an int where a bigint is expected.
+def test_cast_int_to_bigint(cql, table1, scylla_only):
+    expected = int.from_bytes((0xbeefdead).to_bytes(4, 'big'), 'big', signed=True)
     pk = unique_key_int()
-    with pytest.raises(InvalidRequest, match='bigint'):
-        cql.execute(f"INSERT INTO {table1} (pk, bigint_col) VALUES ({pk}, blobasint(0xbeefdead))")
-    with pytest.raises(InvalidRequest, match='bigint'):
-        cql.execute(f"INSERT INTO {table1} (pk, bigint_col) VALUES ({pk}, (bigint)blobasint(0xbeefdead))")
+    cql.execute(f"INSERT INTO {table1} (pk, bigint_col) VALUES ({pk}, blobasint(0xbeefdead))")
+    assert list(cql.execute(f"SELECT bigint_col FROM {table1} WHERE pk = {pk}")) == [(expected,)]
+    pk = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (pk, bigint_col) VALUES ({pk}, (bigint)blobasint(0xbeefdead))")
+    assert list(cql.execute(f"SELECT bigint_col FROM {table1} WHERE pk = {pk}")) == [(expected,)]
 
 # The function token() returns a bigint, which can be converted to blob.
 def test_cast_bigint_token_to_blobl(cql, table1):

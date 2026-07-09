@@ -200,6 +200,24 @@ contains_ttl(const expr::expression& e) {
     return contains_column_mutation_attribute(expr::column_mutation_attribute::attribute_kind::ttl, e);
 }
 
+// A call that counts every row: countRows(), or count(<non-null constant>). A
+// constant argument is never null, so counting its non-null occurrences yields
+// the row count, exactly like countRows(). count(<column>) does not qualify: it
+// counts only the rows where the column is non-null.
+static
+bool
+is_count_rows_call(const expr::function_call& fc) {
+    auto& func = std::get<shared_ptr<cql3::functions::function>>(fc.func);
+    if (func->name() == functions::function_name::native_function(functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME)) {
+        return true;
+    }
+    if (func->name() != functions::function_name::native_function("count") || fc.args.size() != 1) {
+        return false;
+    }
+    auto* c = expr::as_if<expr::constant>(&fc.args[0]);
+    return c && !c->is_null();
+}
+
 class selection_with_processing : public selection {
 private:
     std::vector<expr::expression> _selectors;
@@ -267,10 +285,7 @@ public:
 
     virtual bool is_count() const override {
         return _selectors.size() == 1
-            && expr::find_in_expression<expr::function_call>(_selectors[0], [] (const expr::function_call& fc) {
-                auto& func = std::get<shared_ptr<cql3::functions::function>>(fc.func);
-                return func->name() == functions::function_name::native_function(functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME);
-            });
+            && expr::find_in_expression<expr::function_call>(_selectors[0], is_count_rows_call);
     }
 
     virtual bool is_reducible() const override {
@@ -315,19 +330,27 @@ public:
             }
             auto agg_func = dynamic_pointer_cast<functions::aggregate_function>(std::move(func));
 
-            auto type = (agg_func->name().name == "countRows") ? query::mapreduce_request::reduction_type::count : query::mapreduce_request::reduction_type::aggregate;
+            auto type = is_count_rows_call(*fc) ? query::mapreduce_request::reduction_type::count : query::mapreduce_request::reduction_type::aggregate;
 
             std::vector<sstring> column_names;
-            for (auto& arg : fc->args) {
-                auto col = expr::as_if<expr::column_value>(&arg);
-                if (!col) {
-                    bad();
+            if (type == query::mapreduce_request::reduction_type::aggregate) {
+                for (auto& arg : fc->args) {
+                    auto col = expr::as_if<expr::column_value>(&arg);
+                    if (!col) {
+                        bad();
+                    }
+                    column_names.push_back(col->col->name_as_text());
                 }
-                column_names.push_back(col->col->name_as_text());
             }
 
             auto info = query::mapreduce_request::aggregation_info {
-                .name = agg_func->name(),
+                // For a count reduction the executed plan is the canonical countRows()
+                // regardless of how the selector spelled it; replicas mock the aggregate
+                // from this name. A constant argument could not be shipped anyway (the
+                // request carries column names only), but the count reduction needs none.
+                .name = type == query::mapreduce_request::reduction_type::count
+                        ? functions::function_name::native_function(functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME)
+                        : agg_func->name(),
                 .column_names = std::move(column_names),
             };
 

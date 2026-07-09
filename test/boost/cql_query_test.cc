@@ -6835,4 +6835,283 @@ SEASTAR_TEST_CASE(test_tablets_routing_strong_consistency) {
     }, tablet_v2_cql_test_config());
 }
 
+SEASTAR_TEST_CASE(test_select_constant_type_inference) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Integer constant — small value fits int32
+        auto msg = e.execute_cql("SELECT 1 FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({int32_type})
+            .with_row({{int32_type->decompose(1)}});
+
+        // Integer constant — large value requires bigint
+        msg = e.execute_cql("SELECT 10000000000 FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({long_type})
+            .with_row({{long_type->decompose(int64_t(10000000000))}});
+
+        // String constant
+        msg = e.execute_cql("SELECT 'hello' FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({utf8_type})
+            .with_row({{utf8_type->decompose(sstring("hello"))}});
+
+        // Boolean constant
+        msg = e.execute_cql("SELECT true FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({boolean_type})
+            .with_row({{boolean_type->decompose(true)}});
+
+        // Floating-point constant
+        msg = e.execute_cql("SELECT 3.14 FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({double_type});
+
+        // Negative integer constant
+        msg = e.execute_cql("SELECT -1 FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({int32_type});
+
+        // Scientific notation is inferred as double
+        msg = e.execute_cql("SELECT 1e6 FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({double_type});
+
+        // Multiple constants
+        msg = e.execute_cql("SELECT 1, 'hello', true FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({int32_type, utf8_type, boolean_type});
+
+        // Function call as a top-level selector — type inferred from return type
+        msg = e.execute_cql("SELECT now() FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({timeuuid_type});
+
+        // count(1) works
+        msg = e.execute_cql("SELECT count(1) FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1);
+    });
+}
+
+SEASTAR_TEST_CASE(test_select_collection_literal_type_inference) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // List literal
+        auto msg = e.execute_cql("SELECT [1, 2, 3] FROM system.local").get();
+        auto expected_list_type = list_type_impl::get_instance(int32_type, false);
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_list_type});
+
+        // Set literal
+        msg = e.execute_cql("SELECT {1, 2, 3} FROM system.local").get();
+        auto expected_set_type = set_type_impl::get_instance(int32_type, false);
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_set_type});
+
+        // Map literal
+        msg = e.execute_cql("SELECT {'a': 1, 'b': 2} FROM system.local").get();
+        auto expected_map_type = map_type_impl::get_instance(utf8_type, int32_type, false);
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_map_type});
+
+        // Nested collection literal
+        msg = e.execute_cql("SELECT [[1, 2], [3, 4]] FROM system.local").get();
+        auto expected_nested_list = list_type_impl::get_instance(
+                list_type_impl::get_instance(int32_type, false), false);
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_nested_list});
+
+        // Type widening within integer chain. The int literal 1 must be converted to
+        // the 8-byte bigint representation, not just relabelled.
+        msg = e.execute_cql("SELECT [1, 10000000000] FROM system.local").get();
+        auto expected_bigint_list = list_type_impl::get_instance(long_type, false);
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_bigint_list})
+            .with_rows({{
+                expected_bigint_list->decompose(
+                    make_list_value(expected_bigint_list, list_type_impl::native_type({int64_t(1), int64_t(10000000000)})))
+            }});
+
+        msg = e.execute_cql("SELECT {1, 10000000000} FROM system.local").get();
+        auto expected_bigint_set = set_type_impl::get_instance(long_type, false);
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_bigint_set});
+
+        msg = e.execute_cql("SELECT {'a': 1, 'b': 10000000000} FROM system.local").get();
+        auto expected_text_bigint_map = map_type_impl::get_instance(utf8_type, long_type, false);
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_text_bigint_map});
+
+        // Integer widening: int32 + int64 + varint (from literal values)
+        msg = e.execute_cql("SELECT [1, 10000000000, 99999999999999999999] FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({list_type_impl::get_instance(varint_type, false)});
+
+        // Full integer widening chain with C-style type hints
+        msg = e.execute_cql("SELECT [(tinyint)1, (smallint)2, 3, 10000000000, 99999999999999999999] FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({list_type_impl::get_instance(varint_type, false)});
+
+        // Float chain: float + double → double. The (float)1.0 element must be
+        // converted to a double value, not reinterpreted as 4 bytes.
+        msg = e.execute_cql("SELECT [(float)1.0, 3.14] FROM system.local").get();
+        auto expected_double_list = list_type_impl::get_instance(double_type, false);
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_double_list})
+            .with_rows({{
+                expected_double_list->decompose(
+                    make_list_value(expected_double_list, list_type_impl::native_type({double(1.0), double(3.14)})))
+            }});
+
+        // Cross-chain widening (int + double) should fail
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT [1, 3.14] FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {1, 3.14} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {'a': 1, 'b': 3.14} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {1: 'a', 3.14: 'b'} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        // Cross-chain: float + int
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT [(float)1.0, 1] FROM system.local").get(),
+            exceptions::invalid_request_exception);
+
+        // Mixed types in collection should fail
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT [1, 'hello'] FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {1, 'hello'} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {'a': 1, 'b': 'hello'} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {'a': 1, 2: 3} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT [1, true] FROM system.local").get(),
+            exceptions::invalid_request_exception);
+
+        // Nested collection type mismatch
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT [[1, 2], [3, 'a']] FROM system.local").get(),
+            exceptions::invalid_request_exception);
+
+        // Empty collection should fail (can't infer type)
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT [] FROM system.local").get(),
+            exceptions::invalid_request_exception);
+
+        // Null has no inherent type. As a top-level selector there is no
+        // column or function parameter to provide type context, so type
+        // inference fails.
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT null FROM system.local").get(),
+            exceptions::invalid_request_exception);
+
+        // Null cannot self-type, so collections containing null fail
+        // at type inference time ("Could not infer type of ...").
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT [1, null] FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {1, null} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {'a': null} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {null: 1} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+
+        // All nulls in collection — no consensus possible
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT [null, null] FROM system.local").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("SELECT {null: null} FROM system.local").get(),
+            exceptions::invalid_request_exception);
+
+        // Function calls inside collections — infer_type resolves return types
+        // via functions::get() without producing prepared expressions
+        msg = e.execute_cql("SELECT [now(), now()] FROM system.local").get();
+        auto expected_timeuuid_list = list_type_impl::get_instance(timeuuid_type, false);
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_timeuuid_list});
+
+        // Tuple literal
+        msg = e.execute_cql("SELECT (1, 'hello', true) FROM system.local").get();
+        auto expected_tuple_type = tuple_type_impl::get_instance({int32_type, utf8_type, boolean_type});
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({expected_tuple_type});
+
+        // SQL CAST in SELECT clause
+        msg = e.execute_cql("SELECT CAST(1 AS bigint) FROM system.local").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_column_types({long_type})
+            .with_row({{long_type->decompose(int64_t(1))}});
+    });
+}
+
+// A narrower (T) cast widening into a wider sink (clustering key, column, WHERE RHS) must be
+// converted to the sink's representation, not just relabelled.
+SEASTAR_TEST_CASE(test_widening_value_into_wider_sink) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE wide (pk int, ck bigint, d double, PRIMARY KEY (pk, ck))").get();
+
+        // INSERT sink: (int)5 widens to the bigint clustering key, (float)2.5 widens to
+        // the double column. A relabel would store 4 bytes; we require real conversion.
+        e.execute_cql("INSERT INTO wide (pk, ck, d) VALUES (1, (int)5, (float)2.5)").get();
+
+        auto msg = e.execute_cql("SELECT ck, d FROM wide WHERE pk = 1").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(5)), double_type->decompose(double(2.5))});
+
+        // WHERE RHS sink: (int)5 must be converted to bigint to match the clustering key.
+        // An unconverted 4-byte value would never compare equal to the stored bigint.
+        msg = e.execute_cql("SELECT ck, d FROM wide WHERE pk = 1 AND ck = (int)5").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(5)), double_type->decompose(double(2.5))});
+
+        // UPDATE sink + WHERE-key widening together.
+        e.execute_cql("UPDATE wide SET d = (float)3.5 WHERE pk = 1 AND ck = (int)5").get();
+        msg = e.execute_cql("SELECT d FROM wide WHERE pk = 1").get();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_row({double_type->decompose(double(3.5))});
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
