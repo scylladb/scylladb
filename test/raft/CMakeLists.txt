@@ -15,6 +15,12 @@ target_link_libraries(test-raft
   test-lib
   Seastar::seastar_testing)
 
+add_scylla_test(bounded_clock_adjtimex_test
+  KIND BOOST
+  SOURCES
+    bounded_clock_adjtimex_test.cc
+    ${CMAKE_SOURCE_DIR}/service/raft/bounded_clock_adjtimex.cc
+  LIBRARIES test-raft)
 add_scylla_test(discovery_test
   KIND BOOST
   LIBRARIES test-raft)
