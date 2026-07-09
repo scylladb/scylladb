@@ -26,6 +26,7 @@
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
 #include "auth/certificate_authenticator.hh"
+#include "auth/certificate_or_password_authenticator.hh"
 #include "auth/common.hh"
 #include "auth/default_authorizer.hh"
 #include "auth/ldap_role_manager.hh"
@@ -836,6 +837,10 @@ authenticator_factory make_authenticator_factory(
     } else if (boost::iequals(short_name, "CertificateAuthenticator")) {
         return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
             return std::make_unique<certificate_authenticator>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
+        };
+    } else if (boost::iequals(short_name, "CertificateOrPasswordAuthenticator")) {
+        return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
+            return std::make_unique<certificate_or_password_authenticator>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
         };
     } else if (boost::iequals(short_name, "SaslauthdAuthenticator")) {
         return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
