@@ -21,6 +21,7 @@
 #include "utils/small_vector.hh"
 #include "utils/updateable_value.hh"
 #include <seastar/core/units.hh>
+#include <boost/regex.hpp>
 
 struct client_data;
 
@@ -47,6 +48,17 @@ class server : public peering_sharded_service<server> {
     qos::service_level_controller& _sl_controller;
 
     key_cache _key_cache;
+    // Caches the result of try_mtls_authentication()'s role validation
+    // (role exists and has can_login=true), keyed by role name, so a
+    // long-lived mTLS connection doesn't re-read the roles table on
+    // every single request.
+    role_cache _mtls_role_cache;
+    // auth_certificate_role_queries patterns (SUBJECT and ALTNAME), compiled once at startup.
+    struct cert_pattern {
+        enum class source_type { subject, altname } source;
+        boost::regex regex;
+    };
+    std::vector<cert_pattern> _cert_patterns;
     utils::updateable_value<bool> _enforce_authorization;
     utils::updateable_value<bool> _warn_authorization;
     utils::updateable_value<uint64_t> _max_users_query_size_in_trace_output;
@@ -118,8 +130,18 @@ public:
     future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data();
 private:
     void set_routes(seastar::httpd::routes& r);
-    // If verification succeeds, returns the authenticated user's username
+    // If verification succeeds, returns the authenticated user's username.
+    // Throws an api_error if the verification fails.
     future<std::string> verify_signature(const seastar::http::request&, const chunked_content&);
+    // Attempt to authenticate via mTLS certificate matching. Returns the role
+    // name if a client certificate was presented and a valid role could be
+    // extracted using auth_certificate_role_queries patterns. Returns
+    // std::nullopt if no client certificate was presented at all (caller
+    // should fall through to SigV4). If a certificate was presented but a
+    // valid role could not be extracted, throws an authentication error when
+    // alternator_enforce_authorization is true, and otherwise returns an
+    // empty string (indicating an unauthenticated request).
+    future<std::optional<std::string>> try_mtls_authentication(const seastar::http::request&);
     future<executor::request_return_type> handle_api_request(std::unique_ptr<http::request> req);
 };
 
