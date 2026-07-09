@@ -22,6 +22,7 @@ target_sources(service
     strong_consistency/raft_groups_storage.cc
     strong_consistency/raft_commitlog.cc
     raft/discovery.cc
+    raft/bounded_clock_adjtimex.cc
     raft/group0_state_id_handler.cc
     raft/group0_state_machine.cc
     raft/group0_state_machine_merger.cc
