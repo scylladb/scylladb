@@ -35,20 +35,23 @@ using namespace utils;
 
 static logging::logger osclog("object_storage_client");
 
+sstables::object_name::object_name(std::string object_location)
+    : _name(std::move(object_location))
+{}
 
 sstables::object_name::object_name(std::string_view bucket, std::string_view prefix, std::string_view type)
-    : _name(fmt::format("/{}/{}/{}", bucket, prefix, type))
+    : object_name(fmt::format("/{}/{}/{}", bucket, prefix, type))
 {}
 
 sstables::object_name::object_name(std::string_view bucket, std::string_view prefix, const sstable_id& sid, std::string_view type)
-    : _name(fmt::format("/{}/{}/{}/{}", bucket, prefix, sid, type))
+    : object_name(fmt::format("/{}/{}/{}/{}", bucket, prefix, sid, type))
 {
     if (!sid) {
         on_internal_error(sstlog, fmt::format("SSTable identifier is required for object storage: bucket={} prefix={}", bucket, prefix));
     }
 }
 sstables::object_name::object_name(std::string_view bucket, std::string_view object) 
-    : _name(fmt::format("/{}/{}", bucket, object))
+    : object_name(fmt::format("/{}/{}", bucket, object))
 {}
 
 sstables::object_name::object_name(const object_name&) = default;
