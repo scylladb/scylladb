@@ -84,6 +84,14 @@ def run_alternator_cmd(pid, dir):
         ]
     else:
         cmd += ['--alternator-port', '8000']
+    if '--mtls' in sys.argv:
+        if '--https' not in sys.argv:
+            sys.exit('Error: --mtls requires --https')
+        run.setup_mtls_certificate(dir)
+        cmd += [
+            '--alternator-encryption-options', 'require_client_auth=true',
+            '--alternator-encryption-options', f'truststore={dir}/ca.crt',
+        ]
     if '--vs' in sys.argv:
         cmd += ['--vector-store-primary-uri', f'http://{ip}:6080']
     cmd += extra_scylla_options
@@ -108,6 +116,7 @@ def run_alternator_cmd(pid, dir):
 
 pid = run.run_with_temporary_dir(run_alternator_cmd)
 ip = run.pid_to_ip(pid)
+scylla_dir = run.pid_to_dir(pid)
 
 if '--https' in sys.argv:
     alternator_url=f"https://{ip}:8043"
@@ -162,7 +171,8 @@ if '--vs' in sys.argv:
 # CQL for setting up authentication.
 def check_alternator(url):
     try:
-        requests.get(url, verify=False)
+        cert = (f'{scylla_dir}/client.crt', f'{scylla_dir}/client.key') if '--mtls' in sys.argv else None
+        requests.get(url, verify=False, cert=cert)
     except requests.ConnectionError:
         raise run.NotYetUp
     # Any other exception may indicate a problem, and is passed to the caller.
@@ -173,7 +183,11 @@ run.wait_for_services(pid, [
 ])
 
 # Finally run pytest:
-success = run.run_pytest(sys.path[0], ['--url', alternator_url] + sys.argv[1:])
+pytest_args = ['--url', alternator_url]
+if '--mtls' in sys.argv:
+    pytest_args += ['--client-cert-file', f'{scylla_dir}/client.crt',
+                    '--client-key-file', f'{scylla_dir}/client.key']
+success = run.run_pytest(sys.path[0],  pytest_args + sys.argv[1:])
 
 run.summary = 'Alternator tests pass' if success else 'Alternator tests failure'
 

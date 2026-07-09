@@ -561,3 +561,23 @@ def setup_ssl_certificate(dir):
     # FIXME: error checking (if "openssl" isn't found, for example)
     os.system(f'openssl genrsa 2048 > "{dir}/scylla.key"')
     os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/C=IL/ST=None/L=None/O=None/OU=None/CN=example.com" -key "{dir}/scylla.key" -out "{dir}/scylla.crt"')
+
+# Set up mTLS (mutual TLS) certificates for testing client certificate
+# authentication. Creates:
+#   dir/ca.key, dir/ca.crt    - a self-signed CA certificate
+#   dir/client.key, dir/client.crt - a client certificate with CN "cassandra",
+#                                    signed by the above CA
+# The CA certificate (dir/ca.crt) should be passed to Scylla as the truststore
+# so that Scylla can verify client certificates. The client key and certificate
+# can be used by test clients to authenticate themselves.
+def setup_mtls_certificate(dir):
+    # FIXME: error checking (if "openssl" isn't found, for example)
+    # Create a self-signed CA certificate
+    os.system(f'openssl genrsa 2048 > "{dir}/ca.key"')
+    os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/CN=TestCA" -key "{dir}/ca.key" -out "{dir}/ca.crt"')
+    # Create a client key and a certificate signing request with CN "cassandra",
+    # matching the role already used in Alternator tests.
+    os.system(f'openssl genrsa 2048 > "{dir}/client.key"')
+    os.system(f'openssl req -new -sha256 -subj "/CN=cassandra" -key "{dir}/client.key" -out "{dir}/client.csr"')
+    # Sign the client certificate with the CA
+    os.system(f'openssl x509 -req -sha256 -days 365 -in "{dir}/client.csr" -CA "{dir}/ca.crt" -CAkey "{dir}/ca.key" -CAcreateserial -out "{dir}/client.crt"')
