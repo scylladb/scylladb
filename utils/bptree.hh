@@ -1893,12 +1893,9 @@ private:
 template <typename K, typename T, typename Less, size_t NS, key_search S, with_debug D>
 class data final {
     friend class validator<K, T, Less, NS>;
-    template <typename c1, typename c2, typename c3, size_t s1, key_search p1, with_debug p2>
-            friend class tree<c1, c2, c3, s1, p1, p2>::iterator;
-    template <typename c1, typename c2, typename c3, size_t s1, key_search p1, with_debug p2>
-            friend class tree<c1, c2, c3, s1, p1, p2>::iterator_base_const;
-    template <typename c1, typename c2, typename c3, size_t s1, key_search p1, with_debug p2>
-            friend class tree<c1, c2, c3, s1, p1, p2>::iterator_base_nonconst;
+    friend class tree<K, T, Less, NS, S, D>::iterator;
+    friend typename tree<K, T, Less, NS, S, D>::iterator_base_const;
+    friend typename tree<K, T, Less, NS, S, D>::iterator_base_nonconst;
 
     using node = class node<K, T, Less, NS, S, D>;
 
