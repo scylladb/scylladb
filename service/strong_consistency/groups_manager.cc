@@ -189,6 +189,30 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
     return ok{};
 }
 
+// Renewal and the deferred commit are checked once per tick, so a lease under
+// this many ticks would be renewed on every tick.
+static constexpr int64_t min_lease_ticks = 3;
+
+// Above this a leader change stalls a group's writes for long enough to warn
+// about: the new leader commits nothing until the deposed lease has expired.
+static constexpr auto lease_duration_warn_threshold = std::chrono::seconds(8);
+
+// The lease duration (Delta): the configured value, or, when it is 0, the Raft
+// election timeout, the longest lease a crashed leader's successor never has
+// to wait out, since it is elected only after that long.
+static std::chrono::milliseconds lease_duration(const db::config& db_config) {
+    const auto tick = std::chrono::duration_cast<std::chrono::milliseconds>(get_tick_interval());
+    const auto configured = std::chrono::milliseconds(db_config.strong_consistency_lease_duration_in_ms());
+    const auto delta = configured.count() ? configured : tick * raft::ELECTION_TIMEOUT.count();
+    if (delta < tick * min_lease_ticks) {
+        throw std::invalid_argument(fmt::format(
+                "strong_consistency_lease_duration_in_ms must be at least {} raft ticks ({}ms) "
+                "when strong_consistency_enable_leases is set, got {}ms",
+                min_lease_ticks, (tick * min_lease_ticks).count(), delta.count()));
+    }
+    return delta;
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
@@ -204,6 +228,26 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _raft_replay_buffer(raft_replay_buffer)
     , _resize_tracker(resize_tracker.local())
 {
+    const auto& db_config = _db.get_config();
+    if (db_config.strong_consistency_enable_leases()) {
+        _lease_duration = lease_duration(db_config);
+    }
+    // Log once per node (not once per shard or per raft group): the options are
+    // MustRestart, so every group on the node uses the same setting.
+    if (this_shard_id() == 0) {
+        if (db_config.strong_consistency_enable_leases()) {
+            logger.info("LeaseGuard leader leases enabled (lease duration {}ms)", _lease_duration.count());
+            if (_lease_duration > lease_duration_warn_threshold) {
+                logger.warn("LeaseGuard lease duration {}ms is above {}ms: after every leader change "
+                            "a group's writes stall for up to the lease duration",
+                            _lease_duration.count(),
+                            std::chrono::duration_cast<std::chrono::milliseconds>(lease_duration_warn_threshold).count());
+            }
+        } else {
+            logger.info("LeaseGuard leader leases disabled");
+        }
+    }
+
     init_messaging_service();
 }
 
@@ -321,6 +365,20 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // table starts with many tablets).
         .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
     };
+
+    // LeaseGuard leader leases. Off by default: leases require synchronized
+    // clocks on all nodes; when enabled, the leader serves local linearizable
+    // reads while its lease is valid and defers committing after a leadership
+    // change until the previous lease has expired. The clock is owned by this
+    // manager (per shard) and outlives the server.
+    const auto& db_config = _db.get_config();
+    if (db_config.strong_consistency_enable_leases()) {
+        config.leaseguard = raft::server::configuration::leaseguard_configuration {
+            .delta = _lease_duration,
+            .clock = _bounded_clock,
+        };
+    }
+
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
 
