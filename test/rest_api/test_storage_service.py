@@ -9,7 +9,8 @@ import time
 
 # Use the util.py library from ../cqlpy:
 from ..cqlpy.util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
-from test.rest_api.rest_util import new_test_snapshot, scylla_inject_error, ThreadWrapper
+from test.rest_api.rest_util import new_test_snapshot, scylla_inject_error, ThreadWrapper, set_logger_level
+from test.cqlpy.test_logs import wait_for_log, logfile, logfile_path
 
 # "keyspace" function: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
@@ -926,3 +927,47 @@ def test_drop_quarantined_sstables(cql, this_dc, rest_api):
                                    params={"keyspace": keyspace, "tables": f"{test_tables[0]},non_existent_table"})
                 assert resp.status_code == requests.codes.bad_request
                 assert "Can't find a column family non_existent_table in keyspace" in resp.json()["message"]
+
+@pytest.mark.parametrize("tablets_enabled, compaction_type", [
+    ("true", "VALIDATE"),
+    ("true", "ABORT"),
+    ("true", "SCRUB"),
+    ("false", "CLEANUP"),
+    ("false", "VALIDATE"),
+    ("false", "ABORT"),
+    ("false", "SCRUB"),
+])
+def test_disable_autocompaction_doesnt_block_user_initiated_compactions(cql, this_dc, rest_api, logfile, compaction_type: str, skip_without_tablets, tablets_enabled):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}  AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace1:
+        with new_test_table(cql, keyspace1, 'p int PRIMARY KEY') as table1:
+            with set_logger_level(rest_api, "compaction", "debug"):
+                cf = table1.split('.')[1]
+
+                resp = rest_api.send("DELETE", f"storage_service/auto_compaction/{keyspace1}", {"cf": cf})
+                resp.raise_for_status()
+
+                stmt = cql.prepare(f"INSERT INTO {table1} (p) VALUES (?)")
+                for i in range(1000):
+                    cql.execute(stmt, [i])
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace1}")
+                resp.raise_for_status()
+
+                match compaction_type:
+                    case "CLEANUP":
+                        cql.execute(f"ALTER KEYSPACE {keyspace1} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 0 }}")
+                        resp = rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace1}")
+                        to_find = r"Cleaned \d* sstables to"
+                    case "VALIDATE":
+                        resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace1}", { "cf": cf, "scrub_mode": "VALIDATE" })
+                        to_find = "Finished scrubbing in validate mode"
+                    case "SCRUB":
+                        resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace1}", { "cf": cf })
+                        to_find = "Finished scrubbing in validate mode"
+                    case "ABORT":
+                        resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace1}", { "cf": cf, "scrub_mode": "ABORT" })
+                        to_find = "Finished scrubbing in abort mode"
+
+                resp.raise_for_status()
+
+                wait_for_log(logfile, to_find, timeout=180)
