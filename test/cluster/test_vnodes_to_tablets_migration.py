@@ -1358,6 +1358,119 @@ async def test_replace_during_migration(manager: ManagerClient, rbno_enabled: bo
             "Keyspace is still using vnodes after migration finalization"
 
 
+@pytest.mark.parametrize("rbno_enabled", [
+    pytest.param(True, id="repair"),
+    pytest.param(False, id="range_streamer"),
+])
+async def test_replace_during_migration_tablet_followers(manager: ManagerClient, rbno_enabled: bool):
+    """Verify that streaming works correctly from tablet-only followers.
+
+    The test creates a 3-node cluster, upgrades two nodes to tablets and then
+    replaces the vnode-based node. The new node is expected to stream the full
+    dataset from the two upgraded nodes.
+
+    The test contains 2 tweaks that trigger problematic edge cases in
+    repair-based and range streaming which are expected to be fixed as part of
+    node replacement support (SCYLLADB-1165):
+
+    * Tweak for repair-based streaming:
+      Followers are created with more shards than the new node. This causes
+      the test to fail if the follower chooses local instead of multishard read
+      strategy. With less or equal shards on the follower, the problem would be
+      masked by the master's multishard writer: a follower's local read would
+      return incomplete data per repair session, but the collection of all
+      repair sessions would return the complete data. The master starts one
+      repair session per master shard.
+
+    * Tweak for range streaming:
+      Data on followers reside on memtables. This causes the test to fail if
+      the follower's streaming reader does not read from all tablets.
+    """
+    num_keys = 1000
+    tokens_per_node = 16
+    replaced_cmdline = ['--smp', '2']
+    follower_cmdline = ['--smp', '3']
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'num_tokens': tokens_per_node,
+        'enable_repair_based_node_ops': rbno_enabled,
+    }
+    property_files = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+
+    logger.info("Starting replaced node with 2 shards")
+    replaced_server = await manager.server_add(cmdline=replaced_cmdline, config=cfg, property_file=property_files[0])
+
+    logger.info("Starting two follower nodes with 3 shards")
+    follower_servers = [
+        await manager.server_add(cmdline=follower_cmdline, config=cfg, property_file=property_files[1]),
+        await manager.server_add(cmdline=follower_cmdline, config=cfg, property_file=property_files[2]),
+    ]
+    servers = [replaced_server] + follower_servers
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async def upgrade_and_restart_node(server: ServerInfo):
+        logger.info(f"Marking node {server.server_id} for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        logger.info(f"Restarting node {server.server_id} for resharding")
+        await manager.server_restart(server.server_id)
+
+    logger.info("Creating keyspace and table with RF=3 using vnodes")
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'enabled': false}") as ks:
+        table_name = "test"
+        await cql.run_async(f"CREATE TABLE {ks}.{table_name} (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet map)")
+        await manager.api.create_vnode_tablet_migration(replaced_server.ip_addr, ks)
+
+        logger.info("Migrating the two follower nodes to tablets")
+        for s in follower_servers:
+            await upgrade_and_restart_node(s)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # Inject data after restarts to ensure they will reside on memtables.
+        logger.info(f"Populating table with {num_keys} rows at CL=ALL")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{table_name} (pk, c) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, [k, k]) for k in range(num_keys)))
+
+        replaced_host_id = await manager.get_host_id(replaced_server.server_id)
+        replaced_tokens = await manager.api.get_tokens(replaced_server.ip_addr)
+
+        logger.info(f"Stopping 2-shard node {replaced_server.server_id} to replace mid-migration")
+        await manager.server_stop(replaced_server.server_id, convict=True)
+
+        logger.info("Adding 2-shard replacement node")
+        replace_cfg = ReplaceConfig(replaced_id=replaced_server.server_id, reuse_ip_addr=False, use_host_id=True)
+        new_server = await manager.server_add(replace_cfg,
+                                              cmdline=replaced_cmdline,
+                                              property_file=replaced_server.property_file(),
+                                              config=cfg)
+        logger.info(f"Replacement node started: server_id={new_server.server_id}, host_id={await manager.get_host_id(new_server.server_id)}")
+
+        await reconnect_driver(manager)
+        surviving_servers = follower_servers + [new_server]
+        cql, _ = await manager.get_ready_cql(surviving_servers)
+
+        logger.info("Verifying that the new node has the same token ranges as the replaced node")
+        new_tokens = await manager.api.get_tokens(new_server.ip_addr)
+        assert replaced_tokens == new_tokens, \
+            f"Replacement node tokens {new_tokens} do not match replaced node tokens {replaced_tokens}"
+
+        logger.info("Verifying node statuses after replacement")
+        rows = await cql.run_async("SELECT host_id, node_state FROM system.topology WHERE key = 'topology'")
+        for row in rows:
+            if row.host_id == UUID(replaced_host_id):
+                assert row.node_state == "left", f"Replaced node {row.host_id} should be left, got {row.node_state}"
+            else:
+                assert row.node_state == "normal", f"Surviving node {row.host_id} should be normal, got {row.node_state}"
+
+        logger.info("Reading all rows from the replacement node at CL=LOCAL_ONE")
+        await verify_data_integrity(cql, ks, table_name, num_keys, cl=ConsistencyLevel.LOCAL_ONE, server=new_server)
+
+
 async def test_replace_during_migration_rejects_shard_count_mismatch(manager: ManagerClient):
     """Verify that node replacement during vnodes-to-tablets migration fails if shard counts do not match."""
     cfg = {'num_tokens': 1}
