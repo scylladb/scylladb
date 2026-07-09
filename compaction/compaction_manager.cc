@@ -460,7 +460,8 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         auto old_sstables = desc.old_sstables;
         _cm.on_compaction_completion(t, std::move(desc), offstrategy).get();
         on_replace.on_removal(old_sstables);
-        cmlog.info("[split-trace] replacer done table={} old=[{}]", t,
+        cmlog.info("[split-trace] replacer done table={} compaction_uuid={} task={} old=[{}]",
+                t, cdata.compaction_uuid, fmt::ptr(this),
                 fmt::join(old_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
     };
 
@@ -1016,6 +1017,18 @@ void compaction_task_executor::abort(abort_source& as) noexcept {
 }
 
 void compaction_task_executor::stop_compaction(sstring reason) noexcept {
+    // Emit a structured trace of the stop signal delivery so we can correlate
+    // "this task got a stop request at time T" with "this task's replacer fired
+    // at time T+X" during the split-vs-regular-compaction race investigation.
+    //
+    // NOTE: intentionally does NOT dereference _compacting_table. During
+    // shutdown/decommission the pointed-to compaction_group_view can be
+    // destroyed while stop_compaction() is called during task tear-down; a
+    // null-pointer check is not enough because the pointer may be dangling.
+    // Callers can join this log line with 'regular_compaction picked' /
+    // 'replacer called' by compaction_uuid to recover the table identity.
+    cmlog.info("[split-trace] stop_compaction task={} compaction_uuid={} compaction_type={} reason={}",
+            fmt::ptr(this), _compaction_data.compaction_uuid, _type, reason);
     _compaction_data.stop(std::move(reason));
 }
 
@@ -1542,8 +1555,17 @@ protected:
                 ex = std::current_exception();
             }
 
+            // Trace the failed compaction so we can distinguish "compaction was interrupted"
+            // (compaction_stopped_exception) from other failures, and see whether do_run's
+            // for(;;) loop retries — potentially picking a new set of sstables.
+            cmlog.info("[split-trace] regular_compaction failed table={} compaction_uuid={} task={} error={}",
+                    *_compacting_table, _compaction_data.compaction_uuid, fmt::ptr(this), ex);
             finish_compaction(state::failed);
-            if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
+            auto retry = co_await maybe_retry(std::move(ex));
+            cmlog.info("[split-trace] regular_compaction maybe_retry table={} task={} retry={}",
+                    *_compacting_table, fmt::ptr(this),
+                    retry == stop_iteration::yes ? "no" : "yes");
+            if (retry == stop_iteration::yes) {
                 co_return std::nullopt;
             }
         }

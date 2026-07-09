@@ -593,9 +593,15 @@ void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> ne
     const auto old_size = _main_sstables->size();
     const auto new_size = new_main_sstables->size();
     _main_sstables = std::move(new_main_sstables);
-    tlogger.info("[sst-mutation] set_main_sstables table={}.{} cg@{}(id={}) main_ptr={}->{} main_size={}->{} caller={}",
+    // Bracket every _main_sstables mutation. Correlate via wall-clock time
+    // with the surrounding [split-trace] replacer called/done events emitted
+    // by the caller (compaction_manager.cc:_replacer lambda). We deliberately
+    // omit current_backtrace() here — it was too expensive and noisy in
+    // stress runs. The compaction_uuid on the surrounding replacer log lines
+    // is sufficient to identify who caused the mutation.
+    tlogger.info("[sst-mutation] set_main_sstables table={}.{} cg@{}(id={}) main_ptr={}->{} main_size={}->{}",
             _t.schema()->ks_name(), _t.schema()->cf_name(), fmt::ptr(this), _group_id,
-            fmt::ptr(old_ptr), fmt::ptr(_main_sstables.get()), old_size, new_size, current_backtrace());
+            fmt::ptr(old_ptr), fmt::ptr(_main_sstables.get()), old_size, new_size);
 }
 
 void compaction_group::add_maintenance_sstable(sstables::shared_sstable sst) {
@@ -617,9 +623,10 @@ void compaction_group::set_maintenance_sstables(lw_shared_ptr<sstables::sstable_
     const auto old_size = _maintenance_sstables->size();
     const auto new_size = new_maintenance_sstables->size();
     _maintenance_sstables = std::move(new_maintenance_sstables);
-    tlogger.info("[sst-mutation] set_maintenance_sstables table={}.{} cg@{}(id={}) maint_ptr={}->{} maint_size={}->{} caller={}",
+    // See rationale in set_main_sstables above regarding current_backtrace().
+    tlogger.info("[sst-mutation] set_maintenance_sstables table={}.{} cg@{}(id={}) maint_ptr={}->{} maint_size={}->{}",
             _t.schema()->ks_name(), _t.schema()->cf_name(), fmt::ptr(this), _group_id,
-            fmt::ptr(old_ptr), fmt::ptr(_maintenance_sstables.get()), old_size, new_size, current_backtrace());
+            fmt::ptr(old_ptr), fmt::ptr(_maintenance_sstables.get()), old_size, new_size);
 }
 
 void table::add_sstable(compaction_group& cg, sstables::shared_sstable sstable) {

@@ -1025,7 +1025,19 @@ protected:
         auto duration = std::chrono::duration<float>(ended_at - started_at);
         // Don't report NaN or negative number.
 
+        // Trace what finish()/on_end_of_compaction is about to process. The remaining
+        // input sstables are what replace_remaining_exhausted_sstables() will pass to
+        // _replacer as old_sstables. new_unused_sstables is what it passes as new_sstables.
+        // If new_unused is empty here and _sstables non-empty, we're about to fire the
+        // "type=unknown" scenario in on_compaction_completion.
+        clogger.info("[split-trace] finish begin table={}.{} compaction_uuid={} remaining_inputs=[{}] new_unused=[{}] used_gc=[{}]",
+                _schema->ks_name(), _schema->cf_name(), _cdata.compaction_uuid,
+                fmt::join(_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                fmt::join(_new_unused_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                fmt::join(used_garbage_collected_sstables() | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
         on_end_of_compaction();
+        clogger.info("[split-trace] finish end table={}.{} compaction_uuid={}",
+                _schema->ks_name(), _schema->cf_name(), _cdata.compaction_uuid);
 
         // FIXME: there is some missing information in the log message below.
         // look at CompactionTask::runMayThrow() in origin for reference.
@@ -1044,6 +1056,13 @@ protected:
 private:
     void on_interrupt(std::exception_ptr ex) {
         log_info("{} of {} sstables interrupted due to: {}, at {}", report_start_desc(), _input_sstable_generations.size(), ex, current_backtrace());
+        // Extra structured trace for the split/regular-compaction race investigation.
+        // Emits the input sstable filenames so we can correlate with [replacer called] events.
+        clogger.info("[split-trace] on_interrupt table={}.{} compaction_uuid={} inputs=[{}] new_unused=[{}] used_gc=[{}]",
+                _schema->ks_name(), _schema->cf_name(), _cdata.compaction_uuid,
+                fmt::join(_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                fmt::join(_new_unused_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                fmt::join(used_garbage_collected_sstables() | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
         delete_sstables_for_interrupted_compaction();
     }
 
@@ -1351,6 +1370,11 @@ private:
             log_debug("Replacing earlier exhausted sstable(s) [{}] by new sstable(s) [{}]",
                 fmt::join(exhausted_ssts | std::views::transform([] (auto sst) { return to_string(sst, false); }), ","),
                 fmt::join(_new_unused_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
+            clogger.info("[split-trace] incremental_replacer table={}.{} compaction_uuid={} exhausted=[{}] new_unused=[{}] remaining_after=[{}]",
+                    _schema->ks_name(), _schema->cf_name(), _cdata.compaction_uuid,
+                    fmt::join(exhausted_ssts | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                    fmt::join(_new_unused_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                    fmt::join(std::ranges::subrange(_sstables.begin(), exhausted) | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
             _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
             dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
@@ -1381,6 +1405,9 @@ private:
             log_debug("Releasing {} exhausted GC sstable(s) earlier: [{}]",
                 exhausted_gc_ssts.size(),
                 fmt::join(exhausted_gc_ssts | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
+            clogger.info("[split-trace] incremental_replacer_gc table={}.{} compaction_uuid={} exhausted_gc=[{}]",
+                    _schema->ks_name(), _schema->cf_name(), _cdata.compaction_uuid,
+                    fmt::join(exhausted_gc_ssts | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
             _replacer(get_compaction_completion_desc(std::move(exhausted_gc_ssts), {}));
             _used_garbage_collected_sstables.erase(exhausted, _used_garbage_collected_sstables.end());
         }
@@ -1395,6 +1422,15 @@ private:
             auto& used_gc_sstables = used_garbage_collected_sstables();
             old_sstables.insert(old_sstables.end(), used_gc_sstables.begin(), used_gc_sstables.end());
 
+            // This is the "final" replacer call, invoked from on_end_of_compaction/finish().
+            // If _new_unused_sstables is empty, the resulting on_compaction_completion will fire
+            // with desc.new_sstables.empty(), which surfaces as compaction_type="unknown" if
+            // any of old_sstables is no longer in _main_sstables at that point (the failure
+            // we're investigating).
+            clogger.info("[split-trace] final_replacer table={}.{} compaction_uuid={} old=[{}] new_unused=[{}]",
+                    _schema->ks_name(), _schema->cf_name(), _cdata.compaction_uuid,
+                    fmt::join(old_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                    fmt::join(_new_unused_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
             _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
          }
     }
