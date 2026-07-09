@@ -2694,30 +2694,34 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
     return do_with_cql_env([](auto& e) { return test_env::do_with_async([&e](test_env& env) { sstable_cleanup_correctness_fn(e, env); }); });
 }
 
+// Runs sstable_cleanup_correctness_fn on a cql_test_env that is configured
+// with the given object-storage backend. cql_test_env owns the sharded
+// storage_manager for the object-storage endpoints; the sstable-level test_env
+// is constructed to share that same storage_manager (rather than starting its
+// own sharded storage_manager, which would conflict on the same endpoints).
+static future<> run_sstable_cleanup_correctness_with_storage(data_dictionary::storage_options storage) {
+    auto db_cfg = make_shared<db::config>();
+    db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
+    db_cfg->object_storage_endpoints(make_storage_options_config(storage));
+
+    cql_test_config cql_cfg;
+    cql_cfg.db_config = db_cfg;
+
+    return do_with_cql_env_thread([storage = std::move(storage)] (cql_test_env& e) {
+        auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+        test_env env(test_env_config{.storage = storage}, *scf, &e.get_sstorage_manager().local());
+        auto close_env = defer([&] { env.stop().get(); });
+        env.plug_mock_sstables_registry();
+        sstable_cleanup_correctness_fn(e, env);
+    }, std::move(cql_cfg));
+}
+
 SEASTAR_TEST_CASE(sstable_cleanup_correctness_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
-    // TODO: When configuring object storage it is not possible to use cql_env and test_env together since they both initiate storage, which causes conflicts.
-    // Needs deeper investigation to figure out how to properly configure storage for both environments.
-    testlog.info("sstable_cleanup_correctness_s3_test is not supported for S3 storage yet, skipping test");
-    return make_ready_future();
-#if 0
-    return do_with_cql_env([](auto& e) {
-        return test_env::do_with_async([&e](test_env& env) { sstable_cleanup_correctness_fn(e, env); },
-                                       test_env_config{.storage = make_test_object_storage_options("S3")});
-    });
-#endif
+    return run_sstable_cleanup_correctness_with_storage(make_test_object_storage_options("S3"));
 }
 
 SEASTAR_FIXTURE_TEST_CASE(sstable_cleanup_correctness_gcs_test, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
-    // TODO: When configuring object storage it is not possible to use cql_env and test_env together since they both initiate storage, which causes conflicts.
-    // Needs deeper investigation to figure out how to properly configure storage for both environments.
-    testlog.info("sstable_cleanup_correctness_gcs_test is not supported for GCS storage yet, skipping test");
-    return make_ready_future();
-#if 0
-    return do_with_cql_env([](auto& e) {
-        return test_env::do_with_async([&e](test_env& env) { sstable_cleanup_correctness_fn(e, env); },
-                                       test_env_config{.storage = make_test_object_storage_options("GS")});
-    });
-#endif
+    return run_sstable_cleanup_correctness_with_storage(make_test_object_storage_options("GS"));
 }
 
 future<> foreach_compaction_group_view_with_thread(table_for_tests& table, std::function<void(compaction::compaction_group_view&)> action) {
