@@ -1722,6 +1722,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/client_state_test.cc',
     'test/boost/batchlog_manager_test.cc',
     'test/boost/table_helper_test.cc',
+    'test/boost/table_streaming_reader_test.cc',
     'test/boost/cache_algorithm_test.cc',
     'test/boost/castas_fcts_test.cc',
     'test/boost/cdc_test.cc',
