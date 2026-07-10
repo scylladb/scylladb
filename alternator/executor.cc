@@ -3269,7 +3269,7 @@ struct primary_key_equal {
 // done is known prior to starting the operation). Nevertheless, we want to
 // do this mutation via LWT to ensure that it is serialized with other LWT
 // mutations to the same partition.
-// 
+//
 // The std::vector<put_or_delete_item> must remain alive until the
 // storage_proxy::cas() future is resolved.
 class put_or_delete_item_cas_request : public service::cas_request {
@@ -3398,9 +3398,9 @@ future<> executor::do_batch_write(
         // Multiple mutations may be destined for the same partition, adding
         // or deleting different items of one partition. Join them together
         // because we can do them in one cas() call.
-        using map_type = std::unordered_map<schema_decorated_key, 
-            std::vector<put_or_delete_item>, 
-            schema_decorated_key_hash, 
+        using map_type = std::unordered_map<schema_decorated_key,
+            std::vector<put_or_delete_item>,
+            schema_decorated_key_hash,
             schema_decorated_key_equal>;
         auto key_builders = std::make_unique<map_type>(1, schema_decorated_key_hash{}, schema_decorated_key_equal{});
         for (auto&& b : std::move(mutation_builders)) {
