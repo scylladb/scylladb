@@ -543,7 +543,7 @@ void modification_statement::build_cas_result_set_metadata() {
 void
 modification_statement::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
     _restrictions = restrictions::analyze_statement_restrictions(db, s, type, where_clause, ctx,
-            applies_only_to_static_columns(), _selects_a_collection, false /* allow_filtering */, restrictions::check_indexes::no);
+            applies_only_to_static_columns(), false /* for_view */, false /* allow_filtering */, restrictions::check_indexes::no);
     /*
      * If there's no clustering columns restriction, we may assume that EXISTS
      * check only selects static columns and hence we can use any row from the
@@ -787,7 +787,6 @@ void modification_statement::add_operation(std::unique_ptr<operation> op) {
         _sets_static_columns = true;
     } else {
         _sets_regular_columns = true;
-        _selects_a_collection |= op->column.type->is_collection();
     }
     if (op->requires_read()) {
         _requires_read = true;
@@ -833,7 +832,6 @@ void modification_statement::analyze_condition(expr::expression cond) {
         _has_static_column_conditions = true;
     } else {
         _has_regular_column_conditions = true;
-        _selects_a_collection |=  col.col->type->is_collection();
     }
   });
 }
