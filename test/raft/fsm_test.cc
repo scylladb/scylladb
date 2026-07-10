@@ -2439,7 +2439,7 @@ BOOST_AUTO_TEST_CASE(test_start_as_candidate) {
             raft::config_member{server_addr_from_id(B_id), is_voter::yes}});
 
     raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
-                          .enable_fast_bootstrap = true};
+                          .fast_bootstrap_seed = 0};
 
     {
         raft::log log(raft::snapshot_descriptor{.config = cfg});
@@ -2480,8 +2480,8 @@ BOOST_AUTO_TEST_CASE(test_start_as_candidate) {
     }
 }
 
-// Test that fast bootstrap is gated by enable_fast_bootstrap: with the flag
-// off (the default), even the smallest-id voter on a fresh group stays a
+// Test that fast bootstrap is gated by fast_bootstrap_seed: when it is unset
+// (the default), even the smallest-id voter on a fresh group stays a
 // follower. This is what keeps the bare fsm usable in tests.
 BOOST_AUTO_TEST_CASE(test_no_start_as_candidate_without_fast_bootstrap) {
     server_id A_id = id(), B_id = id();
@@ -2506,7 +2506,7 @@ BOOST_AUTO_TEST_CASE(test_no_start_as_candidate_with_nonempty_log) {
     // Snapshot at index 1 => non-empty log.
     raft::log log(raft::snapshot_descriptor{.idx = index_t{1}, .config = cfg});
     raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
-                          .enable_fast_bootstrap = true};
+                          .fast_bootstrap_seed = 0};
     fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
 
     BOOST_CHECK(A.is_follower());
@@ -2521,7 +2521,7 @@ BOOST_AUTO_TEST_CASE(test_start_as_candidate_resend_on_peer_ping) {
     raft::log log(raft::snapshot_descriptor{.config = cfg});
 
     raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
-                          .enable_fast_bootstrap = true};
+                          .fast_bootstrap_seed = 0};
     fsm_debug A(A_id, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
 
     BOOST_CHECK(A.is_candidate());

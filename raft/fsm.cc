@@ -7,7 +7,6 @@
  */
 #include "fsm.hh"
 #include <random>
-#include <ranges>
 #include <seastar/core/coroutine.hh>
 #include "raft/raft.hh"
 #include "utils/assert.hh"
@@ -37,31 +36,44 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
     // so that the log can be replayed
     _commit_idx = std::max(_commit_idx, commit_idx);
 
-    // A node that "starts as a candidate" calls an election immediately on
-    // startup instead of waiting for the randomized election timeout. There is
-    // no existing leader to disrupt in these cases, so prevoting is skipped too
-    // -- the extra round-trip would be pure overhead. We start as a candidate:
-    //  - as the (voting) member of a single-node group: it is the only possible
-    //    leader, so it should take over right away;
-    //  - as the smallest-id voting member of a fresh multi-node group (empty
-    //    log, i.e. last_idx() == 0), but only when fast bootstrap is enabled.
-    //    Restricting it to a single, deterministically-chosen node avoids all
-    //    nodes racing to call an election simultaneously (which wastes a term
-    //    and risks split votes). Fast bootstrap is gated by a config flag so
-    //    that a bare fsm (e.g. in unit tests) keeps the classic behaviour of
-    //    starting as a follower; raft::server enables it.
-    // Any node with a non-empty log has already participated in the group and
-    // must go through the normal timeout path.
-    const auto& cfg = _log.get_configuration();
-    const bool start_as_candidate = cfg.can_vote(_my_id) && (
-        cfg.current.size() == 1 || (
-            _config.enable_fast_bootstrap &&
-            _log.last_idx() == index_t{0} &&
-            std::ranges::none_of(cfg.current, [this](const auto& m) {
-                return m.can_vote && m.addr.id < _my_id;
-            })
-        )
-    );
+    // A node "starts as a candidate" -- calls an election immediately instead of
+    // waiting for the randomized election timeout, skipping prevoting since there
+    // is no existing leader to disrupt. This happens for the sole voter of a
+    // single-node group (the only possible leader), and, when fast bootstrap is
+    // enabled (fast_bootstrap_seed is set), for one deterministically chosen voter
+    // of a fresh multi-node group (empty log, last_idx() == 0). Choosing a single
+    // node avoids all nodes racing to call an election at once (wasting a term,
+    // risking split votes). The chosen one is the voter at rank (seed % num_voters)
+    // in ascending server_id order; every node derives the same rank without
+    // coordination. A caller managing many groups can vary the seed per group to
+    // rotate leadership across nodes; seed 0 picks the smallest-id voter. A bare
+    // fsm (e.g. in unit tests) leaves the seed unset and starts as a follower;
+    // raft::server sets it. A multi-node node with a non-empty log has already
+    // participated and takes the normal timeout path.
+    const bool start_as_candidate = std::invoke([&] {
+        const auto& cfg = _log.get_configuration();
+        if (!cfg.can_vote(_my_id)) {
+            return false;
+        }
+        if (cfg.current.size() == 1) {
+            return true;
+        }
+        if (!_config.fast_bootstrap_seed.has_value() || _log.last_idx() != index_t{0}) {
+            return false;
+        }
+        unsigned voters = 0;
+        unsigned rank = 0;
+        for (const auto& m : cfg.current) {
+            if (!m.can_vote) {
+                continue;
+            }
+            if (m.addr.id < _my_id) {
+                ++rank;
+            }
+            ++voters;
+        }
+        return rank == *_config.fast_bootstrap_seed % voters;
+    });
     logger.trace("fsm[{}]: starting, current term {}, log length {}, commit index {}, start_as_candidate {}",
             _tag, _current_term, _log.last_idx(), _commit_idx, start_as_candidate);
 
