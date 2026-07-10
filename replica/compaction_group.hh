@@ -520,6 +520,8 @@ public:
 
     virtual storage_group& storage_group_for_token(dht::token) const = 0;
     virtual utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const = 0;
+    virtual utils::chunked_vector<storage_group_ptr> storage_groups_for_token_ranges(
+            noncopyable_function<std::optional<dht::token_range>()> next_token_range) const = 0;
 
     virtual locator::combined_load_stats table_load_stats() const = 0;
     virtual bool all_storage_groups_split() = 0;

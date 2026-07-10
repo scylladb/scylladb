@@ -746,6 +746,11 @@ public:
         ret.push_back(_single_sg);
         return ret;
     }
+    utils::chunked_vector<storage_group_ptr> storage_groups_for_token_ranges(noncopyable_function<std::optional<dht::token_range>()>) const override {
+        utils::chunked_vector<storage_group_ptr> ret;
+        ret.push_back(_single_sg);
+        return ret;
+    }
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override {
         return get_compaction_group();
     }
@@ -947,6 +952,7 @@ public:
 
     compaction_group& compaction_group_for_token(dht::token token) const override;
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override;
+    utils::chunked_vector<storage_group_ptr> storage_groups_for_token_ranges(noncopyable_function<std::optional<dht::token_range>()> next_token_range) const override;
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override;
     compaction_group& compaction_group_for_token_range(sstring desc, dht::token first_token, dht::token last_token) const;
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
@@ -1428,6 +1434,27 @@ utils::chunked_vector<storage_group_ptr> tablet_storage_group_manager::storage_g
 
 utils::chunked_vector<storage_group_ptr> table::storage_groups_for_token_range(dht::token_range tr) const {
     return _sg_manager->storage_groups_for_token_range(tr);
+}
+
+utils::chunked_vector<storage_group_ptr>
+tablet_storage_group_manager::storage_groups_for_token_ranges(noncopyable_function<std::optional<dht::token_range>()> next_token_range) const {
+    utils::chunked_vector<storage_group_ptr> sgs;
+    const storage_group* last = nullptr;
+    while (auto tr = next_token_range()) {
+        for (auto& sg : storage_groups_for_token_range(*tr)) {
+            if (sg.get() == last) {
+                continue;
+            }
+            last = sg.get();
+            sgs.push_back(sg);
+        }
+    }
+    return sgs;
+}
+
+utils::chunked_vector<storage_group_ptr>
+table::storage_groups_for_token_ranges(noncopyable_function<std::optional<dht::token_range>()> next_token_range) const {
+    return _sg_manager->storage_groups_for_token_ranges(std::move(next_token_range));
 }
 
 compaction_group& tablet_storage_group_manager::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const {
