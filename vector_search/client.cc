@@ -120,6 +120,29 @@ bool is_server_problem(std::exception_ptr& err) {
     return is_server_unavailable(err) || try_catch<tls::verification_error>(err) != nullptr || try_catch<timed_out_error>(err) != nullptr;
 }
 
+bool is_service_unavailable(http::reply::status_type status) {
+    return status == http::reply::status_type::service_unavailable;
+}
+
+enum class service_unavailable_reason { node_bootstrapping, index_building };
+
+std::optional<service_unavailable_reason> parse_service_unavailable_reason(std::string_view body) {
+    auto maybe_json = rjson::try_parse(body);
+    if (maybe_json) {
+        const auto* reason = rjson::find(*maybe_json, "reason");
+        if (reason && reason->IsString()) {
+            auto reason_str = rjson::to_string_view(*reason);
+            if (reason_str == "NODE_BOOTSTRAPPING") {
+                return service_unavailable_reason::node_bootstrapping;
+            }
+            if (reason_str == "INDEX_BUILDING") {
+                return service_unavailable_reason::index_building;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 future<client::request_error> map_err(std::exception_ptr& err) {
     if (is_server_problem(err)) {
         co_return service_unavailable_error{};
@@ -156,11 +179,20 @@ seastar::future<client::request_result> client::request(
             co_return std::unexpected{aborted_error{}};
         }
         if (is_server_problem(err)) {
-            handle_server_unavailable(err);
+            handle_server_unavailable(fmt::format("{}", err));
         }
         co_return std::unexpected{co_await map_err(err)};
     }
-    co_return co_await std::move(f);
+    auto resp = co_await std::move(f);
+    if (is_service_unavailable(resp.status)) {
+        auto body = response_content_to_sstring(resp.content);
+        auto reason = parse_service_unavailable_reason(body);
+        if (reason == service_unavailable_reason::node_bootstrapping) {
+            handle_server_unavailable(fmt::format("received HTTP status {}: {}", static_cast<int>(resp.status), body));
+            co_return std::unexpected{service_unavailable_error{}};
+        }
+    }
+    co_return resp;
 }
 
 seastar::future<client::response> client::request_impl(seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content,
@@ -197,9 +229,9 @@ seastar::future<> client::close() {
     co_await _http_client.close();
 }
 
-void client::handle_server_unavailable(std::exception_ptr err) {
+void client::handle_server_unavailable(const seastar::sstring& reason) {
     if (!is_checking_status_in_progress()) {
-        _logger.warn("Request to vector store {} {}:{} failed: {}", _endpoint.host, _endpoint.ip, _endpoint.port, err);
+        _logger.warn("Request to vector store {} {}:{} failed: {}", _endpoint.host, _endpoint.ip, _endpoint.port, reason);
         _checking_status_future = run_checking_status();
     }
 }
