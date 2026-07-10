@@ -67,6 +67,15 @@ public:
         // Helps distinguish raft instances when multiple groups share the
         // same server_id. If empty, server_id is used as the default.
         sstring tag;
+        // Selects which voting member fast-bootstraps as the initial leader on
+        // a fresh group: the one at rank (fast_bootstrap_seed % number_of_voters)
+        // in ascending server_id order. Callers that manage many groups (e.g.
+        // one per tablet) can derive this from the group id so that leadership
+        // is spread across nodes instead of always landing on the smallest-id
+        // one. The default of 0 selects the smallest-id voter. raft::server
+        // always enables fast bootstrap (unlike a bare fsm, which disables it
+        // when no seed is provided).
+        uint64_t fast_bootstrap_seed = 0;
     };
 
     virtual ~server() {}

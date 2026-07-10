@@ -194,7 +194,13 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
                 ::format("table {}, tablet {} raft group {} background error {}", 
                     tablet.table, tablet.tablet, group_id, e));
         },
-        .tag = format("sc-{}", group_id)
+        .tag = format("sc-{}", group_id),
+        // Spread initial tablet-group leadership across nodes: derive the
+        // fast-bootstrap leader choice from the group id so that different
+        // groups pick different replicas instead of all electing the
+        // smallest-id node (which would concentrate load on one node when a
+        // table starts with many tablets).
+        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
