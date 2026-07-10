@@ -88,19 +88,16 @@ auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
 }
 
 auto decode_error_message(const std::vector<seastar::temporary_buffer<char>>& content) -> sstring {
-    if (content.size() == 1) {
-        auto body = std::string_view(content.front().get(), content.front().size());
-        auto json = rjson::try_parse(body);
-        if (json && json->IsString()) {
-            return sstring(rjson::to_string_view(*json));
-        }
-        return sstring(body);
-    }
-
     auto body = vector_search::response_content_to_sstring(content);
     auto json = rjson::try_parse(body);
-    if (json && json->IsString()) {
-        return sstring(rjson::to_string_view(*json));
+    if (json) {
+        if (json->IsString()) {
+            return sstring(rjson::to_string_view(*json));
+        }
+        auto message = rjson::find(*json, "message");
+        if (message && message->IsString()) {
+            return sstring(rjson::to_string_view(*message));
+        }
     }
     return body;
 }
