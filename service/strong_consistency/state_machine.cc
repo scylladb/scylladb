@@ -79,17 +79,16 @@ public:
                 co_await _mm.get_group0_barrier().trigger(false, &_as);
             };
             auto schemas = co_await resolve_and_upgrade_mutations(muts, _tablet.table, _db, _sys_ks, barrier);
-            // Apply mutations in order. Writes are started sequentially to preserve
-            // strong consistency ordering, then we wait for all to complete.
+            // Apply mutations sequentially to preserve linearizability.
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
-            std::vector<future<>> apply_futures;
-            apply_futures.reserve(muts.size());
             for (size_t i = 0; i < command.size(); ++i) {
                 throwing_assert(replay_positions[i].index == command[i]->idx);
-                apply_futures.emplace_back(_db.apply_in_memory(muts[i], schemas[i], std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance()).discard_result());
+                // Concurrent apply_in_memory() calls can complete out of order under memory pressure
+                // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
+                // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
+                co_await _db.apply_in_memory(muts[i], schemas[i], std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
             }
-            co_await when_all_succeed(apply_futures.begin(), apply_futures.end());
         } catch (replica::no_such_column_family&) {
             // If the table doesn't exist, it means it was already dropped.
             // This cannot happen if the table wasn't created yet on the node
