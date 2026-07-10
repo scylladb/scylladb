@@ -1844,6 +1844,7 @@ void writer::consume_end_of_stream() {
     // context after the write is over, because it hogs memory).
     auto decompressor = _sst.manager().get_compressor_factory().make_compressor_for_reading(_sst._components->compression).get();
     _sst._components->compression.set_compressor(std::move(decompressor));
+    _sst._components->compression.discard_hidden_options();
     run_identifier identifier{_run_identifier};
     std::optional<scylla_metadata::large_data_stats> ld_stats(scylla_metadata::large_data_stats{
         .map = {
