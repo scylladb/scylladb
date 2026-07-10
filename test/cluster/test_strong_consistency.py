@@ -118,6 +118,27 @@ async def get_table_raft_group_id(manager: ManagerClient, ks: str, table: str):
     rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
     return str(rows[0].raft_group_id)
 
+SC_MIN_TIMESTAMP = -(2**63) + 1
+
+async def read_stable_timestamp(cql, host, group_id: str):
+    """Read the persisted stable_timestamp for a raft group on a given host.
+    Returns None if there is no row/value yet (never written).
+    """
+    rows = await cql.run_async(
+        "SELECT DISTINCT shard, group_id, stable_timestamp FROM system.raft_groups",
+        host=host)
+    for row in rows:
+        if str(row.group_id) == str(group_id) and row.stable_timestamp is not None:
+            return row.stable_timestamp
+    return None
+
+async def wait_for_stable_timestamp(cql, host, group_id: str, predicate, deadline_s: float = 60):
+    """Poll stable_timestamp on host until predicate(value) is true."""
+    async def check():
+        value = await read_stable_timestamp(cql, host, group_id)
+        return value if (value is not None and predicate(value)) else None
+    return await wait_for(check, time.time() + deadline_s)
+
 async def test_basic_write_read(manager: ManagerClient, build_mode: str):
 
     logger.info("Bootstrapping cluster")
@@ -1608,3 +1629,58 @@ async def test_write_from_non_replica_after_leader_down(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 2", host=non_replica_host)
             assert len(rows) == 1
             assert rows[0].c == 2
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_stable_timestamp_leader_refresh(manager: ManagerClient):
+    """Verify that the tablet group leader correctly and regularly advances
+    stable_timestamp.
+    """
+    cmdline = DEFAULT_CMDLINE + ['--smp=1']
+    config = dict(DEFAULT_CONFIG)
+    config['error_injections_at_startup'] = ['sc_short_stable_timestamp_refresh']
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    def host_by_id(hid):
+        return [h for h in hosts if str(h.host_id) == str(hid)][0]
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            # Identify the leader replica.
+            leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+            leader_host = host_by_id(leader_host_id)
+            logger.info(f"group {group_id}: leader={leader_host_id}")
+
+            initial = await read_stable_timestamp(cql, leader_host, group_id)
+            assert initial is None or initial == SC_MIN_TIMESTAMP, f"unexpected initial stable_timestamp: {initial}"
+
+            for pk in range(10):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({pk}, {pk})", host=leader_host)
+            wt_rows = await cql.run_async(f"SELECT WRITETIME(c) AS wt FROM {table} WHERE pk = 9", host=leader_host)
+            ref_ts_1 = wt_rows[0].wt
+            assert ref_ts_1 > SC_MIN_TIMESTAMP
+
+            leader_ts_1 = await wait_for_stable_timestamp(
+                cql, leader_host, group_id, lambda v: v >= ref_ts_1)
+            logger.info(f"leader advanced to {leader_ts_1} (>= ref {ref_ts_1})")
+            assert leader_ts_1 > SC_MIN_TIMESTAMP
+
+            for pk in range(10, 20):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({pk}, {pk})", host=leader_host)
+            wt_rows = await cql.run_async(f"SELECT WRITETIME(c) AS wt FROM {table} WHERE pk = 19", host=leader_host)
+            ref_ts_2 = wt_rows[0].wt
+            assert ref_ts_2 > ref_ts_1
+
+            leader_ts_2 = await wait_for_stable_timestamp(
+                cql, leader_host, group_id, lambda v: v >= ref_ts_2)
+            logger.info(f"leader advanced further to {leader_ts_2} (>= ref {ref_ts_2})")
+            assert leader_ts_2 > leader_ts_1
+
+    await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])

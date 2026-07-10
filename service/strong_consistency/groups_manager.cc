@@ -21,6 +21,7 @@
 #include "service/storage_proxy.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "utils/error_injection.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
 #include "utils/error_injection.hh"
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -516,8 +517,12 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
 
 future<> groups_manager::stable_timestamp_tracker::run() {
     while (!_as.abort_requested()) {
+        auto interval = std::chrono::duration_cast<std::chrono::milliseconds>(stable_timestamp_refresh_interval);
+        if (utils::get_local_injector().is_enabled("sc_short_stable_timestamp_refresh")) {
+            interval = std::chrono::milliseconds(200);
+        }
         try {
-            co_await seastar::sleep_abortable(stable_timestamp_refresh_interval, _as);
+            co_await seastar::sleep_abortable(interval, _as);
         } catch (const seastar::sleep_aborted&) {
             co_return;
         }
