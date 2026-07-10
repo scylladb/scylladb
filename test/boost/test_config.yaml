@@ -61,6 +61,8 @@ custom_args:
     # Required for test_table_size_estimate_singlenode_many_shards.
     vnodes_to_tablets_migration_test:
         - '-c2 -m2G'
+    table_streaming_reader_test:
+        - '-c1 -m2G'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
 # Tests skipped in debug/sanitize modes because they use many iterations
