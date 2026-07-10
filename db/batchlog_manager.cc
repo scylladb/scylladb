@@ -36,6 +36,7 @@
 #include "db/schema_tables.hh"
 #include "message/messaging_service.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/untyped_result_set_idl_utils.hh"
 #include "service_permit.hh"
 #include "cql3/query_processor.hh"
 
@@ -357,8 +358,6 @@ static future<db::all_batches_replayed> process_batch(
         co_return db::all_batches_replayed::no;
     }
 
-    auto data = row.get_blob_unfragmented("data");
-
     blogger.debug("Replaying batch {} from stage {} and batch shard {}", id, int32_t(stage), batch_shard);
 
     utils::chunked_vector<mutation> mutations;
@@ -368,7 +367,8 @@ static future<db::all_batches_replayed> process_batch(
 
     try {
         utils::chunked_vector<std::pair<canonical_mutation, schema_ptr>> fms;
-        auto in = ser::as_input_stream(data);
+        auto in = cql3::ser::blob_as_input_stream(row, "data");
+        auto size = in.size();
         while (in.size()) {
             auto fm = ser::deserialize(in, std::type_identity<canonical_mutation>());
             const auto tbl = qp.db().try_find_table(fm.column_family_id());
@@ -392,8 +392,6 @@ static future<db::all_batches_replayed> process_batch(
 
             co_return db::all_batches_replayed::no;
         }
-
-        auto size = data.size();
 
         for (const auto& [fm, s] : fms) {
             mutations.emplace_back(fm.to_mutation(s));
