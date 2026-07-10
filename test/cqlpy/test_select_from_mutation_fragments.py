@@ -473,10 +473,12 @@ def test_ck_in_query(cql, test_table, scylla_only):
     sources_res = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}"))
 
     sources = {r.mutation_source.split(":")[0]: r.mutation_source for r in sources_res}
-    assert "sstable" in sources # the only source we are guaranteed to have
-    assert set(sources.keys()).issubset({"memtable", "row-cache", "sstable"})
+    assert len(sources) == 3
+    assert "memtable" in sources
+    assert "row-cache" in sources
+    assert "sstable" in sources
 
-    res = list(reversed(list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
+    res = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
         WHERE
             pk1 = {pk1} AND
             pk2 = {pk2} AND
@@ -485,18 +487,17 @@ def test_ck_in_query(cql, test_table, scylla_only):
                 ('{sources["row-cache"]}', 2, 0, 0, 0),
                 ('{sources["sstable"]}', 2, 0, 0, 0),
                 ('{sources["sstable"]}', 2, 1, 1, 0))
-        """))))
+        """))
 
     columns = ("mutation_source", "partition_region", "ck1", "ck2", "position_weight")
-    expected_results = [ # reversed order
-            (sources["sstable"], 2, 1, 1, 0),
-            (sources["sstable"], 2, 0, 0, 0),
-            (sources["row-cache"], 2, 0, 0, 0),
+    expected_results = [
             (sources["memtable"], 2, 0, 0, 0),
+            (sources["row-cache"], 2, 0, 0, 0),
+            (sources["sstable"], 2, 0, 0, 0),
+            (sources["sstable"], 2, 1, 1, 0),
     ]
 
-    assert len(res) >= 2
-    assert len(res) <= len(expected_results)
+    assert len(res) == len(expected_results)
     for row, expected_row in zip(res, expected_results):
         for col_name, expected_value in zip(columns, expected_row):
             assert hasattr(row, col_name)
