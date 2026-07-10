@@ -17,6 +17,7 @@
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/untyped_result_set_idl_utils.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
 #include "schema/schema_builder.hh"
@@ -558,7 +559,7 @@ future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema
     std::optional<service::paxos::proposal> accepted;
     if (row.has("proposal")) {
         accepted = service::paxos::proposal(row.get_as<utils::UUID>("proposal_ballot"),
-                ser::deserialize_from_buffer<>(row.get_blob_unfragmented("proposal"),  std::type_identity<frozen_mutation>(), 0));
+                cql3::ser::deserialize_blob_as<frozen_mutation>(row, "proposal"));
     }
 
     std::optional<service::paxos::proposal> most_recent;
@@ -566,7 +567,7 @@ future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema
         // the value can be missing if it was pruned, supply empty one since
         // it will not going to be used anyway
         auto fm = row.has("most_recent_commit") ?
-                    ser::deserialize_from_buffer<>(row.get_blob_unfragmented("most_recent_commit"), std::type_identity<frozen_mutation>(), 0) :
+                    cql3::ser::deserialize_blob_as<frozen_mutation>(row, "most_recent_commit") :
                     freeze(mutation(s, key));
         most_recent = service::paxos::proposal(row.get_as<utils::UUID>("most_recent_commit_at"),
                 std::move(fm));
