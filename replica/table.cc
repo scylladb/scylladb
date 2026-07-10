@@ -1121,6 +1121,15 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
         // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
         co_await cm.perform_offstrategy(*view, tablet_split_task_info);
         co_await cm.perform_split_compaction(*view, opt, tablet_split_task_info);
+        // Injection point: pause after the first view's split compaction
+        // completes (sstables moved and deregistered). This gives a concurrent
+        // regular compaction time to run its completion phase before the next
+        // view's run_with_compaction_disabled kills it.
+        if (!is_repairing_view(view)) {
+            co_await utils::get_local_injector().inject(
+                    "split_pause_after_first_view_compaction",
+                    utils::wait_for_message{std::chrono::minutes{5}});
+        }
     }
 
     if (_t.uses_logstor()) {

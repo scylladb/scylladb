@@ -2338,3 +2338,123 @@ async def test_split_stopped_on_shutdown(manager: ManagerClient):
         await log.wait_for('Detected tablet split for table', from_mark=log_mark)
         tablet_count = await get_tablet_count(manager, server, ks, 'test')
         assert tablet_count >= expected_tablet_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+async def test_split_vs_regular_compaction_stale_snapshot(manager: ManagerClient):
+    """Reproducer for split-vs-regular-compaction stale-snapshot race.
+
+    The race happens when a regular compaction picker captures a snapshot of
+    main_sstables, then split's replacer moves sstables out of main and
+    deregisters them from _compacting_sstables, then the picker's eligibility
+    filter runs on the stale snapshot and selects the moved sstables.  The
+    regular compaction's completion phase then fails because the sstables are
+    no longer in the source compaction group's main set.
+
+    Injection points:
+      - split_pause_before_replacer: pauses split's replacer before it calls
+        on_compaction_completion (which moves sstables).
+      - regular_compaction_pause_after_snapshot: pauses the regular picker
+        after capturing the snapshot but before the eligibility filter.
+
+    Without the fix (selector_lock), the replacer runs freely between the
+    picker's snapshot and filter, triggering the race and aborting the node.
+    With the fix, selector_lock serializes the two, preventing the race.
+    """
+    logger.info("Setting up 2-node cluster (RF=2, 2 racks)")
+    cfg = {'enable_tablets': True}
+    cmdline = ['--smp', '1', '--target-tablet-size-in-bytes', '1000000']
+    servers = []
+    for i in range(2):
+        s = await manager.servers_add(1, cmdline=cmdline, config=cfg,
+                                      property_file={'dc': 'dc1', 'rack': f'r{i}'})
+        servers.extend(s)
+    server = servers[0]
+    cql = manager.get_cql()
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+
+    await manager.api.disable_tablet_balancing(server.ip_addr)
+
+    ks = await create_new_test_keyspace(cql,
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} "
+        "AND tablets = {'initial': 1}")
+
+    await cql.run_async(
+        f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) "
+        f"WITH compression = {{'sstable_compression': ''}} "
+        f"AND compaction = {{'class': 'IncrementalCompactionStrategy', "
+        f"                    'min_threshold': '2'}}")
+
+    insert = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+
+    # Disable auto-compaction during sstable creation.
+    for s in servers:
+        await manager.api.disable_autocompaction(s.ip_addr, ks)
+
+    # Create two sstables.
+    for pk in range(200):
+        await cql.run_async(insert, [pk, b'\x00' * 512])
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+    for pk in range(200, 400):
+        await cql.run_async(insert, [pk, b'\x00' * 512])
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+
+    # Enable injections.
+    await manager.api.enable_injection(
+        server.ip_addr, "split_pause_before_replacer", one_shot=False)
+    await manager.api.enable_injection(
+        server.ip_addr, "regular_compaction_pause_after_snapshot", one_shot=False)
+
+    # Trigger split.
+    await cql.run_async(
+        f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}}")
+    await manager.enable_tablet_balancing()
+    await log.wait_for("Emitting resize decision of type split",
+                       from_mark=mark, timeout=60)
+
+    # Wait for split to pause before its replacer.
+    await log.wait_for("split_pause_before_replacer: waiting",
+                       from_mark=mark, timeout=120)
+
+    # Enable auto-compaction so a regular task is submitted.  It captures
+    # a snapshot containing the sstables (still in main, registered as
+    # compacting by split) and pauses at the injection.
+    await manager.api.enable_autocompaction(server.ip_addr, ks)
+    # Wait for the handler to actually block (not just enter and co_return).
+    await log.wait_for("regular_compaction_pause_after_snapshot: waiting",
+                       from_mark=mark, timeout=120)
+
+    # Release split replacer.  Without the fix it deregisters sstables
+    # immediately; with the fix it blocks on sstable_set_lock.
+    await manager.api.message_injection(
+        server.ip_addr, "split_pause_before_replacer")
+    await asyncio.sleep(2)
+
+    # Release the picker.
+    try:
+        await manager.api.message_injection(
+            server.ip_addr, "regular_compaction_pause_after_snapshot")
+    except Exception:
+        pass
+
+    # Wait for outcome.
+    try:
+        await asyncio.sleep(10)
+    except Exception:
+        pass
+
+    # Disable injections.
+    try:
+        await manager.api.disable_injection(server.ip_addr, "split_pause_before_replacer")
+        await manager.api.disable_injection(server.ip_addr, "regular_compaction_pause_after_snapshot")
+    except Exception:
+        pass
+
+    # Verify no abort.
+    for marker in ("Unable to remove input SSTable", "Aborting on shard"):
+        matches = await log.grep(marker, from_mark=mark)
+        assert not matches, f"Race triggered: '{marker}' found in log"
