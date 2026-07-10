@@ -17,7 +17,7 @@ from functools import wraps
 from typing import List, Dict, Callable, Optional, Tuple
 
 from cassandra import ConsistencyLevel
-from cassandra import WriteTimeout, ReadTimeout, OperationTimedOut
+from cassandra import WriteFailure, WriteTimeout, ReadTimeout, OperationTimedOut
 from cassandra.query import SimpleStatement, PreparedStatement
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_count
@@ -29,8 +29,14 @@ DEFAULT_WORKERS = 20
 DEFAULT_BACKOFF_BASE = 0.02
 DEFAULT_NUM_KEYS = 50
 UNCERTAINTY_RE = re.compile(r"write timeout due to uncertainty", re.IGNORECASE)
+MAX_COUNTER_WRITE_ATTEMPTS = 10
+COUNTER_RETRY_BASE_SLEEP_S = 0.1
 
 
+def _is_safe_counter_write_failure(exc: Exception) -> bool:
+    """A WriteFailure with 0 received responses means no replica applied the write,
+    so it is safe to retry without risk of double-counting."""
+    return isinstance(exc, WriteFailure) and getattr(exc, "received_responses", None) == 0
 
 
 def backoff_on_exception(timeout, between_sleep, retry_exceptions, should_retry):
@@ -133,7 +139,21 @@ class Worker:
     async def _inc_counter(self, pk: int, delta: int) -> None:
         stmt = self.counter_update_statement.bind([delta, pk])
         stmt.consistency_level = ConsistencyLevel.LOCAL_QUORUM
-        await self.cql.run_async(stmt)
+        retries = MAX_COUNTER_WRITE_ATTEMPTS
+        for attempt in range(retries):
+            try:
+                await self.cql.run_async(stmt)
+                return
+            except WriteFailure as e:
+                if not _is_safe_counter_write_failure(e) or attempt == retries - 1:
+                    raise
+                # Exponential backoff: base * 2^attempt, capped at 5s
+                sleep_time = min(COUNTER_RETRY_BASE_SLEEP_S * (2 ** attempt), 5.0)
+                logger.warning(
+                    "Counter write failed (attempt %d/%d, pk=%d): %s, retrying in %.2fs",
+                    attempt + 1, retries, pk, e, sleep_time,
+                )
+                await asyncio.sleep(sleep_time)
 
     def stop(self) -> None:
         self.stop_event.set()
