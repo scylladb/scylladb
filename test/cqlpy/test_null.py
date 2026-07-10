@@ -106,18 +106,28 @@ def test_insert_null_key_in_batch(cql, table1):
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(stmt, [None, s])
 
-# INSERT statements must specify all components of the primary key,
-# and the corresponding query parameters, if any, must not be null.
-# If INSERT or DELETE statement is missing a non-last element of
-# the primary key, the error message generated contained
-# an invalid column name (#12046).
-# The problem occurred if the query contains a column with the list type,
-# otherwise statement_restrictions::process_clustering_columns_restrictions
-# checks that all the components of the key are specified.
+# INSERT statements must specify all components of the primary key.
+# When a non-last clustering-key component is missing while a later one is
+# given (here "b" is given but "a" is missing),
+# statement_restrictions::process_clustering_columns_restrictions rejects the
+# statement during restriction analysis with a "preceding column ... is not
+# restricted" error. When only the trailing component is missing (here "b"),
+# the analysis passes and modification_statement instead reports the clearer
+# "Missing mandatory PRIMARY KEY part" error.
+#
+# This error message used to depend, by accident, on whether the statement
+# mentioned a list column: a list column set modification_statement's
+# _selects_a_collection, which was mistakenly passed as the restrictions'
+# for_view flag and relaxed the completeness check - so only statements that
+# happened to mention a list column reached the "Missing mandatory PRIMARY KEY
+# part" message. That misuse has been fixed, so list and non-list statements
+# now behave identically and the gap case surfaces the statement_restrictions
+# error. The "Some clustering keys are missing" alternative is kept for
+# Cassandra compatibility. See also #12046 (the reported column must be real).
 def test_insert_with_list_column_and_missing_clustering_key_part(cql, table2):
     key = unique_key_string()
     with pytest.raises(InvalidRequest,
-                       match='Missing mandatory PRIMARY KEY part a|Some clustering keys are missing: a'):
+                       match='PRIMARY KEY column "b" cannot be restricted as preceding column "a" is not restricted|Some clustering keys are missing: a'):
         cql.execute(cql.prepare(f"INSERT INTO {table2} (id,b,c) VALUES ('{key}',1,null)"))
     with pytest.raises(InvalidRequest,
                        match='Missing mandatory PRIMARY KEY part b|Some clustering keys are missing: b'):
@@ -141,14 +151,20 @@ def test_delete_with_list_column_and_missing_clustering_key_part(cql, table2):
     assert list(cql.execute(f"SELECT c FROM {table2} WHERE id='{key}' AND a=1 AND b=1"))[0][0] is None
 
 # The same as test_insert_with_list_column_and_missing_clustering_key_part but
-# for partition key.
+# for partition key. A partition key has no prefix concept, so any missing
+# component (whether id1 or id2) makes the restrictions incomplete; the
+# analysis then rejects the statement with the generic data-filtering error,
+# rather than modification_statement's "Missing mandatory PRIMARY KEY part".
+# As above, this used to reach the nicer message only by accident (via a list
+# column being misrouted into the for_view flag). The "Some partition key
+# parts are missing" alternative is kept for Cassandra compatibility.
 def test_insert_with_list_column_and_missing_partition_key_part(cql, table3):
     key = unique_key_string()
     with pytest.raises(InvalidRequest,
-                       match='Missing mandatory PRIMARY KEY part id1|Some partition key parts are missing: id1'):
+                       match='use ALLOW FILTERING|Some partition key parts are missing: id1'):
         cql.execute(cql.prepare(f"INSERT INTO {table3} (id2,a,c) VALUES ('{key}',1,[1])"))
     with pytest.raises(InvalidRequest,
-                       match='Missing mandatory PRIMARY KEY part id2|Some partition key parts are missing: id2'):
+                       match='use ALLOW FILTERING|Some partition key parts are missing: id2'):
         cql.execute(cql.prepare(f"INSERT INTO {table3} (id1,a,c) VALUES ('{key}',1,[1])"))
 
 # Tests handling of "key_column in ?" where ? is bound to null.

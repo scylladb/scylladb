@@ -94,9 +94,6 @@ private:
     // columns, respectively.
     bool _sets_static_columns = false;
     bool _sets_regular_columns = false;
-    // True if this statement has column operations or conditions for a column
-    // that stores a collection.
-    bool _selects_a_collection = false;
 
     std::optional<bool> _is_raw_counter_shard_write;
 
