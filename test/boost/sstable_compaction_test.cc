@@ -11,7 +11,6 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
-#include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
@@ -19,7 +18,6 @@
 
 #include "sstables/generation_type.hh"
 #include "sstables/sstables.hh"
-#include "sstables/compress.hh"
 #include "compaction/compaction.hh"
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
@@ -33,8 +31,6 @@
 #include "sstables/sstable_writer.hh"
 #include <memory>
 #include "test/boost/sstable_test.hh"
-#include <seastar/core/seastar.hh>
-#include <seastar/core/do_with.hh>
 #include "compaction/compaction_manager.hh"
 #include "test/lib/tmpdir.hh"
 #include "utils/interval.hh"
@@ -44,9 +40,7 @@
 #include "compaction/incremental_backlog_tracker.hh"
 #include "compaction/size_tiered_backlog_tracker.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "mutation/counters.hh"
 #include "test/lib/simple_schema.hh"
-#include "replica/memtable-sstable.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/sstable_run_based_compaction_strategy_for_tests.hh"
 #include "test/lib/random_schema.hh"
@@ -54,7 +48,6 @@
 #include "db/config.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
 #include "compaction/compaction_group_view.hh"
-#include "mutation/mutation_rebuilder.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "mutation/mutation_partition.hh"
 
@@ -100,16 +93,44 @@ atomic_cell make_atomic_cell(data_type dt, bytes_view value, uint32_t ttl = 0, u
 
 ////////////////////////////////  Test basic compaction support
 
-// open_sstables() opens several generations of the same sstable, returning,
-// after all the tables have been open, their vector.
-static future<std::vector<sstables::shared_sstable>> open_sstables(test_env& env, schema_ptr s, sstring dir, std::vector<sstables::generation_type::int_t> gen_values) {
-    auto generations = generations_from_values(gen_values);
-    std::vector<sstables::shared_sstable> ret;
-    co_await coroutine::parallel_for_each(generations, [&env, &ret, &dir, s] (auto generation) -> future<> {
-        auto sst = co_await env.reusable_sst(s, dir, generation);
-        ret.push_back(std::move(sst));
-    });
-    co_return ret;
+static std::vector<sstables::shared_sstable> make_compaction_fixture_sstables(test_env& env, schema_ptr s) {
+    constexpr api::timestamp_type ts1 = 1;
+    constexpr api::timestamp_type ts2 = 2;
+    constexpr api::timestamp_type ts3 = 3;
+
+    auto make_key = [&](std::string_view key) { return partition_key::from_exploded(*s, {to_bytes(sstring(key))}); };
+    auto set_age = [&](mutation& m, int32_t value, api::timestamp_type ts) {
+        m.set_clustered_cell(clustering_key::make_empty(), bytes("age"), data_value(value), ts);
+    };
+    auto set_height = [&](mutation& m, int32_t value, api::timestamp_type ts) {
+        m.set_clustered_cell(clustering_key::make_empty(), bytes("height"), data_value(value), ts);
+    };
+
+    mutation la1_john(s, make_key("john"));
+    set_age(la1_john, 30, ts1);
+    mutation la1_nadav(s, make_key("nadav"));
+    set_age(la1_nadav, 40, ts1);
+
+    mutation la2_jerry(s, make_key("jerry"));
+    set_age(la2_jerry, 40, ts2);
+    set_height(la2_jerry, 170, ts2);
+    mutation la2_nadav(s, make_key("nadav"));
+    set_height(la2_nadav, 186, ts2);
+
+    mutation la3_tom(s, make_key("tom"));
+    set_age(la3_tom, 20, ts3);
+    set_height(la3_tom, 180, ts3);
+    mutation la3_john(s, make_key("john"));
+    set_age(la3_john, 20, ts3);
+    mutation la3_nadav(s, make_key("nadav"));
+    la3_nadav.partition().apply(tombstone(ts3, gc_clock::time_point(gc_clock::duration(ts3))));
+
+    auto sst_gen = env.make_sst_factory(s);
+    return {
+        make_sstable_containing(sst_gen, {std::move(la1_john), std::move(la1_nadav)}).get(),
+        make_sstable_containing(sst_gen, {std::move(la2_jerry), std::move(la2_nadav)}).get(),
+        make_sstable_containing(sst_gen, {std::move(la3_tom), std::move(la3_john), std::move(la3_nadav)}).get(),
+    };
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
@@ -257,7 +278,7 @@ void compact(test_env& env) {
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
 
-    auto sstables = open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).get();
+    auto sstables = make_compaction_fixture_sstables(env, s);
     std::vector<shared_sstable> new_sstables;
     auto new_sstable = [&] {
         auto sst = env.make_sstable(cf->schema());
@@ -338,25 +359,17 @@ SEASTAR_TEST_CASE(compact_test) {
 }
 
 SEASTAR_TEST_CASE(compact_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
-    testlog.info("OBJECT STORAGE only works with uuid_sstable_identifier enabled, skipping test");
-    return make_ready_future();
-#if 0
     return sstables::test_env::do_with_async([](sstables::test_env& env) { compact(env); },
                                              test_env_config{
                                                  .storage = make_test_object_storage_options("S3"),
                                              });
-#endif
 }
 
 SEASTAR_FIXTURE_TEST_CASE(compact_gcs_test, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
-    testlog.info("OBJECT STORAGE only works with uuid_sstable_identifier enabled, skipping test");
-    return make_ready_future();
-#if 0
     return sstables::test_env::do_with_async([](sstables::test_env& env) { compact(env); },
                                              test_env_config{
                                                  .storage = make_test_object_storage_options("GS"),
                                              });
-#endif
 }
 
 static std::vector<sstables::shared_sstable> get_candidates_for_leveled_strategy(replica::column_family& cf) {
