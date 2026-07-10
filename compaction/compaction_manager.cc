@@ -423,8 +423,22 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         return t.make_sstable(sstables::sstable_state::normal);
     };
     descriptor.replacer = [this, &t, &on_replace, offstrategy] (compaction_completion_desc desc) {
+        utils::get_local_injector().inject("split_pause_before_replacer",
+                [this, &t] (auto& handler) -> future<> {
+            if (is_system_keyspace(t.schema()->ks_name()) || _type != compaction_type::Split) {
+                co_return;
+            }
+            cmlog.info("split_pause_before_replacer: waiting");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+            cmlog.info("split_pause_before_replacer: released");
+        }).get();
         t.get_compaction_strategy().notify_completion(t, desc.old_sstables, desc.new_sstables);
         _cm.propagate_replacement(t, desc.old_sstables, desc.new_sstables);
+        // Hold sstable_set_lock while mutating the sstable set and deregistering
+        // old sstables.  This serializes with regular compaction's snapshot +
+        // filter + registration, preventing the stale-snapshot race.
+        auto& cs = _cm.get_compaction_state(_compacting_table);
+        auto units = get_units(cs.sstable_set_lock, 1).get();
         // on_replace updates the compacting registration with the old and new
         // sstables. while on_compaction_completion() removes the old sstables
         // from the table's sstable set, and adds the new ones to the sstable
@@ -584,6 +598,9 @@ protected:
             co_return std::nullopt;
         }
 
+        // sstable_set_lock serializes with replacers that mutate sstable sets.
+        auto sstable_set_units = co_await get_units(_compaction_state.sstable_set_lock, 1);
+
         // candidates are sstables that aren't being operated on by other compaction types.
         // those are eligible for major compaction.
         compaction_group_view* t = _compacting_table;
@@ -596,9 +613,9 @@ protected:
 
         cmlog.info0("User initiated compaction started on behalf of {}", *t);
 
-        // Now that the sstables for major compaction are registered
-        // and the user_initiated_backlog_tracker is set up
-        // the exclusive lock can be freed to let regular compaction run in parallel to major
+        // Now that the sstables for major compaction are registered,
+        // release both locks to let regular compaction run in parallel to major.
+        sstable_set_units.return_all();
         lock_holder.return_all();
 
         co_await utils::get_local_injector().inject("major_compaction_wait", [this] (auto& handler) -> future<> {
@@ -835,6 +852,12 @@ future<>
 compaction_manager::run_with_compaction_disabled(compaction_group_view& t, std::function<future<> ()> func, sstring reason) {
     compaction_reenabler cre = co_await stop_and_disable_compaction(std::move(reason), t);
 
+    // Hold sstable_set_lock while running the function (which typically captures
+    // sstables and registers them as compacting).  This serializes with
+    // concurrent replacers that mutate the sstable set, preventing them from
+    // making the captured snapshot stale.
+    auto& cs = get_compaction_state(&t);
+    auto units = co_await get_units(cs.sstable_set_lock, 1);
     co_await func();
 }
 
@@ -1014,6 +1037,21 @@ public:
 
     future<std::vector<sstables::frozen_sstable_run>> candidates_as_runs(compaction_group_view& t) const override {
         auto main_set = co_await t.main_sstable_set();
+        co_await utils::get_local_injector().inject("regular_compaction_pause_after_snapshot",
+                [this, &t, &main_set] (auto& handler) -> future<> {
+            if (is_system_keyspace(t.schema()->ks_name()) || main_set->size() == 0
+                    || !_cm.can_proceed(&t)) {
+                co_return;
+            }
+            bool has_compacting = std::ranges::any_of(main_set->all_sstable_runs(),
+                    [this] (const auto& run) { return !_cm.eligible_for_compaction(run); });
+            if (!has_compacting) {
+                co_return;
+            }
+            cmlog.info("regular_compaction_pause_after_snapshot: waiting");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+            cmlog.info("regular_compaction_pause_after_snapshot: released");
+        });
         co_return _cm.get_candidates(t, main_set->all_sstable_runs());
     }
 };
@@ -1414,8 +1452,16 @@ protected:
                 co_return std::nullopt;
             }
             switch_state(state::pending);
-            // Write lock is used to synchronize selection of sstables for compaction and their registration.
-            auto lock_holder = co_await _compaction_state.lock.hold_write_lock();
+            // Read lock serializes with major compaction (which takes write lock).
+            auto lock_holder = co_await _compaction_state.lock.hold_read_lock();
+            if (!can_proceed()) {
+                co_return std::nullopt;
+            }
+
+            // sstable_set_lock protects the atomicity of snapshot + filter + registration,
+            // preventing split's replacer from mutating the sstable set and deregistering
+            // sstables between our snapshot capture and eligibility filter.
+            auto sstable_set_units = co_await get_units(_compaction_state.sstable_set_lock, 1);
             if (!can_proceed()) {
                 co_return std::nullopt;
             }
@@ -1447,9 +1493,10 @@ protected:
             cmlog.debug("Accepted compaction job: task={} ({} sstable(s)) of weight {} for {}",
                 fmt::ptr(this), descriptor.sstables.size(), weight, t);
 
-            // Finished selecting and registering compacting sstables, so write lock can be released.
-            lock_holder.return_all();
-            lock_holder = co_await _compaction_state.lock.hold_read_lock();
+            // Finished selecting and registering compacting sstables.
+            // Release sstable_set_lock (snapshot+filter+registration is complete).
+            // Keep read lock held during compaction execution.
+            sstable_set_units.return_all();
 
             setup_new_compaction(descriptor.run_identifier);
             _compaction_state.last_regular_compaction = gc_clock::now();
