@@ -36,9 +36,11 @@ class VectorStoreMock:
     def __init__(self):
         self._ann_requests: list[Request] = []
         self._bm25_requests: list[Request] = []
+        self._status_requests: list[Request] = []
         self._lock = threading.Lock()
         self._next_ann_response = Response()
         self._next_bm25_response = BM25Response()
+        self._next_status_response = Response(status=200, body='"SERVING"')
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -56,6 +58,11 @@ class VectorStoreMock:
         with self._lock:
             return self._bm25_requests.copy()
 
+    @property
+    def status_requests(self) -> list[Request]:
+        with self._lock:
+            return self._status_requests.copy()
+
     def set_next_ann_response(self, status: int, body: str) -> None:
         with self._lock:
             self._next_ann_response = Response(status=status, body=body)
@@ -64,12 +71,18 @@ class VectorStoreMock:
         with self._lock:
             self._next_bm25_response = BM25Response(status=status, body=body)
 
+    def set_next_status_response(self, status: int, body: str) -> None:
+        with self._lock:
+            self._next_status_response = Response(status=status, body=body)
+
     def reset(self) -> None:
         with self._lock:
             self._ann_requests.clear()
             self._bm25_requests.clear()
+            self._status_requests.clear()
             self._next_ann_response = Response()
             self._next_bm25_response = BM25Response()
+            self._next_status_response = Response(status=200, body='"SERVING"')
 
     def _handle_ann(self, request: Request, send_response: Callable[[Response], None]) -> None:
         with self._lock:
@@ -81,6 +94,12 @@ class VectorStoreMock:
         with self._lock:
             self._bm25_requests.append(request)
             response = self._next_bm25_response
+        send_response(response)
+
+    def _handle_status(self, request: Request, send_response: Callable[[Response], None]) -> None:
+        with self._lock:
+            self._status_requests.append(request)
+            response = self._next_status_response
         send_response(response)
 
     def start(self, host: str):
@@ -98,6 +117,14 @@ class VectorStoreMock:
                     mock._handle_ann(req, self._send_response)
                 elif self.path.endswith("/bm25"):
                     mock._handle_bm25(req, self._send_response)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def do_GET(self):
+                if self.path == "/api/v1/status":
+                    req = Request(path=self.path, body="")
+                    mock._handle_status(req, self._send_response)
                 else:
                     self.send_response(404)
                     self.end_headers()
