@@ -862,6 +862,18 @@ private:
              streamed_mutation::forwarding fwd,
              mutation_reader::forwarding fwd_mr,
              std::function<void(size_t)> reserve_fn) const;
+    // Multi-range overload for the streaming reader. Creates memtable readers
+    // on all storage groups that overlap with the provided ranges.
+    // The provided ranges must be sorted, disjoint and non-empty.
+    void add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
+             const schema_ptr& s,
+             const reader_permit& permit,
+             const dht::partition_range_vector& ranges,
+             const query::partition_slice& slice,
+             const tracing::trace_state_ptr& trace_state,
+             streamed_mutation::forwarding fwd,
+             mutation_reader::forwarding fwd_mr,
+             std::function<void(size_t)> reserve_fn) const;
 public:
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }

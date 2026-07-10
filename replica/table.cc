@@ -222,6 +222,46 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
     }
 }
 
+void
+table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
+        const schema_ptr& s,
+        const reader_permit& permit,
+        const dht::partition_range_vector& ranges,
+        const query::partition_slice& slice,
+        const tracing::trace_state_ptr& trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        std::function<void(size_t)> reserve_fn) const {
+    if (ranges.empty()) {
+        return;
+    }
+    const dht::partition_range& first_range = ranges.front();
+
+    auto add_memtables_from_cg = [&] (compaction_group& cg) mutable {
+        for (auto&& mt: *cg.memtables()) {
+            // Create each reader with first range as its initial range; a reader of
+            // a later storage group yields nothing until fast-forwarded into its own range.
+            if (auto reader_opt = mt->make_mutation_reader_opt(s, permit, first_range, slice, trace_state, fwd, fwd_mr)) {
+                readers.emplace_back(std::move(*reader_opt));
+            }
+        }
+    };
+
+    auto next_token_range = [it = ranges.cbegin(), end = ranges.cend()] () mutable -> std::optional<dht::token_range> {
+        if (it == end) {
+            return std::nullopt;
+        }
+        return (it++)->transform(std::mem_fn(&dht::ring_position::token));
+    };
+    auto sgs = storage_groups_for_token_ranges(next_token_range);
+    reserve_fn(std::ranges::fold_left(sgs | std::views::transform(std::mem_fn(&storage_group::memtable_count)), uint64_t(0), std::plus{}));
+    for (auto& sg : sgs) {
+        sg->for_each_compaction_group([&] (const compaction_group_ptr &cg) {
+            add_memtables_from_cg(*cg);
+        });
+    }
+}
+
 mutation_reader
 table::make_mutation_reader(schema_ptr s,
                            reader_permit permit,
@@ -316,10 +356,10 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
                            gc_clock::time_point compaction_time) const {
     auto& slice = s->full_slice();
 
-    auto source = mutation_source([this] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
+    auto source = mutation_source([this, &ranges] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
                                       tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
         std::vector<mutation_reader> readers;
-        add_memtables_to_reader_list(readers, s, permit, range, slice, trace_state, fwd, fwd_mr, [&] (size_t memtable_count) {
+        add_memtables_to_reader_list(readers, s, permit, ranges, slice, trace_state, fwd, fwd_mr, [&] (size_t memtable_count) {
             readers.reserve(memtable_count + 1);
         });
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice,
