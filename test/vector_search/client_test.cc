@@ -119,7 +119,45 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_server_error_status) {
     co_await server->stop();
 }
 
-SEASTAR_TEST_CASE(is_up_when_server_returned_service_unavailable_status) {
+SEASTAR_TEST_CASE(becomes_down_after_service_unavailable_when_body_has_node_bootstrapping_reason) {
+    abort_source_timeout as;
+    auto server = co_await make_vs_mock_server();
+    server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::service_unavailable, R"({"reason":"NODE_BOOTSTRAPPING"})"});
+
+    client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
+
+    auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
+
+    BOOST_CHECK(!res);
+    BOOST_CHECK(std::holds_alternative<service_unavailable_error>(res.error()));
+
+    auto became_down = co_await repeat_until([&client]() -> future<bool> {
+        co_return !client.is_up();
+    });
+    BOOST_CHECK(became_down);
+
+    co_await client.close();
+    co_await server->stop();
+}
+
+SEASTAR_TEST_CASE(returns_response_and_stays_up_on_service_unavailable_when_body_has_index_building_reason) {
+    abort_source_timeout as;
+    auto server = co_await make_vs_mock_server();
+    server->next_ann_response(
+            vs_mock_server::response{seastar::http::reply::status_type::service_unavailable, R"({"reason":"INDEX_BUILDING","message":"index is building"})"});
+
+    client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
+
+    auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
+    BOOST_REQUIRE(res);
+    BOOST_CHECK_EQUAL(res.value().status, seastar::http::reply::status_type::service_unavailable);
+    BOOST_CHECK(client.is_up());
+
+    co_await client.close();
+    co_await server->stop();
+}
+
+SEASTAR_TEST_CASE(returns_response_and_stays_up_on_service_unavailable_when_body_is_not_json_object) {
     abort_source_timeout as;
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::service_unavailable, "Service Unavailable"});
@@ -127,10 +165,9 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_service_unavailable_status) {
     client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
-
+    BOOST_REQUIRE(res);
+    BOOST_CHECK_EQUAL(res.value().status, seastar::http::reply::status_type::service_unavailable);
     BOOST_CHECK(client.is_up());
-    BOOST_CHECK(res);
-    BOOST_CHECK(res->status == seastar::http::reply::status_type::service_unavailable);
 
     co_await client.close();
     co_await server->stop();

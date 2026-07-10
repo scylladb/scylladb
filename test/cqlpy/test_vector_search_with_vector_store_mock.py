@@ -13,12 +13,32 @@
 from http import HTTPStatus
 from itertools import combinations
 import json
+import time
 
 import pytest
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 
 from .util import new_test_table, unique_name
+
+
+def wait_for_vector_store_node_recovery(cql, table, vector_store_mock):
+    vector_store_mock.set_next_status_response(200, '"SERVING"')
+    vector_store_mock.set_next_ann_response(200, json.dumps({
+        "primary_keys": {"pk1": [], "pk2": [], "ck1": [], "ck2": []},
+        "similarity_scores": [],
+    }))
+    timeout_s = 10
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            cql.execute(
+                f"SELECT pk1, pk2, ck1, ck2 FROM {table} WHERE pk1 IN (5, 6) ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2")
+            return
+        except InvalidRequest:
+            time.sleep(0.5)
+    pytest.fail(
+        "Timed out waiting for vector store node to recover after bootstrapping")
 
 
 # Verify that partition key IN restriction is forwarded to the vector store.
@@ -210,3 +230,54 @@ def test_vector_search_map_subscript_restriction_raises_error(cql, test_keyspace
                 " ORDER BY embedding ANN OF [1.0, 0.0, 0.0]"
                 " LIMIT 10 ALLOW FILTERING"
             )
+
+
+# Reproduces SCYLLADB-3209: the vector store embeds the reason directly in the 503 body:
+#
+# {"reason":"NODE_BOOTSTRAPPING"} - the node has not finished its startup sequence and is
+# not yet ready to serve any traffic. Scylla must treat this as a node-level outage: mark
+# the node down (so future requests are not routed there) and report a service unavailable
+# error if no other nodes are available to failover.
+def test_vector_search_503_from_ann_when_vector_store_is_bootstrapping(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+
+    schema = "pk1 tinyint, pk2 tinyint, ck1 tinyint, ck2 tinyint, embedding vector<float, 3>, PRIMARY KEY ((pk1, pk2), ck1, ck2)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(
+            f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index'")
+
+        vector_store_mock.set_next_ann_response(
+            HTTPStatus.SERVICE_UNAVAILABLE, '{"reason":"NODE_BOOTSTRAPPING"}')
+        cql.execute(
+            f"INSERT INTO {table} (pk1, pk2, ck1, ck2, embedding) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3])")
+
+        try:
+            with pytest.raises(InvalidRequest, match="Vector Store service is unavailable"):
+                cql.execute(
+                    f"SELECT pk1, pk2, ck1, ck2 FROM {table} WHERE pk1 IN (5, 6) ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2")
+        finally:
+            # Restore the node to a healthy state so subsequent tests are not affected
+            # by the node-down state left behind by this test.
+            wait_for_vector_store_node_recovery(cql, table, vector_store_mock)
+
+
+# Reproduces SCYLLADB-3209 (complement to the BOOTSTRAPPING case above): when /ann returns
+# HTTP 503 with {"reason":"INDEX_BUILDING","message":...} the node itself is healthy - the 503
+# signals an index-specific condition: index is still being built after creation.
+# Scylla must NOT mark the node as down; instead it should forward the "message" field from the
+# 503 body to the CQL caller as an InvalidRequest error.
+def test_vector_search_503_from_ann_when_vector_store_is_serving(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+
+    schema = "pk1 tinyint, pk2 tinyint, ck1 tinyint, ck2 tinyint, embedding vector<float, 3>, PRIMARY KEY ((pk1, pk2), ck1, ck2)"
+
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(
+            f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index'")
+        cql.execute(
+            f"INSERT INTO {table} (pk1, pk2, ck1, ck2, embedding) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3])")
+
+        vector_store_mock.set_next_ann_response(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            '{"reason":"INDEX_BUILDING","message":"Index is not available yet as it is still being constructed, progress: 33.333%"}')
+        with pytest.raises(InvalidRequest, match="503.*still being constructed"):
+            cql.execute(
+                f"SELECT pk1, pk2, ck1, ck2 FROM {table} WHERE pk1 IN (5, 6) ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2")

@@ -12,7 +12,6 @@
 #include "utils/log.hh"
 #include "utils/updateable_value.hh"
 #include <chrono>
-#include <exception>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/abort_source.hh>
@@ -61,7 +60,7 @@ private:
     seastar::future<response> request_impl(seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content,
             std::optional<seastar::http::reply::status_type>&& expected, seastar::abort_source& as);
     seastar::future<bool> check_status();
-    void handle_server_unavailable(std::exception_ptr err);
+    void handle_server_unavailable(const seastar::sstring& reason);
     seastar::future<> run_checking_status();
     bool is_checking_status_in_progress() const;
     std::chrono::milliseconds backoff_retry_max() const;
