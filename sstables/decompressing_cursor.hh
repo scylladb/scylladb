@@ -31,6 +31,8 @@ namespace sstables {
 // to a decompressing_cursor.
 class framed_chunk_source {
 public:
+    enum class direction { forward, backward };
+
     // The bytes of one chunk. `header` holds the chunk's first frame_len()
     // bytes, and `rest` holds the bytes after them. `rest` can extend past the
     // end of the chunk.
@@ -42,8 +44,15 @@ public:
     virtual ~framed_chunk_source() = default;
 
     // Reads the chunk that starts at `chunk_start`. `extent_hint` is 0, or an
-    // upper bound of the chunk's extent.
-    virtual future<raw_chunk> read_chunk(uint64_t chunk_start, uint64_t extent_hint) = 0;
+    // upper bound of the chunk's extent. `dir` is the direction in which the
+    // reader moves; it tells the source where to read ahead. When reading
+    // forward, the reader needs no data past the file offset `forward_limit`,
+    // so the source should not read ahead past it. A source that is already
+    // bounded can ignore it.
+    virtual future<raw_chunk> read_chunk(uint64_t chunk_start, uint64_t extent_hint, direction dir, uint64_t forward_limit) = 0;
+
+    // Returns the extent of the chunk that ends at `chunk_end`, from its footer.
+    virtual future<uint64_t> read_previous_extent(uint64_t chunk_end) = 0;
 
     virtual future<> close() = 0;
 };
@@ -53,7 +62,10 @@ public:
 // uncompressed chunk. It doesn't use CompressionInfo.db, because each chunk's
 // header and footer give the positions of the next and the previous chunk.
 //
-// The cursor reads forward through continuous_data_consumer_input_stream.
+// The cursor reads forward through continuous_data_consumer_input_stream. If
+// its source supports it, the cursor can also seek backwards and read
+// backwards. Then forward and backward reads share one source, and one buffer
+// of decompressed data.
 //
 // The cursor verifies the checksum of each chunk that it loads. If it was
 // given a digest, and it loads every chunk of the file in order, it also
@@ -93,9 +105,11 @@ class decompressing_cursor final : public data_consumer::continuous_data_consume
 
     // Whether _chunk is the chunk at _stream_position.
     bool has_current_chunk() const;
-    future<> load_chunk();
+    // Loads the chunk at _stream_position. A forward read needs no data past
+    // `end`, or past _end if `end` is not given.
+    future<> load_chunk(framed_chunk_source::direction dir, std::optional<sstable_position> end);
     void add_to_digest(uint64_t chunk_start, const framed_chunk& chunk, uint32_t checksum);
-    future<> ensure_chunk_if_not_eof();
+    future<> ensure_chunk_if_not_eof(std::optional<sstable_position> end);
     // Moves the position by `n` bytes forward within the current chunk. Steps
     // to the next chunk at the end of the current one.
     void advance(uint64_t n);
@@ -104,12 +118,25 @@ public:
             const compressor& compressor, reader_permit permit, uint64_t compressed_file_length,
             disk_read_range range, std::optional<uint32_t> digest);
 
-    // Moves the cursor to `pos`. Keeps the loaded chunk if `pos` is in it.
+    // Moves the cursor to `pos`, in either direction. Keeps the loaded chunk if
+    // `pos` is in it.
     void seek(sstable_position pos);
+
+    // Reads up to `n` bytes that precede the current position, and moves the
+    // position back by their size. Returns an empty buffer at the start of the
+    // file. The source must support backward reads.
+    future<temporary_buffer<char>> read_backwards_up_to(size_t n);
+
+    // Like read_backwards_up_to(), but reads exactly `n` bytes, or fewer at the
+    // start of the file.
+    future<temporary_buffer<char>> read_backwards_exactly(size_t n);
 
     void init_stream_position(sstable_position pos) override;
     future<> skip_to(sstable_position target) override;
     future<> skip(uint64_t n) override;
+    // Like skip(n), but the reader needs no data past `end`, so the source
+    // doesn't read ahead past the chunk that contains it.
+    future<> skip(uint64_t n, std::optional<sstable_position> end);
     future<consumption_result<char>> consume_one(std::optional<sstable_position> end_position, consumer_one_fn consumer) override;
     sstable_position compute_relative_position(int64_t offset) override;
     future<> close() override;
@@ -133,5 +160,10 @@ std::unique_ptr<decompressing_cursor>
 make_decompressing_cursor(shared_sstable sst, disk_read_range range,
         reader_permit permit, tracing::trace_state_ptr trace_state,
         file_input_stream_options options, std::optional<uint32_t> digest = std::nullopt);
+
+// Reads `range` of `sst`'s Data.db in both directions, through a file_cursor.
+std::unique_ptr<decompressing_cursor>
+make_bidirectional_decompressing_cursor(shared_sstable sst, disk_read_range range, reader_permit permit,
+        tracing::trace_state_ptr trace_state);
 
 } // namespace sstables

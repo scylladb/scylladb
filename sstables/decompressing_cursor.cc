@@ -9,6 +9,7 @@
 #include "sstables/decompressing_cursor.hh"
 
 #include <algorithm>
+#include <cstring>
 #include <optional>
 
 #include <fmt/std.h>
@@ -24,6 +25,7 @@
 
 #include "sstables/checksum_utils.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/file_cursor.hh"
 #include "sstables/sstables.hh"
 #include "tracing/traced_file.hh"
 
@@ -32,6 +34,8 @@ namespace sstables {
 namespace {
 
 static constexpr uint64_t disk_block_size = 512;
+
+using direction = framed_chunk_source::direction;
 
 // The end of the part of Data.db that a read of `end` needs: the end of the
 // chunk that contains `end`. If `end` is at the start of a chunk, no byte of
@@ -77,9 +81,10 @@ public:
     {}
 
     // The header gives the exact extent, so the hint is not needed. The caller
-    // already bounded the source by the end of the range.
-    future<raw_chunk> read_chunk(uint64_t chunk_start, uint64_t) override {
-        if (chunk_start < _input_pos) {
+    // already bounded the source by the end of the range, so the forward limit
+    // is not needed either.
+    future<raw_chunk> read_chunk(uint64_t chunk_start, uint64_t, direction dir, uint64_t) override {
+        if (dir != direction::forward || chunk_start < _input_pos) {
             on_internal_error(sstlog, format(
                     "sequential_chunk_source can't read backwards: chunk_start={}, input_pos={}", chunk_start, _input_pos));
         }
@@ -104,10 +109,68 @@ public:
         co_return raw_chunk{std::move(header), std::move(rest)};
     }
 
+    future<uint64_t> read_previous_extent(uint64_t chunk_end) override {
+        on_internal_error(sstlog, "sequential_chunk_source can't read backwards");
+    }
+
     future<> close() override {
         if (_input) {
             co_await _input->close();
         }
+    }
+};
+
+// Reads chunks through a file_cursor, in both directions. Reads in both
+// directions share the cursor's buffers.
+class file_cursor_chunk_source final : public framed_chunk_source {
+    file_cursor _cursor;
+    framed_chunk_codec _codec;
+
+    future<temporary_buffer<char>> read(uint64_t start, uint64_t end, direction dir, uint64_t forward_limit) {
+        if (dir == direction::forward) {
+            _cursor.seek(start);
+            return _cursor.read_forwards_exactly(end - start, forward_limit);
+        }
+        _cursor.seek(end);
+        return _cursor.read_backwards_exactly(end - start);
+    }
+public:
+    file_cursor_chunk_source(file_cursor cursor, framed_chunk_codec codec)
+        : _cursor(std::move(cursor))
+        , _codec(codec)
+    {}
+
+    future<raw_chunk> read_chunk(uint64_t chunk_start, uint64_t extent_hint, direction dir, uint64_t forward_limit) override {
+        const uint64_t frame_len = _codec.frame_len();
+        if (!extent_hint) {
+            auto header = co_await read(chunk_start, chunk_start + frame_len, dir, forward_limit);
+            if (header.size() != frame_len) {
+                throw_malformed_sstable_exception(format("Unexpected eof in the header of the compressed chunk at file offset {}", chunk_start));
+            }
+            extent_hint = _codec.extent_from_frame(header.get());
+        }
+        // The hint bounds the chunk end from above. It can point past the end
+        // of the file or past the cursor's bounds, so clamp it.
+        const auto end = std::min<uint64_t>(chunk_start + extent_hint, _cursor.upper_bound());
+        auto buf = co_await read(chunk_start, end, dir, forward_limit);
+        if (buf.size() < frame_len) {
+            throw_malformed_sstable_exception(format("Unexpected eof in the compressed chunk at file offset {}", chunk_start));
+        }
+        co_return raw_chunk{buf.share(0, frame_len), buf.share(frame_len, buf.size() - frame_len)};
+    }
+
+    future<uint64_t> read_previous_extent(uint64_t chunk_end) override {
+        const uint64_t frame_len = _codec.frame_len();
+        _cursor.seek(chunk_end);
+        auto footer = co_await _cursor.read_backwards_exactly(frame_len);
+        if (footer.size() != frame_len) {
+            throw_malformed_sstable_exception(format("Unexpected eof in the footer of the compressed chunk that ends at file offset {}", chunk_end));
+        }
+        co_return _codec.extent_from_frame(footer.get());
+    }
+
+    future<> close() override {
+        return _cursor.close();
     }
 };
 
@@ -148,11 +211,12 @@ bool decompressing_cursor::has_current_chunk() const {
     return _chunk && _chunk->position == uint64_t(_stream_position.position.as_physical().chunk_position);
 }
 
-future<> decompressing_cursor::load_chunk() {
+future<> decompressing_cursor::load_chunk(direction dir, std::optional<sstable_position> end) {
     auto& pos = _stream_position.position.as_physical();
     const uint64_t chunk_start = pos.chunk_position;
+    const uint64_t forward_limit = source_end(end.value_or(_end), _compressed_file_length);
     _chunk.reset();
-    auto raw = co_await _source->read_chunk(chunk_start, pos.extent_hint);
+    auto raw = co_await _source->read_chunk(chunk_start, pos.extent_hint, dir, forward_limit);
     auto parsed = _codec.parse(std::string_view(raw.header.get(), raw.header.size()),
             std::string_view(raw.rest.get(), raw.rest.size()));
     const auto checksum = parsed.verify_checksum<crc32_utils>(chunk_start);
@@ -180,7 +244,7 @@ void decompressing_cursor::add_to_digest(uint64_t chunk_start, const framed_chun
     }
 }
 
-future<> decompressing_cursor::ensure_chunk_if_not_eof() {
+future<> decompressing_cursor::ensure_chunk_if_not_eof(std::optional<sstable_position> end) {
     if (has_current_chunk()) {
         return make_ready_future<>();
     }
@@ -194,7 +258,7 @@ future<> decompressing_cursor::ensure_chunk_if_not_eof() {
     if (chunk_start >= _end) {
         return make_ready_future<>();
     }
-    return load_chunk();
+    return load_chunk(direction::forward, end);
 }
 
 void decompressing_cursor::advance(uint64_t n) {
@@ -219,6 +283,60 @@ void decompressing_cursor::seek(sstable_position pos) {
     }
 }
 
+future<temporary_buffer<char>> decompressing_cursor::read_backwards_up_to(size_t n) {
+    if (n == 0) {
+        co_return temporary_buffer<char>();
+    }
+    auto& pos = _stream_position.position.as_physical();
+    const bool at_chunk_start = pos.offset_within_chunk == 0;
+    if (at_chunk_start) {
+        if (pos.chunk_position == 0) {
+            co_return temporary_buffer<char>();
+        }
+        // Step back into the previous chunk. If it is loaded, its extent is
+        // known. Otherwise, the bytes just before this chunk are the previous
+        // chunk's footer, which gives its extent.
+        uint64_t prev_extent;
+        if (_chunk && _chunk->position + _chunk->extent == uint64_t(pos.chunk_position)) {
+            prev_extent = _chunk->extent;
+        } else {
+            prev_extent = co_await _source->read_previous_extent(pos.chunk_position);
+            if (prev_extent > uint64_t(pos.chunk_position)) {
+                throw_malformed_sstable_exception(format(
+                        "compressed chunk footer at file offset {} declares a previous chunk of size {} that starts before the file",
+                        pos.chunk_position, prev_extent));
+            }
+        }
+        pos.chunk_position -= prev_extent;
+        pos.extent_hint = prev_extent;
+    }
+    if (!has_current_chunk()) {
+        co_await load_chunk(direction::backward, std::nullopt);
+    }
+    if (at_chunk_start) {
+        pos.offset_within_chunk = _chunk->data.size();
+    }
+    n = std::min<uint64_t>(n, pos.offset_within_chunk);
+    pos.offset_within_chunk -= n;
+    co_return _chunk->data.share(pos.offset_within_chunk, n);
+}
+
+future<temporary_buffer<char>> decompressing_cursor::read_backwards_exactly(size_t n) {
+    auto units = _permit.consume_memory(n);
+    auto out = temporary_buffer<char>(n);
+    while (n) {
+        auto frag = co_await read_backwards_up_to(n);
+        if (frag.empty()) {
+            break;
+        }
+        std::memcpy(out.get_write() + (n - frag.size()), frag.get(), frag.size());
+        n -= frag.size();
+    }
+    out = make_tracked_temporary_buffer(std::move(out), std::move(units));
+    out.trim_front(n);
+    co_return out;
+}
+
 void decompressing_cursor::init_stream_position(sstable_position pos) {
     seek(pos);
     _stream_position.bytes_consumed = 0;
@@ -234,8 +352,12 @@ future<> decompressing_cursor::skip_to(sstable_position target) {
 }
 
 future<> decompressing_cursor::skip(uint64_t n) {
+    return skip(n, std::nullopt);
+}
+
+future<> decompressing_cursor::skip(uint64_t n, std::optional<sstable_position> end) {
     while (n != 0) {
-        co_await ensure_chunk_if_not_eof();
+        co_await ensure_chunk_if_not_eof(end);
         if (!has_current_chunk()) {
             throw_malformed_sstable_exception(format("decompressing_cursor hit end-of-file while skipping {} bytes", n));
         }
@@ -251,7 +373,7 @@ future<> decompressing_cursor::skip(uint64_t n) {
 future<consumption_result<char>> decompressing_cursor::consume_one(std::optional<sstable_position> end_position, consumer_one_fn consumer) {
     sstlog.trace("[decompressing_cursor@{}] consume_one: enter pos={} end={}",
             fmt::ptr(this), _stream_position.position, end_position);
-    co_await ensure_chunk_if_not_eof();
+    co_await ensure_chunk_if_not_eof(end_position);
     if (!has_current_chunk()) {
         co_return consumer(temporary_buffer<char>());
     }
@@ -349,6 +471,28 @@ make_decompressing_cursor(shared_sstable sst, disk_read_range range,
     return make_decompressing_cursor(decompressing_cursor_source_opener(std::move(opener)), range,
             sst->get_compression().get_compressor(), sst->get_chunk_codec(), file_size,
             std::move(permit), digest);
+}
+
+std::unique_ptr<decompressing_cursor>
+make_bidirectional_decompressing_cursor(shared_sstable sst, disk_read_range range, reader_permit permit,
+        tracing::trace_state_ptr trace_state) {
+    const uint64_t file_size = sst->ondisk_data_size();
+    // The range comes from the index, which has no checksum.
+    const uint64_t range_start = range.start.as_physical().chunk_position;
+    if (range.end < range.start || range_start > source_end(range.end, file_size)) {
+        throw_malformed_sstable_exception(format("Invalid range {}-{} in compressed data file of size {}",
+                range.start, range.end, file_size), sst->get_filename());
+    }
+    file f = make_tracked_file(sst->get_data_file(), permit);
+    if (trace_state) {
+        f = tracing::make_traced_file(std::move(f), std::move(trace_state), seastar::format("{}:", sst->get_filename()));
+    }
+    file_cursor cursor(std::move(f), file_size, permit);
+    cursor.set_bounds(range.start.as_physical().chunk_position, source_end(range.end, file_size));
+    const auto codec = sst->get_chunk_codec();
+    return std::make_unique<decompressing_cursor>(
+            std::make_unique<file_cursor_chunk_source>(std::move(cursor), codec),
+            codec, sst->get_compression().get_compressor(), std::move(permit), file_size, range, std::nullopt);
 }
 
 } // namespace sstables
