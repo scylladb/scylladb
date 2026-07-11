@@ -18,6 +18,7 @@
 #include "test/boost/sstable_test.hh"
 #include "sstables/key.hh"
 #include <seastar/core/do_with.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/core/thread.hh>
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
@@ -1528,3 +1529,41 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
     });
 }
 
+
+// A reverse read of a partition must read the data file in large blocks, not
+// once per row.
+SEASTAR_TEST_CASE(test_reversed_read_io_does_not_scale_with_row_count) {
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr uint32_t rows = 2000;
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pk = ss.make_pkey();
+            mutation m(s, pk);
+            for (uint32_t i = 0; i < rows; ++i) {
+                ss.add_row(m, ss.make_ckey(i), "v");
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+
+            auto pr = dht::partition_range::make_singular(pk);
+            auto rev_s = s->make_reversed();
+            auto slice = partition_slice_builder(*rev_s, rev_s->full_slice())
+                    .with_option<query::partition_slice::option::reversed>()
+                    .build();
+            reactor& r = *local_engine;
+            auto reads_before = r.get_io_stats().aio_reads;
+            {
+                auto a = assert_that(sst->make_reader(rev_s, env.make_reader_permit(), pr, slice));
+                a.produces_partition_start(pk);
+                for (uint32_t i = rows; i-- > 0;) {
+                    a.produces_row_with_key(ss.make_ckey(i));
+                }
+                a.produces_partition_end().produces_end_of_stream();
+            }
+            auto reads = r.get_io_stats().aio_reads - reads_before;
+            testlog.info("version {}: {} reads to reverse {} rows", version, reads, rows);
+            BOOST_REQUIRE_LT(reads, rows / 10);
+        }
+    });
+}
