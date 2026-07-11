@@ -45,12 +45,12 @@ class view_update_generator::progress_tracker final : public sstables::read_moni
 
         virtual void on_read_completed() override {
             if (auto tracker = std::exchange(_tracker, nullptr)) {
-                _last_position_seen = tracker->position;
+                _last_position_seen = tracker->offset;
             }
         }
 
         uint64_t pending_work() const noexcept {
-            auto last_pos = (_tracker) ? _tracker->position : _last_position_seen;
+            auto last_pos = (_tracker) ? _tracker->offset : _last_position_seen;
             return _sst->data_size() - last_pos;
         }
 

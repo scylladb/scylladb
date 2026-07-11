@@ -521,7 +521,7 @@ public:
     continuous_data_consumer(reader_permit permit, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
             : primitive_consumer(std::move(permit))
             , _input(std::move(input))
-            , _stream_position(sstables::reader_position_tracker{start, maxlen})
+            , _stream_position(sstables::reader_position_tracker{.position = sstables::sstable_position::from_logical(start), .offset = int64_t(start)})
             , _remain(maxlen) {}
 
     future<> consume_input() {
@@ -595,9 +595,9 @@ public:
             // We received more data than we actually care about, so process
             // the beginning of the buffer, and return the rest to the stream
             auto segment = data.share(0, _remain);
-            _stream_position.position += _remain;
+            _stream_position.offset += _remain;
             auto ret = process(segment);
-            _stream_position.position -= segment.size();
+            _stream_position.offset -= segment.size();
             data.trim_front(_remain - segment.size());
             auto len = _remain - segment.size();
             _remain -= len;
@@ -612,11 +612,11 @@ public:
         } else {
             // We can process the entire buffer (if the consumer wants to).
             auto orig_data_size = data.size();
-            _stream_position.position += data.size();
+            _stream_position.offset += data.size();
             auto result = process(data);
             return seastar::visit(result, [this, &data, orig_data_size] (proceed value) {
                 _remain -= orig_data_size - data.size();
-                _stream_position.position -= data.size();
+                _stream_position.offset -= data.size();
                 if (value == proceed::yes) {
                     mark_blocked();
                     return make_ready_future<consumption_result_type>(continue_consuming{});
@@ -630,12 +630,12 @@ public:
                 _remain -= orig_data_size;
                 if (skip.get_value() >= _remain) {
                     skip_bytes skip_remaining(_remain);
-                    _stream_position.position += _remain;
+                    _stream_position.offset += _remain;
                     _remain = 0;
                     verify_end_state();
                     return make_ready_future<consumption_result_type>(std::move(skip_remaining));
                 }
-                _stream_position.position += skip.get_value();
+                _stream_position.offset += skip.get_value();
                 _remain -= skip.get_value();
                 mark_blocked();
                 return make_ready_future<consumption_result_type>(std::move(skip));
@@ -644,12 +644,12 @@ public:
     }
 
     future<> fast_forward_to(size_t begin, size_t end) {
-        sstables::parse_assert(begin >= _stream_position.position);
-        auto n = begin - _stream_position.position;
-        _stream_position.position = begin;
+        sstables::parse_assert(int64_t(begin) >= _stream_position.offset);
+        auto n = begin - _stream_position.offset;
+        _stream_position.offset = begin;
 
-        sstables::parse_assert(end >= _stream_position.position);
-        _remain = end - _stream_position.position;
+        sstables::parse_assert(int64_t(end) >= _stream_position.offset);
+        _remain = end - _stream_position.offset;
 
         primitive_consumer::reset();
         reader_permit::awaits_guard _{_permit};
@@ -657,14 +657,14 @@ public:
     }
 
     future<> skip_to(size_t begin) {
-        return fast_forward_to(begin, _stream_position.position + _remain);
+        return fast_forward_to(begin, _stream_position.offset + _remain);
     }
 
     // Returns the offset of the first byte which has not been consumed yet.
     // When called from state_processor::process_state() invoked by this consumer,
     // returns the offset of the first byte after the buffer passed to process_state().
     uint64_t position() const {
-        return _stream_position.position;
+        return _stream_position.offset;
     }
 
     const sstables::reader_position_tracker& reader_position() const {
