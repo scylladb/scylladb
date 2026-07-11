@@ -1099,7 +1099,7 @@ public:
                               const shared_sstable sst,
                               mp_row_consumer_k_l& consumer,
                               input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-                : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
+                : continuous_data_consumer(consumer.permit(), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
                 , _consumer(consumer)
                 , _sst(std::move(sst))
                 , _gen(do_process_state())
@@ -1311,7 +1311,7 @@ private:
             return get_index_reader().advance_to(*pos).then([this] {
                 index_reader& idx = *_index_reader;
                 auto index_position = idx.data_file_positions();
-                if (index_position.start <= _context->position()) {
+                if (sstable_position::from_logical(index_position.start) <= _context->position()) {
                     return make_ready_future<>();
                 }
                 return skip_to(idx.element_kind(), index_position.start).then([this] {
@@ -1366,7 +1366,8 @@ private:
         }
         return initialize();
     }
-    future<> skip_to(indexable_element el, uint64_t begin) {
+    future<> skip_to(indexable_element el, uint64_t begin_raw) {
+        auto begin = sstable_position::from_logical(begin_raw);
         sstlog.trace("sstable_reader: {}: skip_to({} -> {}, el={})", fmt::ptr(_context.get()), _context->position(), begin, static_cast<int>(el));
         if (begin <= _context->position()) {
             return make_ready_future<>();
@@ -1402,7 +1403,7 @@ public:
                         _read_enabled = true;
                         _index_in_current_partition = true;
                         _context->reset(indexable_element::partition);
-                        return _context->fast_forward_to(start, *end);
+                        return _context->fast_forward_to(sstable_position::from_logical(start), sstable_position::from_logical(*end));
                     }
                     _index_in_current_partition = false;
                     _read_enabled = false;

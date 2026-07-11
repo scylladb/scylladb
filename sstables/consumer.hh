@@ -646,37 +646,105 @@ class continuous_data_consumer : protected primitive_consumer {
         return static_cast<StateProcessor&>(*this);
     };
 protected:
-    input_stream<char> _input;
-    sstables::reader_position_tracker _stream_position;
-    // remaining length of input to read (if <0, continue until end of file).
-    uint64_t _remain;
+    std::unique_ptr<continuous_data_consumer_input_stream> _input;
+    // Absolute position of the first byte past the region we care about; a
+    // disengaged value means "continue until end of file".
+    std::optional<sstables::sstable_position> _end_position;
     std::optional<reader_permit::awaits_guard> _awaits_guard;
     bool _first_invoke = true;
 public:
     using read_status = data_consumer::read_status;
 
-    continuous_data_consumer(reader_permit permit, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
+    continuous_data_consumer(reader_permit permit, std::unique_ptr<continuous_data_consumer_input_stream> input, sstables::sstable_position start, std::optional<sstables::sstable_position> end)
             : primitive_consumer(std::move(permit))
             , _input(std::move(input))
-            , _stream_position(sstables::reader_position_tracker{.position = sstables::sstable_position::from_logical(start), .offset = int64_t(start)})
-            , _remain(maxlen) {}
+            , _end_position(end) {
+        _input->init_stream_position(start);
+    }
+
+    continuous_data_consumer(reader_permit permit, input_stream<char> input, sstables::sstable_position start, std::optional<sstables::sstable_position> end)
+            : continuous_data_consumer(std::move(permit), std::make_unique<continuous_data_consumer_seastar_input_stream>(std::move(input)), start, end) {}
 
     future<> consume_input() {
         // On first invoke we are guaranteed to go to the disk, so mark as
-        // blocked unconditionally. On succeeding invokes, we determine whether
-        // we need to block inside operator().
-        // One corner case this misses is when the last operator() consumed all
-        // data but didn't want more so the next invocation will block, we bet
-        // on this being rare.
+        // blocked unconditionally. On succeeding invokes we mark blocked only
+        // right before a fetch (see the bottom of the loop); if the previous
+        // call left buffered data behind, consume_one() serves it without going
+        // to disk and we correctly stay unblocked.
         if (_first_invoke) {
             _first_invoke = false;
             mark_blocked();
         }
-        return _input.consume(state_processor());
+        // Drive the read loop ourselves. Only the buffer-touching core runs
+        // inside consume_one(); the surrounding control flow -- interpreting the
+        // outcome, dispatching skips, blocking for I/O -- lives out here.
+        while (true) {
+            bool verify = false;
+            auto result = co_await _input->consume_one(_end_position, [this, &verify] (temporary_buffer<char> data) -> consumption_result_type {
+                // We got a buffer, so we are no longer waiting on I/O.
+                mark_unblocked();
+                if (data.empty()) {
+                    // End of file.
+                    verify = true;
+                    return stop_consuming<char>{std::move(data)};
+                }
+                // We can process the entire buffer (if the state machine wants to).
+                auto ret = process(data);
+                if (_end_position && position() >= *_end_position) {
+                    if (ret == proceed::yes) {
+                        verify = true;
+                    }
+                    return stop_consuming<char>{std::move(data)};
+                }
+                if (auto* skip = std::get_if<skip_bytes>(&ret)) {
+                    // skip_bytes is only used to skip beyond the provided buffer;
+                    // otherwise process() just trims and proceeds as usual.
+                    sstables::parse_assert(data.size() == 0);
+                    return skip_bytes{skip->get_value()};
+                }
+                if (ret == proceed::yes) {
+                    return continue_consuming{};
+                }
+                return stop_consuming<char>{std::move(data)};
+            });
+            auto& outcome = result.get();
+            if (std::holds_alternative<stop_consuming<char>>(outcome)) {
+                if (verify) {
+                    verify_end_state();
+                }
+                break;
+            }
+            // Both continue_consuming and skip_bytes go on to fetch another
+            // buffer, so mark blocked for the upcoming I/O.
+            mark_blocked();
+            if (auto* skip = std::get_if<skip_bytes>(&outcome)) {
+                // The state machine asked to skip past the current buffer; the
+                // input stream advances its tracked position with the skip.
+                check_skip_within_end(skip->get_value());
+                co_await _input->skip(skip->get_value());
+            }
+        }
     }
 
     void verify_end_state() {
         state_processor().verify_end_state();
+    }
+
+    // In a valid sstable, no skip crosses the end position. The input streams
+    // of logical positions treat such a skip as an internal error, so report
+    // it here as a malformed sstable. A physical position doesn't give the
+    // number of bytes before the end without reading the chunks in between,
+    // so physical skips are not checked here.
+    void check_skip_within_end(uint64_t n) const {
+        if (!_end_position || _end_position->is_physical()) {
+            return;
+        }
+        const auto pos = position();
+        const int64_t remaining = _end_position->to_logical() - pos.to_logical();
+        if (remaining < 0 || n > uint64_t(remaining)) {
+            sstables::throw_malformed_sstable_exception(fmt::format("Skip of {} bytes at position {} crosses the end position {}",
+                    n, pos, *_end_position));
+        }
     }
 
     void mark_blocked() {
@@ -724,96 +792,51 @@ public:
         return proceed::yes;
     }
 
-    // called by input_stream::consume():
-    future<consumption_result_type>
-    operator()(temporary_buffer<char> data) {
-        mark_unblocked();
-        if (data.size() >= _remain) {
-            // We received more data than we actually care about, so process
-            // the beginning of the buffer, and return the rest to the stream
-            auto segment = data.share(0, _remain);
-            _stream_position.offset += _remain;
-            auto ret = process(segment);
-            _stream_position.offset -= segment.size();
-            data.trim_front(_remain - segment.size());
-            auto len = _remain - segment.size();
-            _remain -= len;
-            if (_remain == 0 && ret == proceed::yes) {
-                verify_end_state();
-            }
-            return make_ready_future<consumption_result_type>(stop_consuming<char>{std::move(data)});
-        } else if (data.empty()) {
-            // End of file
-            verify_end_state();
-            return make_ready_future<consumption_result_type>(stop_consuming<char>{std::move(data)});
-        } else {
-            // We can process the entire buffer (if the consumer wants to).
-            auto orig_data_size = data.size();
-            _stream_position.offset += data.size();
-            auto result = process(data);
-            return seastar::visit(result, [this, &data, orig_data_size] (proceed value) {
-                _remain -= orig_data_size - data.size();
-                _stream_position.offset -= data.size();
-                if (value == proceed::yes) {
-                    mark_blocked();
-                    return make_ready_future<consumption_result_type>(continue_consuming{});
-                } else {
-                    return make_ready_future<consumption_result_type>(stop_consuming<char>{std::move(data)});
-                }
-            }, [this, &data, orig_data_size](skip_bytes skip) {
-                // we only expect skip_bytes to be used if reader needs to skip beyond the provided buffer
-                // otherwise it should just trim_front and proceed as usual
-                sstables::parse_assert(data.size() == 0);
-                _remain -= orig_data_size;
-                if (skip.get_value() >= _remain) {
-                    skip_bytes skip_remaining(_remain);
-                    _stream_position.offset += _remain;
-                    _remain = 0;
-                    verify_end_state();
-                    return make_ready_future<consumption_result_type>(std::move(skip_remaining));
-                }
-                _stream_position.offset += skip.get_value();
-                _remain -= skip.get_value();
-                mark_blocked();
-                return make_ready_future<consumption_result_type>(std::move(skip));
-            });
-        }
+    sstables::sstable_position compute_relative_position(int64_t n) {
+        return _input->compute_relative_position(n);
     }
 
-    future<> fast_forward_to(size_t begin, size_t end) {
-        sstables::parse_assert(int64_t(begin) >= _stream_position.offset);
-        auto n = begin - _stream_position.offset;
-        _stream_position.offset = begin;
+    future<> fast_forward_to_impl(sstables::sstable_position begin, std::optional<sstables::sstable_position> end) {
+        sstables::parse_assert(begin >= position());
 
-        sstables::parse_assert(int64_t(end) >= _stream_position.offset);
-        _remain = end - _stream_position.offset;
+        sstables::parse_assert(!end || *end >= begin);
+        _end_position = end;
 
         primitive_consumer::reset();
         reader_permit::awaits_guard _{_permit};
-        co_await _input.skip(n);
+        co_await _input->skip_to(begin);
     }
 
-    future<> skip_to(size_t begin) {
-        return fast_forward_to(begin, _stream_position.offset + _remain);
+    future<> fast_forward_to(sstables::sstable_position begin, sstables::sstable_position end) {
+        return fast_forward_to_impl(begin, end);
     }
 
-    // Returns the offset of the first byte which has not been consumed yet.
+    future<> skip_to(sstables::sstable_position begin) {
+        return fast_forward_to_impl(begin, _end_position);
+    }
+
+    // Returns the position of the first byte which has not been consumed yet.
     // When called from state_processor::process_state() invoked by this consumer,
-    // returns the offset of the first byte after the buffer passed to process_state().
-    uint64_t position() const {
-        return _stream_position.offset;
+    // returns the position of the first byte after the buffer passed to process_state().
+    sstables::sstable_position position() const {
+        return _input->stream_position().position;
+    }
+
+    // The number of uncompressed bytes consumed since the start of the stream.
+    int64_t offset() const {
+        return _input->stream_position().offset;
     }
 
     const sstables::reader_position_tracker& reader_position() const {
-        return _stream_position;
+        return _input->stream_position();
     }
 
     bool eof() const {
-        return _remain == 0;
+        return _end_position.has_value() && position() >= _end_position.value();
     }
 
     future<> close() noexcept {
-        return _input.close();
+        return _input->close();
     }
 };
 }

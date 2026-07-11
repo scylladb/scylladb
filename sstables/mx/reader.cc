@@ -945,7 +945,7 @@ private:
             }
         row_body_label: {
             co_yield this->read_unsigned_vint(*_processing_data);
-            _next_row_offset = this->position() - _processing_data->size() + this->_u64;
+            _next_row_offset = this->offset() - _processing_data->size() + this->_u64;
             co_yield this->read_unsigned_vint(*_processing_data);
             // Ignore the result
             row_processing_result ret = _extended_flags.is_static()
@@ -960,7 +960,7 @@ private:
             }
             if (ret == row_processing_result::skip_row) {
                 _state = state::FLAGS;
-                auto current_pos = this->position() - _processing_data->size();
+                auto current_pos = this->offset() - _processing_data->size();
                 auto maybe_skip_bytes = this->skip(*_processing_data, _next_row_offset - current_pos);
                 if (std::holds_alternative<skip_bytes>(maybe_skip_bytes)) {
                     co_yield maybe_skip_bytes;
@@ -1191,7 +1191,7 @@ public:
                                 input_stream<char> && input,
                                 uint64_t start,
                                 uint64_t maxlen)
-        : data_consumer::continuous_data_consumer<data_consume_rows_context_m<Consumer>>(consumer.permit(), std::move(input), start, maxlen)
+        : data_consumer::continuous_data_consumer<data_consume_rows_context_m<Consumer>>(consumer.permit(), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
         , _consumer(consumer)
         , _sst(sst)
         , _header(sst->get_serialization_header())
@@ -1496,7 +1496,7 @@ private:
                 return get_index_reader().advance_to(pos).then([this] {
                     abstract_index_reader& idx = *_index_reader;
                     auto index_position = idx.data_file_positions();
-                    if (index_position.start <= _context->position()) {
+                    if (sstable_position::from_logical(index_position.start) <= _context->position()) {
                         return make_ready_future<>();
                     }
                     return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
@@ -1604,7 +1604,8 @@ private:
         _index_in_current_partition = true;
         co_return true;
     }
-    future<> skip_to(indexable_element el, uint64_t begin) {
+    future<> skip_to(indexable_element el, uint64_t begin_raw) {
+        auto begin = sstable_position::from_logical(begin_raw);
         sstlog.trace("sstable_reader: {}: skip_to({} -> {}, el={})", fmt::ptr(_context.get()), _context->position(), begin, static_cast<int>(el));
         if (begin <= _context->position()) {
             return make_ready_future<>();
@@ -1629,7 +1630,7 @@ public:
     future<> advance_index_until_unseen_partition() {
         while (true) {
             auto [start, end] = _index_reader->data_file_positions();
-            if (start >= _context->position()) {
+            if (sstable_position::from_logical(start) >= _context->position()) {
                 sstlog.trace("mp_row_consumer_reader_mx {}: advance_index_until_unseen_partition(): advanced to {}", fmt::ptr(this), start);
                 co_return;
             } else {
@@ -1660,7 +1661,7 @@ public:
                     auto [start, end] = _index_reader->data_file_positions();
                     parse_assert(bool(end), _sst->get_filename());
                     sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({}), index returned range [{}, {}), parser currently at {}", fmt::ptr(this), _pr.get(), start, *end, _context->position());
-                    if (start < _context->position()) {
+                    if (sstable_position::from_logical(start) < _context->position()) {
                         sstlog.trace("mp_row_consumer_reader_mx {}: _saved_partition_tombstone={}", fmt::ptr(this), _saved_partition_tombstone);
                         // If we got here, the index returned a Data start which precedes
                         // the data parser's position.
@@ -1686,9 +1687,9 @@ public:
                         _index_in_current_partition = false;
                         if (_saved_partition_tombstone) {
                             // Case 1 from the comment above.
-                            if (*end >= _context->position()) {
+                            if (sstable_position::from_logical(*end) >= _context->position()) {
                                 _read_enabled = true;
-                                return _context->fast_forward_to(_context->position(), *end);
+                                return _context->fast_forward_to(_context->position(), sstable_position::from_logical(*end));
                             } else {
                                 _read_enabled = false;
                                 return make_ready_future<>();
@@ -1699,7 +1700,7 @@ public:
                                 auto [start, end] = _index_reader->data_file_positions();
                                 _read_enabled = true;
                                 _context->reset(indexable_element::partition);
-                                return _context->fast_forward_to(start, *end);
+                                return _context->fast_forward_to(sstable_position::from_logical(start), sstable_position::from_logical(*end));
                             });
                         }
                     }
@@ -1708,7 +1709,7 @@ public:
                         _index_in_current_partition = true;
                         _saved_partition_tombstone.reset();
                         _context->reset(indexable_element::partition);
-                        return _context->fast_forward_to(start, *end);
+                        return _context->fast_forward_to(sstable_position::from_logical(start), sstable_position::from_logical(*end));
                     }
                     _index_in_current_partition = false;
                     _read_enabled = false;
@@ -2282,7 +2283,7 @@ future<uint64_t> validate(
                 }
 
                 const auto index_pos = idx_reader->data_file_positions().start;
-                const auto data_pos = context->position();
+                const uint64_t data_pos = context->position().to_logical();
                 auto pk = idx_reader->get_partition_key();
 
                 if (pk) {
@@ -2314,7 +2315,7 @@ future<uint64_t> validate(
                     const auto start = std::get<position_in_partition_view>(current_pi_block->start);
                     const auto end = std::get<position_in_partition_view>(current_pi_block->end);
                     const auto index_pos = current_partition_pos + current_pi_block->offset;
-                    const auto data_pos = context->position();
+                    const uint64_t data_pos = context->position().to_logical();
                     sstlog.trace("validate(): index-data position check for clustering block (first={}) [{}, {}]: {} == {}, partition starts at {}", first_block, start, end, index_pos, data_pos, current_partition_pos);
                     // We cannot reliably position the parser at the start of
                     // the first block, because there is no way to check what

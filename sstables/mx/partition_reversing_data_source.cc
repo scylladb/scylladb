@@ -57,7 +57,7 @@ public:
     }
 private:
     uint64_t current_position() {
-        return position() - _processing_data->size();
+        return position().to_logical() - _processing_data->size();
     }
     processing_result_generator do_process_state() {
         // length of the partition key
@@ -98,7 +98,7 @@ private:
 public:
 
     partition_header_context(input_stream<char>&& input, uint64_t start, uint64_t maxlen, reader_permit permit)
-                : continuous_data_consumer(std::move(permit), std::move(input), start, maxlen)
+                : continuous_data_consumer(std::move(permit), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
                 , _gen(do_process_state())
     {}
 };
@@ -211,7 +211,7 @@ public:
     }
 private:
     uint64_t current_position() {
-        return position() - _processing_data->size();
+        return position().to_logical() - _processing_data->size();
     }
     processing_result_generator do_process_state() {
         while (true) {
@@ -289,7 +289,7 @@ private:
     }
 public:
     row_body_skipping_context(input_stream<char>&& input, uint64_t start, uint64_t maxlen, reader_permit permit, column_translation ct)
-                : continuous_data_consumer(std::move(permit), std::move(input), start, maxlen)
+                : continuous_data_consumer(std::move(permit), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
                 , _gen(do_process_state())
                 , _column_translation(std::move(ct))
     {}
@@ -530,7 +530,7 @@ public:
                 co_await _row_skipping_context->consume_input();
                 while (!_row_skipping_context->end_of_partition()) {
                     last_row_start = _row_start;
-                    _row_start = _row_skipping_context->position();
+                    _row_start = _row_skipping_context->position().to_logical();
                     co_await _row_skipping_context->consume_input();
                 }
                 _row_end = _row_start;

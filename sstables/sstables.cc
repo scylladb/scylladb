@@ -236,6 +236,22 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
+read_progress_estimator::read_progress_estimator(const sstable& sst)
+    : _data_size(sst.data_size())
+    , _ondisk_data_size(sst.ondisk_data_size())
+{}
+
+uint64_t read_progress_estimator::operator()(sstable_position pos) const {
+    if (!pos.is_physical()) {
+        return pos.to_logical();
+    }
+    if (_ondisk_data_size == 0) {
+        return 0;
+    }
+    auto fraction = double(pos.as_physical().chunk_position) / _ondisk_data_size;
+    return std::min(uint64_t(fraction * _data_size), _data_size);
+}
+
 std::unique_ptr<crc32_digest_file_writer> make_calculate_digest_writer() noexcept {
     return std::make_unique<crc32_digest_file_writer>(make_null_data_sink(default_sstable_buffer_size), default_sstable_buffer_size);
 }

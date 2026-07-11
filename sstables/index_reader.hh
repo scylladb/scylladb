@@ -190,7 +190,7 @@ private:
 
 public:
     void verify_end_state() const {
-        if (this->_remain > 0) {
+        if (!continuous_data_consumer::eof()) {
             throw_malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): parsing ended but there is unconsumed data", _state), _sst.index_filename());
         }
         if (_state != state::KEY_SIZE && _state != state::START) {
@@ -205,7 +205,7 @@ public:
     processing_result process_state(temporary_buffer<char>& data) {
         _abort.check();
 
-        auto current_pos = [&] { return this->position() - data.size(); };
+        auto current_pos = [&] { return this->position().to_logical() - data.size(); };
         auto read_vint_or_uint64 = [this] (temporary_buffer<char>& data) {
             return is_mc_format() ? this->read_unsigned_vint(data) : this->read_64(data);
         };
@@ -354,7 +354,11 @@ public:
             column_translation ctr,
             const abort_source& abort,
             tracing::trace_state_ptr trace_state = {})
-        : continuous_data_consumer(std::move(permit), std::move(input), start, maxlen)
+        : continuous_data_consumer(
+            std::move(permit),
+            std::move(input),
+            sstable_position::from_logical(start),
+            sstable_position::from_logical(start + maxlen))
         , _sst(sst), _consumer(consumer), _entry_offset(start), _trust_pi(trust_pi)
         , _ctr(std::move(ctr))
         , _trace_state(std::move(trace_state))
@@ -465,7 +469,9 @@ class index_reader final : public abstract_index_reader {
             co_return;
         }
         bound.consumer->prepare(quantity);
-        co_return co_await bound.context->fast_forward_to(begin, end);
+        co_return co_await bound.context->fast_forward_to(
+            sstable_position::from_logical(begin),
+            sstable_position::from_logical(end));
     }
 
 private:

@@ -203,7 +203,7 @@ public:
     promoted_index_blocks_reader(reader_permit permit, input_stream<char>&& promoted_index_stream, uint32_t num_blocks,
                                  const schema& s, uint64_t start, uint64_t maxlen,
                                  std::optional<column_values_fixed_lengths> clustering_values_fixed_lengths)
-        : continuous_data_consumer(permit, std::move(promoted_index_stream), start, maxlen)
+        : continuous_data_consumer(permit, std::move(promoted_index_stream), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
         , _total_num_blocks{num_blocks}
         , _num_blocks_left{num_blocks}
         , _s{s}
