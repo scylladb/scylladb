@@ -365,6 +365,43 @@ public:
     friend class sstable;
 };
 
+// The maximum length, in bytes, of the compressed data of a chunk whose
+// uncompressed length is `uncompressed_chunk_length`. The limit doesn't include
+// the checksum, or the header and the footer of a framed chunk.
+//
+// Rationale: there are some data structures which store compressed chunk lengths
+// (in particular: the header of compressed chunk in Data.db
+// and the payload of an sstable index entry, for sstables which use physical positions).
+// Space is valuable there, so we want to pack this length into as few bits as possible.
+//
+// Imposing a limit on the post-compression size for a given sstable
+// allows us to use a more efficient encoding.
+inline uint64_t compressed_chunk_length_limit(uint64_t uncompressed_chunk_length) {
+    // This assumption should be met (with a large margin) by any sane compressor and chunk size.
+    return uncompressed_chunk_length + uncompressed_chunk_length / 2;
+}
+
+// In a physically indexed (`mu`) Data.db, each compressed chunk starts with a
+// header and ends with a footer. Both hold the length of the chunk's compressed
+// data, as a variable-size integer. See framed_chunk_codec for the encoding.
+// On-disk chunk layout:
+//
+//     [ header ][ compressed data ][ 4-byte checksum ][ footer ]
+//
+// A reader at the start of a chunk uses the header to find the end of the chunk.
+// It uses the footer of the previous chunk (the bytes just before its position)
+// to find the start of the previous chunk. Thus, a reader can move in both
+// directions without the chunk offsets from CompressionInfo.db.
+//
+// The 4-byte checksum covers the header and the compressed data, but not the
+// footer. Instead, a reader checks that the footer holds the same length as the
+// header. A backward reader uses the footer before it can check it. If the
+// footer is corrupt, the reader computes a wrong start for the previous chunk,
+// and the header it finds there doesn't match the footer, or the data fails the
+// checksum. Thus, a reader must not trust a length until it has verified the
+// chunk. The decoder also rejects lengths that are too large, so a reader never
+// sizes a read from an obviously corrupt length.
+
 using stream_creator_fn = std::function<future<input_stream<char>>(uint64_t, uint64_t, file_input_stream_options)>;
 
 // Note: compression_metadata is passed by reference; The caller is
