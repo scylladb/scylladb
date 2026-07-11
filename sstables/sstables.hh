@@ -46,6 +46,7 @@
 #include "dht/decorated_key.hh"
 #include "service/session.hh"
 #include "sstables/trie/bti_index.hh"
+#include "sstables/framed_chunk.hh"
 #include "utils/file_size_stats.hh"
 
 #include <seastar/util/optimized_optional.hh>
@@ -389,6 +390,9 @@ public:
     uint64_t data_size() const;
     // Returns on-disk size of data component.
     uint64_t ondisk_data_size() const;
+    // The codec of the chunks of the compressed data component. Only valid for
+    // a compressed sstable.
+    framed_chunk_codec get_chunk_codec() const;
     // Start/end positions of the data component, expressed as sstable_positions.
     sstable_position start_position() const;
     sstable_position end_position() const;

@@ -2972,6 +2972,10 @@ uint64_t sstable::ondisk_data_size() const {
     return _data_file_size;
 }
 
+framed_chunk_codec sstable::get_chunk_codec() const {
+    return framed_chunk_codec(_version, get_compression().uncompressed_chunk_length());
+}
+
 sstable_position sstable::start_position() const {
     // The physical-position start (for compressed `mu`) is added in a later
     // commit; for now every version reads from logical position 0.
