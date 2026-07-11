@@ -71,12 +71,17 @@ protected:
 
 class writeable_segment : public segment {
     seastar::gate _write_gate;
+    seastar::semaphore _append_sem{1};
     segment_ref _seg_ref;
     segment_sequence _seq_num;
 
     uint32_t _current_offset = 0; // next offset for write
 
     future<> do_write(log_location , bytes_view data);
+
+    bool can_fit(size_t data_size) const noexcept {
+        return _current_offset + data_size <= _max_size;
+    }
 
 public:
     using segment::segment;
@@ -85,13 +90,20 @@ public:
 
     future<> stop();
 
-    // write a serialized sequence of records.
-    // must not be called concurrently.
-    future<log_location> append(bytes_view data);
+    struct append_reservation {
+        log_location loc;
+        seastar::semaphore_units<> units;
+    };
 
-    bool can_fit(size_t data_size) const noexcept {
-        return _current_offset + data_size <= _max_size;
-    }
+    // Reserve the next append offset for this segment and keep the permit held
+    // until the DMA write completes.
+    future<std::optional<append_reservation>> reserve(size_t data_size);
+
+    future<log_location> write_reserved(append_reservation reservation, bytes_view data);
+
+    // Convenience helper for callers that do not need to split reservation and write.
+    // Fails if the segment cannot fit the write.
+    future<log_location> append(bytes_view data);
 
     size_t bytes_remaining() const noexcept {
         return _max_size - _current_offset;
@@ -140,22 +152,46 @@ future<> writeable_segment::stop() {
     co_await _write_gate.close();
 }
 
-future<log_location> writeable_segment::append(bytes_view data) {
-    auto data_size = data.size();
+future<std::optional<writeable_segment::append_reservation>> writeable_segment::reserve(size_t data_size) {
+    auto units = co_await get_units(_append_sem, 1);
 
     if (!can_fit(data_size)) {
-        throw std::runtime_error("Entry too large for remaining segment space");
+        co_return std::nullopt;
     }
 
-    log_location loc {
-        .segment = _id,
-        .offset = _current_offset,
-        .size = static_cast<uint32_t>(data_size)
+    append_reservation reservation {
+        .loc = log_location {
+            .segment = _id,
+            .offset = _current_offset,
+            .size = static_cast<uint32_t>(data_size)
+        },
+        .units = std::move(units),
     };
 
-    co_await do_write(loc, data);
     _current_offset += data_size;
-    co_return loc;
+
+    co_return std::move(reservation);
+}
+
+future<log_location> writeable_segment::write_reserved(append_reservation reservation, bytes_view data) {
+    auto write_result = co_await coroutine::as_future(do_write(reservation.loc, data));
+    if (write_result.failed()) {
+        auto ex = write_result.get_exception();
+
+        // if a write fails, fail also all later writes to the segment, since we assume no holes in a segment.
+        _append_sem.broken(ex);
+
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    co_return reservation.loc;
+}
+
+future<log_location> writeable_segment::append(bytes_view data) {
+    auto reservation = co_await reserve(data.size());
+    if (!reservation) {
+        co_return coroutine::return_exception(std::runtime_error(fmt::format("Can't append write of size {} to segment with {} bytes remaining", data.size(), bytes_remaining())));
+    }
+    co_return co_await write_reserved(std::move(*reservation), data);
 }
 
 future<> writeable_segment::do_write(log_location loc, bytes_view data) {
@@ -666,7 +702,6 @@ class segment_manager_impl {
     static constexpr size_t segment_pool_size = 128;
 
     seg_ptr _active_segment;
-    seastar::semaphore _active_segment_write_sem{1};
     segment_pool _segment_pool;
     std::optional<shared_future<>> _switch_segment_fut;
     segment_sequence _next_segment_seq{1};
@@ -1046,26 +1081,35 @@ future<> segment_manager_impl::stop() {
 future<> segment_manager_impl::write(write_buffer& wb) {
     write_source source = write_source::normal_write;
     auto holder = _async_gate.hold();
-
+    auto write_op = _writes_phaser.start();
     const auto sealed_size = wb.sealed_size(block_alignment);
 
     if (sealed_size > _cfg.segment_size) {
         throw std::runtime_error(fmt::format( "Write size {} exceeds segment size {}", sealed_size, _cfg.segment_size));
     }
 
-    {
-        auto sem_units = co_await get_units(_active_segment_write_sem, 1);
-
-        while (!_active_segment || !_active_segment->can_fit(sealed_size)) {
+    while (true) {
+        if (!_active_segment) {
             co_await request_segment_switch();
+            continue;
         }
 
         seg_ptr seg = _active_segment;
         auto seg_holder = seg->hold();
         auto seg_ref = seg->ref();
+
+        auto reservation = co_await seg->reserve(sealed_size);
+        if (!reservation) {
+            if (_active_segment == seg) {
+                co_await request_segment_switch();
+            }
+            continue;
+        }
+
         auto seq_num = seg->seq_num();
-        auto write_op = _writes_phaser.start();
         auto& desc = get_segment_descriptor(seg->id());
+
+        wb.seal(seq_num, std::nullopt, block_alignment);
 
         // if we wrote a record to the segment but failed to write it to the separator, the segment should not be freed.
         auto write_to_separator_failed = defer([seg_ref] mutable noexcept {
@@ -1074,11 +1118,8 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
 
-        wb.seal(seq_num, std::nullopt, block_alignment);
         bytes_view data(reinterpret_cast<const int8_t*>(wb.data()), wb.serialized_size());
-
-        auto loc = co_await seg->append(data);
-        sem_units.return_all();
+        auto loc = co_await seg->write_reserved(std::move(*reservation), data);
 
         desc.on_write(wb.net_data_size(), wb.record_count());
 
@@ -1093,6 +1134,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
             return write_to_separator(wb, std::move(seg_ref), seq_num);
         });
         write_to_separator_failed.cancel();
+        break;
     }
 
     // flow control for separator debt
