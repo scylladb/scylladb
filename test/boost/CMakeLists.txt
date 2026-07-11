@@ -78,6 +78,8 @@ add_scylla_test(cql_auth_syntax_test
   LIBRARIES cql3)
 add_scylla_test(crc_test
   KIND BOOST)
+add_scylla_test(decompressing_cursor_test
+  KIND SEASTAR)
 add_scylla_test(dict_trainer_test
   KIND SEASTAR)
 add_scylla_test(dirty_memory_manager_test
