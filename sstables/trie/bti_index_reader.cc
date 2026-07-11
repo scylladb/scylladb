@@ -44,7 +44,7 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
     processing_result_generator _gen;
 
     row_index_header_parser(reader_permit rp, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-        : continuous_data_consumer(std::move(rp), std::move(input), start, maxlen)
+        : continuous_data_consumer(std::move(rp), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
         , _gen(do_process_state())
     {}
     void verify_end_state() {
@@ -67,7 +67,7 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
 
         // The start of of this vint is used as a reference point
         // for the delta encoded in the next vint.
-        uint64_t trie_root_delta_base = this->position() - (*_processing_data).size();
+        uint64_t trie_root_delta_base = this->position().to_logical() - (*_processing_data).size();
         expensive_log("row_index_header_parser: reading unsigned vint for data file offset, delta_base={}", trie_root_delta_base);
         co_yield this->read_unsigned_vint(*_processing_data);
         _result.data_file_offset = this->_u64;
