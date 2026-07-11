@@ -141,7 +141,7 @@ struct reversed_context {
     // This points to the current position of the context over the underlying sstable file;
     // either the end of partition or the beginning of some row (never in the middle of a row).
     // The reference is valid as long as the context is alive.
-    const uint64_t& current_position_in_sstable;
+    const sstable_position& current_position_in_sstable;
 };
 
 // See `sstables::mx::make_partition_reversing_data_source` for documentation.
@@ -149,16 +149,14 @@ template <typename DataConsumeRowsContext>
 inline reversed_context<DataConsumeRowsContext> data_consume_reversed_partition(
         const schema& s, shared_sstable sst, abstract_index_reader& ir,
         typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
-    auto start = toread.start.to_logical();
-    auto end = toread.end.to_logical();
     auto reversing_data_source = sstables::mx::make_partition_reversing_data_source(
-            s, sst, ir, start, end - start,
+            s, sst, ir, toread.start, toread.end,
             consumer.permit(), consumer.trace_state());
     return reversed_context<DataConsumeRowsContext> {
         .the_context = std::make_unique<DataConsumeRowsContext>(
                 s, std::move(sst), consumer,
                 std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(input_stream<char>(std::move(reversing_data_source.the_source))),
-                sstable_position::from_logical(start), sstable_position::from_logical(end)),
+                toread.start, toread.end),
         .current_position_in_sstable = reversing_data_source.current_position_in_sstable
     };
 }

@@ -1275,7 +1275,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     // For reversed (single partition) reads, points to the current position in the sstable
     // of the reversing data source used underneath (see `partition_reversing_data_source`).
     // Engaged after `_context` is engaged, i.e. after `initialize()`.
-    const uint64_t* _reversed_read_sstable_position;
+    const sstable_position* _reversed_read_sstable_position;
 public:
     mx_sstable_mutation_reader(shared_sstable sst,
                             schema_ptr schema,
@@ -1474,7 +1474,7 @@ private:
 
                     parse_assert(_reversed_read_sstable_position, _sst->get_filename());
                     auto ip = _index_reader->data_file_positions();
-                    if (ip.end >= *_reversed_read_sstable_position) {
+                    if (ip.end && sstable_position::from_logical(*ip.end) >= *_reversed_read_sstable_position) {
                         // The reversing data source was already ahead (in reverse - its position was smaller)
                         // than the index. We must not update the current range tombstone in this case
                         // or reset the context since all fragments up to the new position of the index
