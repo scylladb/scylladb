@@ -33,26 +33,55 @@
 namespace service::paxos {
 
 logging::logger paxos_state::logger("paxos");
-thread_local paxos_state::key_lock_map paxos_state::_paxos_table_lock;
-thread_local paxos_state::key_lock_map paxos_state::_coordinator_lock;
+thread_local token_lock_map paxos_state::_paxos_table_lock(true);
+thread_local token_lock_map paxos_state::_coordinator_lock(true);
 
-paxos_state::key_lock_map::key_lock_map() {
-    // preallocate 8K pointers and set max_load_factor to 8 to support around 1M outstanding requests
-    // without re-allocations
-    _locks.reserve(8 * 1024);
-    _locks.max_load_factor(8);
-}
-
-paxos_state::key_lock_map::semaphore& paxos_state::key_lock_map::get_semaphore_for_key(const dht::token& key) {
-    return _locks.try_emplace(key, 1).first->second;
-}
-
-void paxos_state::key_lock_map::release_semaphore_for_key(const dht::token& key) {
-    auto it = _locks.find(key);
-    if (it != _locks.end() && (*it).second.current() == 1) {
-        _locks.erase(it);
+template <typename Key>
+key_lock_map<Key>::key_lock_map(bool preallocate) {
+    if (preallocate) {
+        // preallocate 8K pointers and set max_load_factor to 8 to support around 1M outstanding requests
+        // without re-allocations
+        _locks.reserve(8 * 1024);
+        _locks.max_load_factor(8);
     }
 }
+
+template <typename Key>
+key_lock_map<Key>::guard::guard(key_lock_map<Key>& map, const Key& key)
+    : _map(map._locks)
+    , _entry(&*_map.try_emplace(key).first)
+    , _locked(false)
+{
+    ++_entry->second.refs;
+}
+
+template <typename Key>
+key_lock_map<Key>::guard::guard(guard&& o) noexcept
+    : _map(o._map)
+    , _entry(std::exchange(o._entry, nullptr))
+    , _locked(std::exchange(o._locked, false))
+{
+}
+
+template <typename Key>
+key_lock_map<Key>::guard::~guard() {
+    if (!_entry) {
+        return;
+    }
+    if (_locked) {
+        sem().signal(1);
+    }
+    if (--_entry->second.refs == 0) {
+        _map.erase(key());
+    }
+}
+
+template <typename Key>
+future<> key_lock_map<Key>::guard::lock(clock_type::time_point timeout) {
+    return sem().wait(timeout, 1).then([this] { _locked = true; });
+}
+
+template class key_lock_map<dht::token>;
 
 future<paxos_state::replica_guard> paxos_state::get_replica_lock(const schema& s, const dht::token& token,
         clock_type::time_point timeout)
@@ -71,18 +100,18 @@ future<paxos_state::replica_guard> paxos_state::get_replica_lock(const schema& s
     replica_guard replica_guard;
     replica_guard.resize(shards.size());
     for (size_t i = 0; i < shards.size(); ++i) {
-        replica_guard[i] = co_await smp::submit_to(shards[i], [token, timeout] {
-            auto g = make_lw_shared<guard>(_paxos_table_lock, token, timeout);
-            return g->lock().then([g]{ return make_foreign(std::move(g)); });
+        replica_guard[i] = co_await smp::submit_to(shards[i], [token, timeout] -> future<token_guard_foreign_ptr> {
+            auto g = make_lw_shared<token_guard>(_paxos_table_lock, token);
+            return g->lock(timeout).then([g]{ return make_foreign(std::move(g)); });
         });
     }
     co_return replica_guard;
 }
 
-future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, clock_type::time_point timeout) {
-    guard m(_coordinator_lock, key, timeout);
-    co_await m.lock();
-    co_return m;
+future<token_guard> paxos_state::get_cas_lock(const dht::token& key, clock_type::time_point timeout) {
+    token_guard m(_coordinator_lock, key);
+    co_await m.lock(timeout);
+    co_return std::move(m);
 }
 
 future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
