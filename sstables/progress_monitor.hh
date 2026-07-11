@@ -12,6 +12,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include "shared_sstable.hh"
+#include "sstables/sstable_position.hh"
 
 namespace sstables {
 
@@ -29,8 +30,8 @@ public:
 write_monitor& default_write_monitor();
 
 struct reader_position_tracker {
-    uint64_t position = 0;
-    uint64_t total_read_size = 0;
+    sstable_position position;
+    int64_t offset = 0;
 };
 
 class read_monitor {
