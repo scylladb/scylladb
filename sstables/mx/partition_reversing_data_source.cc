@@ -12,6 +12,7 @@
 #include "partition_reversing_data_source.hh"
 #include "reader_permit.hh"
 #include "sstables/compress.hh"
+#include "sstables/decompressing_cursor.hh"
 #include "sstables/consumer.hh"
 #include "sstables/processing_result_generator.hh"
 #include "sstables/reversing_source_cursor.hh"
@@ -370,18 +371,24 @@ static temporary_buffer<char> end_of_partition() {
 // and closes its input stream. However, forward parsing and backward row reads
 // must share one physical cursor. This facade sends all operations to that
 // cursor. close() does nothing. The reversing data source closes the cursor.
+//
+// The parser needs no data past `end`. The parser passes its end to
+// consume_one() itself, but skip() has no such argument, so the facade passes
+// `end` to the cursor's skip().
 class borrowed_cursor_stream final : public data_consumer::continuous_data_consumer_input_stream {
-    data_consumer::continuous_data_consumer_input_stream& _cursor;
+    decompressing_cursor& _cursor;
+    sstable_position _end;
 public:
-    explicit borrowed_cursor_stream(data_consumer::continuous_data_consumer_input_stream& cursor) noexcept
+    borrowed_cursor_stream(decompressing_cursor& cursor, sstable_position end) noexcept
         : continuous_data_consumer_input_stream(cursor.stream_position())
         , _cursor(cursor)
+        , _end(end)
     {}
     future<> skip_to(sstable_position target) override {
         return _cursor.skip_to(target);
     }
     future<> skip(uint64_t n) override {
-        return _cursor.skip(n);
+        return _cursor.skip(n, _end);
     }
     future<> close() override {
         // The cursor is owned by the reversing data source, not by this stream.
@@ -491,6 +498,68 @@ public:
     future<> close() override {
         // Parsers own and close their own streams; data_read has no stream to close.
         return make_ready_future<>();
+    }
+};
+
+// Reversing cursor for physical positions. Forward parsers borrow the
+// bidirectional decompressing cursor that supplies backward row reads. Thus,
+// reads in both directions share its physical position and its buffers.
+class physical_reversing_cursor final : public reversing_source_cursor {
+    std::unique_ptr<decompressing_cursor> _cursor;
+
+public:
+    explicit physical_reversing_cursor(std::unique_ptr<decompressing_cursor> cursor)
+        : _cursor(std::move(cursor))
+    {}
+
+    future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>>
+    make_forward_input_stream(sstable_position, sstable_position end) override {
+        // The parser positions the borrowed cursor itself (init_stream_position),
+        // so the start is not needed here. The end limits read-ahead, as it
+        // bounds the stream of the logical path.
+        co_return std::make_unique<borrowed_cursor_stream>(*_cursor, end);
+    }
+
+    future<temporary_buffer<char>>
+    read_forwards(sstable_position start, sstable_position end) override {
+        // Reading rows backwards is the cursor's usual job; read the header forwards
+        // through the same cursor's consume interface. The size of [start, end)
+        // is unknown until it is read, so collect the fragments first.
+        _cursor->init_stream_position(start);
+        std::vector<temporary_buffer<char>> fragments;
+        size_t size = 0;
+        bool at_end = false;
+        while (!at_end) {
+            co_await _cursor->consume_one(end, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                // An empty buffer means that the stream reached `end` or eof.
+                at_end = data.empty();
+                size += data.size();
+                fragments.push_back(std::move(data));
+                return continue_consuming{};
+            });
+        }
+        auto out = temporary_buffer<char>(size);
+        size_t filled = 0;
+        for (const auto& fragment : fragments) {
+            std::memcpy(out.get_write() + filled, fragment.get(), fragment.size());
+            filled += fragment.size();
+        }
+        co_return out;
+    }
+
+    future<backward_read>
+    read_backwards(sstable_position end, size_t size) override {
+        _cursor->seek(end);
+        auto data = co_await _cursor->read_backwards_exactly(size);
+        co_return backward_read{_cursor->stream_position().position, std::move(data)};
+    }
+
+    void trim_read_ahead(sstable_position) override {
+        // Nothing to discard: the next backward read seeks to the new end.
+    }
+
+    future<> close() override {
+        return _cursor->close();
     }
 };
 
@@ -641,9 +710,12 @@ private:
         }
     }
 
-    // Builds the cursor backing all IO into the data file. For now this is always
-    // a logical_reversing_cursor (data_stream/data_read); the physical-position
-    // compressed cursor is added in a later commit.
+    // Builds the cursor backing all IO into the data file. The physical-position
+    // physical_reversing_cursor exists (above) but is not selected here yet: its
+    // input positions only become physical once start_position() and the
+    // logical->physical mapping are flipped for compressed `mu` (a later commit).
+    // Until then the reversing path is fed logical positions, which the compressed
+    // cursor cannot consume, so every sstable keeps using logical_reversing_cursor.
     static std::unique_ptr<reversing_source_cursor> make_cursor(const shared_sstable& sst, reader_permit permit,
             tracing::trace_state_ptr trace_state, sstable_position partition_start) {
         return std::make_unique<logical_reversing_cursor>(sst, std::move(permit), std::move(trace_state),
