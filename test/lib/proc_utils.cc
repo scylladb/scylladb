@@ -26,6 +26,8 @@
 
 using namespace seastar;
 
+static logger proc_logger("docker_service");
+
 class tests::proc::process_fixture::impl {
 public:
     experimental::process _process;
@@ -231,30 +233,34 @@ future<std::tuple<tests::proc::process_fixture, int>> tests::proc::start_docker_
         promise<> ready_promise;
         auto ready_fut = ready_promise.get_future();
 
-        auto create_handler = [](auto h_in, std::ostream& out) {
-            auto h = process_fixture::create_copy_handler(out);
+        auto create_handler = [](auto h_in) {
             promise<> ready_promise;
             future<> f = ready_promise.get_future();
             if (h_in) {
-                h = [state = service_parse_state::cont, ready_promise = std::move(ready_promise), h = std::move(h), h_in = std::move(h_in)](std::string_view line) mutable -> future<consumption_result<char>> {
+                auto h = [state = service_parse_state::cont, ready_promise = std::move(ready_promise), h_in = std::move(h_in)](std::string_view line) mutable -> future<consumption_result<char>> {
+                    proc_logger.info("{}", line);
                     if (state == service_parse_state::cont) {
                         switch (state = h_in(line)) {
-                            case service_parse_state::success: ready_promise.set_value(); break;
-                            case service_parse_state::failed: ready_promise.set_exception(in_use{}); break;
-                            default: 
-                                break;
+                        case service_parse_state::success: ready_promise.set_value(); break;
+                        case service_parse_state::failed: ready_promise.set_exception(in_use{}); break;
+                        default:
+                            break;
                         }
                     }
-                    return h(line);
+                    co_return continue_consuming{};
                 };
-            } else {
-                ready_promise.set_value();
+                return std::make_tuple(process_fixture::line_handler(std::move(h)), std::move(f));
             }
-            return std::make_tuple(std::move(h), std::move(f));
+            ready_promise.set_value();
+            auto h = [](std::string_view line) -> future<consumption_result<char>> {
+                proc_logger.info("{}", line);
+                co_return continue_consuming{};
+            };
+            return std::make_tuple(process_fixture::line_handler(std::move(h)), std::move(f));
         };
 
-        auto [out_h, out_fut] = create_handler(stdout_parse, std::cout);
-        auto [err_h, err_fut] = create_handler(stderr_parse, std::cerr);
+        auto [out_h, out_fut] = create_handler(stdout_parse);
+        auto [err_h, err_fut] = create_handler(stderr_parse);
 
         auto ps = co_await process_fixture::create(exec
             , params
