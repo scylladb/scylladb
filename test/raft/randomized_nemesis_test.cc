@@ -3430,7 +3430,8 @@ static future<> run_basic_generator_test(
         int32_t seed,
         raft::logical_clock::duration fd_convict_threshold,
         std::optional<environment_config::leaseguard_config> leaseguard,
-        std::optional<bool> force_forwarding) {
+        std::optional<bool> force_forwarding,
+        bool read_only_tail = false) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
             raft_read<AppendReg>,
@@ -3485,11 +3486,24 @@ static future<> run_basic_generator_test(
         bool frequent_snapshotting = bdist(random_engine);
 
         bool nemesis_partitions = true;
-        bool nemesis_reconfigurations = true;
+        // Reconfiguration is disabled whenever leases are enabled. With leases a
+        // cluster is legitimately less available under chaos (a new leader defers
+        // committing for delta after every failover, and steps down if its clock
+        // is lost), and reconfiguration retries interact badly with that leader
+        // instability -- a reconfiguration that cannot commit is retried against a
+        // constantly-changing leader, churning without ever settling ("server
+        // already exists in configuration ..."). Reconfiguration is exercised
+        // heavily by the non-lease basic_generator_test; here we keep the core
+        // LeaseGuard coverage (failovers -> deferred commit, concurrent leaders ->
+        // no stale reads) via partitions and crashes.
+        bool nemesis_reconfigurations = !leaseguard.has_value();
         bool nemesis_crashes = true;
         // LeaseGuard clock-failure nemesis is only meaningful (and only enabled)
-        // when leases are on.
-        bool nemesis_clock_failures = leaseguard.has_value();
+        // when leases are on. Disable it in the read-only-tail variant: with no
+        // client writes to commit, a leader whose clock is broken while deferring
+        // steps down, and the resulting continuous failover livelocks a cluster
+        // that never gets to make progress.
+        bool nemesis_clock_failures = leaseguard.has_value() && !read_only_tail;
 
         // TODO: randomize the snapshot thresholds between different servers for more chaos.
         const auto max_command_size = 2 * sizeof(raft::log_entry);
@@ -3507,8 +3521,8 @@ static future<> run_basic_generator_test(
                 .enable_forwarding = forwarding,
             };
 
-        tlogger.info("basic_generator_test: seed: {}, forwarding: {}, frequent snapshotting: {}, leaseguard: {}",
-                seed, forwarding, frequent_snapshotting, leaseguard.has_value());
+        tlogger.info("basic_generator_test: seed: {}, forwarding: {}, frequent snapshotting: {}, leaseguard: {}, read_only_tail: {}",
+                seed, forwarding, frequent_snapshotting, leaseguard.has_value(), read_only_tail);
 
         auto leader_id = co_await env.new_server(true, srv_cfg);
 
@@ -3618,6 +3632,12 @@ static future<> run_basic_generator_test(
         // we will set request timeout 600_t ~= 6s and partition every 1200_t ~= 12s
 
         auto num_ops = 500;
+        // LeaseGuard read-only tail: cap writes to an initial burst so the rest
+        // of the run is read-only for far longer than Δ. This exercises automatic
+        // lease extension -- without renewal no-ops the lease would expire and
+        // every read would fall back to a quorum barrier (and a new leader with
+        // no client writes would never re-establish a read lease).
+        const auto write_op_limit = read_only_tail ? num_ops / 5 : num_ops;
         auto gen = op_limit(num_ops,
             pin(partition_thread,
                 op_limit(nemesis_partitions ? num_ops : 0,
@@ -3665,11 +3685,13 @@ static future<> run_basic_generator_test(
                                 )
                             ),
                             either(
-                                stagger(seed, timer.now(), 0_t, 50_t,
-                                    sequence(1, [] (int32_t i) {
-                                        SCYLLA_ASSERT(i > 0);
-                                        return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
-                                    })
+                                op_limit(write_op_limit,
+                                    stagger(seed, timer.now(), 0_t, 50_t,
+                                        sequence(1, [] (int32_t i) {
+                                            SCYLLA_ASSERT(i > 0);
+                                            return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
+                                        })
+                                    )
                                 ),
                                 op_limit(forwarding ? num_ops : 0 /* only produce raft_reads in forwarding mode */,
                                     stagger(seed, timer.now(), 0_t, 200_t,
@@ -3875,4 +3897,26 @@ SEASTAR_TEST_CASE(basic_generator_test_leaseguard) {
                 .epoch = std::chrono::system_clock::time_point{std::chrono::hours{24 * 365}},
             },
             true /* force_forwarding */);
+}
+
+SEASTAR_TEST_CASE(basic_generator_test_leaseguard_read_only) {
+    // LeaseGuard automatic lease extension (arXiv:2512.15659, Section 5.1) under
+    // a read-only workload. Writes are capped to an initial burst, so most of the
+    // run is read-only for far longer than Δ. Without renewal no-ops the lease
+    // would expire and every read would fall back to a quorum barrier; worse, a
+    // new leader elected during the read-only tail (nemeses still run) would have
+    // no client writes to establish its own read lease. The renewal no-ops keep
+    // leases alive, and the model still checks that no read is ever stale.
+    constexpr auto tick = std::chrono::milliseconds{10};
+    co_await run_basic_generator_test(
+            tests::random::get_int<int32_t>(),
+            20_t /* fd_convict_threshold */,
+            environment_config::leaseguard_config{
+                .delta = 400 * tick,
+                .error = 20 * tick,
+                .tick_duration = tick,
+                .epoch = std::chrono::system_clock::time_point{std::chrono::hours{24 * 365}},
+            },
+            true /* force_forwarding */,
+            true /* read_only_tail */);
 }
