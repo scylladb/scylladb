@@ -15,6 +15,7 @@
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "serializer_impl.hh"
 #include "idl/logstor.dist.hh"
 #include "idl/logstor.dist.impl.hh"
@@ -299,12 +300,86 @@ buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group 
     }
 }
 
+bool buffered_writer::has_pending_buffers() const noexcept {
+    return _tail < _head || head_buf().has_data();
+}
+
+bool buffered_writer::should_rotate_head_for_flush() const noexcept {
+    return _dispatch_tail == _head && head_buf().has_data();
+}
+
+bool buffered_writer::maybe_advance_head() noexcept {
+    if (ring_full() || !head_buf().has_data()) {
+        return false;
+    }
+    ++_head;
+    _head_can_advance.broadcast();
+    _consumer_progress_cv.signal();
+    return true;
+}
+
+bool buffered_writer::try_dispatch_next_buffer() {
+    auto idx = _dispatch_tail;
+    auto& state = dispatch_tail_write();
+    auto& buf = _ring[idx % ring_size];
+
+    if (_dispatch_tail >= _head || !state.idle() || !buf.has_data()) {
+        return false;
+    }
+
+    try {
+        state.start(run_dispatched_write(idx));
+    } catch (...) {
+        state.start(make_exception_future<>(std::current_exception()));
+    }
+    ++_dispatch_tail;
+    return true;
+}
+
+future<> buffered_writer::run_dispatched_write(size_t idx) {
+    auto& buf = _ring[idx % ring_size];
+    auto f = co_await coroutine::as_future(_sm.write(buf));
+    _consumer_progress_cv.signal();
+    if (f.failed()) {
+        co_await coroutine::return_exception_ptr(f.get_exception());
+    }
+}
+
+future<bool> buffered_writer::reclaim_completed_tails() {
+    bool reclaimed = false;
+    while (_tail < _dispatch_tail) {
+        auto& state = tail_write();
+        if (!state.ready()) {
+            break;
+        }
+
+        auto completion = state.take_completion();
+        auto f = co_await coroutine::as_future(std::move(completion));
+
+        if (f.failed()) {
+            auto ex = f.get_exception();
+            auto abort_f = co_await coroutine::as_future(tail_buf().abort_writes(std::move(ex)));
+            if (abort_f.failed()) {
+                logstor_logger.warn("Failed to abort buffered writes: {}. Ignoring.", abort_f.get_exception());
+            }
+        }
+
+        tail_buf().reset();
+        state.reset();
+        ++_tail;
+        reclaimed = true;
+        _head_can_advance.broadcast();
+
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return reclaimed;
+}
+
 future<> buffered_writer::start() {
     logstor_logger.info("Starting write buffer");
-    _consumer = with_gate(_async_gate, [this] {
-        return with_scheduling_group(_flush_sg, [this] {
-            return consumer_loop();
-        });
+    _consumer = with_scheduling_group(_flush_sg, [this] {
+        return consumer_loop();
     });
     co_return;
 }
@@ -316,12 +391,22 @@ future<> buffered_writer::stop() {
     logstor_logger.info("Stopping write buffer");
 
     // Wake the consumer so it can observe the closing gate and exit.
-    _tail_can_advance.broadcast();
+    auto close_fut = _async_gate.close();
+    _consumer_progress_cv.broadcast();
     // Wake any writer blocked waiting for a free ring slot.
     _head_can_advance.broadcast();
-
-    co_await _async_gate.close();
+    co_await std::move(close_fut);
     co_await std::move(_consumer);
+
+    for (auto& state : _in_flight) {
+        if (state.completion) {
+            auto f = co_await coroutine::as_future(std::move(*state.completion));
+            state.completion.reset();
+            if (f.failed()) {
+                logstor_logger.warn("Buffered write completion failed during stop: {}. Ignoring.", f.get_exception());
+            }
+        }
+    }
 
     logstor_logger.info("Write buffer stopped");
 }
@@ -336,7 +421,7 @@ future<log_location_with_holder> buffered_writer::write(log_record record, db::t
     }
 
     if (writer.size() > head_buf().max_record_size()) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), head_buf().max_record_size()));
+        co_await coroutine::return_exception(std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), head_buf().max_record_size())));
     }
 
     // Wait until the head buffer can fit this write.
@@ -351,47 +436,46 @@ future<log_location_with_holder> buffered_writer::write(log_record record, db::t
         }
         _async_gate.check();
         if (_head == current_head) {
-            ++_head;
-            // Wake other writers that are also waiting for a new head buffer.
-            _head_can_advance.broadcast();
+            maybe_advance_head();
         }
     }
 
     auto fut = head_buf().write(std::move(writer), cg, std::move(cg_holder));
 
-    // Wake the consumer: there is now data at the tail.
-    _tail_can_advance.broadcast();
+    // Wake the consumer: there is now data at the head.
+    _consumer_progress_cv.broadcast();
 
     co_return co_await std::move(fut);
 }
 
 future<> buffered_writer::consumer_loop() {
-    while (true) {
-        // Wait for something to flush at the tail.
-        while (!_async_gate.is_closed() && !tail_buf().has_data()) {
-            co_await _tail_can_advance.wait();
+    try {
+        while (true) {
+            bool progressed = false;
+
+            progressed |= co_await reclaim_completed_tails();
+
+            if (should_rotate_head_for_flush()) {
+                progressed |= maybe_advance_head();
+            }
+
+            while (try_dispatch_next_buffer()) {
+                progressed = true;
+                co_await coroutine::maybe_yield();
+            }
+
+            if (_async_gate.is_closed() && !has_pending_buffers()) {
+                break;
+            }
+
+            if (!progressed) {
+                co_await _consumer_progress_cv.wait();
+            }
+
+            co_await coroutine::maybe_yield();
         }
-
-        if (!tail_buf().has_data()) {
-            // Gate is closing and tail is empty — we are done.
-            break;
-        }
-
-        // If head == tail, the head buffer is still being written to.  Seal it
-        // by advancing the head to give writers a fresh slot.
-        if (_head == _tail) {
-            ++_head;
-            // Wake writers that may be waiting for a new head slot.
-            _head_can_advance.broadcast();
-        }
-
-        co_await _sm.write(tail_buf());
-
-        tail_buf().reset();
-        ++_tail;
-
-        // A slot has been freed: wake any writer waiting to advance the head.
-        _head_can_advance.broadcast();
+    } catch (...) {
+        on_internal_error(logstor_logger, format("buffered_writer consumer loop aborted unexpectedly: {}", std::current_exception()));
     }
 }
 

@@ -270,6 +270,7 @@ private:
     future<> complete_writes(log_location base_location);
     future<> abort_writes(std::exception_ptr);
 
+    friend class buffered_writer;
     friend class segment_manager_impl;
 };
 
@@ -292,29 +293,74 @@ class buffered_writer {
 
     // Monotonically increasing indices; the actual slot is idx % ring_size.
     // _head: next slot writers append to.
-    // _tail: next slot the consumer will flush.
-    // Invariant: _head >= _tail && _head - _tail < ring_size.
+    // _dispatch_tail: next slot the consumer will dispatch to segment_manager.
+    // _tail: oldest slot not yet safe to reuse.
+    // Invariant: _head >= _dispatch_tail >= _tail && _head - _tail < ring_size.
     size_t _head{0};
+    size_t _dispatch_tail{0};
     size_t _tail{0};
+
+    struct in_flight_write {
+        std::optional<future<>> completion;
+
+        bool idle() const noexcept {
+            return !completion;
+        }
+
+        bool ready() const noexcept {
+            return completion && completion->available();
+        }
+
+        void start(future<> f) {
+            completion.emplace(std::move(f));
+        }
+
+        future<> take_completion() {
+            auto f = std::move(*completion);
+            completion.reset();
+            return f;
+        }
+
+        void reset() noexcept {
+            completion.reset();
+        }
+    };
+
+    std::array<in_flight_write, ring_size> _in_flight;
 
     // Notified when _tail advances (a slot becomes free for the head to move into)
     // or when the head buffer is switched.
     seastar::condition_variable _head_can_advance;
 
-    // Notified when data is written to the head buffer (consumer may wake up).
-    seastar::condition_variable _tail_can_advance;
+    // Wakes the consumer whenever a state change may let it make forward
+    // progress again: queued writes arrive, the head buffer gains data or
+    // advances, a flush completes, a tail is reclaimed, or shutdown begins.
+    seastar::condition_variable _consumer_progress_cv;
 
     seastar::gate _async_gate;
 
     // The single flush-consumer fiber, running for the lifetime of the writer.
     future<> _consumer{make_ready_future<>()};
 
-    write_buffer& head_buf() noexcept { return _ring[_head % ring_size]; }
-    write_buffer& tail_buf() noexcept { return _ring[_tail % ring_size]; }
+    auto&& head_buf(this auto&& self) noexcept { return self._ring[self._head % ring_size]; }
+    auto&& tail_buf(this auto&& self) noexcept { return self._ring[self._tail % ring_size]; }
+
+    auto&& tail_write(this auto&& self) noexcept { return self._in_flight[self._tail % ring_size]; }
+    auto&& dispatch_tail_write(this auto&& self) noexcept { return self._in_flight[self._dispatch_tail % ring_size]; }
 
     // The ring is full when all ring_size slots are occupied. Advancing the
     // head further would make the new head slot collide with the tail slot.
     bool ring_full() const noexcept { return _head - _tail == ring_size - 1; }
+
+    bool has_pending_buffers() const noexcept;
+    bool should_rotate_head_for_flush() const noexcept;
+    bool maybe_advance_head() noexcept;
+
+    bool try_dispatch_next_buffer();
+    future<> run_dispatched_write(size_t idx);
+    future<bool> reclaim_completed_tails();
+
+    future<> consumer_loop();
 
 public:
     explicit buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg);
@@ -326,10 +372,6 @@ public:
     future<> stop();
 
     future<log_location_with_holder> write(log_record, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
-
-private:
-    // The flush consumer loop.
-    future<> consumer_loop();
 };
 
 }
