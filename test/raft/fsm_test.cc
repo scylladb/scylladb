@@ -2845,6 +2845,123 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_commits_after_delta_without_clock) {
     BOOST_CHECK(!clock.interval_now());
 }
 
+namespace {
+
+// Drive a single-node-quorum-of-two fsm to leadership with a caught-up follower,
+// and tell it whether that follower's clock works. Returns the fsm ready for the
+// clock-loss tests below.
+struct clock_loss_fixture {
+    server_id id1 = id(), id2 = id();
+    raft::configuration cfg = config_from_ids({id1, id2});
+    fsm_debug fsm;
+
+    clock_loss_fixture(raft::bounded_clock_mock& clock, bool follower_clock_ok)
+        : fsm(id1, term_t{}, server_id{}, raft::log{raft::snapshot_descriptor{.config = cfg}},
+                trivial_failure_detector, make_lease_cfg(clock)) {
+        election_timeout(fsm);
+        (void)fsm.get_output();
+        fsm.step(id2, raft::vote_reply{fsm.get_current_term(), true});
+        BOOST_REQUIRE(fsm.is_leader());
+        auto output = fsm.get_output();
+        const auto append = std::get<raft::append_request>(output.messages.back().second);
+        const auto idx = append.entries.back()->idx;
+        // Follower is fully caught up, and reports its clock health.
+        fsm.step(id2, raft::append_reply{fsm.get_current_term(), index_t{},
+                raft::append_reply::accepted{idx}, follower_clock_ok});
+        (void)fsm.get_output();
+    }
+};
+
+bool sent_timeout_now(const raft::fsm_output& o) {
+    return std::ranges::any_of(o.messages, [](const auto& m) {
+        return std::holds_alternative<raft::timeout_now>(m.second);
+    });
+}
+
+// The wait is 2*delta plus a per-group jitter of at most delta, and the jitter is
+// drawn randomly, so tests assert either side of that range rather than an exact
+// boundary. Both bounds hold for every possible jitter.
+const auto lease_below_stepdown_wait =
+        std::chrono::duration_cast<raft::mono_clock::duration>(lease_delta) * 2;
+const auto lease_above_stepdown_wait =
+        std::chrono::duration_cast<raft::mono_clock::duration>(lease_delta) * 3;
+
+} // anonymous namespace
+
+// A leader whose clock fails keeps making progress, but silently loses leases:
+// no local reads, no stamped entries, no renewal, for as long as the outage
+// lasts. If a caught-up voter's clock still works, hand leadership over so the
+// group gets them back.
+BOOST_AUTO_TEST_CASE(test_leaseguard_transfers_leadership_on_clock_loss) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+    clock_loss_fixture f(clock, true /* follower's clock works */);
+
+    // Our clock fails. The first tick observes it and starts the clock.
+    clock.set_unsynchronized();
+    f.fsm.tick();
+    BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
+
+    // Short of the wait, leadership must not move however many ticks pass: a
+    // clock that recovers quickly is not worth a transfer, which costs the
+    // successor a delta of deferred commits.
+    clock.advance_monotonic(lease_below_stepdown_wait - 1ms);
+    for (int i = 0; i < 5; i++) {
+        f.fsm.tick();
+        BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
+    }
+    BOOST_REQUIRE(f.fsm.is_leader());
+
+    // Past it, leadership is handed to the follower.
+    clock.advance_monotonic(lease_above_stepdown_wait);
+    f.fsm.tick();
+    BOOST_CHECK(sent_timeout_now(f.fsm.get_output()));
+}
+
+// ... but only if the target can actually do what we cannot. A follower whose
+// clock is equally broken is no improvement, so we keep leading.
+BOOST_AUTO_TEST_CASE(test_leaseguard_no_transfer_when_follower_clock_also_broken) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+    clock_loss_fixture f(clock, false /* follower's clock is broken too */);
+
+    // Arm the wait first, then let the time pass: the wait is measured from the
+    // tick that observes the failure, so advancing before that first tick would
+    // leave zero elapsed time and the test would pass without proving anything.
+    clock.set_unsynchronized();
+    f.fsm.tick();
+    BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
+
+    clock.advance_monotonic(lease_above_stepdown_wait * 2);
+    for (int i = 0; i < 5; i++) {
+        f.fsm.tick();
+        BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
+    }
+    BOOST_CHECK(f.fsm.is_leader());
+}
+
+// A clock that flaps must not ping-pong leadership: every recovery cancels the
+// wait, so a node that is unsynchronized half the time never accumulates enough
+// consecutive failure to trigger a transfer.
+BOOST_AUTO_TEST_CASE(test_leaseguard_clock_recovery_cancels_transfer) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+    clock_loss_fixture f(clock, true);
+
+    for (int i = 0; i < 5; i++) {
+        clock.set_unsynchronized();
+        f.fsm.tick();
+        BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
+        // Nearly long enough, but the clock comes back before the wait elapses.
+        clock.advance_monotonic(lease_below_stepdown_wait - 1ms);
+        clock.set(lease_t0, lease_err);
+        f.fsm.tick();
+        BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
+        clock.advance_monotonic(lease_above_stepdown_wait);
+    }
+    BOOST_CHECK(f.fsm.is_leader());
+}
+
 // LeaseGuard automatic lease extension (arXiv:2512.15659, Section 5.1). Under a
 // read-only workload the lease would otherwise expire (no writes to refresh it)
 // and every read would fall back to a quorum barrier. While reads are flowing,

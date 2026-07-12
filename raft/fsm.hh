@@ -170,6 +170,17 @@ struct leader {
     // commit is deferred, so the warning is emitted once per leadership term
     // rather than once per tick.
     bool clock_unavailable_warned = false;
+    // LeaseGuard: elapsed-time reading at which our clock last became unusable,
+    // or empty while it is usable. A leader with no clock can serve no local
+    // reads, stamp nothing and renew nothing, so once this has persisted we hand
+    // leadership to a replica whose clock works. Measured on the monotonic clock
+    // precisely because the clock being judged is the one that failed.
+    std::optional<mono_clock::time_point> clock_unusable_since;
+    // LeaseGuard: per-group delay added to that wait. Scylla runs one raft group
+    // per strongly-consistent tablet, so without it a single node's clock
+    // failure would transfer every group it leads at the same instant -- and
+    // again in reverse when the clock recovers. Drawn once per leadership term.
+    mono_clock::duration clock_stepdown_jitter{0};
 
     leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(std::make_unique<seastar::semaphore>(max_log_size)) {}
     leader(leader&&) = default;
@@ -241,6 +252,16 @@ class fsm {
     // Set if we want to actively search for a leader.
     // Can be true only if the leader is not known
     bool _ping_leader = false;
+    // LeaseGuard: whether our bounded clock was usable at the last tick, i.e.
+    // whether we could hold a lease. Reported to the leader in
+    // append_reply::clock_ok so it can hand leadership to a node that still can.
+    //
+    // Sampled once per tick rather than per reply on purpose: append_entries is
+    // the hottest path in raft and a follower otherwise never reads the clock
+    // (interval_now() is a syscall on the adjtimex backend), while the value
+    // only feeds a leadership decision gated on the failure persisting for
+    // multiples of delta -- a tick of staleness cannot matter.
+    bool _clock_ok = false;
 
     // Stores the last state observed by get_output().
     // Is updated with the actual state of the FSM after
@@ -320,6 +341,10 @@ private:
     // delta old. When true the leader may serve a linearizable read locally
     // without a quorum round-trip. Precondition: is_leader().
     bool can_serve_lease_read();
+    // LeaseGuard: hand leadership to a replica whose clock still works, if ours
+    // has been unusable long enough and such a replica exists. A no-op unless
+    // leases are enabled. Precondition: is_leader(), not already stepping down.
+    void maybe_transfer_leadership_on_clock_loss();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
