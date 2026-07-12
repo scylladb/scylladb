@@ -25,7 +25,9 @@
 #include "sstables/shared_sstable.hh"
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
+#include "locator/host_id.hh"
 #include "utils/disk-error-handler.hh"
+#include "utils/small_vector.hh"
 
 namespace data_dictionary {
 class storage_options;
@@ -37,6 +39,7 @@ namespace sstables {
 
 enum class sstable_state;
 class delayed_commit_changes;
+class object_storage_client;
 class sstable;
 class sstables_manager;
 class entry_descriptor;
@@ -45,6 +48,8 @@ struct atomic_delete_context {
     sstring pending_delete_log;
     std::unordered_set<sstring> prefixes;
 };
+
+using object_storage_reference_names = utils::small_vector<sstring, 3>;
 
 class opened_directory final {
     std::filesystem::path _pathname;
@@ -121,10 +126,11 @@ public:
     virtual future<> destroy(const sstable& sst) = 0;
     virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const = 0;
     virtual future<> atomic_delete_complete(atomic_delete_context ctx) const = 0;
-    virtual future<> remove_by_registry_entry(entry_descriptor desc) = 0;
+    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) = 0;
     // Free space available in the underlying storage.
     virtual future<uint64_t> free_space() const = 0;
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
+    virtual future<size_t> num_references(const sstable& sst) const = 0;
 
     virtual std::string_view prefix() const  = 0;
     virtual future<bool> exists(const sstable& sst, component_type type) const = 0;
@@ -135,6 +141,7 @@ public:
 };
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
+future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, sstring prefix, generation_type gen);
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);

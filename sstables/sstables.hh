@@ -289,6 +289,8 @@ public:
         return _generation;
     }
 
+    future<size_t> num_references() const;
+
     // Returns a mutation_reader for given range of partitions.
     //
     // Precondition: if the slice is reversed, the schema must be reversed as well.

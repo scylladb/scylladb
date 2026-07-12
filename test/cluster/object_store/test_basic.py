@@ -810,14 +810,19 @@ async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, objec
         expected = {i: i for i in range(20)}
         assert result == expected, f"Data mismatch: {result}"
 
-        def get_components():
+        def get_components_and_refs():
             objects = object_storage.get_resource().Bucket(
                 object_storage.bucket_name).objects.all()
             components = {}
+            refs = {}
             for o in objects:
-                generation, _, component = o.key.rpartition("/")
-                components.setdefault(generation, set()).add(component)
-            return components
+                generation, has_refs, ref = o.key.rpartition("/refs/")
+                if has_refs:
+                    refs.setdefault(generation, set()).add(ref)
+                else:
+                    generation, _, component = o.key.rpartition("/")
+                    components.setdefault(generation, set()).add(component)
+            return components, refs
 
         # The aborted streaming attempt failed while writing the TOC,
         # so on object storage it left behind only
@@ -830,7 +835,12 @@ async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, objec
         # With the fix the leaked TOC.txt.tmp is gone so the condition converges;
         # without it the orphan persists and wait_for times out.
         async def no_orphaned_objects():
-            components = get_components()
+            components, refs = get_components_and_refs()
+            for gen, refset in refs.items():
+                if not gen in components:
+                    raise RuntimeError(f"Orphaned refs with no components: {gen=} refs={refset}")
+                if len(refset) > 1: 
+                    raise RuntimeError(f"Too many refs: {gen=} refs={refset} comps={components[gen]}")
             orphans = {gen for gen, comps in components.items()
                        if "Data.db" not in comps}
             return None if orphans else True
@@ -839,6 +849,6 @@ async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, objec
             await wait_for(no_orphaned_objects, time.time() + 30,
                     label="object storage bucket has no orphaned sstable components")
         except Exception as e:
-            components = get_components()
-            logger.error(f"Orphaned components: {components=}: {e}")
+            components, refs = get_components_and_refs()
+            logger.error(f"Orphaned components: {components=} {refs=}: {e}")
             raise

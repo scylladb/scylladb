@@ -104,11 +104,12 @@ public:
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
     virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
     virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
-    virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
+    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) override;
     virtual future<uint64_t> free_space() const override {
         return seastar::fs_avail(prefix());
     }
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept override;
+    future<size_t> num_references(const sstable& sst) const override;
 
     virtual std::string_view prefix() const override { return _dir.native(); }
     bool is_object_storage() const override { return false; }
@@ -615,8 +616,13 @@ future<> filesystem_storage::atomic_delete_complete(atomic_delete_context ctx) c
         }
 }
 
-future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc) {
+future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) {
     on_internal_error(sstlog, "Filesystem storage doesn't keep its entries in registry");
+}
+
+future<size_t> filesystem_storage::num_references(const sstable& sst) const {
+    auto has_toc = co_await exists(sst, component_type::TOC);
+    co_return has_toc ? 1 : 0;
 }
 
 future<> filesystem_storage::unlink_component(const sstable& sst, component_type type) noexcept {
@@ -650,6 +656,11 @@ protected:
 
     object_name make_object_name(const sstable& sst, component_type type) const;
     object_name make_object_name(const sstable& sst, sstring comp, generation_type gen) const;
+
+    // Construct the object name for a reference: {prefix}/{gen}/refs/nodes/{host_id}/{gen}
+    object_name make_ref_object_name(generation_type gen, locator::host_id host_id) const {
+        return object_name(_bucket, prefix(), gen, fmt::format("refs/nodes/{}/{}", host_id, gen));
+    }
 
     table_id owner() const {
         if (_uses_foreign_location) {
@@ -689,12 +700,13 @@ public:
     future<> destroy(const sstable& sst) override;
     future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
     future<> atomic_delete_complete(atomic_delete_context ctx) const override;
-    future<> remove_by_registry_entry(entry_descriptor desc) override;
+    future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) override;
     future<uint64_t> free_space() const override {
         // assumes infinite space on s3/gs (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
     }
     future<> unlink_component(const sstable& sst, component_type) noexcept override;
+    future<size_t> num_references(const sstable& sst) const override;
 
     sstable_id get_sstable_identifier(const sstable& sst) const {
         auto sid = sst.sstable_identifier();
@@ -712,6 +724,12 @@ public:
     future<bool> exists(const sstable& sst, component_type type) const override {
         return _client->object_exists(make_object_name(sst, type), abort_source());
     }
+
+    // FIXME: pass sstable_id when reference sharing is introduced. At this point
+    // only this node's reference can exist, using the same generation as the
+    // object-storage prefix.
+    future<size_t> num_references(generation_type gen) const;
+    future<> delete_components(sstable_version_types version, generation_type gen, bool log_errors) const;
 
     bool is_object_storage() const override { return true; }
 
@@ -762,10 +780,70 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
     return ret;
 }
 
+static future<> collect_lister_entries(abstract_lister& lister, object_storage_reference_names& entries) {
+    while (auto entry = co_await lister.get()) {
+        entries.push_back(entry->name);
+    }
+}
+
+future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, generation_type gen) {
+    object_storage_reference_names refs;
+    try {
+        auto refs_prefix = fmt::format("{}/{}/refs/", prefix, gen);
+        auto lister = client.make_object_lister(std::move(bucket), refs_prefix, [] (const std::filesystem::path&, const directory_entry&) { return true; });
+        co_await with_closeable(std::move(lister), [&refs] (abstract_lister& lister) {
+            return collect_lister_entries(lister, refs);
+        });
+    } catch (...) {
+        throw std::runtime_error(fmt::format("Failed to list references: prefix={} generation={}: {}", prefix, gen, std::current_exception()));
+    }
+    co_return refs;
+}
+
+future<size_t> object_storage_base::num_references(generation_type gen) const {
+    auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), gen);
+    co_return refs.size();
+}
+
+future<size_t> object_storage_base::num_references(const sstable& sst) const {
+    return num_references(sst.generation());
+}
+
+future<> object_storage_base::delete_components(sstable_version_types version, generation_type gen, bool log_errors) const {
+    auto prefix = this->prefix();
+    auto delete_component = [this, &prefix, &gen, log_errors] (std::string_view component) -> future<> {
+        try {
+            co_await delete_object(object_name(_bucket, prefix, gen, component));
+        } catch (const storage_io_error& e) {
+            if (e.code().value() != ENOENT) {
+                throw;
+            }
+        } catch (...) {
+            if (!log_errors) {
+                throw;
+            }
+            sstlog.warn("Failed to delete {} object {} for generation={}: {}", _type, component, gen, std::current_exception());
+        }
+    };
+
+    auto& component_map = sstable_version_constants::get_component_map(version);
+    co_await coroutine::parallel_for_each(component_map, [&delete_component] (const auto& entry) -> future<> {
+        if (entry.first == component_type::TOC) {
+            co_return;
+        }
+        co_await delete_component(entry.second);
+    });
+    co_await delete_component(sstable_version_constants::TOC_SUFFIX);
+}
+
 void object_storage_base::open(sstable& sst) {
     auto sid = get_sstable_identifier(sst);
     entry_descriptor desc(sst._generation, sid, sst._version, sst._format, component_type::TOC);
-    sst.manager().sstables_registry().create_entry(owner(), sst.manager().get_local_host_id(), status_creating, sst._state, std::move(desc)).get();
+    auto host_id = sst.manager().get_local_host_id();
+    sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
+
+    auto ref_name = make_ref_object_name(sst.generation(), host_id);
+    put_object(ref_name, memory_data_sink_buffers()).get();
 
     memory_data_sink_buffers bufs;
     auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
@@ -773,6 +851,7 @@ void object_storage_base::open(sstable& sst) {
 
     sst.write_toc(std::move(w));
     put_object(make_object_name(sst, component_type::TOC), std::move(bufs)).get();
+    sstlog.debug("Created reference {}: {}", sst.get_filename(), ref_name);
 }
 
 future<file> object_storage_base::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
@@ -910,17 +989,23 @@ future<> object_storage_base::destroy(const sstable& sst) {
     if (!sst.marked_for_deletion()) {
         co_return;
     }
-    // Delete the S3 objects. Errors are logged but not propagated because
-    // destroy() is called fire-and-forget from the shared_ptr deleter.
-    // Any objects that could not be deleted here will be retried on the
-    // next startup via garbage_collect() which handles "removing" entries.
-    co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
-        try {
-            co_await delete_object(make_object_name(sst, type));
-        } catch (...) {
-            sstlog.warn("Failed to delete {} object for {}: {}", _type, sst.toc_filename(), std::current_exception());
-        }
-    });
+
+    auto node_owner = sst.manager().get_local_host_id();
+
+    // Remove this node's reference to the sstable
+    auto ref_name = make_ref_object_name(sst.generation(), node_owner);
+    co_await delete_object(ref_name);
+
+    // Only delete components if no references remain
+    auto remaining_refs = co_await sst.num_references();
+    if (!remaining_refs) {
+        // Delete the S3 objects. Errors are logged but not propagated because
+        // destroy() is called fire-and-forget from the shared_ptr deleter.
+        // Any objects that could not be deleted here will be retried on the
+        // next startup via garbage_collect() which handles "removing" entries.
+        co_await delete_components(sst.get_version(), sst.generation(), true);
+    }
+
     // Remove the registry entry only after S3 objects are cleaned up.
     // If this fails, the "removing" entry survives and garbage_collect()
     // will delete the (already gone) objects tolerantly and retry deletion.
@@ -937,10 +1022,11 @@ future<> object_storage_base::destroy(const sstable& sst) {
             sstlog.warn("Skipping registry entry deletion for {}: sstables registry already unplugged (shutdown in progress)", sst.toc_filename());
             co_return;
         }
-        co_await sst.manager().sstables_registry().delete_entry(owner(), sst.manager().get_local_host_id(), sst.generation());
+        co_await sst.manager().sstables_registry().delete_entry(owner(), node_owner, sst.generation());
     } catch (...) {
         sstlog.warn("Failed to delete registry entry for {}: {}", sst.toc_filename(), std::current_exception());
     }
+    sstlog.debug("Deleted reference {} remaining_refs={}", ref_name.str(), remaining_refs);
 }
 
 future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
@@ -957,27 +1043,24 @@ future<> object_storage_base::atomic_delete_complete(atomic_delete_context ctx) 
     co_return;
 }
 
-future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
-    std::vector<sstring> components;
-
+future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) {
+    auto ref_name = make_ref_object_name(desc.generation, node_owner);
     try {
-        auto f = make_readable_file(object_name(_bucket, prefix(), desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
-        auto [toc_components, digest] = co_await with_closeable(std::move(f), [] (file& f) {
-            return sstable::read_and_parse_toc(f);
-        });
-        components = std::move(toc_components);
+        co_await delete_object(ref_name);
     } catch (const storage_io_error& e) {
         if (e.code().value() != ENOENT) {
             throw;
         }
     }
 
-    co_await coroutine::parallel_for_each(components, [this, &desc] (sstring comp) -> future<> {
-        if (comp != sstable_version_constants::TOC_SUFFIX) {
-            co_await delete_object(object_name(_bucket, prefix(), desc.generation, comp));
-        }
-    });
-    co_await delete_object(object_name(_bucket, prefix(), desc.generation, sstable_version_constants::TOC_SUFFIX));
+    auto remaining_refs = co_await num_references(desc.generation);
+    if (remaining_refs) {
+        sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), remaining_refs);
+        co_return;
+    }
+
+    co_await delete_components(desc.version, desc.generation, false);
+    sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), remaining_refs);
 }
 
 future<> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {
@@ -1003,6 +1086,11 @@ future<entry_descriptor> object_storage_base::clone(const sstable& sst, generati
     desc.state = sst.state();
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
+
+    auto ref_name = make_ref_object_name(gen, node_owner);
+    co_await _client->put_object(ref_name, memory_data_sink_buffers(), abort_source());
+    auto refs = co_await num_references(desc.generation);
+    sstlog.debug("Cloned {} reference {} num_references={}", sst.get_filename(), ref_name, refs);
 
     // Copy all component objects from the source to the destination generation.
     co_await coroutine::parallel_for_each(sst.all_components(), [this, &sst, &gen] (const std::pair<component_type, sstring>& p) -> future<> {

@@ -992,6 +992,10 @@ future<entry_descriptor> sstable::clone(generation_type new_generation, bool lea
     return _storage->clone(*this, new_generation, leave_unsealed);
 }
 
+future<size_t> sstable::num_references() const {
+    return _storage->num_references(*this);
+}
+
 file_writer::~file_writer() {
     if (_closed) {
         return;
