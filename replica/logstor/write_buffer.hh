@@ -285,6 +285,7 @@ struct buffered_writer_config {
     size_t ring_size;
     seastar::scheduling_group flush_sg;
     size_t max_queued_write_bytes{0};
+    std::chrono::milliseconds sync_period{0};
 };
 
 // Manages a circular ring of write_buffers.
@@ -297,6 +298,7 @@ class buffered_writer {
     seastar::scheduling_group _flush_sg;
     size_t _buffer_size;
     size_t _ring_size;
+    std::chrono::milliseconds _sync_period;
     seastar::noncopyable_function<future<>(write_buffer&)> _flush_func;
 
     // The ring of buffers, indexed modulo _ring_size.
@@ -381,6 +383,9 @@ class buffered_writer {
     size_t _queued_write_bytes{0};
     size_t _max_queued_write_bytes{0};
 
+    seastar::timer<db::timeout_clock> _head_flush_timer;
+    bool _head_deadline_expired = false;
+
     seastar::gate _async_gate;
 
     // The single flush-consumer fiber, running for the lifetime of the writer.
@@ -410,6 +415,10 @@ class buffered_writer {
 
     void on_queued_write_removed(const queued_write&) noexcept;
     void fail_queued_write(queued_write&, std::exception_ptr) noexcept;
+
+    void arm_head_flush_timer();
+    void on_head_flush_timer() noexcept;
+    void cancel_head_flush_timer() noexcept;
 
     future<> consumer_loop();
 
