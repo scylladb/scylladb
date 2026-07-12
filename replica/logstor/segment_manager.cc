@@ -845,13 +845,13 @@ private:
         co_return seg;
     }
 
-    void free_segment(log_segment_id) noexcept;
+    void free_segment(log_segment_id);
 
-    segment_descriptor& get_segment_descriptor(log_segment_id segment_id) {
+    segment_descriptor& get_segment_descriptor(log_segment_id segment_id) noexcept {
         return _segment_descs[segment_id.value];
     }
 
-    segment_descriptor& get_segment_descriptor(log_location loc) {
+    segment_descriptor& get_segment_descriptor(log_location loc) noexcept {
         return _segment_descs[loc.segment.value];
     }
 
@@ -1253,7 +1253,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
     }
 }
 
-void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
+void segment_manager_impl::free_segment(log_segment_id segment_id) {
     // Before freeing a segment, ensure there are no ongoing operations that use
     // locations in this segment. See for example `await_pending_reads`.
     logstor_logger.trace("Free segment {}", segment_id);
