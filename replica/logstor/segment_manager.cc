@@ -914,11 +914,11 @@ private:
 
     void free_segment(log_segment_id) noexcept;
 
-    segment_descriptor& get_segment_descriptor(log_segment_id segment_id) {
+    segment_descriptor& get_segment_descriptor(log_segment_id segment_id) noexcept {
         return _segment_descs[segment_id.value];
     }
 
-    segment_descriptor& get_segment_descriptor(log_location loc) {
+    segment_descriptor& get_segment_descriptor(log_location loc) noexcept {
         return _segment_descs[loc.segment.value];
     }
 
@@ -1344,14 +1344,20 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
     // locations in this segment. See for example `await_pending_reads`.
     logstor_logger.trace("Free segment {}", segment_id);
 
+    // This runs on the release path of segment_ref (including from its destructor), so it must
+    // not throw: any of the checks below firing is a correctness bug (freeing a segment that is
+    // still live or still referenced would let it be reallocated and clobber live data), so we
+    // abort unconditionally rather than risk continuing, or a throw escaping a destructor.
     auto& desc = get_segment_descriptor(segment_id);
     if (desc.net_data_size(_cfg.segment_size) != 0) {
-        on_internal_error(logstor_logger, format("Freeing segment {} that has data", segment_id));
+        on_fatal_internal_error(logstor_logger, format("Freeing segment {} that has data", segment_id));
     }
     if (desc.ref_count != 0) {
-        on_internal_error(logstor_logger, format("Freeing segment {} with non-zero reference count", segment_id));
+        on_fatal_internal_error(logstor_logger, format("Freeing segment {} with non-zero reference count", segment_id));
     }
     if (segment_id.value < _max_segments.configured) {
+        // _free_segments is pre-reserved to fit every configured segment (see the constructor and
+        // set_actual_max_segments()), so this should never grow the vector.
         _free_segments.push_back(segment_id);
         _segment_freed_cv.signal();
     }
