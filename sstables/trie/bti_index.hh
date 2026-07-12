@@ -11,6 +11,8 @@
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
 #include "sstables/abstract_index_reader.hh"
+#include "sstables/framed_chunk.hh"
+#include "utils/assert.hh"
 
 namespace sstables {
     class file_writer;
@@ -55,6 +57,72 @@ struct bti_partitions_db_footer {
     sstables::key last_key;
     uint64_t partition_count;
     uint64_t trie_root_position;
+};
+
+// The bit layout of the packed (block count, offset within chunk) fields in
+// physical BTI index positions. The index stores the chunk's extent as a block
+// count N, and the offset within the chunk as O. The widths of both fields depend
+// on the sstable's uncompressed chunk length L and on its chunk frames, so the
+// layout is computed once from the sstable's chunk codec. This is the only
+// implementation of the layout: the partition payload, the row payload and the
+// row index header all pack and unpack (N, O) here.
+class bti_physical_layout {
+    uint32_t _uncompressed_chunk_length;
+    uint64_t _max_block_count;
+    unsigned _block_count_bits;
+    unsigned _offset_within_chunk_bits;
+public:
+    // Throws malformed_sstable_exception unless L is a power of two.
+    // A physical position doesn't hold the chunk's length, so a reader finds
+    // chunk boundaries from the chunk frames. Thus, the codec must be framed.
+    explicit bti_physical_layout(const framed_chunk_codec& codec);
+
+    uint32_t uncompressed_chunk_length() const noexcept {
+        return _uncompressed_chunk_length;
+    }
+    // The upper bound on the block count N of a chunk. A chunk's compressed data
+    // is at most compressed_chunk_length_limit() bytes. Its on-disk extent also
+    // includes the header, the checksum and the footer. The chunk may start at any
+    // offset within a block, so the count also covers up to block size - 1 bytes
+    // of leading misalignment.
+    uint64_t max_block_count() const noexcept {
+        return _max_block_count;
+    }
+    // N is a 1-based value in [1, max_block_count()], stored zero-based
+    // in exactly this many bits.
+    unsigned block_count_bits() const noexcept {
+        return _block_count_bits;
+    }
+    unsigned offset_within_chunk_bits() const noexcept {
+        return _offset_within_chunk_bits;
+    }
+    unsigned packed_bits() const noexcept {
+        return _block_count_bits + _offset_within_chunk_bits;
+    }
+    size_t packed_bytes() const noexcept {
+        return (packed_bits() + 7) / 8;
+    }
+
+    // Packs N and O into the low packed_bits() bits of the result.
+    uint64_t pack(uint64_t block_count, uint64_t offset_within_chunk) const {
+        SCYLLA_ASSERT(block_count >= 1);
+        SCYLLA_ASSERT(block_count <= _max_block_count);
+        SCYLLA_ASSERT(offset_within_chunk < _uncompressed_chunk_length);
+        return ((block_count - 1) << _offset_within_chunk_bits) | offset_within_chunk;
+    }
+
+    struct unpacked {
+        uint64_t block_count;
+        uint64_t offset_within_chunk;
+    };
+    // Inverse of pack(). Bits above packed_bits() are ignored.
+    unpacked unpack(uint64_t packed) const noexcept {
+        const auto encoded_length = (packed >> _offset_within_chunk_bits) & ((uint64_t{1} << _block_count_bits) - 1);
+        return unpacked{
+            .block_count = encoded_length + 1,
+            .offset_within_chunk = packed & ((uint64_t{1} << _offset_within_chunk_bits) - 1),
+        };
+    }
 };
 
 // Transforms a stream of (partition key, offset in Data.db, hash bits) tuples
