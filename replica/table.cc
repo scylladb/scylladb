@@ -3284,10 +3284,9 @@ future<> compaction_group::stop(sstring reason) noexcept {
     if (_async_gate.is_closed()) {
         co_return;
     }
-  // FIXME: indentation
-  for (auto view : all_views()) {
-    co_await _t._compaction_manager.stop_ongoing_compactions(reason, view);
-  }
+    for (auto view : all_views()) {
+        co_await _t._compaction_manager.stop_ongoing_compactions(reason, view);
+    }
     if (_t.uses_logstor()) {
         co_await get_logstor_compaction_manager().stop_ongoing_compactions(*this);
     }
@@ -3297,12 +3296,11 @@ future<> compaction_group::stop(sstring reason) noexcept {
     co_await flush_separator();
     co_await _flush_gate.close();
     co_await _sstable_add_gate.close();
-  // FIXME: indentation
-  _compaction_disabler_for_views.clear();
-  co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
-  for (auto view : all_views()) {
-    co_await _t._compaction_manager.remove(*view, reason);
-  }
+    _compaction_disabler_for_views.clear();
+    co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
+    for (auto view : all_views()) {
+        co_await _t._compaction_manager.remove(*view, reason);
+    }
     if (_t.uses_logstor()) {
         co_await get_logstor_compaction_manager().remove(*this);
     }
