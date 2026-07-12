@@ -254,6 +254,7 @@ distributed_loader::get_sstables_from(sharded<replica::database>& db, sstring ks
     return seastar::async([&db, ks = std::move(ks), cf = std::move(cf), start_dir = std::move(start_dir), cfg] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get();
         auto table_id = global_table->schema()->id();
+        auto allow_numerical_generations = !global_table->get_storage_options().is_object_storage_type();
 
         sharded<sstables::sstable_directory> directory;
         start_dir(global_table, directory).get();
@@ -265,6 +266,7 @@ distributed_loader::get_sstables_from(sharded<replica::database>& db, sstring ks
             .need_mutate_level = true,
             .allow_loading_materialized_view = false,
             .sort_sstables_according_to_owner = false,
+            .allow_numerical_generations = allow_numerical_generations,
             .sstable_open_config = cfg,
         };
         process_sstable_dir(directory, flags).get();
@@ -292,14 +294,16 @@ private:
     std::vector<lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _version_for_reshaping = sstables::oldest_writable_sstable_format;
     migration_direction _migration_direction;
+    bool _allow_numerical_generations;
 
 public:
-    table_populator(global_table_ptr& ptr, sharded<replica::database>& db, sstring ks, sstring cf, migration_direction md = migration_direction::none)
+    table_populator(global_table_ptr& ptr, sharded<replica::database>& db, sstring ks, sstring cf, migration_direction md, bool allow_numerical_generations)
         : _db(db)
         , _ks(std::move(ks))
         , _cf(std::move(cf))
         , _global_table(ptr)
         , _migration_direction(md)
+        , _allow_numerical_generations(allow_numerical_generations)
     {
     }
 
@@ -383,6 +387,7 @@ future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& d
         .throw_on_missing_toc = true,
         .allow_loading_materialized_view = true,
         .garbage_collect = true,
+        .allow_numerical_generations = _allow_numerical_generations,
     };
     co_await distributed_loader::process_sstable_dir(directory, flags);
 
@@ -486,7 +491,8 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
             dblog.info("Keyspace {}: CF {} is in vnodes-to-tablets migration mode (direction: {})", ks_name, cfname, direction == md::forward ? "forward" : "rollback");
         }
 
-        auto metadata = table_populator(gtable, db, ks_name, cfname, direction);
+        auto allow_numerical_generations = !cf.get_storage_options().is_object_storage_type();
+        auto metadata = table_populator(gtable, db, ks_name, cfname, direction, allow_numerical_generations);
         std::exception_ptr ex;
 
         try {

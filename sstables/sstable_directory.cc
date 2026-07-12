@@ -242,6 +242,11 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
         _max_version_seen = desc.version;
     }
 
+    if (!flags.allow_numerical_generations && !desc.generation.is_uuid_based()) {
+        throw_malformed_sstable_exception(format("{}: numerical SSTable generations are not supported",
+                sstable::component_basename(_schema->ks_name(), _schema->cf_name(), desc.version, desc.generation, desc.format, desc.component)));
+    }
+
     auto storage_opts = get_storage_options();
     auto shards = co_await get_shards_for_this_sstable(desc, storage_opts, flags);
     if (flags.sort_sstables_according_to_owner && shards.size() == 1 && shards[0] != this_shard_id()) {

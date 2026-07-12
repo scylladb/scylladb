@@ -83,6 +83,7 @@ public:
         bool allow_loading_materialized_view = false;
         bool sort_sstables_according_to_owner = true;
         bool garbage_collect = false;
+        bool allow_numerical_generations = true;
         sstables::sstable_open_config sstable_open_config;
     };
 
