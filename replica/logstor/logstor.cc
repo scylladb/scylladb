@@ -45,6 +45,13 @@ logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
     : _segment_manager(config.segment_manager_cfg)
     , _write_buffer(_segment_manager, config.flush_sg)
     , _cache_tracker(shared_cache_tracker) {
+
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("logstor", {
+        sm::make_counter("write_failures", [this] { return _stats.write_failures; },
+                       sm::description("Number of writes that failed to be persisted.")),
+    });
 }
 
 future<> logstor::do_recovery(replica::database& db) {
@@ -105,26 +112,25 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record), timeout, &cg, std::move(cg_holder)).then_unpack([this, index_ptr = &index, ts, key = std::move(key)]
-            (log_location location, seastar::gate::holder op) {
-        index_entry new_entry {
-            .location = location,
-            .timestamp = ts,
-        };
+    auto result_f = co_await coroutine::as_future(_write_buffer.write(std::move(record), timeout, &cg, std::move(cg_holder)));
+    if (result_f.failed()){
+        _stats.write_failures++;
+        co_await coroutine::return_exception_ptr(result_f.get_exception());
+    }
+    auto [location, op] = result_f.get();
+    index_entry new_entry {
+        .location = location,
+        .timestamp = ts,
+    };
+    auto [inserted, prev_entry] = index.insert(key, std::move(new_entry));
 
-        auto [inserted, prev_entry] = index_ptr->insert(key, std::move(new_entry));
-
-        if (!inserted) {
-            // A newer entry already exists; free the record we just wrote.
-            _segment_manager.free_record(location);
-        } else if (prev_entry) {
-            // Overwrote an older entry; free it.
-            _segment_manager.free_record(prev_entry->location);
-        }
-    }).handle_exception([] (std::exception_ptr ep) {
-        logstor_logger.error("Error writing mutation: {}", ep);
-        return make_exception_future<>(ep);
-    });
+    if (!inserted) {
+        // A newer entry already exists; free the record we just wrote.
+        _segment_manager.free_record(location);
+    } else if (prev_entry) {
+        // Overwrote an older entry; free it.
+        _segment_manager.free_record(prev_entry->location);
+    }
 }
 
 future<std::optional<mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {

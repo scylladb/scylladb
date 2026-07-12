@@ -38,9 +38,15 @@ struct logstor_config {
 
 class logstor {
 
+    struct stats {
+        uint64_t write_failures{0};
+    };
+
     segment_manager _segment_manager;
     buffered_writer _write_buffer;
     cache_tracker _cache_tracker;
+    seastar::metrics::metric_groups _metrics;
+    stats _stats;
 
 public:
 
