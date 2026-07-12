@@ -56,6 +56,28 @@ static_assert(std::is_same_v<lease_clock::period, std::nano>,
 static_assert(sizeof(lease_clock::rep) == 8,
         "raft::lease_clock::rep is the on-disk width of log_entry::lease_time");
 
+// An elapsed-physical-time source, used by LeaseGuard's deferred commit to bound
+// how long it has been leader without needing to know what time it is.
+//
+// Only DIFFERENCES between readings taken by one node are meaningful: the epoch
+// is arbitrary and is not comparable across nodes, restarts, or even instances.
+// Nothing here is ever persisted or put on the wire, so unlike lease_clock the
+// rep/period are an internal detail rather than a format commitment.
+//
+// This is deliberately a separate concept from lease_clock rather than a second
+// use of it: lease_clock answers "what time is it", which requires a
+// synchronized clock and can therefore be unavailable, while this answers "how
+// much time has passed", which never is.
+class mono_clock final {
+public:
+    using rep = int64_t;
+    using period = std::nano;
+    using duration = std::chrono::duration<rep, period>;
+    using time_point = std::chrono::time_point<mono_clock, duration>;
+
+    static constexpr bool is_steady = true;
+};
+
 // A reading of a bounded-uncertainty (physical) clock.
 //
 // A call to bounded_clock::interval_now() returns [earliest, latest] such that
@@ -108,12 +130,35 @@ class bounded_clock {
 public:
     virtual ~bounded_clock() = default;
     virtual std::optional<time_bounds> interval_now() = 0;
+
+    // Elapsed physical time (see mono_clock). Unlike interval_now() this cannot
+    // fail: it measures a duration rather than an absolute position, so it does
+    // not depend on the clock being synchronized. This is what lets a leader
+    // whose wall clock is unusable still bound how long ago it was elected, and
+    // so discharge LeaseGuard's deferred commit instead of stalling.
+    //
+    // Backends MUST implement this with a clock source whose *rate* is not
+    // disciplined by NTP -- CLOCK_MONOTONIC_RAW, not CLOCK_MONOTONIC. The
+    // difference matters: CLOCK_MONOTONIC is immune to clock steps but not to
+    // slewing, and a daemon correcting a large offset may legitimately run it
+    // several percent fast (chrony's default maxslewrate is 8.33%). That is the
+    // exact situation this function is used in -- a clock that was unsynchronized
+    // and is now being corrected -- so the safety margin its caller applies must
+    // not have to cover it.
+    //
+    // Deliberately pure virtual with no default implementation: a default reading
+    // a real clock would silently leak real time into simulated-time tests.
+    virtual mono_clock::time_point monotonic_now() = 0;
 };
 
 // Test backend with an explicit, injectable reading. Lets fsm unit tests drive
 // deterministic time and clock skew without touching the real clock.
 class bounded_clock_mock final : public bounded_clock {
     std::optional<time_bounds> _now;
+    // Elapsed-time reading. Independent of _now on purpose: a node whose clock
+    // is unsynchronized still has a working monotonic clock, and tests need to
+    // model that.
+    mono_clock::time_point _mono_now{};
 public:
     bounded_clock_mock() = default;
     explicit bounded_clock_mock(time_bounds now) : _now(now) {}
@@ -133,8 +178,24 @@ public:
         _now = std::nullopt;
     }
 
+    // Set the elapsed-time reading. Note set_unsynchronized() deliberately does
+    // NOT reset this: losing clock synchronization does not stop the monotonic
+    // clock, and a test that modelled it that way would not be testing anything
+    // real.
+    void set_monotonic(mono_clock::time_point now) {
+        _mono_now = now;
+    }
+
+    void advance_monotonic(mono_clock::duration d) {
+        _mono_now += d;
+    }
+
     std::optional<time_bounds> interval_now() override {
         return _now;
+    }
+
+    mono_clock::time_point monotonic_now() override {
+        return _mono_now;
     }
 };
 

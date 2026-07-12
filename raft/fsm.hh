@@ -154,16 +154,22 @@ struct leader {
     // election, or no recorded interval of its own). Set lazily on the first
     // available clock reading, so it may be empty until then.
     std::optional<time_bounds> lease_wait_start;
+    // LeaseGuard: elapsed-time reading taken when this node became leader. Every
+    // prior-term entry was created before the election, so once delta of physical
+    // time has passed since this anchor the deposed lease is certainly expired.
+    // Unlike lease_wait_start this needs no synchronized clock, so it is the path
+    // that lets a leader with an unusable clock make progress at all rather than
+    // stalling. See prev_term_lease_expired().
+    mono_clock::time_point lease_wait_mono_start{};
     // LeaseGuard: set once the deferred-commit restriction no longer applies
     // for this leadership term -- either because there was no deposed lease to
     // wait for (no prior-term entry at election) or because that lease has
     // expired.
     bool lease_wait_done = false;
-    // LeaseGuard: logical time at which the clock first became unsynchronized
-    // while a commit was deferred, or empty while the clock is available. If the
-    // clock stays unavailable for an election timeout the leader steps down, so
-    // that a node with a healthy clock can take over instead of stalling.
-    std::optional<logical_clock::time_point> clock_unavailable_since;
+    // LeaseGuard: true once we have warned that the clock is unusable while a
+    // commit is deferred, so the warning is emitted once per leadership term
+    // rather than once per tick.
+    bool clock_unavailable_warned = false;
 
     leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(std::make_unique<seastar::semaphore>(max_log_size)) {}
     leader(leader&&) = default;
@@ -303,7 +309,9 @@ private:
     // delta old, so it is safe to advance the commit index past all prior-term
     // entries. Uses the deposed entry's own recorded interval when it is still
     // in the in-memory log, otherwise a delta wait since this node became
-    // leader. Returns false (defer) when the clock is unsynchronized.
+    // leader. An unsynchronized clock only delays this -- the elapsed-time path
+    // still discharges it a little over delta after the election -- so it never
+    // defers indefinitely.
     // Precondition: is_leader(), leases enabled, last_prev_term_idx > 0.
     bool prev_term_lease_expired();
     // LeaseGuard: true if this leader currently holds a valid lease, i.e. its

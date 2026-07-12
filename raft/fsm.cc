@@ -229,6 +229,10 @@ void fsm::become_leader() {
     if (leaseguard_enabled()) {
         leader_state().last_prev_term_idx = _log.last_idx();
         leader_state().lease_wait_start = lease_time_now();
+        // Anchor the elapsed-time fallback. Taken here, after the election has
+        // completed, so it is a conservative lower bound on how long ago every
+        // prior-term entry was created.
+        leader_state().lease_wait_mono_start = _config.leaseguard->clock.monotonic_now();
         // No prior-term entry means no deposed lease to wait for, so the
         // deferred-commit restriction does not apply for this leadership term.
         leader_state().lease_wait_done = leader_state().last_prev_term_idx == index_t{0};
@@ -607,16 +611,44 @@ void fsm::maybe_commit() {
     }
 }
 
+// Safety margin on the elapsed-time deferred-commit wait below, as a divisor of
+// delta: we wait delta + delta/8 (12.5%) of monotonic time instead of delta.
+//
+// It covers the rate error of the monotonic clock, which bounded_clock requires
+// to be an NTP-undisciplined source (CLOCK_MONOTONIC_RAW): raw oscillator plus
+// boot calibration, on the order of 100-200ppm. 12.5% is therefore ~100x
+// headroom. It is only ever paid when the wall clock is unusable, so there is no
+// reason to trim it closer.
+static constexpr int mono_wait_margin_div = 8;
+
 bool fsm::prev_term_lease_expired() {
-    const auto now = _config.leaseguard->clock.interval_now();
-    if (!now) {
-        // The clock is unsynchronized: we cannot bound any time, so we cannot
-        // prove the deposed leader's lease has expired. Defer conservatively;
-        // tick_leader() steps down if this persists.
-        return false;
-    }
     const auto delta = _config.leaseguard->delta;
     auto& state = leader_state();
+
+    // Elapsed-time path. Every prior-term entry was created before our election
+    // (a deposed leader cannot commit or renew afterwards: that needs a quorum,
+    // and the quorum that elected us is in a higher term), and the deposed leader
+    // measures its own lease against its own bounded clock, so it stops serving
+    // by delta after that entry was created. Waiting delta of physical time since
+    // the election is therefore sufficient.
+    //
+    // Crucially this needs no synchronized clock, only elapsed time, so it always
+    // eventually fires. That is what keeps a leader with an unusable clock making
+    // progress -- without it such a leader can commit nothing, and since its
+    // commit index then stays on a prior-term entry, start_read_barrier() fails
+    // its current-term check too and the group serves neither reads nor writes.
+    if (_config.leaseguard->clock.monotonic_now() - state.lease_wait_mono_start
+            >= delta + delta / mono_wait_margin_div) {
+        return true;
+    }
+
+    const auto now = _config.leaseguard->clock.interval_now();
+    if (!now) {
+        // The clock is unsynchronized, so we cannot bound absolute time and the
+        // sharper tests below are unavailable. Defer; the elapsed-time path above
+        // will discharge this shortly after delta has passed since the election.
+        return false;
+    }
     // Record the first available clock reading since becoming leader. Every
     // prior-term entry was created before the election, so this is a safe upper
     // bound on their age when the deposed leader's own entry is unavailable.
@@ -733,28 +765,27 @@ void fsm::tick_leader() {
     // LeaseGuard: while a deposed leader's lease may still be valid we defer
     // committing. Retry now that physical time has advanced; once the lease has
     // expired this commits the pending, already-replicated entries without
-    // needing any new messages from followers. If the clock stays unavailable we
-    // cannot bound the lease, so step down to let a node with a healthy clock
-    // take over instead of stalling here indefinitely.
+    // needing any new messages from followers.
+    //
+    // An unsynchronized clock delays this but does not block it: the
+    // elapsed-time path in prev_term_lease_expired() discharges the wait a little
+    // over delta after the election. We do not step down for a clock failure --
+    // it would not avoid the delta wait, only move it onto the successor (which
+    // inherits our unstamped entries and must then wait a full delta from its own
+    // election), on top of an election timeout and an election.
     if (leaseguard_enabled() && !leader_state().lease_wait_done) {
         auto& state = leader_state();
-        if (_config.leaseguard->clock.interval_now()) {
-            state.clock_unavailable_since.reset();
-            maybe_commit();
-            // maybe_commit() may have stepped us down (committing a C_new that
-            // removes this node calls transfer_leadership()), destroying the
-            // leader state `state` refers to. Nothing below may run then.
-            if (!is_leader()) {
-                return;
-            }
-        } else if (!state.clock_unavailable_since) {
-            state.clock_unavailable_since = _clock.now();
-            logger.warn("[{}]: LeaseGuard clock is unsynchronized while a commit is deferred; "
-                "commits are stalled and this leader will step down if it persists", _tag);
-        } else if (_clock.now() - *state.clock_unavailable_since >= ELECTION_TIMEOUT) {
-            logger.error("[{}]: LeaseGuard clock has been unsynchronized for over an election "
-                "timeout; stepping down so a node with a healthy clock can lead", _tag);
-            become_follower(server_id{});
+        if (!_config.leaseguard->clock.interval_now() && !state.clock_unavailable_warned) {
+            state.clock_unavailable_warned = true;
+            logger.warn("[{}]: LeaseGuard clock is unsynchronized while a commit is deferred. "
+                "Commits proceed once delta has elapsed since this node was elected, and reads "
+                "fall back to quorum barriers until the clock recovers.", _tag);
+        }
+        maybe_commit();
+        // maybe_commit() may have stepped us down (committing a C_new that
+        // removes this node calls transfer_leadership()), destroying the leader
+        // state `state` refers to. Nothing below may run then.
+        if (!is_leader()) {
             return;
         }
     }

@@ -1677,6 +1677,11 @@ class environment : public seastar::weakly_referencable<environment<M>> {
         // [-error, +error]. Node-scoped like the clock itself, so a restart does
         // not silently resynchronize the node.
         raft::lease_clock::duration _clock_skew{0};
+        // LeaseGuard: origin of this node's elapsed-time (monotonic) readings.
+        // Deliberately different per node: only differences within one node are
+        // meaningful, so any code that compared these across nodes would be
+        // wrong, and a shared origin would hide it.
+        raft::mono_clock::time_point _mono_epoch{};
     };
 
     // Passed to newly created failure detectors.
@@ -1803,10 +1808,18 @@ public:
         const auto ticks = (now - raft::logical_clock::min()).count();
         const auto t = _leaseguard->epoch + ticks * _leaseguard->tick_duration;
         for (auto& [id, r] : _routes) {
+            // Elapsed time keeps running on every node, including one whose
+            // clock is "broken": losing synchronization does not stop the
+            // monotonic clock. Modelling it otherwise would make the simulated
+            // failure stronger than any real one and hide the recovery path.
+            r._clock.set_monotonic(r._mono_epoch
+                    + std::chrono::duration_cast<raft::mono_clock::duration>(
+                            ticks * _leaseguard->tick_duration));
             if (r._clock_broken) {
                 // Simulated clock failure: the node cannot bound the current
-                // time. LeaseGuard must fall back to the safe path (defer / no
-                // lease reads / step down).
+                // time. LeaseGuard must fall back to the safe path (defer
+                // commits until enough elapsed time has passed / no lease
+                // reads).
                 r._clock.set_unsynchronized();
             } else {
                 r._clock.set(t + r._clock_skew, _leaseguard->error);
@@ -1855,6 +1868,10 @@ public:
             const auto err = _leaseguard->error.count();
             it->second._clock_skew = raft::lease_clock::duration{
                     std::uniform_int_distribution<raft::lease_clock::rep>{-err, err}(_clock_skew_rnd)};
+            it->second._mono_epoch = raft::mono_clock::time_point{
+                    raft::mono_clock::duration{
+                            std::uniform_int_distribution<raft::mono_clock::rep>{
+                                    0, 1'000'000'000}(_clock_skew_rnd)}};
             it->second._cfg.leaseguard.emplace(raft::server::configuration::leaseguard_configuration{
                 .delta = _leaseguard->delta,
                 .clock = it->second._clock,

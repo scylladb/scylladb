@@ -2615,6 +2615,13 @@ const auto lease_t0 = raft::lease_clock::time_point(std::chrono::hours(24 * 365)
 const auto lease_err = 1ms;
 const auto lease_delta = 10s;
 
+// Elapsed time after which a leader may discharge its deferred commit without a
+// synchronized clock: delta plus the safety margin fsm.cc applies to it. Cast to
+// the monotonic duration before dividing -- computing it as `lease_delta / 8`
+// would be integer division on seconds and silently yield 1s instead of 1.25s.
+const auto lease_mono_wait =
+        std::chrono::duration_cast<raft::mono_clock::duration>(lease_delta) * 9 / 8;
+
 raft::time_bounds make_bounds(raft::lease_clock::time_point center,
         raft::lease_clock::duration error = lease_err) {
     return raft::time_bounds{center - error, center + error};
@@ -2702,7 +2709,11 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit) {
 }
 
 // When the clock is unsynchronized the age of the deposed leader's lease cannot
-// be bounded, so the commit stays deferred until the clock recovers.
+// be bounded from the recorded interval, so the commit stays deferred until
+// either the clock recovers or enough elapsed time has been measured. This
+// covers the near side of that boundary: just under the elapsed-time threshold
+// nothing may commit. test_leaseguard_commits_after_delta_without_clock covers
+// the far side; without both, a broken margin or a missing anchor passes.
 BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit_unsynchronized) {
     raft::bounded_clock_mock clock;
     clock.set_unsynchronized();
@@ -2718,6 +2729,14 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit_unsynchronized) {
     BOOST_REQUIRE(fsm.is_leader());
 
     (void)fsm.get_output();
+    for (int i = 0; i < 5; i++) {
+        fsm.tick();
+        BOOST_CHECK(fsm.get_output().committed.empty());
+    }
+
+    // Elapsed time just short of the threshold (delta plus the safety margin)
+    // is still not enough, however many ticks it is spread over.
+    clock.advance_monotonic(lease_mono_wait - 1ms);
     for (int i = 0; i < 5; i++) {
         fsm.tick();
         BOOST_CHECK(fsm.get_output().committed.empty());
@@ -2774,10 +2793,14 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_local_lease_read) {
     BOOST_CHECK(has_read_quorum(output));
 }
 
-// A leader whose clock stays unsynchronized while a commit is deferred cannot
-// bound the deposed leader's lease, so instead of stalling forever it steps down
-// after an election timeout to let a node with a healthy clock take over.
-BOOST_AUTO_TEST_CASE(test_leaseguard_steps_down_on_clock_loss) {
+// A leader whose clock never synchronizes still commits. It cannot bound the
+// deposed lease from that lease's recorded interval, but it does not need to:
+// every prior-term entry predates its election, so delta of *elapsed* time since
+// the election proves the lease is gone. Elapsed time needs no synchronized
+// clock, so the leader keeps making progress instead of stalling -- and it stays
+// leader, since stepping down would only move the same delta wait onto whoever
+// replaces it, after an election timeout and an election.
+BOOST_AUTO_TEST_CASE(test_leaseguard_commits_after_delta_without_clock) {
     raft::bounded_clock_mock clock;
     clock.set_unsynchronized();
 
@@ -2798,14 +2821,28 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_steps_down_on_clock_loss) {
     election_timeout(fsm1);
     communicate(fsm1, fsm2);
     BOOST_REQUIRE(fsm1.is_leader());
+    (void)fsm1.get_output();
 
-    // With the clock unsynchronized the deposed lease's age cannot be bounded,
-    // so the deferred commit never proceeds. After an election timeout worth of
-    // ticks the leader steps down instead of stalling indefinitely.
-    for (int i = 0; i < 3 * 10 && fsm1.is_leader(); i++) {
+    // No elapsed time yet: the commit is deferred, but the node keeps leading.
+    for (int i = 0; i < 3 * 10; i++) {
         fsm1.tick();
+        BOOST_CHECK(fsm1.get_output().committed.empty());
+        BOOST_REQUIRE(fsm1.is_leader());
     }
-    BOOST_CHECK(!fsm1.is_leader());
+
+    // One millisecond short of the threshold: still nothing.
+    clock.advance_monotonic(lease_mono_wait - 1ms);
+    fsm1.tick();
+    BOOST_CHECK(fsm1.get_output().committed.empty());
+    BOOST_REQUIRE(fsm1.is_leader());
+
+    // Past it: the deferred, already-replicated entries commit, with the clock
+    // still reporting nothing.
+    clock.advance_monotonic(2ms);
+    fsm1.tick();
+    BOOST_CHECK(!fsm1.get_output().committed.empty());
+    BOOST_CHECK(fsm1.is_leader());
+    BOOST_CHECK(!clock.interval_now());
 }
 
 // LeaseGuard automatic lease extension (arXiv:2512.15659, Section 5.1). Under a
