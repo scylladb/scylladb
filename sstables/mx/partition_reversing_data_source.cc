@@ -12,6 +12,7 @@
 #include "partition_reversing_data_source.hh"
 #include "reader_permit.hh"
 #include "sstables/compress.hh"
+#include "sstables/decompressing_cursor.hh"
 #include "sstables/consumer.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/processing_result_generator.hh"
@@ -495,6 +496,68 @@ public:
     }
 };
 
+// Reversing cursor for physical positions. Forward parsers borrow the
+// bidirectional decompressing cursor that supplies backward row reads. Thus,
+// reads in both directions share its physical position and its buffers.
+class physical_reversing_cursor final : public reversing_source_cursor {
+    std::unique_ptr<decompressing_cursor> _cursor;
+
+public:
+    explicit physical_reversing_cursor(std::unique_ptr<decompressing_cursor> cursor)
+        : _cursor(std::move(cursor))
+    {}
+
+    future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>>
+    make_forward_input_stream(sstable_position, sstable_position) override {
+        // The parser positions the borrowed cursor itself (init_stream_position),
+        // so the start is not needed here. The parser passes its end to
+        // consume(). Without it, the cursor stops at its own end, the partition
+        // end.
+        co_return std::make_unique<borrowed_cursor_stream>(*_cursor);
+    }
+
+    future<temporary_buffer<char>>
+    read_forwards(sstable_position start, sstable_position end) override {
+        // Reading rows backwards is the cursor's usual job; read the header forwards
+        // through the same cursor's consume interface. The size of [start, end)
+        // is unknown until it is read, so collect the fragments first.
+        _cursor->init_stream_position(start);
+        std::vector<temporary_buffer<char>> fragments;
+        size_t size = 0;
+        co_await _cursor->consume(end, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+            // The cursor signals the end with an empty buffer, which can have a
+            // null pointer. Don't pass that pointer to memcpy() below.
+            if (!data.empty()) {
+                size += data.size();
+                fragments.push_back(std::move(data));
+            }
+            return continue_consuming{};
+        });
+        auto out = temporary_buffer<char>(size);
+        size_t filled = 0;
+        for (const auto& fragment : fragments) {
+            std::memcpy(out.get_write() + filled, fragment.get(), fragment.size());
+            filled += fragment.size();
+        }
+        co_return out;
+    }
+
+    future<backward_read>
+    read_backwards(sstable_position end, size_t size) override {
+        _cursor->seek(end);
+        auto data = co_await _cursor->read_backwards_exactly(size);
+        co_return backward_read{_cursor->stream_position().position, std::move(data)};
+    }
+
+    void trim_read_ahead(sstable_position) override {
+        // Nothing to discard: the next backward read seeks to the new end.
+    }
+
+    future<> close() override {
+        return _cursor->close();
+    }
+};
+
 // The intermediary data source that reads from an sstable, and produces
 // data buffers, as if the sstable had all rows written in a reversed order.
 //
@@ -642,9 +705,12 @@ private:
         }
     }
 
-    // Builds the cursor backing all IO into the data file. For now this is always
-    // a logical_reversing_cursor (data_stream/data_read); the physical-position
-    // compressed cursor is added in a later commit.
+    // Builds the cursor backing all IO into the data file. The physical-position
+    // physical_reversing_cursor exists (above) but is not selected here yet: its
+    // input positions only become physical once start_position() and the
+    // logical->physical mapping are flipped for compressed `mu` (a later commit).
+    // Until then the reversing path is fed logical positions, which the compressed
+    // cursor cannot consume, so every sstable keeps using logical_reversing_cursor.
     static std::unique_ptr<reversing_source_cursor> make_cursor(const shared_sstable& sst, reader_permit permit,
             tracing::trace_state_ptr trace_state, sstable_position partition_start) {
         return std::make_unique<logical_reversing_cursor>(sst, std::move(permit), std::move(trace_state),
