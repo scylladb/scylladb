@@ -43,12 +43,14 @@ static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
 
 logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
     : _segment_manager(config.segment_manager_cfg)
-    , _write_buffer(_segment_manager, config.flush_sg)
+    , _write_buffer(_segment_manager, config.flush_sg, config.max_queued_write_bytes)
     , _cache_tracker(shared_cache_tracker) {
 
     namespace sm = seastar::metrics;
 
     _metrics.add_group("logstor", {
+        sm::make_gauge("queued_write_count", [this] { return _write_buffer.queued_write_count(); },
+                       sm::description("Number of writes currently queued in the write buffer.")),
         sm::make_counter("write_failures", [this] { return _stats.write_failures; },
                        sm::description("Number of writes that failed to be persisted.")),
     });
@@ -112,7 +114,9 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
         .mut = canonical_mutation(m)
     };
 
-    auto result_f = co_await coroutine::as_future(_write_buffer.write(std::move(record), timeout, &cg, std::move(cg_holder)));
+    auto writer = log_record_writer(std::move(record));
+
+    auto result_f = co_await coroutine::as_future(_write_buffer.write(std::move(writer), timeout, &cg, std::move(cg_holder)));
     if (result_f.failed()){
         _stats.write_failures++;
         co_await coroutine::return_exception_ptr(result_f.get_exception());

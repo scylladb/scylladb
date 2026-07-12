@@ -17,7 +17,10 @@
 #include <seastar/core/queue.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/core/expiring_fifo.hh>
+#include <seastar/core/timed_out_error.hh>
 
+#include "replica/exceptions.hh"
 #include "replica/logstor/ondisk.hh"
 #include "schema/schema_fwd.hh"
 #include "types.hh"
@@ -76,6 +79,10 @@ public:
 };
 
 using log_location_with_holder = std::tuple<log_location, seastar::gate::holder>;
+
+struct buffered_write_result {
+    future<log_location_with_holder> persisted;
+};
 
 // Serializes one in-memory logstor buffer.
 //
@@ -328,14 +335,47 @@ class buffered_writer {
 
     std::array<in_flight_write, ring_size> _in_flight;
 
-    // Notified when _tail advances (a slot becomes free for the head to move into)
-    // or when the head buffer is switched.
-    seastar::condition_variable _head_can_advance;
+    struct queued_write {
+        seastar::promise<buffered_write_result> accepted_pr; // written to buffer
+        seastar::promise<log_location_with_holder> persisted_pr; // written to a segment
+        log_record_writer writer;
+        compaction_group* cg;
+        seastar::gate::holder cg_holder;
+        db::timeout_clock::time_point timeout;
+        size_t write_size;
+
+        queued_write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout, size_t write_size)
+            : writer(std::move(writer))
+            , cg(cg)
+            , cg_holder(std::move(cg_holder))
+            , timeout(timeout)
+            , write_size(write_size) {
+        }
+
+        void fail_timeout() noexcept {
+            auto ep = std::make_exception_ptr(seastar::timed_out_error{});
+            accepted_pr.set_exception(ep);
+            persisted_pr.set_exception(ep);
+        }
+    };
+
+    struct on_queued_write_expiry {
+        buffered_writer* owner{};
+
+        void operator()(queued_write& w) noexcept {
+            owner->on_queued_write_removed(w);
+            w.fail_timeout();
+        }
+    };
 
     // Wakes the consumer whenever a state change may let it make forward
     // progress again: queued writes arrive, the head buffer gains data or
     // advances, a flush completes, a tail is reclaimed, or shutdown begins.
     seastar::condition_variable _consumer_progress_cv;
+
+    seastar::expiring_fifo<queued_write, on_queued_write_expiry, db::timeout_clock> _queued_writes;
+    size_t _queued_write_bytes{0};
+    size_t _max_queued_write_bytes{0};
 
     seastar::gate _async_gate;
 
@@ -356,14 +396,21 @@ class buffered_writer {
     bool should_rotate_head_for_flush() const noexcept;
     bool maybe_advance_head() noexcept;
 
+    std::optional<future<log_location_with_holder>> append_to_head_buffer(log_record_writer&, compaction_group*, seastar::gate::holder);
+
     bool try_dispatch_next_buffer();
     future<> run_dispatched_write(size_t idx);
     future<bool> reclaim_completed_tails();
 
+    future<bool> drain_queued_writes();
+
+    void on_queued_write_removed(const queued_write&) noexcept;
+    void fail_queued_write(queued_write&, std::exception_ptr) noexcept;
+
     future<> consumer_loop();
 
 public:
-    explicit buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg);
+    explicit buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg, size_t max_queued_write_bytes);
 
     buffered_writer(const buffered_writer&) = delete;
     buffered_writer& operator=(const buffered_writer&) = delete;
@@ -371,7 +418,11 @@ public:
     future<> start();
     future<> stop();
 
-    future<log_location_with_holder> write(log_record, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
+    future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
+    future<log_location_with_holder> write(log_record_writer, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
+
+    size_t queued_write_count() const noexcept { return _queued_writes.size(); }
+
 };
 
 }

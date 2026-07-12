@@ -291,9 +291,11 @@ bool ondisk::validate_record_header(const ondisk::record_header& rh) {
 
 // buffered_writer
 
-buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg)
+buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg, size_t max_queued_write_bytes)
         : _sm(sm)
-        , _flush_sg(flush_sg) {
+        , _flush_sg(flush_sg)
+        , _queued_writes(on_queued_write_expiry{this})
+        , _max_queued_write_bytes(max_queued_write_bytes) {
     _ring.reserve(ring_size);
     for (size_t i = 0; i < ring_size; ++i) {
         _ring.emplace_back(_sm.get_segment_size(), segment_kind::mixed);
@@ -308,14 +310,35 @@ bool buffered_writer::should_rotate_head_for_flush() const noexcept {
     return _dispatch_tail == _head && head_buf().has_data();
 }
 
+void buffered_writer::on_queued_write_removed(const queued_write& w) noexcept {
+    _queued_write_bytes -= w.write_size;
+}
+
+void buffered_writer::fail_queued_write(queued_write& request, std::exception_ptr ep) noexcept {
+    request.accepted_pr.set_exception(ep);
+    request.persisted_pr.set_exception(std::move(ep));
+}
+
 bool buffered_writer::maybe_advance_head() noexcept {
     if (ring_full() || !head_buf().has_data()) {
         return false;
     }
     ++_head;
-    _head_can_advance.broadcast();
     _consumer_progress_cv.signal();
     return true;
+}
+
+std::optional<future<log_location_with_holder>> buffered_writer::append_to_head_buffer(log_record_writer& writer, compaction_group* cg, seastar::gate::holder cg_holder) {
+    if (!head_buf().can_fit(writer) && !maybe_advance_head()) {
+        return std::nullopt;
+    }
+
+    bool was_empty = !head_buf().has_data();
+    auto persisted = head_buf().write(std::move(writer), cg, std::move(cg_holder));
+    if (was_empty) {
+        _consumer_progress_cv.signal();
+    }
+    return persisted;
 }
 
 bool buffered_writer::try_dispatch_next_buffer() {
@@ -368,12 +391,37 @@ future<bool> buffered_writer::reclaim_completed_tails() {
         state.reset();
         ++_tail;
         reclaimed = true;
-        _head_can_advance.broadcast();
 
         co_await coroutine::maybe_yield();
     }
 
     co_return reclaimed;
+}
+
+future<bool> buffered_writer::drain_queued_writes() {
+    bool removed_queued_writes = false;
+    while (!_queued_writes.empty()) {
+        auto& next = _queued_writes.front();
+
+        if (!head_buf().can_fit(next.writer) && !maybe_advance_head()) {
+            break;
+        }
+
+        auto request = std::move(next);
+        _queued_writes.pop_front();
+        on_queued_write_removed(request);
+        removed_queued_writes = true;
+        try {
+            auto persisted = append_to_head_buffer(request.writer, request.cg, std::move(request.cg_holder)).value();
+            request.accepted_pr.set_value(buffered_write_result{request.persisted_pr.get_future()});
+            std::move(persisted).forward_to(std::move(request.persisted_pr));
+        } catch (...) {
+            fail_queued_write(request, std::current_exception());
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return removed_queued_writes;
 }
 
 future<> buffered_writer::start() {
@@ -393,8 +441,6 @@ future<> buffered_writer::stop() {
     // Wake the consumer so it can observe the closing gate and exit.
     auto close_fut = _async_gate.close();
     _consumer_progress_cv.broadcast();
-    // Wake any writer blocked waiting for a free ring slot.
-    _head_can_advance.broadcast();
     co_await std::move(close_fut);
     co_await std::move(_consumer);
 
@@ -411,41 +457,42 @@ future<> buffered_writer::stop() {
     logstor_logger.info("Write buffer stopped");
 }
 
-future<log_location_with_holder> buffered_writer::write(log_record record, db::timeout_clock::time_point timeout, compaction_group* cg, seastar::gate::holder cg_holder) {
+future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer writer, db::timeout_clock::time_point timeout, compaction_group* cg, seastar::gate::holder cg_holder) {
     auto holder = _async_gate.hold();
-
-    log_record_writer writer(std::move(record));
-
-    if (timeout != db::no_timeout && timeout <= db::timeout_clock::now()) {
-        co_await coroutine::return_exception(timed_out_error{});
-    }
 
     if (writer.size() > head_buf().max_record_size()) {
         co_await coroutine::return_exception(std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), head_buf().max_record_size())));
     }
 
-    // Wait until the head buffer can fit this write.
-    while (!head_buf().can_fit(writer)) {
-        // Capture the current head before waiting.  Multiple concurrent writers
-        // can all reach this point; only the first one to proceed actually
-        // advances _head — the rest see _head != current_head and simply
-        // re-check the (already advanced) head buffer.
-        auto current_head = _head;
-        while (ring_full() && !_async_gate.is_closed()) {
-            co_await _head_can_advance.wait(timeout);
-        }
-        _async_gate.check();
-        if (_head == current_head) {
-            maybe_advance_head();
+    // fast path - if there are no queued writes and there is space in the current head buffer or the next, advance the
+    // head buffer if needed and write to it.
+    if (_queued_writes.empty()) {
+        if (auto persisted = append_to_head_buffer(writer, cg, std::move(cg_holder))) {
+            co_return buffered_write_result{std::move(*persisted)};
         }
     }
 
-    auto fut = head_buf().write(std::move(writer), cg, std::move(cg_holder));
+    // either there are queued writes or there is no space in the head buffer and ring is full - queue the write.
 
-    // Wake the consumer: there is now data at the head.
-    _consumer_progress_cv.broadcast();
+    if (_max_queued_write_bytes != 0 && _queued_write_bytes + writer.size() > _max_queued_write_bytes) {
+        co_await coroutine::return_exception(replica::rate_limit_exception());
+    }
 
-    co_return co_await std::move(fut);
+    const bool queue_was_empty = _queued_writes.empty();
+    const auto write_size = writer.size();
+    queued_write request(std::move(writer), cg, std::move(cg_holder), timeout, write_size);
+    auto accepted = request.accepted_pr.get_future();
+    _queued_write_bytes += write_size;
+    _queued_writes.push_back(std::move(request), timeout);
+    if (queue_was_empty) {
+        _consumer_progress_cv.signal();
+    }
+    co_return co_await std::move(accepted);
+}
+
+future<log_location_with_holder> buffered_writer::write(log_record_writer writer, db::timeout_clock::time_point timeout, compaction_group* cg, seastar::gate::holder cg_holder) {
+    auto result = co_await write_to_buffer(std::move(writer), timeout, cg, std::move(cg_holder));
+    co_return co_await std::move(result.persisted);
 }
 
 future<> buffered_writer::consumer_loop() {
@@ -454,6 +501,8 @@ future<> buffered_writer::consumer_loop() {
             bool progressed = false;
 
             progressed |= co_await reclaim_completed_tails();
+
+            progressed |= co_await drain_queued_writes();
 
             if (should_rotate_head_for_flush()) {
                 progressed |= maybe_advance_head();
@@ -464,7 +513,7 @@ future<> buffered_writer::consumer_loop() {
                 co_await coroutine::maybe_yield();
             }
 
-            if (_async_gate.is_closed() && !has_pending_buffers()) {
+            if (_async_gate.is_closed() && _queued_writes.empty() && !has_pending_buffers()) {
                 break;
             }
 
@@ -472,6 +521,14 @@ future<> buffered_writer::consumer_loop() {
                 co_await _consumer_progress_cv.wait();
             }
 
+            co_await coroutine::maybe_yield();
+        }
+
+        while (!_queued_writes.empty()) {
+            auto request = std::move(_queued_writes.front());
+            _queued_writes.pop_front();
+            on_queued_write_removed(request);
+            fail_queued_write(request, std::make_exception_ptr(seastar::gate_closed_exception()));
             co_await coroutine::maybe_yield();
         }
     } catch (...) {
