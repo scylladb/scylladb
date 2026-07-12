@@ -71,6 +71,7 @@
 #include "db/large_data_handler.hh"
 #include "db/config.hh"
 #include "consumer.hh"
+#include "sstables/decompressing_cursor.hh"
 #include "sstables/random_access_reader.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/partition_index_cache.hh"
@@ -2977,20 +2978,24 @@ framed_chunk_codec sstable::get_chunk_codec() const {
 }
 
 sstable_position sstable::start_position() const {
-    // The physical-position start (for compressed `mu`) is added in a later
-    // commit; for now every version reads from logical position 0.
+    // Physical start positions (for compressed `mu`) require the physical index
+    // format, which is not implemented yet; until then every version reads from
+    // logical position 0. The physical branch is added together with the physical
+    // index writer/reader.
     return sstable_position::from_logical(0);
 }
 
 sstable_position sstable::end_position() const {
-    // The physical-position end sentinel (for compressed `mu`) is added in a
-    // later commit; for now every version ends at the uncompressed data size.
+    // Physical end sentinels (for compressed `mu`) require the physical index
+    // format, which is not implemented yet; until then every version ends at the
+    // uncompressed data size.
     return sstable_position::from_logical(data_size());
 }
 
 sstable_position sstable::sstable_position_from_logical_position(uint64_t logical_position) const {
-    // The physical mapping (for compressed `mu`) is added in a later commit;
-    // for now every version maps a logical position to itself.
+    // The physical mapping (for compressed `mu`) requires the physical index
+    // format, which is not implemented yet; until then every version maps a
+    // logical position to itself.
     return sstable_position::from_logical(logical_position);
 }
 
@@ -3401,6 +3406,17 @@ future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> ss
     std::optional<uint32_t> digest;
     if (integrity == integrity_check::yes) {
         digest = get_digest();
+    }
+
+    if (range.start.is_physical()) {
+        // A physical range means the caller navigates the compressed data file by
+        // chunk coordinates: read it through the decompressing cursor, which opens
+        // its own (traced) file, verifies per-chunk checksums, and - when reading
+        // the whole file in order from the start - folds each chunk's checksum into
+        // a running whole-file digest (verified at end of file) when `digest` is
+        // set. This is version-agnostic: the choice of physical positions is made
+        // by the higher layer that produced the range.
+        co_return make_decompressing_cursor(shared_from_this(), range, permit, std::move(trace_state), std::move(options), digest);
     }
 
     file f = make_tracked_file(_data_file, permit);
