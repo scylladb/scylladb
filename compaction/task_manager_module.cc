@@ -836,7 +836,11 @@ future<> shard_reshaping_compaction_task_impl::run() {
     // reshape sstables individually within the compaction groups
     for (auto& sstables_in_cg : sstables_grouped_by_compaction_group) {
         auto lock_holder = co_await table.get_compaction_manager().get_incremental_repair_read_lock(*sstables_in_cg.first, "reshaping_compaction");
-        co_await reshape_compaction_group(*sstables_in_cg.first, sstables_in_cg.second, table, info);
+        try {
+            co_await reshape_compaction_group(*sstables_in_cg.first, sstables_in_cg.second, table, info);
+        } catch (compaction::compaction_stopped_exception&) {
+            break;
+        }
     }
 }
 
@@ -873,6 +877,8 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
 
         try {
             co_await table.get_compaction_manager().run_custom_job(t, compaction_type::Reshape, "Reshape compaction", [&dir = _dir, sstlist = std::move(sstlist), desc = std::move(desc), &sstables_in_cg, &t] (compaction_data& info, compaction_progress_monitor& progress_monitor) mutable -> future<> {
+                co_await utils::get_local_injector().inject("reshape_compaction_group_before_compact",
+                    utils::wait_for_message(std::chrono::minutes{5}));
                 compaction_result result = co_await compact_sstables(std::move(desc), info, t, progress_monitor);
                 // update the sstables_in_cg set with new sstables and remove the reshaped ones
                 for (auto& sst : sstlist) {
@@ -885,7 +891,7 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
             }, info, throw_if_stopping::yes);
         } catch (compaction::compaction_stopped_exception& e) {
             dblog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
-            break;
+            throw;
         } catch (...) {
             dblog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
             break;
