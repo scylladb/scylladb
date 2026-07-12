@@ -747,6 +747,47 @@ void fsm::tick_leader() {
             return;
         }
     }
+
+    // LeaseGuard automatic lease extension (arXiv:2512.15659 "Raft Leases Done
+    // Right", Section 5.1). A lease is only refreshed by committing entries, so
+    // under a read-only workload the newest committed entry would age past delta
+    // and every read would fall back to a quorum barrier. While reads are
+    // flowing, proactively commit a no-op that extends an already-valid lease
+    // before it expires, keeping can_serve_lease_read() true. The no-op is an
+    // ordinary lease-stamped entry, so safety is unchanged (a future leader
+    // defers commit for it like any other prior-term entry) and the "log is the
+    // lease" gray-failure protection is preserved: a leader that cannot replicate
+    // cannot renew.
+    //
+    // Renewal is deliberately conservative, to avoid destabilizing a cluster
+    // under stress:
+    //  - only when the log is fully committed (nothing in flight), so at most one
+    //    renewal no-op is outstanding and a leader that cannot commit (partitioned
+    //    or churning under failovers) does not pile up no-ops (which would grow
+    //    the log without bound and can livelock the group);
+    //  - only to EXTEND a lease that is still valid but past half its duration --
+    //    never to establish one from scratch. If we do not currently hold a lease
+    //    (e.g. just after a failover or snapshot, or while the clock is
+    //    unsynchronized) reads simply fall back to the quorum barrier, and an
+    //    ordinary committed write re-establishes the lease.
+    if (leaseguard_enabled() && leader_state().lease_wait_done && leader_state().read_since_renewal
+            && _commit_idx == _log.last_idx() && _commit_idx > _log.get_snapshot().idx) {
+        if (auto now = _config.leaseguard->clock.interval_now()) {
+            const auto& newest = *_log[_commit_idx.value()];
+            const auto delta = _config.leaseguard->delta;
+            // The lease is currently valid (younger than delta) but more than
+            // half its duration old: renew now so the committed entry stays
+            // < delta old across the replication + commit round-trip.
+            if (newest.lease_time
+                    && newest.lease_time->younger_than(delta, *now)
+                    && newest.lease_time->older_than(delta / 2, *now)) {
+                logger.trace("tick[{}]: LeaseGuard renewing lease with a no-op at idx {}",
+                    _tag, _log.next_idx());
+                add_entry(log_entry::dummy());
+                leader_state().read_since_renewal = false;
+            }
+        }
+    }
 }
 
 void fsm::tick() {
@@ -1254,6 +1295,14 @@ void fsm::handle_read_quorum_reply(server_id from, const read_quorum_reply& repl
 
 std::optional<std::pair<read_id, index_t>> fsm::start_read_barrier(server_id requester) {
     check_is_leader();
+
+    // LeaseGuard: record that a read is being served this term so tick_leader()
+    // proactively renews the lease under a read-only workload. Set for both the
+    // lease-served and quorum-barrier paths below, since either way keeping the
+    // lease warm avoids future quorum round-trips.
+    if (leaseguard_enabled()) {
+        leader_state().read_since_renewal = true;
+    }
 
     // Make sure that only a leader or a node that is part of the config can request read barrier
     // Nodes outside of the config may never get the data, so they will not be able to read it.

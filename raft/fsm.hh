@@ -131,6 +131,12 @@ struct leader {
     bool last_read_id_changed = false;
     read_id max_read_id_with_quorum{0};
 
+    // LeaseGuard: a linearizable read was served in this leadership term since
+    // the last lease-renewal no-op. Gates proactive lease extension in
+    // tick_leader() so that a read-only workload keeps the lease alive, while an
+    // idle group (no reads) appends nothing.
+    bool read_since_renewal = false;
+
     // LeaseGuard: index of the newest log entry that predates this leader's
     // term (i.e. the deposed leader's lease), captured at election time as
     // last_idx(). Non-zero whenever the group has any prior entry -- including

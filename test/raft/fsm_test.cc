@@ -2807,3 +2807,101 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_steps_down_on_clock_loss) {
     }
     BOOST_CHECK(!fsm1.is_leader());
 }
+
+// LeaseGuard automatic lease extension (arXiv:2512.15659, Section 5.1). Under a
+// read-only workload the lease would otherwise expire (no writes to refresh it)
+// and every read would fall back to a quorum barrier. While reads are flowing,
+// tick_leader() proactively commits a no-op before the newest entry reaches
+// delta, so every read keeps being served locally with no read_quorum.
+BOOST_AUTO_TEST_CASE(test_leaseguard_lease_renewal) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+
+    server_id id1 = id(), id2 = id();
+    raft::configuration cfg = config_from_ids({id1, id2});
+    fsm_debug fsm1(id1, term_t{}, server_id{}, raft::log{raft::snapshot_descriptor{.config = cfg}},
+            trivial_failure_detector, make_lease_cfg(clock));
+    fsm_debug fsm2(id2, term_t{}, server_id{}, raft::log{raft::snapshot_descriptor{.config = cfg}},
+            trivial_failure_detector, make_lease_cfg(clock));
+
+    // Elect fsm1 and commit its dummy entry, establishing a lease (genesis log,
+    // so there is no deposed lease to defer for).
+    election_timeout(fsm1);
+    communicate(fsm1, fsm2);
+    BOOST_REQUIRE(fsm1.is_leader());
+    (void)fsm1.get_output();
+
+    auto has_read_quorum = [](const raft::fsm_output& o) {
+        return std::ranges::any_of(o.messages, [](const auto& m) {
+            return std::holds_alternative<raft::read_quorum>(m.second);
+        });
+    };
+
+    // Simulate a read-only workload for well over delta. Each step advances the
+    // clock by more than delta/2 (the renewal threshold) and performs one read.
+    auto t = lease_t0;
+    for (int step = 0; step < 6; step++) {
+        t += lease_delta / 2 + 1s;
+        clock.set(t, lease_err);
+
+        // The read is served locally from the (renewed) committed entry: its id
+        // reaches quorum immediately and no read_quorum message is broadcast.
+        auto rid = fsm1.start_read_barrier(id1);
+        BOOST_REQUIRE(rid);
+        auto output = fsm1.get_output();
+        BOOST_REQUIRE(output.max_read_id_with_quorum);
+        BOOST_CHECK_EQUAL(*output.max_read_id_with_quorum, rid->first);
+        BOOST_CHECK(!has_read_quorum(output));
+
+        // The following tick renews the lease with a no-op; replicate and commit
+        // it so it becomes the new, fresh basis for the next step's lease read.
+        const auto idx_before = fsm1.log_last_idx();
+        fsm1.tick();
+        BOOST_CHECK_EQUAL(fsm1.log_last_idx(), idx_before + index_t{1});
+        communicate(fsm1, fsm2);
+        (void)fsm1.get_output();
+    }
+}
+
+// Without reads there is nothing to keep warm, so an idle leader must not append
+// renewal no-ops; and once the lease has expired a read falls back to the quorum
+// barrier as usual.
+BOOST_AUTO_TEST_CASE(test_leaseguard_no_renewal_without_reads) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+
+    server_id id1 = id(), id2 = id();
+    raft::configuration cfg = config_from_ids({id1, id2});
+    fsm_debug fsm1(id1, term_t{}, server_id{}, raft::log{raft::snapshot_descriptor{.config = cfg}},
+            trivial_failure_detector, make_lease_cfg(clock));
+    fsm_debug fsm2(id2, term_t{}, server_id{}, raft::log{raft::snapshot_descriptor{.config = cfg}},
+            trivial_failure_detector, make_lease_cfg(clock));
+
+    election_timeout(fsm1);
+    communicate(fsm1, fsm2);
+    BOOST_REQUIRE(fsm1.is_leader());
+    (void)fsm1.get_output();
+
+    const auto idx_before = fsm1.log_last_idx();
+
+    // Advance far past delta and tick repeatedly, but issue no reads.
+    clock.set(lease_t0 + 10 * lease_delta, lease_err);
+    for (int i = 0; i < 20; i++) {
+        fsm1.tick();
+        communicate(fsm1, fsm2);
+    }
+    // No read activity => no renewal no-ops were appended.
+    BOOST_CHECK_EQUAL(fsm1.log_last_idx(), idx_before);
+
+    // The lease is now stale, so a read falls back to the quorum read barrier.
+    auto has_read_quorum = [](const raft::fsm_output& o) {
+        return std::ranges::any_of(o.messages, [](const auto& m) {
+            return std::holds_alternative<raft::read_quorum>(m.second);
+        });
+    };
+    auto rid = fsm1.start_read_barrier(id1);
+    BOOST_REQUIRE(rid);
+    auto output = fsm1.get_output();
+    BOOST_CHECK(!output.max_read_id_with_quorum);
+    BOOST_CHECK(has_read_quorum(output));
+}
