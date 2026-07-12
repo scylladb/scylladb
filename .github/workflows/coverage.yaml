@@ -1,0 +1,105 @@
+name: Coverage
+
+on:
+  issue_comment:
+    types: [created]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  read-toolchain:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/coverage')
+    uses: ./.github/workflows/read-toolchain.yaml
+
+  coverage:
+    name: Build, test and compute patch coverage
+    if: github.repository == 'scylladb/scylladb'
+    needs:
+      - read-toolchain
+    runs-on: ubuntu-latest
+    container: ${{ needs.read-toolchain.outputs.image }}
+    permissions: {}
+    steps:
+      - name: Resolve PR head SHA and base ref
+        id: pr
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('base_ref', pr.base.ref);
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          ref: ${{ steps.pr.outputs.head_sha }}
+
+      - name: Generate the building system (coverage-instrumented)
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+          ./configure.py --mode dev --coverage --with scylla
+
+      - name: Build
+        run: ninja build/dev/scylla
+
+      - name: Determine patch base commit
+        id: base
+        run: |
+          git fetch --no-tags origin "${{ steps.pr.outputs.base_ref }}"
+          base_commit=$(git merge-base "origin/${{ steps.pr.outputs.base_ref }}" HEAD)
+          echo "base_commit=$base_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Run unit tests with coverage
+        run: ./test.py --mode dev --coverage
+
+      - name: Compute patch coverage
+        run: |
+          mkdir -p patch-coverage/patches
+          test/pylib/coverage_utils.py lcov-tools git-patch-coverage \
+            --tracefile testlog/dev_coverage.info \
+            --base-commit "${{ steps.base.outputs.base_commit }}" \
+            --output-dir patch-coverage/patches \
+            --output-trace patch-coverage/patch_coverage.info \
+            --clear-output-dir \
+            --pseudo-patch-for-uncovered
+
+          lcov --summary patch-coverage/patch_coverage.info > patch-coverage/summary.txt
+          lcov --list patch-coverage/patch_coverage.info > patch-coverage/per_file.txt
+
+      - name: Render PR comment body
+        if: always()
+        run: |
+          .github/scripts/format-coverage-comment.py \
+            --summary patch-coverage/summary.txt \
+            --per-file patch-coverage/per_file.txt \
+            --base-commit "${{ steps.base.outputs.base_commit }}" \
+            --head-sha "${{ steps.pr.outputs.head_sha }}" \
+            --output patch-coverage/comment.md
+
+      - name: Save PR number
+        if: always()
+        run: echo "${{ github.event.issue.number }}" > pr_number.txt
+
+      - name: Upload coverage report artifact
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: coverage-report
+          path: |
+            pr_number.txt
+            patch-coverage/comment.md
+            patch-coverage/summary.txt
+            patch-coverage/per_file.txt
+            testlog/test_coverage_report.txt
