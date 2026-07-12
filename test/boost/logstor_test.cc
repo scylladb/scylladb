@@ -182,12 +182,13 @@ db::timeout_clock::time_point test_timeout() {
     return db::timeout_clock::now() + std::chrono::minutes(1);
 }
 
-buffered_writer_config make_buffered_writer_config(size_t buffer_size, size_t ring_size, size_t max_queued_write_bytes = 0) {
+buffered_writer_config make_buffered_writer_config(size_t buffer_size, size_t ring_size, size_t max_queued_write_bytes = 0, std::chrono::milliseconds sync_period = std::chrono::milliseconds(0)) {
     return buffered_writer_config{
         .buffer_size = buffer_size,
         .ring_size = ring_size,
         .flush_sg = seastar::default_scheduling_group(),
         .max_queued_write_bytes = max_queued_write_bytes,
+        .sync_period = sync_period,
     };
 }
 

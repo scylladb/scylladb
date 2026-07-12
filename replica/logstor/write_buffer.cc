@@ -10,6 +10,7 @@
 #include "bytes_fwd.hh"
 #include "logstor.hh"
 #include "replica/logstor/types.hh"
+#include <chrono>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/with_scheduling_group.hh>
@@ -303,11 +304,13 @@ buffered_writer::buffered_writer(buffered_writer_config cfg, seastar::noncopyabl
         : _flush_sg(cfg.flush_sg)
         , _buffer_size(cfg.buffer_size)
         , _ring_size(cfg.ring_size)
+        , _sync_period(cfg.sync_period)
         , _flush_func(std::move(flush_func))
         , _ring()
         , _in_flight(cfg.ring_size)
         , _queued_writes(on_queued_write_expiry{this})
-        , _max_queued_write_bytes(cfg.max_queued_write_bytes) {
+        , _max_queued_write_bytes(cfg.max_queued_write_bytes)
+        , _head_flush_timer([this] { on_head_flush_timer(); }) {
 
     if (_ring_size < 2) {
         on_internal_error(logstor_logger, fmt::format("buffered_writer ring_size must be >= 2 (got {})", _ring_size));
@@ -328,7 +331,28 @@ bool buffered_writer::has_pending_buffers() const noexcept {
 }
 
 bool buffered_writer::should_rotate_head_for_flush() const noexcept {
-    return _dispatch_tail == _head && head_buf().has_data();
+    return _dispatch_tail == _head && head_buf().has_data() && (_async_gate.is_closed() || _head_deadline_expired);
+}
+
+void buffered_writer::arm_head_flush_timer() {
+    if (_head_deadline_expired || _head_flush_timer.armed()) {
+        return;
+    }
+    if (_sync_period <= std::chrono::milliseconds(0)) {
+        on_head_flush_timer();
+        return;
+    }
+    _head_flush_timer.arm(db::timeout_clock::now() + _sync_period);
+}
+
+void buffered_writer::on_head_flush_timer() noexcept {
+    _head_deadline_expired = true;
+    _consumer_progress_cv.signal();
+}
+
+void buffered_writer::cancel_head_flush_timer() noexcept {
+    _head_flush_timer.cancel();
+    _head_deadline_expired = false;
 }
 
 void buffered_writer::on_queued_write_removed(const queued_write& w) noexcept {
@@ -344,6 +368,7 @@ bool buffered_writer::maybe_advance_head() noexcept {
     if (ring_full() || !head_buf().has_data()) {
         return false;
     }
+    cancel_head_flush_timer();
     ++_head;
     _consumer_progress_cv.signal();
     return true;
@@ -357,6 +382,7 @@ std::optional<future<log_location_with_holder>> buffered_writer::append_to_head_
     bool was_empty = !head_buf().has_data();
     auto persisted = head_buf().write(std::move(writer), cg, std::move(cg_holder));
     if (was_empty) {
+        arm_head_flush_timer();
         _consumer_progress_cv.signal();
     }
     return persisted;
@@ -458,6 +484,8 @@ future<> buffered_writer::stop() {
         co_return;
     }
     logstor_logger.info("Stopping write buffer");
+
+    cancel_head_flush_timer();
 
     // Wake the consumer so it can observe the closing gate and exit.
     auto close_fut = _async_gate.close();
