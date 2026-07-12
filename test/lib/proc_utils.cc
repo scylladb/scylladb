@@ -182,6 +182,61 @@ fs::path tests::proc::find_file_in_path(std::string_view name,
 using namespace std::chrono_literals;
 using namespace std::string_literals;
 
+// Ensure `image` is present in the local container store, pulling it
+// once with its own generous timeout so that image-download latency
+// cannot compete with `start_docker_service`'s per-attempt ready-line
+// budget
+static future<> ensure_image_available(const std::filesystem::path& exec, std::string_view image) {
+    using tests::proc::process_fixture;
+
+    // Fast path: image already present locally.
+    {
+        auto ps = co_await process_fixture::create(exec,
+            {exec.string(), "image", "inspect", std::string(image)},
+            {} /* env */,
+            {} /* stdout: discard */,
+            {} /* stderr: discard */);
+        auto status = co_await ps.wait();
+        if (auto* exited = std::get_if<process_fixture::wait_exited>(&status);
+            exited && exited->exit_code == 0) {
+            proc_logger.debug("image {} already present locally, skipping pull", image);
+            co_return;
+        }
+    }
+
+    auto log_line = [image = std::string(image)](log_level level) {
+        return [image, level](std::string_view line) -> future<consumption_result<char>> {
+            proc_logger.log(level, "pull {}: {}", image, line);
+            co_return continue_consuming{};
+        };
+    };
+
+    proc_logger.info("pulling image {}", image);
+    auto ps = co_await process_fixture::create(exec,
+        {exec.string(), "pull", std::string(image)},
+        {} /* env */,
+        process_fixture::line_handler(log_line(log_level::info)),
+        process_fixture::line_handler(log_line(log_level::info)));
+
+    // Image pulls can be slow on cold caches and slow networks; give
+    // them a much larger budget than the container ready-wait itself.
+    constexpr auto pull_timeout = 300s;
+    process_fixture::wait_status status;
+    try {
+        status = co_await with_timeout(std::chrono::steady_clock::now() + pull_timeout, ps.wait());
+    } catch (const seastar::timed_out_error&) {
+        proc_logger.error("timed out after {}s pulling image {}", pull_timeout.count(), image);
+        ps.terminate();
+        throw;
+    }
+
+    auto* exited = std::get_if<process_fixture::wait_exited>(&status);
+    if (!exited || exited->exit_code != 0) {
+        throw std::runtime_error(fmt::format("Failed to pull image {}: {}", image,
+            exited ? fmt::format("exit code {}", exited->exit_code) : "terminated by signal"));
+    }
+}
+
 future<std::tuple<tests::proc::process_fixture, int>> tests::proc::start_docker_service(
     std::string_view name,
     std::string_view image,
@@ -202,6 +257,11 @@ future<std::tuple<tests::proc::process_fixture, int>> tests::proc::start_docker_
     }
 
     static int counter = 0;
+
+    // Pull the image once, before the retry loop, so that a slow image
+    // download cannot eat into the per-attempt ready-wait budget and
+    // cause every attempt to time out for the wrong reason.
+    co_await ensure_image_available(exec, image);
 
     struct in_use{};
     constexpr auto max_retries = 8;
