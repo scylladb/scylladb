@@ -12,6 +12,8 @@
 #include "bti_key_translation.hh"
 #include "utils/div_ceil.hh"
 #include "bti_node_sink.hh"
+#include "sstables/compress.hh"
+#include "sstables/exceptions.hh"
 #include "sstables/writer.hh"
 #include "utils/i_filter.hh"
 
@@ -238,6 +240,24 @@ std::optional<bti_partitions_db_footer> bti_partition_index_writer::finish(
 }
 bti_partition_index_writer::bti_partition_index_writer(bti_partition_index_writer&&) noexcept = default;
 bti_partition_index_writer& bti_partition_index_writer::operator=(bti_partition_index_writer&&) noexcept = default;
+
+bti_physical_layout::bti_physical_layout(const framed_chunk_codec& codec)
+    : _uncompressed_chunk_length(codec.uncompressed_chunk_length())
+{
+    if (!codec.framed()) {
+        on_internal_error(trie_logger, "Physical index positions need framed chunks");
+    }
+    const uint32_t uncompressed_chunk_length = codec.uncompressed_chunk_length();
+    if (!std::has_single_bit(uncompressed_chunk_length)) {
+        throw_malformed_sstable_exception(fmt::format(
+            "Physical index positions need a power-of-two uncompressed chunk length, got {}", uncompressed_chunk_length));
+    }
+    const uint64_t max_extent = codec.extent(compressed_chunk_length_limit(uncompressed_chunk_length));
+    _max_block_count = div_ceil(sstable_compressed_block_size - 1 + max_extent, uint64_t(sstable_compressed_block_size));
+    _block_count_bits = std::bit_width(_max_block_count - 1);
+    // O < L, and L is a power of two, so O fits in log2(L) bits.
+    _offset_within_chunk_bits = std::countr_zero(uncompressed_chunk_length);
+}
 
 std::byte hash_byte_from_key(const schema &s, const partition_key& x) {
     auto hk = utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, x)));

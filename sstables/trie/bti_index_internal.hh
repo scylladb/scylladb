@@ -8,12 +8,40 @@
 
 #pragma once
 
+#include <bit>
+#include <utility>
 #include "bti_index.hh"
+#include "utils/div_ceil.hh"
 
 // This file contains some declarations which aren't needed by users of BTI readers/writers,
 // but are exposed here for testing, or because they are shared between readers and writers.
 
 namespace sstables::trie {
+
+// The compressed data file is read in aligned blocks of this size. To keep the
+// on-disk index compact, a chunk's extent (its size in Data.db) is stored not as a
+// byte count but as the number of these blocks the chunk touches. The two helpers
+// below are the only place that block-size math lives: they convert between the
+// byte count carried in a physical position's `extent_hint` and the on-disk
+// block count. This detail is hidden from users of the index, who deal only in
+// byte counts.
+inline constexpr int64_t sstable_compressed_block_size = 512;
+
+// Extent -> on-disk block count, for the writer. A chunk may begin at an
+// arbitrary offset within a block, so the count accounts for the leading
+// misalignment and rounds up.
+inline int64_t bti_extent_to_block_count(int64_t chunk_position, int64_t extent) {
+    const int64_t misalignment = chunk_position % sstable_compressed_block_size;
+    return div_ceil(misalignment + extent, sstable_compressed_block_size);
+}
+
+// On-disk block count -> an upper bound on the chunk's extent, for the reader.
+// This is lossy: the recovered value is >= the extent, because it rounds the
+// chunk out to whole blocks.
+inline int64_t bti_extent_hint_from_block_count(int64_t chunk_position, int64_t block_count) {
+    const int64_t misalignment = chunk_position % sstable_compressed_block_size;
+    return block_count * sstable_compressed_block_size - misalignment;
+}
 
 // FIXME: we calculate the murmur hash when inserting or reading keys
 // from bloom filters.

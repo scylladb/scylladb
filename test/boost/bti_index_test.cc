@@ -20,6 +20,8 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
+#include "sstables/compress.hh"
+#include "sstables/framed_chunk.hh"
 #include "sstables/mx/types.hh"
 #include "sstables/trie/bti_index.hh"
 #include "sstables/trie/bti_index_internal.hh"
@@ -33,6 +35,228 @@
 #include "utils/i_filter.hh"
 #include "utils/memory_data_sink.hh"
 #include <fmt/std.h>
+
+// Focused coverage for the BTI physical-payload packing primitives. These
+// are pure functions with no I/O, so a plain BOOST_AUTO_TEST_CASE suffices.
+BOOST_AUTO_TEST_CASE(test_bti_extent_block_count_roundtrip) {
+    using namespace sstables::trie;
+    // For every (chunk_position, extent), blocks -> recovered is a lossy upper
+    // bound: recovered >= extent, and it never over-rounds by more than a full
+    // block.
+    for (int64_t chunk_position : {int64_t{0}, int64_t{1}, int64_t{7}, int64_t{511},
+                                   int64_t{512}, int64_t{513}, int64_t{1024},
+                                   int64_t{100'000}, int64_t{100'001}}) {
+        for (int64_t extent : {int64_t{1}, int64_t{2}, int64_t{511}, int64_t{512},
+                               int64_t{513}, int64_t{4096}, int64_t{65536}}) {
+            const auto blocks = bti_extent_to_block_count(chunk_position, extent);
+            const auto recovered = bti_extent_hint_from_block_count(chunk_position, blocks);
+            BOOST_CHECK_GE(recovered, extent);
+            BOOST_CHECK_LT(recovered - extent, sstable_compressed_block_size);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_bti_pack_unpack_length_and_offset_roundtrip) {
+    using namespace sstables::trie;
+    for (uint32_t uncompressed_chunk_length : {uint32_t{4096}, uint32_t{16384}, uint32_t{65536}}) {
+        const auto layout = bti_physical_layout(sstables::framed_chunk_codec::for_framed_chunks(uncompressed_chunk_length));
+        const auto max_len = layout.max_block_count();
+        const auto packed_bits = layout.packed_bits();
+        // The packed value never exceeds its advertised bit width / byte width.
+        BOOST_CHECK_LE(layout.packed_bytes() * 8, 64u);
+        for (uint64_t block_count : {uint64_t{1}, uint64_t{2}, uint64_t{7}, max_len}) {
+            for (uint64_t offset : {uint64_t{0}, uint64_t{1}, uint64_t{uncompressed_chunk_length - 1}}) {
+                const auto packed = layout.pack(block_count, offset);
+                BOOST_CHECK_LT(packed, uint64_t{1} << packed_bits);
+                auto [decoded_len, decoded_offset] = layout.unpack(packed);
+                // The block count and offset are both stored exactly.
+                BOOST_CHECK_EQUAL(decoded_offset, offset);
+                BOOST_CHECK_EQUAL(decoded_len, block_count);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_bti_max_block_count_covers_largest_chunk) {
+    using namespace sstables::trie;
+    // The largest chunk holds compressed_chunk_length_limit bytes of compressed
+    // data. Its block count must stay within the bound, and fit in the block-count
+    // field, at every alignment and for every chunk length that the schema allows.
+    for (uint32_t uncompressed_chunk_length = 1024; uncompressed_chunk_length <= 128 * 1024; uncompressed_chunk_length *= 2) {
+        BOOST_TEST_CONTEXT("uncompressed_chunk_length=" << uncompressed_chunk_length) {
+            const auto codec = sstables::framed_chunk_codec::for_framed_chunks(uncompressed_chunk_length);
+            const auto max_extent = codec.extent(sstables::compressed_chunk_length_limit(uncompressed_chunk_length));
+            const auto layout = bti_physical_layout(codec);
+            const auto max_blocks = layout.max_block_count();
+            const auto length_bits = layout.block_count_bits();
+            BOOST_CHECK_LE(max_blocks - 1, (uint64_t{1} << length_bits) - 1);
+            for (int64_t chunk_position = 0; chunk_position < sstable_compressed_block_size; ++chunk_position) {
+                const auto blocks = bti_extent_to_block_count(chunk_position, max_extent);
+                BOOST_CHECK_LE(uint64_t(blocks), max_blocks);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_bti_physical_layout_matches_format_doc) {
+    using namespace sstables::trie;
+    // The table of N_max, W_N and W_O in docs/architecture/sstable/sstable3/sstable-mu-format.rst.
+    struct expected_layout {
+        uint32_t uncompressed_chunk_length;
+        uint64_t max_block_count;
+        unsigned block_count_bits;
+        unsigned offset_within_chunk_bits;
+    };
+    for (const auto& e : {
+            expected_layout{1024, 5, 3, 10},
+            expected_layout{2048, 8, 3, 11},
+            expected_layout{4096, 14, 4, 12},
+            expected_layout{8192, 26, 5, 13},
+            expected_layout{16384, 50, 6, 14},
+            expected_layout{32768, 98, 7, 15},
+            expected_layout{65536, 194, 8, 16},
+            expected_layout{131072, 386, 9, 17},
+    }) {
+        BOOST_TEST_CONTEXT("uncompressed_chunk_length=" << e.uncompressed_chunk_length) {
+            const auto layout = bti_physical_layout(sstables::framed_chunk_codec::for_framed_chunks(e.uncompressed_chunk_length));
+            BOOST_CHECK_EQUAL(layout.max_block_count(), e.max_block_count);
+            BOOST_CHECK_EQUAL(layout.block_count_bits(), e.block_count_bits);
+            BOOST_CHECK_EQUAL(layout.offset_within_chunk_bits(), e.offset_within_chunk_bits);
+            // The largest values of N and O use every bit of the packed field.
+            const auto packed = layout.pack(e.max_block_count, e.uncompressed_chunk_length - 1);
+            BOOST_CHECK_EQUAL(unsigned(std::bit_width(packed)), layout.packed_bits());
+        }
+    }
+}
+
+// A partition for the payload characterization tests below.
+// All positions are in Data.db.
+struct payload_test_partition {
+    struct block {
+        int16_t first_ck;
+        int16_t last_ck;
+        uint64_t start;
+        sstables::deletion_time range_tombstone_before_first_ck;
+    };
+    // Also the value of the partition key.
+    int16_t token;
+    uint64_t start;
+    // The position of the END_OF_PARTITION byte.
+    uint64_t end;
+    sstables::deletion_time partition_tombstone;
+    // Partitions with no blocks have no row index.
+    std::vector<block> blocks;
+};
+
+struct index_files_hex {
+    std::string partitions_db;
+    std::string rows_db;
+};
+
+static std::string to_hex(const memory_data_sink_buffers& bufs) {
+    std::string retval;
+    for (const auto& frag : bufs.buffers()) {
+        retval += fmt::to_string(fmt_hex(std::as_bytes(std::span(frag))));
+    }
+    return retval;
+}
+
+// Writes Partitions.db and Rows.db for `partitions` the way the sstable writer
+// does, and returns their contents in hex.
+static index_files_hex write_index_for_payload_test(
+    sstables::sstable_version_types sst_ver,
+    const std::vector<payload_test_partition>& partitions
+) {
+    auto s = schema_builder(this_smp_shard_count(), "ks", "t")
+        .with_column("pk", short_type, column_kind::partition_key)
+        .with_column("ck", short_type, column_kind::clustering_key)
+        .build();
+    auto make_ck = [&] (int16_t value) {
+        return sstables::clustering_info{
+            clustering_key::from_deeply_exploded(*s, {data_value(value)}),
+            sstables::bound_kind_m::clustering};
+    };
+    memory_data_sink_buffers partitions_bufs;
+    memory_data_sink_buffers rows_bufs;
+    {
+        sstables::file_writer partitions_db_writer(data_sink(std::make_unique<memory_data_sink>(partitions_bufs)));
+        sstables::file_writer rows_db_writer(data_sink(std::make_unique<memory_data_sink>(rows_bufs)));
+        auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
+        auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
+        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer);
+        auto row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
+        std::vector<sstables::key> keys;
+        for (const auto& p : partitions) {
+            auto pk = partition_key::from_deeply_exploded(*s, {data_value(p.token)});
+            auto dk = dht::decorated_key(dht::token::from_int64(p.token), pk);
+            auto key = sstables::key::from_partition_key(*s, pk);
+            for (const auto& b : p.blocks) {
+                row_index_writer.add(*s, make_ck(b.first_ck), make_ck(b.last_ck), b.start - p.start, b.range_tombstone_before_first_ck);
+            }
+            auto target = row_index_writer.finish(sst_ver, *s, p.start, p.end, key, p.partition_tombstone);
+            partition_index_writer.add(*s, dk, utils::make_hashed_key(bytes_view(key)), target);
+            keys.push_back(std::move(key));
+        }
+        std::move(partition_index_writer).finish(keys.front(), keys.back());
+    }
+    return index_files_hex{
+        .partitions_db = to_hex(partitions_bufs),
+        .rows_db = to_hex(rows_bufs),
+    };
+}
+
+// Checks the exact bytes of the BTI index files of `mt`.
+// A change in these bytes is a change of the on-disk format.
+SEASTAR_THREAD_TEST_CASE(test_mt_index_payload_encoding) {
+    const auto live = sstables::deletion_time::make_live();
+    const auto partitions = std::vector<payload_test_partition>{
+        {.token = 1, .start = 127, .end = 150, .partition_tombstone = live},
+        {.token = 2, .start = 200, .end = 1199, .partition_tombstone = {789, 1011}, .blocks = {
+            {.first_ck = 1, .last_ck = 2, .start = 210, .range_tombstone_before_first_ck = live},
+            {.first_ck = 3, .last_ck = 4, .start = 500, .range_tombstone_before_first_ck = {123, 456}},
+        }},
+        {.token = 3, .start = 0x123456789a, .end = 0x12345678ff, .partition_tombstone = live},
+    };
+    auto files = write_index_for_payload_test(
+        sstables::sstable_version_types::mt,
+        partitions);
+    // Each payload node starts with a byte holding the node type (high 4 bits)
+    // and the payload field (low 4 bits). A partition payload field is
+    // 0x8 (hash byte present) | (position width - 1).
+    BOOST_CHECK_EQUAL(files.partitions_db,
+        // Partition 1: Data.db position 127.
+        // The payload is the hash byte and ~127 in 1 byte.
+        "08" "44" "80"
+        // Partition 2: Rows.db position 30, not negated.
+        "08" "c1" "1e"
+        // Partition 3: Data.db position 0x123456789a.
+        // The payload is the hash byte and ~0x123456789a in 5 bytes.
+        "0c" "9f" "edcba98765"
+        // The trie nodes for the token bytes, from the leaves to the root.
+        "50" "03" "010203" "0d0a07"
+        "1800" "1200" "1200" "1200" "1200" "1200" "1280" "1240"
+        // The footer: the first and last keys, the footer position,
+        // the partition count, and the root position.
+        "0002" "0001" "0002" "0003" "0000000000000025" "0000000000000003" "0000000000000023");
+    // A row payload field is 0x8 (range tombstone present) | (offset width).
+    BOOST_CHECK_EQUAL(files.rows_db,
+        // Partition 2, block 2: offset 300 from the partition start, then the
+        // range tombstone: marked_for_delete_at and local_deletion_time.
+        "0a" "012c" "00000000000001c8" "0000007b"
+        // Partition 2, the end of the partition: offset 999.
+        "02" "03e7"
+        // The trie nodes for the separators.
+        "50" "02" "0305" "1203"
+        "1680"
+        // The root is a SINGLE_8 node with a payload: the transition byte,
+        // the child offset, then the payload of block 1: offset 10.
+        "21" "40" "02" "0a"
+        // The row index header of partition 2, at Rows.db position 30: the key,
+        // Data.db position 200 as a vint, the root position relative to the
+        // previous field (-8) as a signed vint, the block count, and the
+        // partition tombstone.
+        "0002" "0002" "80c8" "0f" "02" "00000000000003f3" "00000315");
+}
 
 struct clustering_index_entry {
     sstables::clustering_info first_ck;
