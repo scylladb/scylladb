@@ -18,6 +18,7 @@
 
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
+#include "sstables/storage.hh"
 
 namespace seastar {
 class abort_source;
@@ -49,8 +50,10 @@ class object_name {
 public:
     object_name(const object_name&);
     object_name(object_name&&);
+    // Used by native backup/restore with externally supplied prefixes
+    // following the foreign Scylla Manager bucket layout.
     object_name(std::string_view bucket, std::string_view prefix, std::string_view type);
-    object_name(std::string_view bucket, const generation_type&, std::string_view type);
+    object_name(std::string_view bucket, std::string_view prefix, const generation_type&, std::string_view type);
     object_name(std::string_view bucket, std::string_view object);
 
     std::string_view bucket() const;

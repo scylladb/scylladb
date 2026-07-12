@@ -9,6 +9,8 @@
 #include "storage.hh"
 
 #include <cerrno>
+#include <algorithm>
+#include <cctype>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/erase.hpp>
 
@@ -108,7 +110,7 @@ public:
     }
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept override;
 
-    virtual sstring prefix() const override { return _dir.native(); }
+    virtual std::string_view prefix() const override { return _dir.native(); }
     bool is_object_storage() const override { return false; }
     future<bool> exists(const sstable& sst, component_type type) const override {
         return file_exists(sst.get_filename(type).format());
@@ -589,7 +591,7 @@ future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const st
 
     for (const auto& sst : ssts) {
         auto prefix = sst->_storage->prefix();
-        res.prefixes.insert(prefix);
+        res.prefixes.emplace(prefix);
     }
 
     res.pending_delete_log = co_await sstable_directory::create_pending_deletion_log(_base_dir, ssts);
@@ -638,7 +640,8 @@ protected:
     schema_ptr _schema;
     shared_ptr<sstables::object_storage_client> _client;
     sstring _bucket;
-    std::optional<sstring> _location;
+    bool _uses_foreign_location;
+    sstring _prefix;
     seastar::abort_source* _as;
 
     static constexpr auto status_creating = "creating";
@@ -649,8 +652,8 @@ protected:
     object_name make_object_name(const sstable& sst, sstring comp, generation_type gen) const;
 
     table_id owner() const {
-        if (_location) {
-            on_internal_error(sstlog, format("Storage holds '{}' prefix, but registry owner is expected", *_location));
+        if (_uses_foreign_location) {
+            on_internal_error(sstlog, format("Storage holds '{}' prefix, but registry owner is expected", prefix()));
         }
         return _schema->id();
     }
@@ -663,10 +666,11 @@ public:
         , _schema(std::move(schema))
         , _client(std::move(client))
         , _bucket(std::move(bucket))
-        , _location(std::move(loc))
+        , _uses_foreign_location(loc.has_value())
+        , _prefix(loc ? std::move(*loc) : "sstables")
         , _as(as)
     {
-        sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} loc={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _location ? *_location : "<none>");
+        sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} prefix={} uses_foreign_location={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _prefix, _uses_foreign_location);
     }
 
     future<> seal(const sstable& sst) override;
@@ -701,11 +705,8 @@ public:
         return *sid;
     }
 
-    sstring prefix() const override { 
-        if (_location) {
-            return *_location;
-        }
-        return fmt::to_string(_schema->id());
+    std::string_view prefix() const override {
+        return _prefix;
     }
 
     future<bool> exists(const sstable& sst, component_type type) const override {
@@ -754,9 +755,9 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
         throw std::runtime_error(fmt::format("'{}' STORAGE only works with uuid_sstable_identifier enabled", _type));
     }
 
-    auto ret = _location
-            ? object_name(_bucket, *_location, sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp))
-            : object_name(_bucket, gen, comp);
+    auto ret = _uses_foreign_location
+            ? object_name(_bucket, prefix(), sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp))
+            : object_name(_bucket, prefix(), gen, comp);
     sstlog.trace("make_object_name: sstable_id={} generation={} comp={}: {}", sst.sstable_identifier(), gen, comp, ret.str());
     return ret;
 }
@@ -960,7 +961,7 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
     std::vector<sstring> components;
 
     try {
-        auto f = make_readable_file(object_name(_bucket, desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
+        auto f = make_readable_file(object_name(_bucket, prefix(), desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
         auto [components, digest] = co_await with_closeable(std::move(f), [] (file& f) {
             return sstable::read_and_parse_toc(f);
         });
@@ -972,10 +973,10 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
 
     co_await coroutine::parallel_for_each(components, [this, &desc] (sstring comp) -> future<> {
         if (comp != sstable_version_constants::TOC_SUFFIX) {
-            co_await delete_object(object_name(_bucket, desc.generation, comp));
+            co_await delete_object(object_name(_bucket, prefix(), desc.generation, comp));
         }
     });
-    co_await delete_object(object_name(_bucket, desc.generation, sstable_version_constants::TOC_SUFFIX));
+    co_await delete_object(object_name(_bucket, prefix(), desc.generation, sstable_version_constants::TOC_SUFFIX));
 }
 
 future<> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {

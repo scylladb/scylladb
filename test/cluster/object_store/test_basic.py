@@ -810,6 +810,15 @@ async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, objec
         expected = {i: i for i in range(20)}
         assert result == expected, f"Data mismatch: {result}"
 
+        def get_components():
+            objects = object_storage.get_resource().Bucket(
+                object_storage.bucket_name).objects.all()
+            components = {}
+            for o in objects:
+                generation, _, component = o.key.rpartition("/")
+                components.setdefault(generation, set()).add(component)
+            return components
+
         # The aborted streaming attempt failed while writing the TOC,
         # so on object storage it left behind only
         # a partial TOC.txt.tmp object and never wrote a Data.db.
@@ -821,15 +830,15 @@ async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, objec
         # With the fix the leaked TOC.txt.tmp is gone so the condition converges;
         # without it the orphan persists and wait_for times out.
         async def no_orphaned_objects():
-            objects = object_storage.get_resource().Bucket(
-                object_storage.bucket_name).objects.all()
-            components = {}
-            for o in objects:
-                generation, _, component = o.key.partition("/")
-                components.setdefault(generation, set()).add(component)
+            components = get_components()
             orphans = {gen for gen, comps in components.items()
                        if "Data.db" not in comps}
             return None if orphans else True
 
-        await wait_for(no_orphaned_objects, time.time() + 30,
-                       label="object storage bucket has no orphaned sstable components")
+        try:
+            await wait_for(no_orphaned_objects, time.time() + 30,
+                    label="object storage bucket has no orphaned sstable components")
+        except Exception as e:
+            components = get_components()
+            logger.error(f"Orphaned components: {components=}: {e}")
+            raise

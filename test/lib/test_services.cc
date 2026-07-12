@@ -483,7 +483,7 @@ test_env::reusable_sst(schema_ptr schema, sstables::generation_type generation,
 
 future<shared_sstable>
 test_env::reusable_sst(schema_ptr schema, shared_sstable sst) {
-    return reusable_sst(std::move(schema), sst->get_storage().prefix(), sst->generation(), sst->get_version());
+    return reusable_sst(std::move(schema), sstring(sst->get_storage().prefix()), sst->generation(), sst->get_version());
 }
 
 future<shared_sstable>

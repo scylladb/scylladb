@@ -482,12 +482,8 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
 
 static future<> check_compacted_sstables(test_env& env, compact_sstables_result res) {
     return seastar::async([&env, res = std::move(res)] {
-        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
-                .with_column("p1", utf8_type, column_kind::partition_key)
-                .with_column("c1", utf8_type, column_kind::clustering_key)
-                .with_column("r1", utf8_type)
-                .build();
         BOOST_REQUIRE_EQUAL(res.output_sstables.size(), 1);
+        auto s = res.output_sstables[0]->get_schema();
         auto sst = env.reusable_sst(s, res.output_sstables[0]).get();
         auto reader = sstable_reader(sst, s, env.make_reader_permit()); // reader holds sst and s alive.
         auto close_reader = deferred_close(reader);

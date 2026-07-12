@@ -11,11 +11,13 @@
 
 #include "utils/assert.hh"
 #include <filesystem>
+#include <fmt/format.h>
 
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/sstring.hh>
 
 #include "data_dictionary/storage_options.hh"
 #include "schema/schema_fwd.hh"
@@ -124,7 +126,7 @@ public:
     virtual future<uint64_t> free_space() const = 0;
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
 
-    virtual sstring prefix() const  = 0;
+    virtual std::string_view prefix() const  = 0;
     virtual future<bool> exists(const sstable& sst, component_type type) const = 0;
 
     // Returns true if this storage backend uses object storage (S3/GCS).
