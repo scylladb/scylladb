@@ -213,10 +213,10 @@ go_arch() {
     echo ${GO_ARCH["$(arch)"]}
 }
 
-NODE_EXPORTER_VERSION=1.10.2
+NODE_EXPORTER_VERSION=1.12.0
 declare -A NODE_EXPORTER_CHECKSUM=(
-    ["x86_64"]=c46e5b6f53948477ff3a19d97c58307394a29fe64a01905646f026ddc32cb65b
-    ["aarch64"]=de69ec8341c8068b7c8e4cfe3eb85065d24d984a3b33007f575d307d13eb89a6
+    ["x86_64"]=b206d98e98a431f2687d4c217abb4b15c46a6b272896113ce9a1585cf1a75d1f
+    ["aarch64"]=4ea211ce95224acb7f7c932693cb25f91f7fbe202c86bf6dc943c8569b3f6bac
     ["s390x"]=3ad4b412254769ab5128bc7211a324cd6e0643540b63351fd6b61830f00402de
 )
 NODE_EXPORTER_DIR=/opt/scylladb/dependencies
@@ -249,8 +249,8 @@ minio_client_url() {
 
 minio_download_jobs() {
     cfile=$(mktemp)
-    echo $(curl -s "$(minio_server_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/minio" > $cfile
-    echo $(curl -s "$(minio_client_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/mc" >> $cfile
+    echo $(curl -sL "$(minio_server_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/minio" > $cfile
+    echo $(curl -sL "$(minio_client_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/mc" >> $cfile
     sha256sum -c $cfile | grep -F FAILED | sed \
         -e 's/:.*$//g' \
         -e "s#${MINIO_BINARIES_DIR}/minio#$(minio_server_url) -o ${MINIO_BINARIES_DIR}/minio#" \
@@ -408,7 +408,7 @@ elif [ "$ID" == "arch" ]; then
     echo -e "Configure example:\n\t./configure.py\n\tninja release"
 fi
 
-cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --root /usr/local
+cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --version 1.0.83 --root /usr/local
 
 CURL_ARGS=$(minio_download_jobs)
 if [ ! -z "${CURL_ARGS}" ]; then
