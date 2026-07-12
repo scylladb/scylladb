@@ -1690,6 +1690,12 @@ class environment : public seastar::weakly_referencable<environment<M>> {
     // Declared (and so initialized) before `_network`, which consumes cfg.rnd.
     std::mt19937 _clock_skew_rnd;
 
+    // LeaseGuard: number of read_quorum messages that crossed the network. A
+    // lease-served read is resolved locally and sends none, so this is a direct
+    // measure of how often the lease was NOT held when a read arrived. Note the
+    // leader broadcasts to every voter, so one un-leased read contributes several.
+    uint64_t _read_quorum_msgs = 0;
+
     // Used to deliver messages coming from the network to appropriate servers and their failure detectors.
     // Also keeps the servers and the failure detectors alive (owns them).
     // Before we show a Raft server to others we must add it to this map.
@@ -1733,10 +1739,19 @@ public:
             auto& n = _routes.at(dst);
             SCYLLA_ASSERT(n._persistence);
 
+            if (std::holds_alternative<raft::read_quorum>(m)) {
+                ++_read_quorum_msgs;
+            }
+
             if (n._server) {
                 n._server->deliver(src, m);
             }
         }) {
+    }
+
+    // LeaseGuard: see `_read_quorum_msgs`.
+    uint64_t read_quorum_msgs() const {
+        return _read_quorum_msgs;
     }
 
     ~environment() {
@@ -3461,7 +3476,8 @@ static future<> run_basic_generator_test(
         int32_t seed,
         raft::logical_clock::duration fd_convict_threshold,
         std::optional<environment_config::leaseguard_config> leaseguard,
-        std::optional<bool> force_forwarding) {
+        std::optional<bool> force_forwarding,
+        bool read_only_tail = false) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
             raft_read<AppendReg>,
@@ -3516,11 +3532,24 @@ static future<> run_basic_generator_test(
         bool frequent_snapshotting = bdist(random_engine);
 
         bool nemesis_partitions = true;
-        bool nemesis_reconfigurations = true;
+        // Reconfiguration is disabled whenever leases are enabled. With leases a
+        // cluster is legitimately less available under chaos (a new leader defers
+        // committing for delta after every failover, and steps down if its clock
+        // is lost), and reconfiguration retries interact badly with that leader
+        // instability -- a reconfiguration that cannot commit is retried against a
+        // constantly-changing leader, churning without ever settling ("server
+        // already exists in configuration ..."). Reconfiguration is exercised
+        // heavily by the non-lease basic_generator_test; here we keep the core
+        // LeaseGuard coverage (failovers -> deferred commit, concurrent leaders ->
+        // no stale reads) via partitions and crashes.
+        bool nemesis_reconfigurations = !leaseguard.has_value();
         bool nemesis_crashes = true;
         // LeaseGuard clock-failure nemesis is only meaningful (and only enabled)
-        // when leases are on.
-        bool nemesis_clock_failures = leaseguard.has_value();
+        // when leases are on. Disable it in the read-only-tail variant: with no
+        // client writes to commit, a leader whose clock is broken while deferring
+        // steps down, and the resulting continuous failover livelocks a cluster
+        // that never gets to make progress.
+        bool nemesis_clock_failures = leaseguard.has_value() && !read_only_tail;
 
         // TODO: randomize the snapshot thresholds between different servers for more chaos.
         const auto max_command_size = 2 * sizeof(raft::log_entry);
@@ -3538,8 +3567,8 @@ static future<> run_basic_generator_test(
                 .enable_forwarding = forwarding,
             };
 
-        tlogger.info("basic_generator_test: seed: {}, forwarding: {}, frequent snapshotting: {}, leaseguard: {}",
-                seed, forwarding, frequent_snapshotting, leaseguard.has_value());
+        tlogger.info("basic_generator_test: seed: {}, forwarding: {}, frequent snapshotting: {}, leaseguard: {}, read_only_tail: {}",
+                seed, forwarding, frequent_snapshotting, leaseguard.has_value(), read_only_tail);
 
         auto leader_id = co_await env.new_server(true, srv_cfg);
 
@@ -3649,6 +3678,12 @@ static future<> run_basic_generator_test(
         // we will set request timeout 600_t ~= 6s and partition every 1200_t ~= 12s
 
         auto num_ops = 500;
+        // LeaseGuard read-only tail: cap writes to an initial burst so the rest
+        // of the run is read-only for far longer than Δ. This exercises automatic
+        // lease extension -- without renewal no-ops the lease would expire and
+        // every read would fall back to a quorum barrier (and a new leader with
+        // no client writes would never re-establish a read lease).
+        const auto write_op_limit = read_only_tail ? num_ops / 5 : num_ops;
         auto gen = op_limit(num_ops,
             pin(partition_thread,
                 op_limit(nemesis_partitions ? num_ops : 0,
@@ -3696,11 +3731,13 @@ static future<> run_basic_generator_test(
                                 )
                             ),
                             either(
-                                stagger(seed, timer.now(), 0_t, 50_t,
-                                    sequence(1, [] (int32_t i) {
-                                        SCYLLA_ASSERT(i > 0);
-                                        return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
-                                    })
+                                op_limit(write_op_limit,
+                                    stagger(seed, timer.now(), 0_t, 50_t,
+                                        sequence(1, [] (int32_t i) {
+                                            SCYLLA_ASSERT(i > 0);
+                                            return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
+                                        })
+                                    )
                                 ),
                                 op_limit(forwarding ? num_ops : 0 /* only produce raft_reads in forwarding mode */,
                                     stagger(seed, timer.now(), 0_t, 200_t,
@@ -3721,6 +3758,9 @@ static future<> run_basic_generator_test(
             size_t successes{0};
             size_t failures{0};
             size_t skipped_applies{0};
+            // LeaseGuard: read invocations, to compare against the number of
+            // read_quorum messages the leases were supposed to avoid.
+            size_t reads{0};
         };
 
         class consistency_checker {
@@ -3738,6 +3778,7 @@ static future<> run_basic_generator_test(
                     _model.invocation(call_op->input.x);
                 } else if (auto read_op = std::get_if<raft_read<AppendReg>>(&o.op)) {
                     ++_stats.invocations;
+                    ++_stats.reads;
                     _model.start_read(read_op->read_id);
                 }
             }
@@ -3816,6 +3857,11 @@ static future<> run_basic_generator_test(
         tlogger.info("Finished generator run, time: {}, invocations: {}, successes: {}, failures: {}, skipped applies: {}, total: {}",
                 timer.now(), stats.invocations, stats.successes, stats.failures, stats.skipped_applies, stats.successes + stats.failures + stats.skipped_applies);
 
+        if (leaseguard) {
+            tlogger.info("LeaseGuard: {} reads, {} read_quorum messages on the wire",
+                    stats.reads, env.read_quorum_msgs());
+        }
+
         // Liveness check: we must be able to obtain a final response after all the nemeses have stopped.
         // Due to possible multiple leaders at this point and the cluster stabilizing (for example there
         // may be no leader right now, the current leader may be stepping down etc.) we may need to try
@@ -3862,6 +3908,78 @@ static future<> run_basic_generator_test(
             if (std::holds_alternative<typename AppendReg::ret>(res)) {
                 tlogger.info("Obtained last result");
                 tlogger.debug("Last result: {}", res);
+
+                if (leaseguard && read_only_tail) {
+                    // LeaseGuard automatic lease extension (Section 5.1), checked
+                    // deterministically now that the nemeses have stopped and the
+                    // cluster is quiescent. The statistics gathered during the
+                    // chaotic phase are far too noisy to assert on -- whether a
+                    // lease is held there is mostly a function of how the
+                    // partitions fell -- but here the only thing that can cost us
+                    // a lease is the protocol itself.
+                    //
+                    // First let the lease lapse completely: no writes for well
+                    // over delta. Renewal must then RE-ESTABLISH it from a read
+                    // alone. If renewal could only extend an already-valid lease,
+                    // every subsequent read would fall back to a quorum barrier
+                    // forever, since nothing in this phase writes.
+                    //
+                    // Sleep 2*delta, not delta: a renewal triggered by the last
+                    // read of the chaotic phase may land anywhere in the first
+                    // delta of this window, and we need the lease to have lapsed
+                    // by the end of it no matter when that was.
+                    const auto delta_ticks = raft::logical_clock::duration{
+                            leaseguard->delta / leaseguard->tick_duration};
+                    co_await timer.sleep(2 * delta_ticks + delta_ticks / 4);
+
+                    // Warm-up read: expected to miss (the lease has lapsed) but it
+                    // marks the term read-active, so the next leader tick appends
+                    // and commits a renewal no-op.
+                    (void)co_await env.read(leader, timer.now() + 200_t, timer);
+                    co_await timer.sleep(delta_ticks / 4);
+
+                    // From here on every read must be served from the lease, with
+                    // no read_quorum on the wire, for a span of several delta.
+                    //
+                    // Count reads that missed the lease, not read_quorum messages.
+                    // The message cost of a single miss is not bounded by the
+                    // configuration size: a barrier that does not reach quorum
+                    // straight away is re-broadcast by tick_leader() on every
+                    // subsequent tick. So a message budget cannot be reconciled
+                    // with a tolerance expressed in reads -- one slow miss could
+                    // outweigh the whole budget while a systematic fallback with
+                    // prompt replies stays inside it.
+                    constexpr int reads = 10;
+                    // Tolerate a couple of stragglers -- a snapshot or a late tick
+                    // can cost a single lease -- but nothing beyond that. Both
+                    // failures and lease misses are measured against this same
+                    // tolerance: a read that failed was not served from a lease
+                    // either, and counting it as anything softer would let a run
+                    // pass the failure check and then trip the lease check.
+                    constexpr int max_missed_reads = 2;
+                    int missed = 0, failed = 0;
+                    for (int i = 0; i < reads; ++i) {
+                        const auto quorum_msgs_before = env.read_quorum_msgs();
+                        auto r = co_await env.read(leader, timer.now() + 200_t, timer);
+                        if (env.read_quorum_msgs() != quorum_msgs_before) {
+                            ++missed;
+                        }
+                        // Guard against a vacuous pass: a read that never gets far
+                        // enough to send a read_quorum would otherwise look like a
+                        // lease hit.
+                        if (!std::holds_alternative<typename AppendReg::state_t>(r)) {
+                            ++failed;
+                        }
+                        co_await timer.sleep(delta_ticks / 4);
+                    }
+                    tlogger.info("LeaseGuard quiescent-phase check: {}/{} reads served from the lease, "
+                            "{} failed, over {} ticks", reads - missed, reads, failed,
+                            reads * (delta_ticks / 4).count());
+
+                    SCYLLA_ASSERT(missed <= max_missed_reads);
+                    SCYLLA_ASSERT(failed <= max_missed_reads);
+                }
+
                 co_return;
             }
 
@@ -3906,4 +4024,26 @@ SEASTAR_TEST_CASE(basic_generator_test_leaseguard) {
                 .epoch = raft::lease_clock::time_point{std::chrono::hours{24 * 365}},
             },
             true /* force_forwarding */);
+}
+
+SEASTAR_TEST_CASE(basic_generator_test_leaseguard_read_only) {
+    // LeaseGuard automatic lease extension (arXiv:2512.15659, Section 5.1) under
+    // a read-only workload. Writes are capped to an initial burst, so most of the
+    // run is read-only for far longer than Δ. Without renewal no-ops the lease
+    // would expire and every read would fall back to a quorum barrier; worse, a
+    // new leader elected during the read-only tail (nemeses still run) would have
+    // no client writes to establish its own read lease. The renewal no-ops keep
+    // leases alive, and the model still checks that no read is ever stale.
+    constexpr auto tick = std::chrono::milliseconds{10};
+    co_await run_basic_generator_test(
+            tests::random::get_int<int32_t>(),
+            20_t /* fd_convict_threshold */,
+            environment_config::leaseguard_config{
+                .delta = 400 * tick,
+                .error = 20 * tick,
+                .tick_duration = tick,
+                .epoch = raft::lease_clock::time_point{std::chrono::hours{24 * 365}},
+            },
+            true /* force_forwarding */,
+            true /* read_only_tail */);
 }
