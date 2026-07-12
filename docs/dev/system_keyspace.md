@@ -1389,7 +1389,7 @@ Implemented by `snapshots_table` in `db/system_keyspace.cc`.
 
 ## system.sstables
 
-The "ownership" table for non-local SSTables when using object storage (S3).
+The "ownership" table for non-local SSTables when using object storage (S3/GS).
 
 Schema:
 ```cql
@@ -1397,6 +1397,7 @@ CREATE TABLE system.sstables (
     owner uuid,
     generation timeuuid,
     status text,
+    sstable_id uuid,
     state text,
     version text,
     format text,
@@ -1406,13 +1407,20 @@ CREATE TABLE system.sstables (
 
 **Columns:**
 - `owner`: UUID of the owning table
-- `generation`: SSTable generation identifier
-- `status`: Current status of the SSTable
-- `state`: State of the SSTable
+- `generation`: Local SSTable generation identifier (clustering key)
+- `status`: Current lifecycle status of this node's local SSTable entry
+- `sstable_id`: Stable identifier of the SSTable data. For newly created SSTables it is derived from the generation, but it can survive local generation changes such as tablet migration.
+- `state`: State of this node's local SSTable entry
 - `version`: SSTable format version
 - `format`: SSTable format
 
-**Note:** When a user keyspace is created with S3 storage options, SSTables are put on remote object storage and the information about them is kept in this table.
+**Note:** When a user keyspace is created with S3/GS storage options, SSTable components are stored on remote object storage and local ownership information is kept in this table.
+
+`generation` and `sstable_id` identify related but different entities:
+- `generation` identifies the local SSTable entry on this node. It is part of the primary key and participates in local lifecycle state such as `status` and `state`.
+- `sstable_id` identifies the SSTable data object set. For object-storage tables, component objects are stored under a prefix containing `sstable_id`. The same `sstable_id` can be referenced by multiple local SSTable entries on different nodes, each with its own `generation`.
+
+This distinction matters for object-storage SSTable sharing. Tablet migration can create a new local SSTable entry with a new `generation` while continuing to reference the same object-storage SSTable data via the same `sstable_id`. The local row state applies to the local entry, not to the shared object-storage data itself.
 
 ---
 

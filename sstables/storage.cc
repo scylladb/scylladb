@@ -690,6 +690,15 @@ public:
     }
     future<> unlink_component(const sstable& sst, component_type) noexcept override;
 
+    sstable_id get_sstable_identifier(const sstable& sst) const {
+        auto sid = sst.sstable_identifier();
+        if (!sid) {
+            // We cannot assert that yet since we don't pass the sstable_id yet in the clone_sstable rpc
+            sstlog.warn("SSTable on object storage with generation={} has no sstable_id", sst.generation());
+        }
+        return *sid;
+    }
+
     sstring prefix() const override { 
         if (_location) {
             return *_location;
@@ -751,7 +760,8 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
 }
 
 void object_storage_base::open(sstable& sst) {
-    entry_descriptor desc(sst._generation, sst._sstable_identifier, sst._version, sst._format, component_type::TOC);
+    auto sid = get_sstable_identifier(sst);
+    entry_descriptor desc(sst._generation, sid, sst._version, sst._format, component_type::TOC);
     sst.manager().sstables_registry().create_entry(owner(), sst.manager().get_local_host_id(), status_creating, sst._state, std::move(desc)).get();
 
     memory_data_sink_buffers bufs;
@@ -984,7 +994,8 @@ future<entry_descriptor> object_storage_base::clone(const sstable& sst, generati
     sstlog.trace("clone sst: {} generation={} leave_unsealed={}", sst.get_filename(), gen, leave_unsealed);
 
     // Register the cloned sstable as "creating" in the registry
-    entry_descriptor desc(gen, sst.sstable_identifier(), sst.get_version(), sst.get_format(), component_type::TOC);
+    auto sid = get_sstable_identifier(sst);
+    entry_descriptor desc(gen, sid, sst.get_version(), sst.get_format(), component_type::TOC);
     desc.state = sst.state();
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
