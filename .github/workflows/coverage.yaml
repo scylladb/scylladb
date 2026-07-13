@@ -3,6 +3,18 @@ name: Coverage
 on:
   issue_comment:
     types: [created]
+  # issue_comment-triggered runs always use the workflow file from the
+  # default branch, so '/coverage' has no effect until this file is merged.
+  # workflow_dispatch runs the workflow as it exists on whatever ref it's
+  # dispatched against, so it's the way to try this out from an open PR
+  # branch first, e.g.:
+  #   gh workflow run coverage.yaml --ref <your-branch> -f pr_number=<PR number>
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Pull request number to build, test and report coverage for'
+        required: true
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -10,12 +22,14 @@ env:
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  group: ${{ github.workflow }}-${{ github.event.issue.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
   read-toolchain:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/coverage')
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/coverage'))
     uses: ./.github/workflows/read-toolchain.yaml
 
   coverage:
@@ -32,11 +46,15 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
+            const prNumber = context.eventName === 'workflow_dispatch'
+              ? Number(context.payload.inputs.pr_number)
+              : context.issue.number;
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.issue.number,
+              pull_number: prNumber,
             });
+            core.setOutput('pr_number', prNumber);
             core.setOutput('head_sha', pr.head.sha);
             core.setOutput('base_ref', pr.base.ref);
 
@@ -90,7 +108,7 @@ jobs:
 
       - name: Save PR number
         if: always()
-        run: echo "${{ github.event.issue.number }}" > pr_number.txt
+        run: echo "${{ steps.pr.outputs.pr_number }}" > pr_number.txt
 
       - name: Upload coverage report artifact
         if: always()
