@@ -9,7 +9,7 @@ Querying data from data is done using a ``SELECT`` statement:
 
 .. code-block::
    
-   select_statement: SELECT [ DISTINCT ] ( `select_clause` | '*' )
+   select_statement: SELECT [ JSON ] [ DISTINCT ] ( `select_clause` | '*' )
                    : FROM `table_name`
                    : [ WHERE `where_clause` ]
                    : [ GROUP BY `group_by_clause` ]
