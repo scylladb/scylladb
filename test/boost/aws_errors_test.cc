@@ -226,6 +226,18 @@ BOOST_AUTO_TEST_CASE(TestHelperFunctions) {
 
     BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(ECONNRESET, std::system_category())), utils::http::retryable::yes);
     BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(EADDRINUSE, std::system_category())), utils::http::retryable::no);
+
+    // aws_error::from_http_code classifies retryability per HTTP status. All 5xx
+    // are retryable except 501 Not Implemented, which reflects a permanent lack
+    // of support and must never be retried.
+    BOOST_REQUIRE_EQUAL(aws::aws_error::from_http_code(seastar::http::reply::status_type::internal_server_error).is_retryable(),
+                        utils::http::retryable::yes);
+    BOOST_REQUIRE_EQUAL(aws::aws_error::from_http_code(seastar::http::reply::status_type::bad_gateway).is_retryable(),
+                        utils::http::retryable::yes);
+    BOOST_REQUIRE_EQUAL(aws::aws_error::from_http_code(seastar::http::reply::status_type::service_unavailable).is_retryable(),
+                        utils::http::retryable::yes);
+    BOOST_REQUIRE_EQUAL(aws::aws_error::from_http_code(seastar::http::reply::status_type::not_implemented).is_retryable(),
+                        utils::http::retryable::no);
 }
 
 BOOST_AUTO_TEST_CASE(TestNestedException) {

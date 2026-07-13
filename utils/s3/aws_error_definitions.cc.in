@@ -76,6 +76,7 @@ const aws_errors& aws_error::get_errors() {
         {"RequestTimeTooSkewed", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
         {"RequestTimeoutException", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
         {"RequestTimeout", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
+        {"HTTP_NOT_IMPLEMENTED", aws_error(aws_error_type::HTTP_NOT_IMPLEMENTED, retryable::no)},
         {"HTTP_UNAUTHORIZED", aws_error(aws_error_type::HTTP_UNAUTHORIZED, retryable::no)},
         {"HTTP_FORBIDDEN", aws_error(aws_error_type::HTTP_FORBIDDEN, retryable::no)},
         {"HTTP_NOT_FOUND", aws_error(aws_error_type::HTTP_NOT_FOUND, retryable::no)},
