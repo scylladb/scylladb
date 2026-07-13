@@ -139,9 +139,12 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
     case seastar::http::reply::status_type::network_read_timeout:
         ret_val = all_errors.at("HTTP_NETWORK_READ_TIMEOUT");
         break;
+    case seastar::http::reply::status_type::not_implemented:
+        ret_val = all_errors.at("HTTP_NOT_IMPLEMENTED");
+        break;
     default:
         ret_val = {aws_error_type::UNKNOWN,
-                   "Unknown server error has been encountered.",
+                   seastar::format("Erroneous HTTP code has been encountered. Reason: {}", http_code),
                    retryable{seastar::http::reply::classify_status(http_code) == seastar::http::reply::status_class::server_error}};
     }
     ret_val._message = seastar::format("{} HTTP code: {}", ret_val._message, http_code);

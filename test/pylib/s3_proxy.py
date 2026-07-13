@@ -69,7 +69,7 @@ def true_or_false():
 
 
 class InjectingHandler(BaseHTTPRequestHandler):
-    retryable_codes = list((408, 419, 429, 440)) + list(range(500, 599))
+    retryable_codes = list((408, 419, 429, 440, 500)) + list(range(502, 599))
     error_names = list(("InternalFailureException",
                         "InternalFailure",
                         "InternalServerError",

@@ -51,6 +51,7 @@ enum class aws_error_type : uint8_t {
     USER_CANCELLED = 102,
     ENDPOINT_RESOLUTION_FAILURE = 103,
     // HTTP errors without additional information in the response body
+    HTTP_NOT_IMPLEMENTED = 114,
     HTTP_UNAUTHORIZED = 115,
     HTTP_FORBIDDEN = 116,
     HTTP_NOT_FOUND = 117,
