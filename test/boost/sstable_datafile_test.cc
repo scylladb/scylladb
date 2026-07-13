@@ -10,6 +10,7 @@
 #include <fmt/ranges.h>
 
 #include <seastar/core/sstring.hh>
+#include <seastar/core/memory.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
@@ -18,6 +19,8 @@
 
 #include "sstables/sstables.hh"
 #include "sstables/compress.hh"
+#include "sstables/compressor.hh"
+#include "sstables/sstable_compressor_factory.hh"
 #include "sstables/metadata_collector.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "schema/schema.hh"
@@ -3458,4 +3461,66 @@ SEASTAR_TEST_CASE(test_non_full_and_empty_row_keys) {
             check(clustering_key::from_exploded(*schema, full_ckey));
         }
     });
+}
+
+// Reproducer for a bug which inflated per-sstable memory usage
+// by leaving a compression dictionary attached to every freshly-written
+// sstable object.
+SEASTAR_THREAD_TEST_CASE(test_small_sstable_has_reasonable_memory_usage) {
+    auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+    test_env env({}, *scf);
+    auto stop_env = defer([&env] { env.stop().get(); });
+
+    // Big enough that a few leaked copies
+    constexpr size_t dict_size = 110 * 1024;
+    constexpr int num_sstables = 8;
+    // At the time of this writing, the measured memory usage without involving dictionaries was 25 kiB. 
+    constexpr size_t per_sstable_allowance = 32 * 1024;
+
+    auto dict = tests::random::get_bytes(dict_size);
+
+    // Build a schema that uses dictionary compression.
+    auto s = schema_builder("ks", "cf")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .set_compressor_params(compression_parameters(compressor::algorithm::zstd_with_dicts))
+        .build();
+    scf->set_recommended_dict(s->id(), std::as_bytes(std::span(dict))).get();
+
+    auto write_one = [&] {
+        auto pk = tests::generate_partition_keys(1, s).front();
+        auto m = mutation(s, pk);
+        m.partition().apply(tombstone(1, gc_clock::now()));
+        return make_sstable_containing(env.make_sst_factory(s), {std::move(m)}).get();
+    };
+
+    // Warm up: write and discard one sstable, so that any lazily-initialized,
+    // one-off allocations on the write path (and the single shared, deduplicated
+    // dictionary copy) are already accounted for before we start measuring.
+    auto warmup = write_one();
+    BOOST_REQUIRE(warmup->get_compression().get_compressor().get_algorithm() == compressor::algorithm::zstd_with_dicts);
+
+    // Now measure the live-memory growth by holding onto N freshly written
+    // sstables with the same dict.
+    auto allocated_before = memory::stats().allocated_memory();
+    std::vector<shared_sstable> ssts;
+    for (int i = 0; i < num_sstables; ++i) {
+        ssts.push_back(write_one());
+    }
+    auto allocated_after = memory::stats().allocated_memory();
+    auto growth = allocated_after - allocated_before;
+
+    // The single shared dictionary copy was already allocated during warm-up, so
+    // the growth should be bounded by just the per-sstable overhead.
+    const size_t upper_bound = num_sstables * per_sstable_allowance;
+    const size_t lower_bound = num_sstables * sizeof(sstable);
+    testlog.info("live-memory growth from holding {} dict-compressed sstables: {} bytes "
+            "(lower_bound: {} bytes, upper_bound: {} bytes, dict_size: {} bytes)",
+            num_sstables, growth, lower_bound, upper_bound, dict_size);
+
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+    // memory::stats() only reflects real usage with the seastar allocator; under
+    // the default allocator (e.g. sanitizer builds) the numbers are meaningless.
+    BOOST_REQUIRE_LT(growth, upper_bound);
+    BOOST_REQUIRE_GE(growth, lower_bound);
+#endif
 }
