@@ -75,8 +75,12 @@ future<> logstor::start() {
 }
 
 future<> logstor::stop() {
+    if (_async_gate.is_closed()) {
+        co_return;
+    }
     logstor_logger.info("Stopping logstor");
 
+    co_await _async_gate.close();
     co_await _write_buffer.stop();
     co_await _segment_manager.stop();
 
@@ -104,6 +108,8 @@ const compaction_manager& logstor::get_compaction_manager() const noexcept {
 }
 
 future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout) {
+    auto gate_holder = _async_gate.hold();
+
     primary_index_key key(m.decorated_key());
     table_id table = m.schema()->id();
     auto& index = cg.get_logstor_index();
@@ -143,6 +149,8 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
 }
 
 future<std::optional<mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
+    auto gate_holder = _async_gate.hold();
+
     auto op = index.start_read();
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);

@@ -49,6 +49,7 @@ class logstor {
     cache_tracker _cache_tracker;
     seastar::metrics::metric_groups _metrics;
     stats _stats;
+    seastar::gate _async_gate;
 
 public:
 
