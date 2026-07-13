@@ -1080,6 +1080,58 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Ma
             # So the best thing to do is to make sure restore task finishes at all
             await asyncio.wait_for(manager.api.wait_task(servers[1].ip_addr, tid), timeout=60)
 
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, manager: ManagerClient, object_storage):
+    '''Check that a new restore request does not hang after a previous restore failed due to API node loss,
+    and that a subsequent restore of the same table after a *successful* one is actually executed rather than
+    silently skipped.'''
+
+    topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+    log = await manager.server_open_log(servers[0].server_id)
+    await log.wait_for("raft_topology - start topology coordinator fiber", timeout=10)
+
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    num_keys = 24
+    tablet_count=8
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
+
+        await manager.api.enable_injection(servers[1].ip_addr, "pause_tablet_restore", one_shot=True)
+
+        manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
+        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        await manager.api.wait_for_injection_enter(servers[1].ip_addr, "pause_tablet_restore")
+
+        await manager.server_stop(servers[1].server_id, convict=True)
+        with pytest.raises(aiohttp.client_exceptions.ClientConnectorError):
+            await manager.api.wait_task(servers[1].ip_addr, tid)
+        await log.wait_for("All restore transitions for table .* completed", "Clearing restore transition for .* due to error", timeout=60)
+
+        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=60)
+
+        # The previous restore succeeded. Issue one more restore of the same table/tablets (same gid) and make
+        # sure it actually runs the restore action instead of being silently skipped.
+        mark = await log.mark()
+        tid = await manager.api.restore_tablets(servers[2].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        await asyncio.wait_for(manager.api.wait_task(servers[2].ip_addr, tid), timeout=60)
+        restored = await log.grep("Restoring tablet=", from_mark=mark)
+        assert len(restored) > 0, "Restore was skipped: coordinator reused stale _tablets state and did not restore any tablet"
+
+
 @pytest.mark.parametrize(("min_tablet_count_before_backup", "max_tablet_count_before_backup", "min_tablet_count_before_restore", "max_tablet_count_before_restore"), [
     (1, 1, 2, 2),
     (4, 4, 2, 2),
