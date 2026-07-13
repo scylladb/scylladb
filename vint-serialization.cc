@@ -98,11 +98,6 @@ uint64_t unsigned_vint::deserialize(bytes_view v) {
     auto src = v.data();
     const int8_t first_byte = *src;
 
-    // No additional bytes, since the most significant bit is not set.
-    if (first_byte >= 0) {
-        return uint64_t(first_byte);
-    }
-
     const auto extra_bytes_size = count_extra_bytes(first_byte);
 
     // Extract the bits not used for counting bytes.
@@ -123,7 +118,11 @@ uint64_t unsigned_vint::deserialize(bytes_view v) {
         value = 0;
         std::copy_n(src + 1, extra_bytes_size, reinterpret_cast<int8_t*>(&value));
     }
-    value = be_to_cpu(value << (64 - (extra_bytes_size * 8)));
+    auto shift = 64 - (extra_bytes_size * 8);
+    // Can't shift by 64, so shift twice by half
+    value = be_to_cpu(value);
+    value >>= shift / 2;
+    value >>= shift / 2;
     result <<= (extra_bytes_size * 8) % 64;
     result |= value;
 #else
