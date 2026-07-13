@@ -35,6 +35,7 @@ struct logstor_config {
     segment_manager_config segment_manager_cfg;
     seastar::scheduling_group flush_sg;
     size_t max_queued_write_bytes{0};
+    size_t write_buffer_ring_size{5};
 };
 
 class logstor {
