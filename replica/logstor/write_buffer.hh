@@ -264,16 +264,16 @@ public:
         return write(std::move(writer), nullptr, {});
     }
 
+    // Complete all tracked writes with their locations when the buffer is flushed to base_location
+    future<> complete_writes(log_location base_location);
+    future<> abort_writes(std::exception_ptr);
+
 private:
     bool with_record_copy() const noexcept {
         return _raw.kind() == segment_kind::mixed;
     }
 
     std::vector<record_in_buffer>& records_for_separator();
-
-    /// Complete all tracked writes with their locations when the buffer is flushed to base_location
-    future<> complete_writes(log_location base_location);
-    future<> abort_writes(std::exception_ptr);
 
     friend class buffered_writer;
     friend class segment_manager_impl;
