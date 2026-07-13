@@ -5814,11 +5814,11 @@ future<> compaction_group::cleanup() {
     }
 
     if (!_sstables_compacted_but_not_deleted.empty()) {
-        co_await _t.delete_sstables_atomically(permit, _sstables_compacted_but_not_deleted);
-        // delete_sstables_atomically swallows exceptions, so this always runs.
-        // Any SSTables that failed to delete will eventually be re-compacted
-        // and re-deleted.
+        auto gh = _t._sstable_deletion_gate.hold();
+        auto deletion = _t.make_atomic_deletion(_sstables_compacted_but_not_deleted);
+        co_await deletion.commit();
         _sstables_compacted_but_not_deleted.clear();
+        co_await deletion.execute();
         _t.rebuild_statistics();
     }
     if (utils::get_local_injector().enter("tablet_cleanup_failure_post_deletion")) {
