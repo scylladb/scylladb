@@ -38,11 +38,20 @@ enum class sstable_state;
 class delayed_commit_changes;
 class sstable;
 class sstables_manager;
+class atomic_deletion;
 class entry_descriptor;
 
-struct atomic_deletion {
-    sstring pending_delete_log;
-    std::unordered_set<sstring> prefixes;
+class atomic_deletion_impl {
+public:
+    virtual ~atomic_deletion_impl() = default;
+    // Commit the atomic deletion intent to stable storage. On success, all
+    // SSTables in the deletion are guaranteed to be eventually deleted. On
+    // failure, either all or none of them will be deleted, but never only some
+    // of them.
+    virtual future<> commit(const std::vector<shared_sstable>&) = 0;
+    // Clean up any pending state created by commit() after the physical
+    // SSTable deletion has completed.
+    virtual future<> finalize() = 0;
 };
 
 class opened_directory final {
@@ -118,8 +127,8 @@ public:
     virtual future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
     virtual future<> destroy(const sstable& sst) = 0;
-    virtual future<atomic_deletion> atomic_delete_prepare(const std::vector<shared_sstable>&) const = 0;
-    virtual future<> atomic_delete_complete(atomic_deletion deletion) const = 0;
+    virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const = 0;
+    virtual bool operator==(const storage&) const noexcept = 0;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) = 0;
     // Free space available in the underlying storage.
     virtual future<uint64_t> free_space() const = 0;

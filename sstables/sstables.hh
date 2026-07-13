@@ -457,7 +457,7 @@ public:
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
     // When deletion is provided, it indicates the call is part of an atomic
-    // deletion sequence where atomic_delete_prepare has already been called.
+    // deletion sequence that has already been committed.
     future<> unlink(const atomic_deletion* deletion = nullptr) noexcept;
 
     db::large_data_handler& get_large_data_handler() {

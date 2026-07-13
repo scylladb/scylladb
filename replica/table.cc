@@ -2390,15 +2390,22 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
         make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list)), std::move(removed_sstables)};
 }
 
+sstables::atomic_deletion
+table::make_atomic_deletion(std::vector<sstables::shared_sstable> sstables_to_remove) {
+    return get_sstables_manager().make_atomic_deletion(std::move(sstables_to_remove));
+}
+
 future<>
 table::delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove) {
     try {
         auto gh = _sstable_deletion_gate.hold();
-        co_await get_sstables_manager().delete_atomically(std::move(sstables_to_remove));
+        auto deletion = make_atomic_deletion(std::move(sstables_to_remove));
+        co_await deletion.commit();
+        co_await deletion.execute();
     } catch (...) {
         // There is nothing more we can do here.
         // Any remaining SSTables will eventually be re-compacted and re-deleted.
-        tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::current_exception());
+        tlogger.error("SSTables deletion failed: {}. Ignored.", std::current_exception());
     }
 }
 
@@ -3002,7 +3009,7 @@ bool storage_group::no_compacted_sstable_undeleted() const {
 
 // Gets the list of all sstables in the column family, including ones that are
 // not used for active queries because they have already been compacted, but are
-// waiting for delete_atomically() to return.
+// waiting for atomic deletion to complete.
 //
 // As long as we haven't deleted them, compaction needs to ensure it doesn't
 // garbage-collect a tombstone that covers data in an sstable that may not be

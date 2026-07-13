@@ -687,7 +687,8 @@ future<sstring> sstable_directory::create_pending_deletion_log(opened_directory&
             base_dir.sync(general_disk_error_handler).get();
             dirlog.debug("{} written successfully.", pending_delete_log);
         } catch (...) {
-            dirlog.warn("Error creating {}: {}. Ignoring.", pending_delete_log, std::current_exception());
+            dirlog.warn("Error creating {}: {}.", pending_delete_log, std::current_exception());
+            throw;
         }
 
         return pending_delete_log;

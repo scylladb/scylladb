@@ -30,6 +30,52 @@ namespace sstables {
 
 logging::logger smlogger("sstables_manager");
 
+const storage& atomic_deletion::get_storage(const std::vector<shared_sstable>& ssts) {
+    auto& storage = ssts.front()->get_storage();
+    for (const auto& sst : ssts | std::views::drop(1)) {
+        auto& other_storage = sst->get_storage();
+        if (storage != other_storage) {
+            on_internal_error(smlogger, format(
+                    "atomic_deletion created with SSTables from different storage contexts: front={} front_storage={} offending={} offending_storage={}",
+                    ssts.front()->get_filename(), storage.prefix(),
+                    sst->get_filename(), other_storage.prefix()));
+        }
+    }
+    return storage;
+}
+
+atomic_deletion::atomic_deletion(std::vector<shared_sstable> ssts)
+    : _ssts(std::move(ssts))
+    , _storage(_ssts.empty() ? nullptr : &get_storage(_ssts))
+    , _impl(_storage ? _storage->make_atomic_deletion_impl() : nullptr) {
+}
+
+future<> atomic_deletion::commit() {
+    if (empty()) {
+        co_return;
+    }
+    co_await _impl->commit(_ssts);
+    utils::get_local_injector().inject("delete_atomically_after_prepare",
+            [] { throw std::runtime_error("delete_atomically_after_prepare"); });
+}
+
+future<> atomic_deletion::execute() noexcept {
+    if (empty()) {
+        co_return;
+    }
+    try {
+        co_await coroutine::parallel_for_each(_ssts, [this] (shared_sstable sst) {
+            return sst->unlink(this);
+        });
+        utils::get_local_injector().inject("delete_atomically_after_unlink",
+                [] { throw std::runtime_error("delete_atomically_after_unlink"); });
+        co_await _impl->finalize();
+    } catch (...) {
+        // After commit(), the SSTables will be deleted even after a crash.
+        smlogger.warn("SSTables deletion failed after commit: {}. Ignored.", std::current_exception());
+    }
+}
+
 sstables_manager::sstables_manager(
     sstring name, db::large_data_handler& large_data_handler, db::corrupt_data_handler& corrupt_data_handler, struct config cfg, gms::feature_service& feat, cache_tracker& ct, directory_semaphore& dir_sem,
     noncopyable_function<locator::host_id()>&& resolve_host_id, sstable_compressor_factory& compressor_factory, const abort_source& abort, std::vector<file_io_extension*> file_io_extensions, scheduling_group maintenance_sg, storage_manager* shared)
@@ -408,29 +454,8 @@ void sstables_manager::maybe_done() {
     }
 }
 
-future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
-    if (ssts.empty()) {
-        co_return;
-    }
-
-    // All sstables here belong to the same table, thus they do live
-    // in the same storage so it's OK to get the deleter from _signal_mana
-    // front element. The deleter implementation is welcome to check
-    // that sstables from the vector really live in it.
-    auto& storage = ssts.front()->get_storage();
-    auto ctx = co_await storage.atomic_delete_prepare(ssts);
-
-    utils::get_local_injector().inject("delete_atomically_after_prepare",
-            [] { throw std::runtime_error("delete_atomically_after_prepare"); });
-
-    co_await coroutine::parallel_for_each(ssts, [&ctx] (shared_sstable sst) {
-        return sst->unlink(&ctx);
-    });
-
-    utils::get_local_injector().inject("delete_atomically_after_unlink",
-            [] { throw std::runtime_error("delete_atomically_after_unlink"); });
-
-    co_await storage.atomic_delete_complete(std::move(ctx));
+atomic_deletion sstables_manager::make_atomic_deletion(std::vector<shared_sstable> ssts) {
+    return atomic_deletion(std::move(ssts));
 }
 
 future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_snapshot(std::vector<shared_sstable> ssts, sstring name) {

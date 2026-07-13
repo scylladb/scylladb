@@ -46,6 +46,7 @@ namespace sstables {
 
 class object_storage_client;
 class directory_semaphore;
+class storage;
 using schema_ptr = lw_shared_ptr<const schema>;
 using shareable_components_ptr = lw_shared_ptr<shareable_components>;
 
@@ -60,6 +61,27 @@ struct sstable_snapshot_metadata {
     int64_t last_token;
     int64_t repaired_at;
     std::optional<size_t> tablet_id;
+};
+
+class atomic_deletion {
+    std::vector<shared_sstable> _ssts;
+    const storage* _storage = nullptr;
+    std::unique_ptr<atomic_deletion_impl> _impl;
+
+    static const storage& get_storage(const std::vector<shared_sstable>& ssts);
+
+public:
+    explicit atomic_deletion(std::vector<shared_sstable> ssts);
+
+    std::vector<shared_sstable>& sstables() noexcept { return _ssts; }
+    const std::vector<shared_sstable>& sstables() const noexcept { return _ssts; }
+    bool empty() const noexcept { return _ssts.empty(); }
+
+    // On success, all sstables are ensured to be eventually deleted.
+    // On failure, either all or none of the sstables will be deleted,
+    // but never only some of them.
+    future<> commit();
+    future<> execute() noexcept;
 };
 
 class storage_manager : public peering_sharded_service<storage_manager> {
@@ -274,7 +296,7 @@ public:
         return *_sstables_registry;
     }
 
-    future<> delete_atomically(std::vector<shared_sstable> ssts);
+    atomic_deletion make_atomic_deletion(std::vector<shared_sstable> ssts);
     future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring jsondir);
     future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const schema& s, const data_dictionary::storage_options& so);
     future<> destroy_table_storage(const data_dictionary::storage_options& so);
