@@ -188,15 +188,83 @@ class utils::gcp::storage::client::object_data_source : public seekable_data_sou
     std::string _session_path;
     uint64_t _generation = 0;
     uint64_t _size = 0;
-    uint64_t _position = 0;
     std::chrono::system_clock::time_point _timestamp;
-    seastar::semaphore_units<> _limits;
     seastar::abort_source* _as;
-    std::deque<temporary_buffer<char>> _buffers;
 
-    size_t buffer_size() const {
-        return std::accumulate(_buffers.begin(), _buffers.end(), 0, [](size_t sum, auto& b) { return sum + b.size(); });
-    }
+    struct state {
+        uint64_t position = 0;
+        std::deque<temporary_buffer<char>> buffers;
+        seastar::semaphore_units<> limits;
+
+        size_t buffer_size() const {
+            return std::accumulate(buffers.begin(), buffers.end(), 0, [](size_t sum, auto& b) { return sum + b.size(); });
+        }
+
+        void adjust_lease();
+
+        void adopt(seastar::semaphore_units<> lease) {
+            if (limits) {
+                limits.adopt(std::move(lease));
+            } else {
+                limits = std::move(lease);
+            }
+        }
+
+        void trim() {
+            while (!buffers.empty() && buffers.front().empty()) {
+                buffers.pop_front();
+            }
+        }
+
+        auto get(size_t limit) {
+            temporary_buffer<char> res;
+
+            if (limit == 0) {
+                return res;
+            }
+
+            while (!buffers.empty() && res.empty()) {
+                auto& buf = buffers.front();
+                if (buf.size() > limit) {
+                    res = buf.share(0, limit);
+                    buf.trim_front(limit);
+                } else {
+                    res = std::move(buf);
+                    buffers.pop_front();
+                }
+            }
+            return res;
+        }
+    };
+
+    std::unique_ptr<state> _state;
+
+    class hold_state {
+        object_data_source& _src;
+        std::unique_ptr<state> _state;
+    public:
+        hold_state(object_data_source& s)
+            : _src(s)
+            , _state(std::exchange(s._state, {}))
+        {
+            if (!_state) {
+                _state = std::make_unique<state>();
+            }
+        }
+        ~hold_state() {
+            _state->adjust_lease();
+            if (!std::uncaught_exceptions()) {
+                _src._state = std::move(_state);
+            }
+        }
+        operator state&() const {
+            return *_state;
+        }
+    };
+
+    future<temporary_buffer<char>> get(size_t limit, state&);
+    future<temporary_buffer<char>> skip(uint64_t n, state&);
+    future<> seek(uint64_t pos, state&);
 
 public:
     object_data_source(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name, seastar::abort_source* as)
@@ -208,9 +276,9 @@ public:
     future<temporary_buffer<char>> get() override;
     future<temporary_buffer<char>> skip(uint64_t n) override;
     future<> read_info();
-    void adjust_lease();
 
     future<temporary_buffer<char>> get(size_t limit) override;
+    future<temporary_buffer<char>> get_at(uint64_t pos, size_t limit) override;
     future<> seek(uint64_t pos) override;
     future<uint64_t> size() override;
     future<std::chrono::system_clock::time_point> timestamp() override;
@@ -369,6 +437,9 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                 co_await coroutine::return_exception_ptr(std::move(eptr));
             }
         };
+
+        co_await utils::get_local_injector().inject("gcp_storage_stall_requests", std::chrono::milliseconds(150));
+
         object_storage_retry_strategy retry_strategy(10,10ms,10000ms, as);
         co_return co_await rest::simple_send(_client, req, wrapped_handler, &retry_strategy, as);
     } catch (...) {
@@ -658,33 +729,31 @@ future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
 }
 
 // Read a single buffer from the source object
-future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get(size_t limit) {
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get(size_t limit, state& s) {
     // If we don't know the source size yet, get the info from server
     if (_size == 0) {
         co_await read_info();
     }
 
+    s.trim();
+
     // If we don't have buffers to give, try getting one from server
-    if (_buffers.empty()) {
-        auto to_read = std::min(_size - _position, limit);
+    if (s.buffers.empty()) {
+        auto to_read = std::min(_size - s.position, limit);
 
         // to_read == 0 -> eof
         if (to_read != 0) {
-            gcp_storage.debug("Reading object {}:{} ({}-{}/{})", _bucket, _object_name, _position, _position+to_read, _size);
+            gcp_storage.debug("Reading object {}:{} ({}-{}/{})", _bucket, _object_name, s.position, s.position+to_read, _size);
 
             auto lease = _impl->try_get_units(to_read);
             if (lease) {
-                if (_limits) {
-                    _limits.adopt(std::move(*lease));
-                } else {
-                    _limits = std::move(*lease);
-                }
+                s.adopt(std::move(*lease));
             } else {
                 // If we can't get a lease to cover this read, don't wait, as this
                 // could cause deadlock in higher layers, but instead adjust the
                 // size down to decrease memory pressure.
                 to_read = std::min(to_read, min_gcp_storage_chunk_size);
-                gcp_storage.debug("Reading object (adjusted) {}:{} ({}-{}/{})", _bucket, _object_name, _position, _position+to_read, _size);
+                gcp_storage.debug("Reading object (adjusted) {}:{} ({}-{}/{})", _bucket, _object_name, s.position, s.position+to_read, _size);
             }
 
             // Ensure we read from the same generation as we queried in read_info. Note: mock server ignores this.
@@ -693,7 +762,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                 , seastar::http::internal::url_encode(_object_name)
                 , _generation
             );
-            auto range = fmt::format("bytes={}-{}", _position, _position+to_read-1); // inclusive range
+            auto range = fmt::format("bytes={}-{}", s.position, s.position+to_read-1); // inclusive range
 
             co_await _impl->send_with_retry(path
                 , GCP_OBJECT_SCOPE_READ_ONLY
@@ -701,16 +770,16 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                 , ""s
                 , [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
-                        throw failed_operation(fmt::format("Could not read object {}: {} ({}/{} - {})", _bucket, _object_name, _position, _size, int(rep._status)));
+                        throw failed_operation(fmt::format("Could not read object {}: {} ({}-{}/{} - {})", _bucket, _object_name, s.position, s.position+to_read, _size, int(rep._status)));
                     }
-                    auto old = _position;
+                    auto old = s.position;
                     // ensure these are on our coroutine frame.
                     auto bufs = co_await util::read_entire_stream(in);
                     for (auto&& buf : bufs) {
-                        _position += buf.size();
-                        _buffers.emplace_back(std::move(buf));
+                        s.position += buf.size();
+                        s.buffers.emplace_back(std::move(buf));
                     }
-                    gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, _position, _size);
+                    gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
                 }
                 , httpclient::method_type::GET
                 , rest::key_values({ { RANGE, range } })
@@ -719,22 +788,18 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
         }
     }
 
-    temporary_buffer<char> res;
+    co_return s.get(limit);
+}
 
-    if (!_buffers.empty()) {
-        auto&& buf = _buffers.front();
-        if (buf.size() >= limit) {
-            res = buf.share(0, limit);
-            buf.trim_front(limit);
-        } else {
-            res = std::move(buf);
-            _buffers.pop_front();
-        }
-    }
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get(size_t limit) {
+    hold_state h(*this);
+    co_return co_await get(limit, h);
+}
 
-    adjust_lease();
-
-    co_return res;
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get_at(uint64_t pos, size_t limit) {
+    hold_state h(*this);
+    co_await seek(pos, h);
+    co_return co_await get(limit, h);
 }
 
 future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get() {
@@ -742,37 +807,39 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
     co_return co_await get(default_gcp_storage_chunk_size);
 }
 
-future<> utils::gcp::storage::client::object_data_source::seek(uint64_t pos) {
+future<> utils::gcp::storage::client::object_data_source::seek(uint64_t pos, state& s) {
     if (_size == 0) {
         co_await read_info();
     }
-    auto buf_size = buffer_size();
-    assert(buf_size <= _position);
-    auto read_pos = _position - buf_size;
-    if (pos < read_pos || pos >= _position) {
-        _buffers.clear();
-        _position = std::min(pos, _size);
+    auto buf_size = s.buffer_size();
+    assert(buf_size <= s.position);
+    auto read_pos = s.position - buf_size;
+    if (pos < read_pos || pos >= s.position) {
+        s.buffers.clear();
+        s.position = std::min(pos, _size);
         co_return;
     }
     auto n = pos - read_pos;
     // Drop superfluous cache
-    while (n > 0 && !_buffers.empty()) {
-        auto m = std::min(n, _buffers.front().size());
-        _buffers.front().trim_front(m);
-        if (_buffers.front().empty()) {
-            _buffers.pop_front();
+    while (n > 0 && !s.buffers.empty()) {
+        auto m = std::min(n, s.buffers.front().size());
+        s.buffers.front().trim_front(m);
+        if (s.buffers.front().empty()) {
+            s.buffers.pop_front();
         }
         n -= m;
     }
-    adjust_lease();
 }
 
-void utils::gcp::storage::client::object_data_source::adjust_lease() {
-    auto total = std::accumulate(_buffers.begin(), _buffers.end(), size_t{}, [](size_t s, auto& buf) {
-        return s + buf.size();
-    });
-    if (total < _limits.count()) {
-        _limits.return_units(_limits.count() - total);
+future<> utils::gcp::storage::client::object_data_source::seek(uint64_t pos) {
+    hold_state h(*this);
+    co_return co_await seek(pos, h);
+}
+
+void utils::gcp::storage::client::object_data_source::state::adjust_lease() {
+    auto total = buffer_size();
+    if (total < limits.count()) {
+        limits.return_units(limits.count() - total);
     }
 }
 
@@ -790,13 +857,20 @@ future<std::chrono::system_clock::time_point> utils::gcp::storage::client::objec
     co_return _timestamp;
 }
 
-future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::skip(uint64_t n) {
-    auto buf_size = buffer_size();
-    assert(buf_size <= _position);
-    auto read_pos = _position - buf_size;
-    co_await seek(read_pos + n);
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::skip(uint64_t n, state& s) {
+    auto buf_size = s.buffer_size();
+    assert(buf_size <= s.position);
+    auto read_pos = s.position - buf_size;
+    auto new_pos = read_pos + n;
+    co_await seek(new_pos, s);
+    s.adjust_lease();
     // And get the next buffer
-    co_return co_await get();
+    co_return co_await get(default_gcp_storage_chunk_size, s);
+}
+
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::skip(uint64_t n) {
+    hold_state h(*this);
+    co_return co_await skip(n, h);
 }
 
 future<> utils::gcp::storage::client::object_data_source::read_info() {
