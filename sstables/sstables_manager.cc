@@ -54,6 +54,9 @@ future<> atomic_deletion::commit() {
     if (empty()) {
         co_return;
     }
+    if (utils::get_local_injector().enter("delete_atomically_before_prepare")) {
+        throw std::runtime_error("delete_atomically_before_prepare");
+    }
     co_await _impl->commit(_ssts);
     utils::get_local_injector().inject("delete_atomically_after_prepare",
             [] { throw std::runtime_error("delete_atomically_after_prepare"); });
