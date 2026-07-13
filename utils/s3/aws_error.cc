@@ -80,12 +80,18 @@ std::optional<aws_error> aws_error::parse(seastar::sstring&& body) {
         }
         ret_val._message = message_node->value();
     } else {
+        std::string code_value = "missing Code node";
+        std::string message_value = "missing Message node";
+
         if (code_node) {
-            ::s3::s3l.warn("Malformed S3 error response: missing Message node, Code: {}", code_node->value());
-        } else if (message_node) {
-            ::s3::s3l.warn("Malformed S3 error response: missing Code node, Message: {}", message_node->value());
+            code_value = code_node->value();
         }
+        if (message_node) {
+            message_value = message_node->value();
+        }
+        ret_val._message = seastar::format("Malformed S3 error response. Code: {}, Message: {}", code_value, message_value);
         ret_val._type = aws_error_type::UNKNOWN;
+        ::s3::s3l.warn("{}", ret_val._message);
     }
     return ret_val;
 }
