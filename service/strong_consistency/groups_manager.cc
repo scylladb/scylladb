@@ -25,6 +25,7 @@
 #include "utils/error_injection.hh"
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include <seastar/core/abort_source.hh>
 
@@ -194,7 +195,21 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
                 ::format("table {}, tablet {} raft group {} background error {}", 
                     tablet.table, tablet.tablet, group_id, e));
         },
-        .tag = format("sc-{}", group_id)
+        .tag = format("sc-{}", group_id),
+        .election_priority = [&] {
+            auto& ks = _db.find_keyspace(_db.find_schema(tablet.table)->ks_name());
+            auto consistency = ks.metadata()->consistency_option();
+            throwing_assert(consistency);
+            if (!consistency->has_dedicated_rack()) {
+                return raft::regular_election_priority;
+            }
+            auto& topo = tm->get_topology();
+            auto my_dc = topo.get_location().dc;
+            auto it = consistency->dedicated_rack.find(my_dc);
+            return (it != consistency->dedicated_rack.end() && it->second == topo.get_location().rack)
+                ? raft::high_election_priority
+                : raft::regular_election_priority;
+        }()
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);

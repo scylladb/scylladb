@@ -67,6 +67,9 @@ public:
         // Helps distinguish raft instances when multiple groups share the
         // same server_id. If empty, server_id is used as the default.
         sstring tag;
+        // Higher priority gives this replica a shorter election timeout range,
+        // making it more likely to become leader.
+        election_priority election_priority = regular_election_priority;
     };
 
     virtual ~server() {}
