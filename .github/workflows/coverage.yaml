@@ -1,14 +1,19 @@
 name: Coverage
 
 on:
+  # issue_comment- and workflow_dispatch-triggered runs are always resolved
+  # from the workflow file on the default branch (GitHub requires the
+  # workflow to already be registered there), so neither works from an open
+  # PR before this file is merged.
+  #
+  # pull_request is the one trigger type that uses the workflow file version
+  # from the PR's own branch/merge commit (the same reason pull_request is
+  # the safe alternative to pull_request_target) -- so it's what actually
+  # lets this be tried out pre-merge: apply the 'coverage' label to your PR.
   issue_comment:
     types: [created]
-  # issue_comment-triggered runs always use the workflow file from the
-  # default branch, so '/coverage' has no effect until this file is merged.
-  # workflow_dispatch runs the workflow as it exists on whatever ref it's
-  # dispatched against, so it's the way to try this out from an open PR
-  # branch first, e.g.:
-  #   gh workflow run coverage.yaml --ref <your-branch> -f pr_number=<PR number>
+  pull_request:
+    types: [labeled, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -22,14 +27,15 @@ env:
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.issue.number || inputs.pr_number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
   read-toolchain:
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/coverage'))
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/coverage')) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'coverage'))
     uses: ./.github/workflows/read-toolchain.yaml
 
   coverage:
@@ -46,9 +52,14 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
-            const prNumber = context.eventName === 'workflow_dispatch'
-              ? Number(context.payload.inputs.pr_number)
-              : context.issue.number;
+            let prNumber;
+            if (context.eventName === 'workflow_dispatch') {
+              prNumber = Number(context.payload.inputs.pr_number);
+            } else if (context.eventName === 'pull_request') {
+              prNumber = context.payload.pull_request.number;
+            } else {
+              prNumber = context.issue.number;
+            }
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
