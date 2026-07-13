@@ -552,7 +552,7 @@ void client_broken_bucket(const client_maker_function& client_maker) {
     auto close_client = deferred_close(*client);
     auto data = sstring("1234567890ABCDEF").release();
     BOOST_REQUIRE_EXCEPTION(client->put_object(name, std::move(data)).get(), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == EIO && e.what() == "S3 request failed. Code: 100. Reason: The specified bucket is not valid."sv;
+        return e.code().value() == EIO && std::string(e.what()).contains("Reason: The specified bucket is not valid.");
     });
 }
 
@@ -566,7 +566,7 @@ void client_missing_prefix(const client_maker_function& client_maker) {
     const auto name = guard.object_path("testobject");
 
     BOOST_REQUIRE_EXCEPTION(client->get_object_size(name).get(), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == ENOENT && e.what() == "S3 request failed. Code: 117. Reason:  HTTP code: 404 Not Found"sv;
+        return e.code().value() == ENOENT && std::string(e.what()).contains("Reason:  HTTP code: 404 Not Found");
     });
 }
 
@@ -580,7 +580,7 @@ void client_access_missing_object(const client_maker_function& client_maker) {
     const auto name = guard.object_path("testobject");
 
     BOOST_REQUIRE_EXCEPTION(client->get_object_tagging(name).get(), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == ENOENT && e.what() == "S3 request failed. Code: 133. Reason: The specified key does not exist."sv;
+        return e.code().value() == ENOENT && std::string(e.what()).contains("Reason: The specified key does not exist.");
     });
 }
 

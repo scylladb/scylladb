@@ -1,0 +1,130 @@
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+// This is a template consumed by utils/s3/gen_aws_service_errors.py.
+// The build system expands the @SCYLLA_AWS_ERRORS_*@ tags below and writes
+// the result to <build-dir>/utils/s3/aws_error_definitions_generated.cc.
+// Do not edit the generated file — edit this template instead.
+
+#include "aws_error.hh"
+
+
+namespace aws {
+
+using namespace utils::http;
+
+const aws_errors& aws_error::get_errors() {
+    static const std::unordered_map<std::string_view, const aws_error> aws_error_map{
+        {"IncompleteSignature", aws_error(aws_error_type::INCOMPLETE_SIGNATURE, retryable::no)},
+        {"IncompleteSignatureException", aws_error(aws_error_type::INCOMPLETE_SIGNATURE, retryable::no)},
+        {"InvalidSignatureException", aws_error(aws_error_type::INVALID_SIGNATURE, retryable::no)},
+        {"InvalidSignature", aws_error(aws_error_type::INVALID_SIGNATURE, retryable::no)},
+        {"InternalFailureException", aws_error(aws_error_type::INTERNAL_FAILURE, retryable::yes)},
+        {"InternalFailure", aws_error(aws_error_type::INTERNAL_FAILURE, retryable::yes)},
+        {"InternalServerError", aws_error(aws_error_type::INTERNAL_FAILURE, retryable::yes)},
+        {"InternalError", aws_error(aws_error_type::INTERNAL_FAILURE, retryable::yes)},
+        {"InvalidActionException", aws_error(aws_error_type::INVALID_ACTION, retryable::no)},
+        {"InvalidAction", aws_error(aws_error_type::INVALID_ACTION, retryable::no)},
+        {"InvalidClientTokenIdException", aws_error(aws_error_type::INVALID_CLIENT_TOKEN_ID, retryable::no)},
+        {"InvalidClientTokenId", aws_error(aws_error_type::INVALID_CLIENT_TOKEN_ID, retryable::no)},
+        {"InvalidParameterCombinationException", aws_error(aws_error_type::INVALID_PARAMETER_COMBINATION, retryable::no)},
+        {"InvalidParameterCombination", aws_error(aws_error_type::INVALID_PARAMETER_COMBINATION, retryable::no)},
+        {"InvalidParameterValueException", aws_error(aws_error_type::INVALID_PARAMETER_VALUE, retryable::no)},
+        {"InvalidParameterValue", aws_error(aws_error_type::INVALID_PARAMETER_VALUE, retryable::no)},
+        {"InvalidQueryParameterException", aws_error(aws_error_type::INVALID_QUERY_PARAMETER, retryable::no)},
+        {"InvalidQueryParameter", aws_error(aws_error_type::INVALID_QUERY_PARAMETER, retryable::no)},
+        {"MalformedQueryStringException", aws_error(aws_error_type::MALFORMED_QUERY_STRING, retryable::no)},
+        {"MalformedQueryString", aws_error(aws_error_type::MALFORMED_QUERY_STRING, retryable::no)},
+        {"MissingActionException", aws_error(aws_error_type::MISSING_ACTION, retryable::no)},
+        {"MissingAction", aws_error(aws_error_type::MISSING_ACTION, retryable::no)},
+        {"MissingAuthenticationTokenException", aws_error(aws_error_type::MISSING_AUTHENTICATION_TOKEN, retryable::no)},
+        {"MissingAuthenticationToken", aws_error(aws_error_type::MISSING_AUTHENTICATION_TOKEN, retryable::no)},
+        {"MissingParameterException", aws_error(aws_error_type::MISSING_PARAMETER, retryable::no)},
+        {"MissingParameter", aws_error(aws_error_type::MISSING_PARAMETER, retryable::no)},
+        {"OptInRequired", aws_error(aws_error_type::OPT_IN_REQUIRED, retryable::no)},
+        {"RequestExpiredException", aws_error(aws_error_type::REQUEST_EXPIRED, retryable::yes)},
+        {"RequestExpired", aws_error(aws_error_type::REQUEST_EXPIRED, retryable::yes)},
+        {"ServiceUnavailableException", aws_error(aws_error_type::SERVICE_UNAVAILABLE, retryable::yes)},
+        {"ServiceUnavailableError", aws_error(aws_error_type::SERVICE_UNAVAILABLE, retryable::yes)},
+        {"ServiceUnavailable", aws_error(aws_error_type::SERVICE_UNAVAILABLE, retryable::yes)},
+        {"RequestThrottledException", aws_error(aws_error_type::THROTTLING, retryable::yes)},
+        {"RequestThrottled", aws_error(aws_error_type::THROTTLING, retryable::yes)},
+        {"ThrottlingException", aws_error(aws_error_type::THROTTLING, retryable::yes)},
+        {"ThrottledException", aws_error(aws_error_type::THROTTLING, retryable::yes)},
+        {"Throttling", aws_error(aws_error_type::THROTTLING, retryable::yes)},
+        {"ValidationErrorException", aws_error(aws_error_type::VALIDATION, retryable::no)},
+        {"ValidationException", aws_error(aws_error_type::VALIDATION, retryable::no)},
+        {"ValidationError", aws_error(aws_error_type::VALIDATION, retryable::no)},
+        {"AccessDeniedException", aws_error(aws_error_type::ACCESS_DENIED, retryable::no)},
+        {"AccessDenied", aws_error(aws_error_type::ACCESS_DENIED, retryable::no)},
+        {"ResourceNotFoundException", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
+        {"ResourceNotFound", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
+        {"UnrecognizedClientException", aws_error(aws_error_type::UNRECOGNIZED_CLIENT, retryable::no)},
+        {"UnrecognizedClient", aws_error(aws_error_type::UNRECOGNIZED_CLIENT, retryable::no)},
+        {"SlowDownException", aws_error(aws_error_type::SLOW_DOWN, retryable::yes)},
+        {"SlowDown", aws_error(aws_error_type::SLOW_DOWN, retryable::yes)},
+        {"SignatureDoesNotMatchException", aws_error(aws_error_type::SIGNATURE_DOES_NOT_MATCH, retryable::no)},
+        {"SignatureDoesNotMatch", aws_error(aws_error_type::SIGNATURE_DOES_NOT_MATCH, retryable::no)},
+        {"InvalidAccessKeyIdException", aws_error(aws_error_type::INVALID_ACCESS_KEY_ID, retryable::no)},
+        {"InvalidAccessKeyId", aws_error(aws_error_type::INVALID_ACCESS_KEY_ID, retryable::no)},
+        {"RequestTimeTooSkewedException", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
+        {"RequestTimeTooSkewed", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
+        {"RequestTimeoutException", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
+        {"RequestTimeout", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
+        // OCI common API errors returned by Object Storage through S3-compatible endpoints.
+        {"CannotParseRequest", aws_error(aws_error_type::OCI_CANNOT_PARSE_REQUEST, retryable::no)},
+        {"InvalidParameter", aws_error(aws_error_type::INVALID_PARAMETER_VALUE, retryable::no)},
+        {"LimitExceeded", aws_error(aws_error_type::OCI_LIMIT_EXCEEDED, retryable::no)},
+        {"QuotaExceeded", aws_error(aws_error_type::OCI_QUOTA_EXCEEDED, retryable::no)},
+        {"RelatedResourceNotAuthorizedOrNotFound", aws_error(aws_error_type::OCI_RELATED_RESOURCE_NOT_AUTHORIZED_OR_NOT_FOUND, retryable::no)},
+        {"NotAuthenticated", aws_error(aws_error_type::MISSING_AUTHENTICATION_TOKEN, retryable::no)},
+        {"NotAllowed", aws_error(aws_error_type::INVALID_ACTION, retryable::no)},
+        {"NotAuthorized", aws_error(aws_error_type::ACCESS_DENIED, retryable::no)},
+        {"SignUpRequired", aws_error(aws_error_type::OPT_IN_REQUIRED, retryable::no)},
+        {"NotAuthorizedOrNotFound", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
+        {"NotFound", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
+        {"NamespaceNotFound", aws_error(aws_error_type::RESOURCE_NOT_FOUND, retryable::no)},
+        {"MethodNotAllowed", aws_error(aws_error_type::INVALID_ACTION, retryable::no)},
+        {"Conflict", aws_error(aws_error_type::OCI_CONFLICT, retryable::no)},
+        {"ExternalServerIncorrectState", aws_error(aws_error_type::OCI_EXTERNAL_SERVER_INCORRECT_STATE, retryable::yes)},
+        {"IncorrectState", aws_error(aws_error_type::OCI_INCORRECT_STATE, retryable::yes)},
+        {"InvalidatedRetryToken", aws_error(aws_error_type::OCI_INVALIDATED_RETRY_TOKEN, retryable::no)},
+        {"ResourceLocked", aws_error(aws_error_type::OCI_RESOURCE_LOCKED, retryable::no)},
+        {"NotAuthorizedOrResourceAlreadyExists", aws_error(aws_error_type::OCI_NOT_AUTHORIZED_OR_RESOURCE_ALREADY_EXISTS, retryable::no)},
+        {"NoEtagMatch", aws_error(aws_error_type::OCI_NO_ETAG_MATCH, retryable::no)},
+        {"PayloadTooLarge", aws_error(aws_error_type::OCI_PAYLOAD_TOO_LARGE, retryable::no)},
+        {"UnprocessableEntity", aws_error(aws_error_type::OCI_UNPROCESSABLE_ENTITY, retryable::no)},
+        {"TooManyRequests", aws_error(aws_error_type::THROTTLING, retryable::yes)},
+        {"RequestHeaderFieldsTooLarge", aws_error(aws_error_type::OCI_REQUEST_HEADER_FIELDS_TOO_LARGE, retryable::no)},
+        {"MethodNotImplemented", aws_error(aws_error_type::OCI_METHOD_NOT_IMPLEMENTED, retryable::no)},
+        {"ExternalServerUnreachable", aws_error(aws_error_type::OCI_EXTERNAL_SERVER_UNREACHABLE, retryable::yes)},
+        {"ExternalServerTimeout", aws_error(aws_error_type::OCI_EXTERNAL_SERVER_TIMEOUT, retryable::yes)},
+        {"ExternalServerInvalidResponse", aws_error(aws_error_type::OCI_EXTERNAL_SERVER_INVALID_RESPONSE, retryable::yes)},
+        {"InvalidStorageTier", aws_error(aws_error_type::OCI_INVALID_STORAGE_TIER, retryable::no)},
+        {"HTTP_UNAUTHORIZED", aws_error(aws_error_type::HTTP_UNAUTHORIZED, retryable::no)},
+        {"HTTP_FORBIDDEN", aws_error(aws_error_type::HTTP_FORBIDDEN, retryable::no)},
+        {"HTTP_NOT_FOUND", aws_error(aws_error_type::HTTP_NOT_FOUND, retryable::no)},
+        {"HTTP_TOO_MANY_REQUESTS", aws_error(aws_error_type::HTTP_TOO_MANY_REQUESTS, retryable::yes)},
+        {"HTTP_INTERNAL_SERVER_ERROR", aws_error(aws_error_type::HTTP_INTERNAL_SERVER_ERROR, retryable::yes)},
+        {"HTTP_BANDWIDTH_LIMIT_EXCEEDED", aws_error(aws_error_type::HTTP_BANDWIDTH_LIMIT_EXCEEDED, retryable::yes)},
+        {"HTTP_SERVICE_UNAVAILABLE", aws_error(aws_error_type::HTTP_SERVICE_UNAVAILABLE, retryable::yes)},
+        {"HTTP_REQUEST_TIMEOUT", aws_error(aws_error_type::HTTP_REQUEST_TIMEOUT, retryable::yes)},
+        {"HTTP_PAGE_EXPIRED", aws_error(aws_error_type::HTTP_PAGE_EXPIRED, retryable::yes)},
+        {"HTTP_LOGIN_TIMEOUT", aws_error(aws_error_type::HTTP_LOGIN_TIMEOUT, retryable::yes)},
+        {"HTTP_GATEWAY_TIMEOUT", aws_error(aws_error_type::HTTP_GATEWAY_TIMEOUT, retryable::yes)},
+        {"HTTP_NETWORK_CONNECT_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_CONNECT_TIMEOUT, retryable::yes)},
+        {"HTTP_NETWORK_READ_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_READ_TIMEOUT, retryable::yes)},
+        // S3-specific wire-code → aws_error entries are substituted here at build time.
+        // @SCYLLA_AWS_ERRORS_S3@
+        // STS-specific wire-code → aws_error entries are substituted here at build time.
+        // @SCYLLA_AWS_ERRORS_STS@
+    };
+    return aws_error_map;
+}
+
+} // namespace aws

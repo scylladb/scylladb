@@ -2489,6 +2489,9 @@ def write_build_file(f,
         rule serializer
             command = ./idl-compiler.py --ns ser -f $in -o $out
             description = IDL compiler $out
+        rule aws_service_errors
+            command = ./utils/s3/gen_aws_service_errors.py --output-dir $out_dir
+            description = AWS service errors generator $out
         rule ninja
             command = {ninja} -C $subdir $target
             restat = 1
@@ -2646,6 +2649,10 @@ def write_build_file(f,
                         && touch $out
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
+        aws_errors_gen_dir = '$builddir/{}/gen'.format(mode)
+        aws_errors_gen_hh = '{}/utils/s3/aws_error_definitions_generated.hh'.format(aws_errors_gen_dir)
+        aws_errors_gen_cc = '{}/utils/s3/aws_error_definitions_generated.cc'.format(aws_errors_gen_dir)
+        aws_errors_gen_obj = aws_errors_gen_cc.replace('.cc', '.o')
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
@@ -2687,6 +2694,11 @@ def write_build_file(f,
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     for src in srcs
                     if src.endswith('.cc')]
+            # If the binary consumes utils/s3/aws_error.cc, it also needs
+            # the generated aws_error_definitions_generated.o (which
+            # provides the aws_error::get_errors() map).
+            if 'utils/s3/aws_error.cc' in srcs:
+                objs.append(aws_errors_gen_obj)
             has_rust = False
             for dep in deps[binary]:
                 if isinstance(dep, Antlr3Grammar):
@@ -2852,6 +2864,19 @@ def write_build_file(f,
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
+        f.write('build {hh} {cc}: aws_service_errors | utils/s3/gen_aws_service_errors.py utils/s3/aws_error_definitions.hh.in utils/s3/aws_error_definitions.cc.in\n'
+                '  out_dir = {out_dir}\n'.format(
+                    hh=aws_errors_gen_hh, cc=aws_errors_gen_cc,
+                    out_dir=aws_errors_gen_dir))
+        # Compile the generated .cc so it can be linked into any binary
+        # that consumes utils/s3/aws_error.cc (see the objs loop above).
+        # The generated .cc lives under $builddir/{mode}/gen/utils/s3/ but
+        # still uses `#include "aws_error.hh"` inherited from the template,
+        # so we add an extra -iquote for utils/s3 to resolve it.
+        f.write('build {obj}: cxx.{mode} {cc} | {profile_dep}\n'
+                '  obj_cxxflags = -iquote utils/s3\n'.format(
+                    obj=aws_errors_gen_obj, mode=mode, cc=aws_errors_gen_cc,
+                    profile_dep=profile_dep))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))

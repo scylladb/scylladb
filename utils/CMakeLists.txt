@@ -1,6 +1,30 @@
 find_package(cryptopp REQUIRED)
 find_package(rapidxml REQUIRED)
 find_package(GnuTLS 3.3.26 REQUIRED)
+find_package(Python3 COMPONENTS QUIET REQUIRED Interpreter)
+
+# Generate aws_error_definitions_generated.{hh,cc} under the build tree from
+# the source templates in utils/s3/, using the current AWS c2j service models
+# for S3 and STS. The stitching of these generated files into the compile
+# graph is done elsewhere.
+set(aws_error_gen_script
+  "${CMAKE_SOURCE_DIR}/utils/s3/gen_aws_service_errors.py")
+set(aws_error_gen_hh
+  "${scylla_gen_build_dir}/utils/s3/aws_error_definitions_generated.hh")
+set(aws_error_gen_cc
+  "${scylla_gen_build_dir}/utils/s3/aws_error_definitions_generated.cc")
+add_custom_command(
+  OUTPUT ${aws_error_gen_hh} ${aws_error_gen_cc}
+  COMMAND ${Python3_EXECUTABLE} ${aws_error_gen_script}
+          --output-dir ${scylla_gen_build_dir}
+  DEPENDS
+    ${aws_error_gen_script}
+    ${CMAKE_CURRENT_SOURCE_DIR}/s3/aws_error_definitions.hh.in
+    ${CMAKE_CURRENT_SOURCE_DIR}/s3/aws_error_definitions.cc.in
+  COMMENT "Generating AWS service error definitions")
+add_custom_target(aws-service-errors-gen
+  DEPENDS ${aws_error_gen_hh} ${aws_error_gen_cc})
+
 add_library(utils STATIC)
 target_sources(utils
   PRIVATE
@@ -52,6 +76,7 @@ target_sources(utils
     aws_sigv4.cc
     rest/client.cc
     s3/aws_error.cc
+    ${aws_error_gen_cc}
     s3/client.cc
     s3/default_aws_retry_strategy.cc
     s3/credentials_providers/aws_credentials_provider.cc
@@ -72,7 +97,9 @@ target_sources(utils
 target_include_directories(utils
   PUBLIC
     ${CMAKE_SOURCE_DIR}
-    ${RAPIDJSON_INCLUDE_DIRS})
+    ${CMAKE_CURRENT_SOURCE_DIR}/s3
+    ${RAPIDJSON_INCLUDE_DIRS}
+    ${scylla_gen_build_dir})
 target_link_libraries(utils
   PUBLIC
     Seastar::seastar
@@ -90,3 +117,5 @@ endif()
 
 check_headers(check-headers utils
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
+
+
