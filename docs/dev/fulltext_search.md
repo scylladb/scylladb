@@ -1,8 +1,8 @@
 # Full-Text Search — Developer Notes
 
 For user-facing documentation (index creation, query syntax, constraints), see
-:doc:`Full-Text Search </features/fulltext-search>` and
-:ref:`Fulltext Index <create-fulltext-index-statement>` in the secondary-indexes reference.
+[Full-Text Search](../features/fulltext-search.rst) and
+[Fulltext Index section](../cql/secondary-indexes.rst#create-fulltext-index-statement) in the secondary-indexes reference.
 
 This document covers implementation details and decisions not included in the user documentation.
 
