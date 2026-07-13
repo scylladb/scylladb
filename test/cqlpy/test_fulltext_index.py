@@ -12,13 +12,15 @@
 
 import pytest
 import re
+from test.pylib.skip_types import skip_env
 from .util import new_test_table, new_test_keyspace, new_function, unique_name
 from cassandra.protocol import InvalidRequest, SyntaxException
 
 # Fulltext search is not allowed in tables using vnodes, so all tests in this file need tablets
-@pytest.fixture(scope="function", autouse=True)
-def all_tests_are_tablets_and_scylla_only(skip_without_tablets, scylla_only):
-    pass
+@pytest.fixture(scope="module", autouse=True)
+def all_tests_are_tablets_and_scylla_only(scylla_only, has_tablets):
+    if not has_tablets:
+        skip_env("Full-Text Search needs tablets enabled")
 
 
 @pytest.mark.parametrize("column_type", ["text", "varchar", "ascii"])
@@ -475,7 +477,7 @@ def test_bm25_only_gt_allowed(cql, fulltext_table):
     """BM25 restrictions should reject all operators other than >."""
     for operator in ["=", "<", "<=", "!=", ">="]:
         with pytest.raises(InvalidRequest, match=fr'Unsupported "{operator}" relation'):
-            cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') {operator} 0 LIMIT 1")
+            cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') {operator} 0 ORDER BY BM25(content, 'hello') LIMIT 1")
 
 
 def test_bm25_like_operator_rejected(cql, fulltext_table):
@@ -508,6 +510,16 @@ def test_bm25_where_only_rejected(cql, fulltext_table):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 1")
 
 
+def test_bm25_multiple_where_restrictions_rejected(cql, test_keyspace):
+    """More than one WHERE BM25() restriction must be rejected."""
+    schema = 'p int primary key, col1 text, col2 text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="only one WHERE BM25"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 AND BM25(col2, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 1")
+
+
 def test_bm25_order_by_only_rejected(cql, fulltext_table):
     """ORDER BY BM25 without a WHERE BM25() > 0 clause must be rejected."""
     with pytest.raises(InvalidRequest, match="require a WHERE BM25"):
@@ -522,6 +534,16 @@ def test_order_by_ann_then_bm25_rejected(cql, test_keyspace):
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(vec) USING 'vector_index'")
         with pytest.raises(InvalidRequest, match="does not support any other ordering"):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY vec ANN OF [1.0, 2.0], BM25(content, 'hello') LIMIT 1")
+
+
+def test_bm25_where_with_ann_order_by_rejected(cql, test_keyspace):
+    """BM25 WHERE restriction combined with an ANN ORDER BY must be rejected."""
+    schema = 'p int primary key, content text, vec vector<float, 2>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(vec) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match="BM25 and ANN cannot be combined in the same query"):
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY vec ANN OF [1.0, 2.0] LIMIT 1")
 
 
 def test_order_by_bm25_then_ann_rejected(cql, test_keyspace):
@@ -598,7 +620,7 @@ def test_bm25_different_columns_rejected(cql, test_keyspace):
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
         with pytest.raises(InvalidRequest, match="same column"):
-            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'world') LIMIT 1")
+            cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'hello') LIMIT 1")
 
 
 def test_bm25_different_search_terms_rejected(cql, fulltext_table):
@@ -667,3 +689,11 @@ def test_udf_named_bm25_coexists_with_system_bm25(cql, test_keyspace, fulltext_t
             cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
         # The system BM25 operator is reachable via system. qualification
         cql.prepare(f"SELECT * FROM {fulltext_table} WHERE system.bm25(content, 'hello') > 0 ORDER BY system.bm25(content, 'hello') LIMIT 10")
+
+
+def test_bm25_rejected_in_non_select_statements(cql, fulltext_table):
+    """BM25 must be rejected in non-SELECT statements."""
+    with pytest.raises(InvalidRequest, match="only supported in SELECT statements"):
+        cql.execute(f"UPDATE {fulltext_table} SET content = 'x' WHERE p = 1 AND BM25(content, 'hello') > 0")
+    with pytest.raises(InvalidRequest, match="only supported in SELECT statements"):
+        cql.execute(f"DELETE FROM {fulltext_table} WHERE p = 1 AND BM25(content, 'hello') > 0")
