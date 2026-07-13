@@ -689,6 +689,63 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
     }, std::move(test_cfg)).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_view_update_generator_stop_during_process_staging_sstables) {
+    cql_test_config test_cfg;
+    auto& db_cfg = *test_cfg.db_config;
+
+    db_cfg.enable_cache(false);
+    db_cfg.enable_commitlog(false);
+
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table t (p text, c text, v text, primary key (p, c))").get();
+        e.execute_cql("create materialized view tv as select * from t "
+                      "where p is not null and c is not null and v is not null "
+                      "primary key (v, c, p)").get();
+
+        auto table = e.local_db().find_column_family("ks", "t").shared_from_this();
+        auto s = table->schema();
+        const auto key = tests::generate_partition_key(s);
+        auto& view_update_generator = e.local_view_update_generator();
+
+        mutation m(s, key);
+        auto col = s->get_column_definition("v");
+        for (int i = 0; i < 1024; ++i) {
+            auto& row = m.partition().clustered_row(*s, clustering_key::from_exploded(*s, {to_bytes(fmt::format("c{}", i))}));
+            row.cells().apply(*col, atomic_cell::make_live(*col->type, 2345, col->type->decompose(sstring("x"))));
+        }
+
+        auto sst = table->make_streaming_staging_sstable();
+        auto sst_cfg = e.local_db().get_user_sstables_manager().configure_writer("test");
+        auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {});
+        sst->write_components(make_mutation_reader_from_mutations(m.schema(), std::move(permit), m), 1ul, s, sst_cfg, {}).get();
+        sst->open_data().get();
+        table->add_sstable_and_update_cache(sst).get();
+
+        constexpr std::string_view injection = "view_update_generator_pause_before_processing";
+        auto disable_injection = defer([injection] {
+            utils::get_local_injector().disable(injection);
+        });
+
+        utils::get_local_injector().enable(injection);
+        auto processing = view_update_generator.process_staging_sstables(table, {sst});
+
+        eventually_true([injection] {
+            return utils::get_local_injector().waiters(injection) > 0;
+        });
+
+        auto stop = view_update_generator.drain().then([&] {
+            return view_update_generator.stop();
+        });
+        utils::get_local_injector().receive_message(injection);
+
+        stop.get();
+        try {
+            processing.get();
+        } catch (abort_requested_exception&) {
+        }
+    }, std::move(test_cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
     using partition_size_map = std::map<dht::decorated_key, size_t, dht::ring_position_less_comparator>;
 
