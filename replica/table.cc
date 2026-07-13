@@ -3044,6 +3044,16 @@ const std::vector<sstables::shared_sstable>& compaction_group::compacted_undelet
     return _sstables_compacted_but_not_deleted;
 }
 
+bool table::tablet_has_compacted_undeleted_sstables(locator::tablet_id tid) const {
+    auto* sg = _sg_manager->maybe_storage_group_for_id(_schema, tid.value());
+    if (!sg) {
+        return false;
+    }
+    return std::ranges::any_of(sg->compaction_groups_immediate(), [] (const auto& cg) {
+        return !cg->compacted_undeleted_sstables().empty();
+    });
+}
+
 lw_shared_ptr<memtable_list>
 table::make_memory_only_memtable_list() {
     auto get_schema = [this] { return schema(); };

@@ -1168,6 +1168,8 @@ public:
     const sstables::sstable_set& get_sstable_set() const;
     lw_shared_ptr<const sstable_list> get_sstables() const;
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
+    // For tests only.
+    bool tablet_has_compacted_undeleted_sstables(locator::tablet_id) const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
     future<> drop_quarantined_sstables();
     size_t sstables_count() const;
