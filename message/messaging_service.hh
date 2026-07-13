@@ -217,7 +217,8 @@ enum class messaging_verb : int32_t {
     RESTORE_TABLET = 88,
     WAIT_FOR_RAFT_GROUPS_TO_START = 89,
     CLONE_SSTABLE = 90,
-    LAST = 91,
+    FETCH_COLUMN_MAPPINGS = 91,
+    LAST = 92,
 };
 
 } // namespace netw

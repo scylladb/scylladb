@@ -34,8 +34,10 @@
 #include "gms/gossiper.hh"
 #include "view_info.hh"
 #include "schema/schema_builder.hh"
+#include "partition_slice_builder.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
+#include "replica/query.hh"
 #include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
@@ -159,6 +161,37 @@ void migration_manager::init_messaging_service()
             mlogger.debug("Schema version request for {}", v);
             return local_schema_registry().get_frozen(v);
         });
+    });
+    ser::migration_manager_rpc_verbs::register_fetch_column_mappings(&_messaging, [this] (table_id cf_id, db::schema_tables::column_mapping_version_list versions_present) -> future<std::optional<frozen_mutation>> {
+        using namespace db::schema_tables;
+
+        auto missing_versions = co_await get_column_mapping_versions(_sys_ks.local(), cf_id);
+        const auto removed = std::ranges::remove_if(missing_versions, [&] (const auto& v) {
+            return std::ranges::contains(versions_present, v);
+        });
+        missing_versions.erase(removed.begin(), removed.end());
+        if (missing_versions.empty()) {
+            co_return std::nullopt;
+        }
+
+        const auto s = scylla_table_schema_history();
+        std::vector<query::clustering_range> ranges;
+        ranges.reserve(missing_versions.size());
+        for (const auto& v : missing_versions) {
+            ranges.emplace_back(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, uuid_type->decompose(v.uuid()))));
+        }
+
+        const auto pk = partition_key::from_exploded(*s, {uuid_type->decompose(cf_id.uuid())});
+        auto rs = co_await replica::query_mutations(_storage_proxy.get_db(),
+            s,
+            dht::partition_range::make_singular(dht::decorate_key(*s, pk)),
+            partition_slice_builder(*s).with_ranges(std::move(ranges)).build(),
+            db::no_timeout);
+        if (rs->partitions().empty()) {
+            co_return std::nullopt;
+        }
+        co_return std::move(rs->partitions()[0].mut());
     });
 }
 
@@ -1153,12 +1186,38 @@ future<> migration_manager::sync_schema(const replica::database& db, const std::
     co_await _group0_barrier.trigger(_as);
 }
 
-future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version v) {
-    schema_ptr s = local_schema_registry().get_or_null(v);
-    if (s) {
-        return make_ready_future<column_mapping>(s->get_column_mapping());
+future<> migration_manager::fetch_column_mappings(table_id cf_id,
+        host_id_vector_replica_set replicas,
+        bool ignore_down_replicas,
+        abort_source& as)
+{
+    if (!_feat.fetch_column_mappings_on_tablet_migration) {
+        co_return;
     }
-    return db::schema_tables::get_column_mapping(sys_ks, table_id, v);
+
+    const auto versions_present = co_await db::schema_tables::get_column_mapping_versions(_sys_ks.local(), cf_id);
+    co_await coroutine::parallel_for_each(replicas, [&] (locator::host_id host) -> future<> {
+        if (ignore_down_replicas && !_gossiper.is_alive(host)) {
+            mlogger.info("fetch_column_mappings[{}]: skipping replica [{}] because it is down", 
+                cf_id, host);
+            co_return;
+        }
+
+        try {
+            const auto fm = co_await ser::migration_manager_rpc_verbs::send_fetch_column_mappings(
+                    &_messaging, host, as, cf_id, versions_present);
+            if (fm) {
+                co_await _storage_proxy.mutate_locally(db::schema_tables::scylla_table_schema_history(),
+                        *fm, nullptr, db::commitlog::force_sync::no);
+            }
+        } catch (...) {
+            if (!ignore_down_replicas) {
+                throw;
+            }
+            mlogger.info("fetch_column_mappings[{}]: failed for replica [{}], error: {}",
+                cf_id, host, std::current_exception());
+        }
+    });
 }
 
 future<> migration_manager::on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id) {
