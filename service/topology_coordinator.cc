@@ -2520,6 +2520,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (action_failed(tablet_state.restore)) {
                         auto ep = tablet_state.restore->get_exception();
                         rtlogger.debug("Clearing restore transition for {} due to error", gid);
+                        _tablets.erase(gid);
                         updates.emplace_back(get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token).build());
                         // Record error on the ongoing restore request so it's propagated to the caller.
                         if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end()) {
@@ -2544,6 +2545,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         });
                     })) {
                         rtlogger.debug("Clearing restore transition for {}", gid);
+                        _tablets.erase(gid);
                         updates.emplace_back(get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token).build());
                     }
                 }
