@@ -156,12 +156,15 @@ docker_common_args+=("${SCYLLADB_DBUILD[@]}")
 
 if [ -z "$is_podman" ]; then
     unset TMP_PASSWD
+    uid="$(id -u)"
+    gid="$(id -g)"
     docker_common_args+=(
-       -u "$(id -u):$(id -g)"
+       -u "$uid:$gid"
        "${group_args[@]}"
        -v /etc/passwd:/etc/passwd:ro
        -v /etc/group:/etc/group:ro
        -v /var/run/docker.sock:/var/run/docker.sock
+       --tmpfs "/run/user/$uid:rw,exec,nosuid,nodev,mode=700,uid=$uid,gid=$gid"
        --pids-limit -1
        )
 fi
