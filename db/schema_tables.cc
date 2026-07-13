@@ -1939,7 +1939,9 @@ static void make_update_indices_mutations(
     }
 
     mutations.emplace_back(std::move(indices_mutation));
-    mutations.insert(mutations.end(), std::make_move_iterator(view_building_muts.begin()), std::make_move_iterator(view_building_muts.end()));
+    if (!view_building_muts.empty()) {
+        mutations.insert(mutations.end(), std::make_move_iterator(view_building_muts.begin()), std::make_move_iterator(view_building_muts.end()));
+    }
 }
 
 static void add_drop_column_to_mutations(schema_ptr table, const sstring& name, const schema::dropped_column& dc, api::timestamp_type timestamp, utils::chunked_vector<mutation>& mutations) {

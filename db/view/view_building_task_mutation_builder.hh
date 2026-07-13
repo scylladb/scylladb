@@ -42,6 +42,9 @@ public:
     mutation build() {
         return std::move(_m);
     }
+    bool empty() const {
+        return _m.partition().empty();
+    }
 
 private:
     clustering_key get_ck(utils::UUID id);
