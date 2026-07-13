@@ -23,8 +23,27 @@ import time
 @pytest.fixture(scope="module")
 def test_table(cql, test_keyspace):
     """ Prepares a table for the mutation dump tests to work with."""
+    # Use a very low bloom_filter_fp_chance.
+    #
+    # These tests check which mutation sources (memtable, row-cache, sstable) a
+    # partition is found in. In particular, some tests expect a freshly written
+    # partition to be present in the row-cache after a flush. Whether the flush
+    # populates the cache for a partition depends on row_cache::update(), which
+    # consults the underlying sstables' bloom filters (via the partition
+    # presence checker): if the checker says the partition "maybe exists" in the
+    # sstables, the flush conservatively skips populating the cache (the cached
+    # data might be incomplete).
+    #
+    # With NullCompactionStrategy each flush leaves a separate, never-merged
+    # sstable, so bloom filters accumulate quickly. At the default
+    # bloom_filter_fp_chance (0.01) a brand-new partition key can deterministically
+    # hit a false positive against those accumulated filters, causing the flush to
+    # skip the cache and the "row-cache" mutation source to be (legitimately)
+    # absent -- which flaked test_ck_in_query. Lowering the false-positive chance
+    # makes such collisions vanishingly unlikely for the handful of partitions
+    # these tests write.
     with util.new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck1 int, ck2 int, v text, s text static, PRIMARY KEY ((pk1, pk2), ck1, ck2)',
-                             "WITH compaction = {'class':'NullCompactionStrategy'} AND tombstone_gc = {'mode': 'disabled'}") as table:
+                             "WITH compaction = {'class':'NullCompactionStrategy'} AND tombstone_gc = {'mode': 'disabled'} AND bloom_filter_fp_chance = 0.00008") as table:
         yield table
 
 
@@ -454,10 +473,12 @@ def test_ck_in_query(cql, test_table, scylla_only):
     sources_res = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}"))
 
     sources = {r.mutation_source.split(":")[0]: r.mutation_source for r in sources_res}
-    assert "sstable" in sources # the only source we are guaranteed to have
-    assert set(sources.keys()).issubset({"memtable", "row-cache", "sstable"})
+    assert len(sources) == 3
+    assert "memtable" in sources
+    assert "row-cache" in sources
+    assert "sstable" in sources
 
-    res = list(reversed(list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
+    res = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
         WHERE
             pk1 = {pk1} AND
             pk2 = {pk2} AND
@@ -466,18 +487,17 @@ def test_ck_in_query(cql, test_table, scylla_only):
                 ('{sources["row-cache"]}', 2, 0, 0, 0),
                 ('{sources["sstable"]}', 2, 0, 0, 0),
                 ('{sources["sstable"]}', 2, 1, 1, 0))
-        """))))
+        """))
 
     columns = ("mutation_source", "partition_region", "ck1", "ck2", "position_weight")
-    expected_results = [ # reversed order
-            (sources["sstable"], 2, 1, 1, 0),
-            (sources["sstable"], 2, 0, 0, 0),
-            (sources["row-cache"], 2, 0, 0, 0),
+    expected_results = [
             (sources["memtable"], 2, 0, 0, 0),
+            (sources["row-cache"], 2, 0, 0, 0),
+            (sources["sstable"], 2, 0, 0, 0),
+            (sources["sstable"], 2, 1, 1, 0),
     ]
 
-    assert len(res) >= 2
-    assert len(res) <= len(expected_results)
+    assert len(res) == len(expected_results)
     for row, expected_row in zip(res, expected_results):
         for col_name, expected_value in zip(columns, expected_row):
             assert hasattr(row, col_name)
