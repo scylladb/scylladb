@@ -32,8 +32,6 @@ class compaction_group;
 
 namespace logstor {
 
-class segment_manager;
-
 // Writer for log records that handles serialization and size computation
 class log_record_writer {
 
@@ -281,28 +279,34 @@ private:
     friend class segment_manager_impl;
 };
 
-// Manages a fixed-size circular ring of write_buffers.
+// Configuration passed to buffered_writer constructor (excluding the flush function).
+struct buffered_writer_config {
+    size_t buffer_size;
+    size_t ring_size;
+    seastar::scheduling_group flush_sg;
+    size_t max_queued_write_bytes{0};
+};
+
+// Manages a circular ring of write_buffers.
 //
 // Writers append to the head buffer.  A single consumer coroutine drains the
 // tail.  The head advances when the current head buffer is full (can't fit the
 // next write) or when the consumer seals it.  Writers wait if the ring is full
 // (all buffers are pending flush).
 class buffered_writer {
-    // Number of buffers in the ring.  Must be >= 2 (one head + at least one
-    // that can be in-flight with the consumer).
-    static constexpr size_t ring_size = 5;
-
-    segment_manager& _sm;
     seastar::scheduling_group _flush_sg;
+    size_t _buffer_size;
+    size_t _ring_size;
+    seastar::noncopyable_function<future<>(write_buffer&)> _flush_func;
 
-    // The ring of buffers, indexed modulo ring_size.
+    // The ring of buffers, indexed modulo _ring_size.
     std::vector<write_buffer> _ring;
 
-    // Monotonically increasing indices; the actual slot is idx % ring_size.
+    // Monotonically increasing indices; the actual slot is idx % _ring_size.
     // _head: next slot writers append to.
-    // _dispatch_tail: next slot the consumer will dispatch to segment_manager.
+    // _dispatch_tail: next slot the consumer will dispatch via _flush_func.
     // _tail: oldest slot not yet safe to reuse.
-    // Invariant: _head >= _dispatch_tail >= _tail && _head - _tail < ring_size.
+    // Invariant: _head >= _dispatch_tail >= _tail && _head - _tail < _ring_size.
     size_t _head{0};
     size_t _dispatch_tail{0};
     size_t _tail{0};
@@ -333,7 +337,7 @@ class buffered_writer {
         }
     };
 
-    std::array<in_flight_write, ring_size> _in_flight;
+    std::vector<in_flight_write> _in_flight;
 
     struct queued_write {
         seastar::promise<buffered_write_result> accepted_pr; // written to buffer
@@ -382,15 +386,15 @@ class buffered_writer {
     // The single flush-consumer fiber, running for the lifetime of the writer.
     future<> _consumer{make_ready_future<>()};
 
-    auto&& head_buf(this auto&& self) noexcept { return self._ring[self._head % ring_size]; }
-    auto&& tail_buf(this auto&& self) noexcept { return self._ring[self._tail % ring_size]; }
+    auto&& head_buf(this auto&& self) noexcept { return self._ring[self._head % self._ring_size]; }
+    auto&& tail_buf(this auto&& self) noexcept { return self._ring[self._tail % self._ring_size]; }
 
-    auto&& tail_write(this auto&& self) noexcept { return self._in_flight[self._tail % ring_size]; }
-    auto&& dispatch_tail_write(this auto&& self) noexcept { return self._in_flight[self._dispatch_tail % ring_size]; }
+    auto&& tail_write(this auto&& self) noexcept { return self._in_flight[self._tail % self._ring_size]; }
+    auto&& dispatch_tail_write(this auto&& self) noexcept { return self._in_flight[self._dispatch_tail % self._ring_size]; }
 
-    // The ring is full when all ring_size slots are occupied. Advancing the
+    // The ring is full when all _ring_size slots are occupied. Advancing the
     // head further would make the new head slot collide with the tail slot.
-    bool ring_full() const noexcept { return _head - _tail == ring_size - 1; }
+    bool ring_full() const noexcept { return _head - _tail == _ring_size - 1; }
 
     bool has_pending_buffers() const noexcept;
     bool should_rotate_head_for_flush() const noexcept;
@@ -410,7 +414,8 @@ class buffered_writer {
     future<> consumer_loop();
 
 public:
-    explicit buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg, size_t max_queued_write_bytes);
+    explicit buffered_writer(buffered_writer_config cfg,
+            seastar::noncopyable_function<future<>(write_buffer&)> flush_func);
 
     buffered_writer(const buffered_writer&) = delete;
     buffered_writer& operator=(const buffered_writer&) = delete;

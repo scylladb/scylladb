@@ -43,7 +43,12 @@ static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
 
 logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
     : _segment_manager(config.segment_manager_cfg)
-    , _write_buffer(_segment_manager, config.flush_sg, config.max_queued_write_bytes)
+    , _write_buffer(buffered_writer_config{
+            .buffer_size = _segment_manager.get_segment_size(),
+            .ring_size = config.write_buffer_ring_size,
+            .flush_sg = config.flush_sg,
+            .max_queued_write_bytes = config.max_queued_write_bytes,
+        }, [&sm = _segment_manager] (write_buffer& buf) { return sm.write(buf); })
     , _cache_tracker(shared_cache_tracker) {
 
     namespace sm = seastar::metrics;
