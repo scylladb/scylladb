@@ -7,7 +7,6 @@
  */
 #include "write_buffer.hh"
 #include "dht/token.hh"
-#include "segment_manager.hh"
 #include "bytes_fwd.hh"
 #include "logstor.hh"
 #include "replica/logstor/types.hh"
@@ -291,14 +290,27 @@ bool ondisk::validate_record_header(const ondisk::record_header& rh) {
 
 // buffered_writer
 
-buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg, size_t max_queued_write_bytes)
-        : _sm(sm)
-        , _flush_sg(flush_sg)
+buffered_writer::buffered_writer(buffered_writer_config cfg, seastar::noncopyable_function<future<>(write_buffer&)> flush_func)
+        : _flush_sg(cfg.flush_sg)
+        , _buffer_size(cfg.buffer_size)
+        , _ring_size(cfg.ring_size)
+        , _flush_func(std::move(flush_func))
+        , _ring()
+        , _in_flight(cfg.ring_size)
         , _queued_writes(on_queued_write_expiry{this})
-        , _max_queued_write_bytes(max_queued_write_bytes) {
-    _ring.reserve(ring_size);
-    for (size_t i = 0; i < ring_size; ++i) {
-        _ring.emplace_back(_sm.get_segment_size(), segment_kind::mixed);
+        , _max_queued_write_bytes(cfg.max_queued_write_bytes) {
+
+    if (_ring_size < 2) {
+        on_internal_error(logstor_logger, fmt::format("buffered_writer ring_size must be >= 2 (got {})", _ring_size));
+    }
+
+    if (_buffer_size == 0) {
+        on_internal_error(logstor_logger, "buffered_writer buffer_size must be > 0");
+    }
+
+    _ring.reserve(_ring_size);
+    for (size_t i = 0; i < _ring_size; ++i) {
+        _ring.emplace_back(_buffer_size, segment_kind::mixed);
     }
 }
 
@@ -344,7 +356,7 @@ std::optional<future<log_location_with_holder>> buffered_writer::append_to_head_
 bool buffered_writer::try_dispatch_next_buffer() {
     auto idx = _dispatch_tail;
     auto& state = dispatch_tail_write();
-    auto& buf = _ring[idx % ring_size];
+    auto& buf = _ring[idx % _ring_size];
 
     if (_dispatch_tail >= _head || !state.idle() || !buf.has_data()) {
         return false;
@@ -360,8 +372,8 @@ bool buffered_writer::try_dispatch_next_buffer() {
 }
 
 future<> buffered_writer::run_dispatched_write(size_t idx) {
-    auto& buf = _ring[idx % ring_size];
-    auto f = co_await coroutine::as_future(_sm.write(buf));
+    auto& buf = _ring[idx % _ring_size];
+    auto f = co_await coroutine::as_future(_flush_func(buf));
     _consumer_progress_cv.signal();
     if (f.failed()) {
         co_await coroutine::return_exception_ptr(f.get_exception());
