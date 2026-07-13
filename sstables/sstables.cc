@@ -3793,7 +3793,7 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 }
 
 future<>
-sstable::unlink(const atomic_delete_context* ctx) noexcept {
+sstable::unlink(const atomic_deletion* deletion) noexcept {
     // Serialize with other calls to unlink or potentially ongoing mutations.
     auto lock = co_await get_units(_mutate_sem, 1);
     if (_unlinked_at) {
@@ -3803,7 +3803,7 @@ sstable::unlink(const atomic_delete_context* ctx) noexcept {
     _unlinked_at = db_clock::now();
     _on_delete(*this);
 
-    auto remove_fut = _storage->wipe(*this, ctx);
+    auto remove_fut = _storage->wipe(*this, deletion);
 
     try {
         if (_cloned_to_sstable_filename) {
