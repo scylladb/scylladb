@@ -59,6 +59,7 @@ from cassandra.cluster import NoHostAvailable   # type: ignore # pylint: disable
 from cassandra.cluster import Session           # pylint: disable=no-name-in-module
 from cassandra.cluster import ExecutionProfile  # pylint: disable=no-name-in-module
 from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in-module
+from cassandra.policies import ExponentialReconnectionPolicy  # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 from cassandra.connection import UnixSocketEndPoint
 
@@ -375,6 +376,13 @@ def stop_event(func):
             self.stop_event.clear()
         return result
     return wrap
+
+
+# The driver's default reconnection policy has an unbounded max_delay (600s) and can take
+# up to ~64 attempts to give up, i.e. hours, to notice a control connection is unreachable.
+# Any Cluster created by this module must bound both individual connection attempts and
+# the overall retry budget.
+_DRIVER_RECONNECTION_POLICY = ExponentialReconnectionPolicy(base_delay=1.0, max_delay=10.0, max_attempts=10)
 
 
 class ScyllaServer:
@@ -772,7 +780,8 @@ class ScyllaServer:
                          # This is the latest version Scylla supports
                          protocol_version=4,
                          control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                         auth_provider=self.auth_provider) as cluster:
+                         auth_provider=self.auth_provider,
+                         reconnection_policy=_DRIVER_RECONNECTION_POLICY,) as cluster:
                 with cluster.connect() as session:
                     connected = True
                     # See the comment above about `auth::standard_role_manager`. We execute
@@ -1022,6 +1031,8 @@ class ScyllaServer:
                      auth_provider=auth,
                      # This is the latest version Scylla supports
                      protocol_version=4,
+                     control_connection_timeout=self.TOPOLOGY_TIMEOUT,
+                     reconnection_policy=_DRIVER_RECONNECTION_POLICY,
                      ) as cluster:
             with cluster.connect() as session:
                 session.execute("CREATE KEYSPACE IF NOT EXISTS k WITH REPLICATION = {" +
