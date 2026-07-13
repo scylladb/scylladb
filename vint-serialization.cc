@@ -96,7 +96,6 @@ vint_size_type unsigned_vint::serialized_size(uint64_t value) noexcept {
 
 uint64_t unsigned_vint::deserialize(bytes_view v) {
     auto src = v.data();
-    auto len = v.size();
     const int8_t first_byte = *src;
 
     // No additional bytes, since the most significant bit is not set.
@@ -113,7 +112,12 @@ uint64_t unsigned_vint::deserialize(bytes_view v) {
     uint64_t value;
     // If we can overread do that. It is cheaper to have a single 64-bit read and
     // then mask out the unneeded part than to do 8x 1 byte reads.
-    if (len >= sizeof(uint64_t) + 1) [[likely]] {
+    bool can_overread = (reinterpret_cast<uintptr_t>(src+1) ^ reinterpret_cast<uintptr_t>(src+1+sizeof(uint64_t))) < 4096;
+#ifdef SEASTAR_ASAN_ENABLED
+    can_overread = false;
+#endif
+
+    if (can_overread) [[likely]] {
         std::copy_n(src + 1, sizeof(uint64_t), reinterpret_cast<int8_t*>(&value));
     } else {
         value = 0;
