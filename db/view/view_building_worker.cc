@@ -157,6 +157,8 @@ future<> view_building_worker::do_drain() {
     }
     co_await _staging_sstables_mutex.wait();
     _staging_sstables_mutex.broken();
+    co_await _started_staging_tasks_mutex.wait();
+    _started_staging_tasks_mutex.broken();
     _sstables_to_register_event.broken();
     if (this_shard_id() == 0) {
         auto sstable_registrator = std::exchange(_staging_sstables_registrator, make_ready_future<>());
@@ -280,16 +282,58 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     auto guard = co_await _group0.client().start_operation(_as);
     view_building_task_mutation_builder builder(guard.write_timestamp());
     auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
+    auto started_tasks_lock = co_await get_units(_started_staging_tasks_mutex, 1, _as);
     for (auto& [table_id, sst_infos]: _sstables_to_register) {
+        std::set<std::pair<shard_id, dht::token>> new_tasks;
+        auto task_exists = [&, this] (shard_id shard, dht::token last_token) {
+            if (new_tasks.contains({shard, last_token})) {
+                // We're already creating a task for this tablet replica
+                return true;
+            }
+
+            if (!_vb_state_machine.building_state.tasks_state.contains(table_id)) {
+                return false;
+            }
+            auto& tasks_for_table = _vb_state_machine.building_state.tasks_state.at(table_id);
+            for (auto& [replica, tasks]: tasks_for_table) {
+                if (replica.host != my_host_id || replica.shard != shard) {
+                    continue;
+                }
+                for (auto& staging_task: tasks.staging_tasks) {
+                    if (_started_staging_tasks[replica].contains(std::make_pair(table_id, staging_task.first))) {
+                        // This view building tasks is already started, we cannot attach this staging sstable to it
+                        continue;
+                    }
+                    if (staging_task.second.last_token == last_token && !staging_task.second.aborted) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+
         for (auto& sst_info: sst_infos) {
+            if (task_exists(sst_info.shard, sst_info.last_token)) {
+                vbw_logger.debug("Process staging task for replica {} already exists, skipping...", locator::tablet_replica{my_host_id, sst_info.shard});
+                continue;
+            }
+
             view_building_task task {
                 utils::UUID_gen::get_time_UUID(), view_building_task::task_type::process_staging, false,
                 table_id, ::table_id{}, {my_host_id, sst_info.shard}, sst_info.last_token
             };
             builder.set_task(task);
-            vbw_logger.trace("Creating process staging task: {} with ID: {} for replica: {}", task, task.id, task.replica);
+            vbw_logger.debug("Creating process staging task: {} with ID: {} for replica: {}", task, task.id, task.replica);
+            new_tasks.insert({sst_info.shard, sst_info.last_token});
         }
     }
+
+    // Release `_started_staging_tasks_mutex` before `add_entry()` below: it is only needed to read
+    // `_started_staging_tasks` in the loop above. Holding it across `add_entry()` deadlocks, since
+    // `add_entry()` waits for the command to be applied (which takes the group0 read-apply mutex)
+    // while the view building state observer holds the read-apply mutex and waits for this mutex.
+    started_tasks_lock.return_all();
 
     utils::chunked_vector<canonical_mutation> cmuts;
     cmuts.emplace_back(builder.build());
@@ -401,6 +445,7 @@ future<> view_building_worker::run_view_building_state_observer() {
 
             co_await update_built_views();
             co_await check_for_aborted_tasks();
+            co_await clear_started_staging_tasks();
             _as.check();
 
             read_apply_mutex_holder.return_all();
@@ -421,6 +466,30 @@ future<> view_building_worker::run_view_building_state_observer() {
             }
         }
     }
+}
+
+// Removes entries from `_started_staging_tasks` which are already removed from view building state machine
+future<> view_building_worker::clear_started_staging_tasks() {
+    auto lock = co_await get_units(_started_staging_tasks_mutex, 1, _as);
+    for (auto it = _started_staging_tasks.begin(); it != _started_staging_tasks.end(); ) {
+        auto& replica = it->first;
+        auto& ids = it->second;
+        for (auto ids_it = ids.begin(); ids_it != ids.end(); ) {
+            if (_vb_state_machine.building_state.get_task(ids_it->first, replica, ids_it->second)) {
+                ++ids_it;
+            } else {
+                ids_it = ids.erase(ids_it);
+            }
+        }
+
+        if (ids.empty()) {
+            it = _started_staging_tasks.erase(it);
+        } else {
+            ++it;
+        }
+        co_await coroutine::maybe_yield();
+    }
+
 }
 
 // Compares tablet-based views entries in `system.view_build_status_v2`(group0 table)
@@ -599,6 +668,19 @@ future<> view_building_worker::batch::abort() {
     });
 }
 
+future<> view_building_worker::batch::log_started_process_staging_tasks() {
+    if (tasks.begin()->second.type != view_building_task::task_type::process_staging) {
+        co_return;
+    }
+
+    auto replica = tasks.begin()->second.replica;
+    auto ids = tasks | std::views::values | std::views::transform([] (auto& task) { return std::make_pair(task.base_id, task.id); }) | std::ranges::to<std::vector>();
+    co_await _vbw.invoke_on(0, [ids = std::move(ids), replica] (view_building_worker& shard0_vbw) -> future<> {
+        auto lock = co_await get_units(shard0_vbw._started_staging_tasks_mutex, 1, shard0_vbw._as);
+        shard0_vbw._started_staging_tasks[replica].insert_range(ids);
+    });
+}
+
 future<> view_building_worker::batch::do_work() {
     if (this_shard_id() != replica.shard) {
         on_internal_error(vbw_logger, fmt::format("view_building_worker::batch::do_work() should be executed on tasks shard "));
@@ -633,6 +715,7 @@ future<> view_building_worker::batch::do_work() {
                 co_await _vbw.local().do_build_range(base_id, views_ids, last_token, as);
                 break;
             case view_building_task::task_type::process_staging:
+                co_await log_started_process_staging_tasks();
                 co_await _vbw.local().do_process_staging(base_id, last_token);
                 break;
             }
