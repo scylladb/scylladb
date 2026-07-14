@@ -2,7 +2,7 @@ name: Close issues created by Scylla associates
 
 on:
   issues:
-    types: [opened, reopened]
+    types: [opened]
 
 permissions:
   issues: write
