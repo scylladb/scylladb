@@ -18,6 +18,7 @@
 #include "utils/maybe_yield.hh"
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
+#include "utils/property.hh"
 #include "tablets.hh"
 #include "data_dictionary/consistency_config_options.hh"
 
@@ -45,8 +46,8 @@ enum class replication_strategy_type {
     everywhere_topology,
 };
 
-using replication_strategy_config_option = std::variant<sstring, rack_list>;
-using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;
+using replication_strategy_config_option = utils::property_value;
+using replication_strategy_config_options = utils::extended_property_map;
 
 // Returns the number of replicas inferred by the option.
 // Throws configuration_exception when option is not a valid replication factor specifier.
