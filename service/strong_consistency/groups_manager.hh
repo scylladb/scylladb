@@ -12,7 +12,7 @@
 #include "locator/tablets.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
-#include "service/raft/bounded_clock_adjtimex.hh"
+#include "raft/bounded_clock.hh"
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 
@@ -147,12 +147,15 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     tablet_group_leader_cache _leader_cache;
 
     // LeaseGuard clock backend, shared by all raft groups on this shard. Reads
-    // bounded-uncertainty time from the kernel NTP state. It is stateless and
-    // outlives every raft::server this manager creates (servers are stopped in
-    // stop()/schedule_raft_group_deletion() before the manager is destroyed),
-    // so passing a reference to it in each server's leaseguard configuration is
-    // safe. Only consulted when leader leases are enabled via db::config.
-    service::bounded_clock_adjtimex _bounded_clock;
+    // bounded-uncertainty time from the selected source (kernel NTP state via
+    // adjtimex, or the AWS ClockBound daemon), chosen once at construction from
+    // db::config::strongly_consistent_raft_leader_lease_clock_source. It is
+    // stateful and outlives every raft::server this manager creates (servers are
+    // stopped in stop()/schedule_raft_group_deletion() before the manager is
+    // destroyed), so passing a reference to it in each server's leaseguard
+    // configuration is safe. Non-null only when leader leases are enabled via
+    // db::config; the backend is only consulted in that case.
+    std::unique_ptr<raft::bounded_clock> _bounded_clock;
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
