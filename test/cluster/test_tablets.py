@@ -1226,6 +1226,109 @@ async def test_failed_tablet_rebuild_is_retried_on_alter(manager: ManagerClient)
     for r in tablet_replicas:
         assert len(r.replicas) == 2
 
+# Regression test: when the target rack in a rack_list colocation has no
+# available nodes (all excluded), the ALTER KEYSPACE must fail promptly
+# instead of livelocking with the request endlessly bouncing between
+# paused and resumed states.
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_rack_list_colocation_livelock_no_target_nodes(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    async def get_replication_options(ks: str, host=None):
+        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'", host=host)
+        repl = parse_replication_options(res[0].replication_v2 or res[0].replication)
+        return repl
+
+    numeric_injection = "create_with_numeric"
+    colocation_injection = "wait_with_rack_list_colocation"
+    config = {
+        "tablets_mode_for_new_keyspaces": "enabled",
+        "error_injections_at_startup": [numeric_injection, colocation_injection],
+        "failure_detector_timeout_in_ms": 2000,
+        "tablet_load_stats_refresh_interval_in_seconds": 1,
+    }
+    cmdline = ['--logger-log-level', 'load_balancer=debug', '--smp=2']
+
+    servers = [
+        await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+        await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
+        await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
+    ]
+
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    live_host = hosts[0]
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'initial': 8}", host=live_host) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY);", host=live_host)
+        repl = await get_replication_options(ks, host=live_host)
+        assert repl['dc1'] == '1'
+
+        # Verify at least one tablet is on rack1a so colocation is triggered
+        # when we ALTER to ['rack1b'].
+        tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, "t")
+        rack1a_tablets = [r for r in tablet_replicas if r.replicas[0][0] in (host_ids[0], host_ids[1])]
+        assert len(rack1a_tablets) > 0, "Need at least one tablet on rack1a for colocation to trigger"
+
+        # Disable the numeric injection so ALTER produces rack_list format.
+        for s in servers:
+            await manager.api.disable_injection(s.ip_addr, numeric_injection)
+
+        # Find topology coordinator and open its log.
+        coord = await get_topology_coordinator(manager)
+        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        coord_log = await manager.server_open_log(coord_serv.server_id)
+        mark = await coord_log.mark()
+
+        # ALTER KEYSPACE in background: convert numeric RF=1 to rack_list ['rack1b'].
+        # Tablets on rack1a need colocation to rack1b first. The injection prevents
+        # colocation from progressing.
+        async def alter_keyspace():
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1b']}};", host=live_host)
+        alter_task = asyncio.create_task(alter_keyspace())
+
+        # Wait for the request to be paused for colocation.
+        await coord_log.wait_for(f'keyspace_rf_change for keyspace {ks} postponed for colocation', from_mark=mark)
+
+        # Stop the rack1b node and mark it as excluded. The node remains in the
+        # topology with state=normal but is_excluded()=true, so
+        # make_rack_list_colocation_plan skips it when building nodes_by_load_dst.
+        await manager.server_stop(servers[2].server_id)
+        await manager.others_not_see_server(servers[2].ip_addr)
+        await manager.api.exclude_node(servers[0].ip_addr, hosts=[host_ids[2]])
+        live_servers = servers[:2]
+
+        # Re-detect coordinator (may have changed if servers[2] was the coordinator).
+        coord = await get_topology_coordinator(manager)
+        coord_serv = await find_server_by_host_id(manager, live_servers, coord)
+        coord_log = await manager.server_open_log(coord_serv.server_id)
+
+        # Disable the colocation injection on live nodes so the real colocation
+        # plan runs. rack1b has no non-excluded nodes, so the system must detect
+        # the situation and fail the ALTER rather than looping forever.
+        for s in live_servers:
+            await manager.api.disable_injection(s.ip_addr, colocation_injection)
+
+        # The ALTER must complete (with an error) within a reasonable time.
+        # If the livelock bug is present, this times out.
+        try:
+            await asyncio.wait_for(alter_task, timeout=60)
+        except asyncio.TimeoutError:
+            alter_task.cancel()
+            try:
+                await alter_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            pytest.fail("ALTER KEYSPACE livelocked: request kept bouncing between paused and resumed states")
+        except Exception:
+            pass  # Expected: ALTER should fail when target rack has no available nodes
+
+        # The ALTER should not have succeeded — the keyspace must still have
+        # its original numeric RF.
+        repl = await get_replication_options(ks, host=live_host)
+        assert repl['dc1'] == '1'
+
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
 # Check that an existing cached read, will be cleaned up when the tablet it reads
 # from is migrated away.
