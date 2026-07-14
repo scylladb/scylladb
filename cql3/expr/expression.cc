@@ -2642,11 +2642,11 @@ split_aggregation(std::span<const expression> aggregation) {
     };
 }
 
-std::map<sstring, sstring> convert_property_map(const collection_constructor& map, error_sink_fn add_recognition_error) {
+::utils::property_string_map convert_property_map(const collection_constructor& map, error_sink_fn add_recognition_error) {
     if (map.elements.empty()) {
-        return std::map<sstring, sstring>{};
+        return utils::property_string_map{};
     }
-    std::map<sstring, sstring> res;
+    utils::property_string_map res;
     for (auto&& entry : map.elements) {
         auto entry_tuple = expr::as_if<tuple_constructor>(&entry);
         // Because the parser tries to be smart and recover on error (to
@@ -2684,12 +2684,12 @@ std::map<sstring, sstring> convert_property_map(const collection_constructor& ma
     return res;
 }
 
-std::map<sstring, std::variant<sstring, std::vector<sstring>>>
+::utils::extended_property_map
 convert_extended_property_map(const collection_constructor& map, error_sink_fn add_recognition_error) {
     if (map.elements.empty()) {
         return {};
     }
-    std::map<sstring, std::variant<sstring, std::vector<sstring>>> res;
+    utils::extended_property_map res;
     for (auto&& entry : map.elements) {
         auto entry_tuple = expr::as_if<tuple_constructor>(&entry);
         // Because the parser tries to be smart and recover on error (to
@@ -2737,7 +2737,7 @@ convert_extended_property_map(const collection_constructor& map, error_sink_fn a
                     return "<invalid>";
                 }
                 return elem->raw_text.linearize();
-            }) | std::ranges::to<std::vector<sstring>>();
+            }) | std::ranges::to<utils::property_string_list>();
             const auto left_text = left->raw_text.linearize();
             if (!res.emplace(left_text, std::move(values)).second) {
                 sstring msg = fmt::format("Multiple definition for property {}", left_text);
