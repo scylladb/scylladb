@@ -528,6 +528,7 @@ ldap_tests = set([
 scylla_tests = set([
     'test/boost/combined_tests',
     'test/boost/UUID_test',
+    'test/boost/on_internal_error_test',
     'test/boost/url_parse_test',
     'test/boost/advanced_rpc_compressor_test',
     'test/boost/allocation_strategy_test',
@@ -618,6 +619,7 @@ scylla_tests = set([
     'test/boost/nonwrapping_interval_test',
     'test/boost/object_storage_upload_test',
     'test/boost/observable_test',
+    'test/boost/on_internal_error_test',
     'test/boost/partitioner_test',
     'test/boost/pretty_printers_test',
     'test/boost/radix_tree_test',
@@ -1623,6 +1625,7 @@ pure_boost_tests = set([
     'test/boost/map_difference_test',
     'test/boost/nonwrapping_interval_test',
     'test/boost/observable_test',
+    'test/boost/on_internal_error_test',
     'test/boost/wrapping_interval_test',
     'test/boost/range_tombstone_list_test',
     'test/boost/reservoir_sampling_test',
@@ -1779,6 +1782,7 @@ deps['test/boost/bytes_ostream_test'] = [
 ]
 deps['test/boost/input_stream_test'] = ['test/boost/input_stream_test.cc']
 deps['test/boost/UUID_test'] = ['clocks-impl.cc', 'utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 'utils/uuid.cc', 'utils/dynamic_bitset.cc', 'utils/hashers.cc', 'utils/on_internal_error.cc']
+deps['test/boost/on_internal_error_test'] = ['test/boost/on_internal_error_test.cc', 'utils/on_internal_error.cc']
 deps['test/boost/url_parse_test'] = ['utils/http.cc', 'test/boost/url_parse_test.cc', ]
 deps['test/boost/hwlb_test'] = ['db/heat_load_balance.cc', 'test/boost/hwlb_test.cc']
 deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test/boost/murmur_hash_test.cc']
