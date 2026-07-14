@@ -51,6 +51,10 @@ schema_ptr make_kv_schema() {
             .build();
 }
 
+primary_index_key make_index_key(const schema& s, const dht::decorated_key& dk) {
+    return primary_index_key{dk};
+}
+
 mutation make_kv_mutation(schema_ptr schema, sstring pk, sstring value, api::timestamp_type ts = api::min_timestamp) {
     auto key = partition_key::from_single_value(*schema, serialized(pk));
     auto dk = dht::decorate_key(*schema, key);
@@ -66,7 +70,7 @@ log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::ti
     auto m = make_kv_mutation(schema, std::move(pk), std::move(value), ts);
     return log_record {
         .header = {
-            .key = primary_index_key{m.decorated_key()},
+            .key = make_index_key(*schema, m.decorated_key()),
             .timestamp = ts,
             .table = schema->id(),
         },
@@ -508,8 +512,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
 
     auto sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
     BOOST_REQUIRE_EQUAL(sh.table, schema->id());
-    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.dk.token());
-    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.dk.token());
+    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.token());
+    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.token());
 }
 
 // Checks that a raw write buffer can hold and seal a record whose serialized size is exactly max_record_size().
@@ -754,8 +758,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
 
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 3u);
 
-    const auto pk0 = primary_index_key{pk0_v1.decorated_key()};
-    const auto pk1 = primary_index_key{pk1_v0.decorated_key()};
+    const auto pk0 = make_index_key(*schema, pk0_v1.decorated_key());
+    const auto pk1 = make_index_key(*schema, pk1_v0.decorated_key());
 
     auto pk0_before = cg.logstor_index().get(pk0);
     auto pk1_before = cg.logstor_index().get(pk1);
@@ -789,8 +793,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     BOOST_REQUIRE(pk0_after->location != pk0_before->location);
     BOOST_REQUIRE(pk1_after->location != pk1_before->location);
 
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get()).is_equal_to(pk0_v1);
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get()).is_equal_to(pk1_v0);
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
 }
 
 // Checks that a compaction whose index updates fail returns its buffer to the pool. This failure
@@ -822,9 +826,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_failing_index_update_returns_it
     write_and_flush_segment(ls, cg, pk1_v0);
     write_and_flush_segment(ls, cg, pk0_v1);
 
-    const auto pk0 = primary_index_key{pk0_v1.decorated_key()};
-    const auto pk1 = primary_index_key{pk1_v0.decorated_key()};
-
     utils::get_local_injector().enable("logstor_compaction_fail_index_update", true /* one shot */);
 
     setup_guard.reset();
@@ -832,16 +833,16 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_failing_index_update_returns_it
     setup_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
     // The records are readable whichever location the index kept for them.
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get()).is_equal_to(pk0_v1);
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get()).is_equal_to(pk1_v0);
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
 
     // The buffer of the failed compaction is back in the pool, so compaction still runs.
     setup_guard.reset();
     ls.get_compaction_manager().submit(cg);
     auto compaction_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get()).is_equal_to(pk0_v1);
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get()).is_equal_to(pk1_v0);
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
 }
 
 // Checks that primary_index accounting callbacks track live bytes across
@@ -882,9 +883,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
 
     primary_index index(schema, accounting);
 
-    const auto pk0 = primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()};
-    const auto pk1 = primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()};
-    const auto pk2 = primary_index_key{make_kv_mutation(schema, "pk2", "v2").decorated_key()};
+    const auto pk0 = make_index_key(*schema, make_kv_mutation(schema, "pk0", "v0").decorated_key());
+    const auto pk1 = make_index_key(*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key());
+    const auto pk2 = make_index_key(*schema, make_kv_mutation(schema, "pk2", "v2").decorated_key());
 
     const log_location loc0{.segment = log_segment_id{1}, .offset = 0, .size = 11};
     const log_location loc0_old{.segment = log_segment_id{1}, .offset = 16, .size = 7};
@@ -1041,15 +1042,15 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     };
 
     std::vector<entry> entries = {
-        { primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()}, {.segment = log_segment_id{11}, .offset = 0, .size = 5} },
-        { primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()}, {.segment = log_segment_id{12}, .offset = 0, .size = 7} },
-        { primary_index_key{make_kv_mutation(schema, "pk2", "v2").decorated_key()}, {.segment = log_segment_id{13}, .offset = 0, .size = 11} },
-        { primary_index_key{make_kv_mutation(schema, "pk3", "v3").decorated_key()}, {.segment = log_segment_id{14}, .offset = 0, .size = 13} },
-        { primary_index_key{make_kv_mutation(schema, "pk4", "v4").decorated_key()}, {.segment = log_segment_id{15}, .offset = 0, .size = 17} },
+        { make_index_key(*schema, make_kv_mutation(schema, "pk0", "v0").decorated_key()), {.segment = log_segment_id{11}, .offset = 0, .size = 5} },
+        { make_index_key(*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key()), {.segment = log_segment_id{12}, .offset = 0, .size = 7} },
+        { make_index_key(*schema, make_kv_mutation(schema, "pk2", "v2").decorated_key()), {.segment = log_segment_id{13}, .offset = 0, .size = 11} },
+        { make_index_key(*schema, make_kv_mutation(schema, "pk3", "v3").decorated_key()), {.segment = log_segment_id{14}, .offset = 0, .size = 13} },
+        { make_index_key(*schema, make_kv_mutation(schema, "pk4", "v4").decorated_key()), {.segment = log_segment_id{15}, .offset = 0, .size = 17} },
     };
 
     std::sort(entries.begin(), entries.end(), [&] (const entry& a, const entry& b) {
-        return dht::decorated_key::less_comparator(schema)(a.key.dk, b.key.dk);
+        return a.key.token() < b.key.token();
     });
 
     auto insert = [&] (const entry& e, api::timestamp_type ts) {
@@ -1075,11 +1076,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[4].loc.size));
-    BOOST_REQUIRE(index.find(entries[0].key.dk) != index.end());
-    BOOST_REQUIRE(index.find(entries[1].key.dk) == index.end());
-    BOOST_REQUIRE(index.find(entries[2].key.dk) == index.end());
-    BOOST_REQUIRE(index.find(entries[3].key.dk) == index.end());
-    BOOST_REQUIRE(index.find(entries[4].key.dk) != index.end());
+    BOOST_REQUIRE(index.find(entries[0].key) != index.end());
+    BOOST_REQUIRE(index.find(entries[1].key) == index.end());
+    BOOST_REQUIRE(index.find(entries[2].key) == index.end());
+    BOOST_REQUIRE(index.find(entries[3].key) == index.end());
+    BOOST_REQUIRE(index.find(entries[4].key) != index.end());
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[1].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[2].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[3].loc), 1);
@@ -1283,14 +1284,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
     BOOST_REQUIRE(std::holds_alternative<segment_header::full>(maybe_header->v));
     auto& full = std::get<segment_header::full>(maybe_header->v);
     auto expected_first_token = std::min({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     auto expected_last_token = std::max({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     BOOST_REQUIRE_EQUAL(full.table, schema->id());
     BOOST_REQUIRE_EQUAL(full.first_token, expected_first_token);
@@ -1967,7 +1968,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 1u);
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 0u);
 
-    auto entry_before_flush = cg.logstor_index().get(primary_index_key{key});
+    auto entry_before_flush = cg.logstor_index().get(make_index_key(*schema, key));
     BOOST_REQUIRE(entry_before_flush);
 
     cg.flush_separator().get();
@@ -1981,7 +1982,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     auto snapshot = ls.get_segment_manager().make_snapshot(cg).get();
     BOOST_REQUIRE_EQUAL(snapshot.size(), 1u);
 
-    auto entry_after_flush = cg.logstor_index().get(primary_index_key{key});
+    auto entry_after_flush = cg.logstor_index().get(make_index_key(*schema, key));
     BOOST_REQUIRE(entry_after_flush);
     BOOST_REQUIRE(entry_after_flush->location.segment != entry_before_flush->location.segment);
     BOOST_REQUIRE_EQUAL(entry_after_flush->location.segment.value, snapshot.front().segment_id.value);
@@ -2019,7 +2020,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_discarded_group_does_not_free_its_unflushe
     ls.flush_to_separator().get();
     BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 1u);
 
-    auto entry_before_discard = cg.logstor_index().get(primary_index_key{key});
+    auto entry_before_discard = cg.logstor_index().get(make_index_key(*schema, key));
     BOOST_REQUIRE(entry_before_discard);
 
     // A value that takes most of a segment, so that the second record does not fit next to the first
@@ -2043,7 +2044,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_discarded_group_does_not_free_its_unflushe
 
     // The records were never written out, so the index still points at them where they were, and the
     // segment that holds them was not freed and reused underneath it.
-    auto entry_after_discard = cg.logstor_index().get(primary_index_key{key});
+    auto entry_after_discard = cg.logstor_index().get(make_index_key(*schema, key));
     BOOST_REQUIRE(entry_after_discard);
     BOOST_REQUIRE(entry_after_discard->location == entry_before_discard->location);
 
@@ -2084,7 +2085,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_closed_group_takes_no_separator_writes) {
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 0u);
 
     // The write itself succeeded and the record is readable where it was written.
-    BOOST_REQUIRE(cg.logstor_index().get(primary_index_key{key}));
+    BOOST_REQUIRE(cg.logstor_index().get(make_index_key(*schema, key)));
 
     auto actual = ls.read(*schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
@@ -2365,9 +2366,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     write_and_flush_segment(ls, cg, pk1_v0);
     write_and_flush_segment(ls, cg, pk2_v0);
 
-    const auto pk0 = primary_index_key{pk0_v1.decorated_key()};
-    const auto pk1 = primary_index_key{pk1_v1.decorated_key()};
-    const auto pk2 = primary_index_key{pk2_v0.decorated_key()};
+    const auto pk0 = make_index_key(*schema, pk0_v1.decorated_key());
+    const auto pk1 = make_index_key(*schema, pk1_v1.decorated_key());
+    const auto pk2 = make_index_key(*schema, pk2_v0.decorated_key());
 
     auto stale_pk0_location = cg.logstor_index().get(pk0);
     auto stale_pk1_location = cg.logstor_index().get(pk1);
@@ -2423,9 +2424,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     BOOST_REQUIRE(!new_segment_ids.contains(stale_pk0_location->location.segment));
     BOOST_REQUIRE(!new_segment_ids.contains(stale_pk1_location->location.segment));
 
-    auto actual_pk0 = ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get();
-    auto actual_pk1 = ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get();
-    auto actual_pk2 = ls.read(*schema, cg.logstor_index(), pk2.dk, schema->full_slice()).get();
+    auto actual_pk0 = ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk1 = ls.read(*schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk2 = ls.read(*schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
 
     BOOST_REQUIRE(actual_pk0);
     BOOST_REQUIRE(actual_pk1);
@@ -2477,9 +2478,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
 
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 5u);
 
-    const auto pk0 = primary_index_key{pk0_v1.decorated_key()};
-    const auto pk1 = primary_index_key{pk1_v1.decorated_key()};
-    const auto pk2 = primary_index_key{pk2_v0.decorated_key()};
+    const auto pk0 = make_index_key(*schema, pk0_v1.decorated_key());
+    const auto pk1 = make_index_key(*schema, pk1_v1.decorated_key());
+    const auto pk2 = make_index_key(*schema, pk2_v0.decorated_key());
 
     auto live_pk0_before = cg.logstor_index().get(pk0);
     auto live_pk1_before = cg.logstor_index().get(pk1);
@@ -2512,9 +2513,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     BOOST_REQUIRE(live_pk1_after->location == live_pk1_before->location);
     BOOST_REQUIRE(live_pk2_after->location == live_pk2_before->location);
 
-    auto actual_pk0 = ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get();
-    auto actual_pk1 = ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get();
-    auto actual_pk2 = ls.read(*schema, cg.logstor_index(), pk2.dk, schema->full_slice()).get();
+    auto actual_pk0 = ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk1 = ls.read(*schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk2 = ls.read(*schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
 
     BOOST_REQUIRE(actual_pk0);
     BOOST_REQUIRE(actual_pk1);
@@ -2574,7 +2575,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
 
     std::vector<primary_index_key> index_keys;
     for (const auto& m : {k0, k1, k2_v1, k3, k4, k5}) {
-        index_keys.push_back(primary_index_key{m.decorated_key()});
+        index_keys.push_back(make_index_key(*schema, m.decorated_key()));
     }
 
     std::vector<log_location> locations_before;

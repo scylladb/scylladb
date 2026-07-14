@@ -63,7 +63,7 @@ std::optional<mutation> cache_tracker::lookup(const primary_index_entry& pie, sc
                     pie._cached_entry->upgrade(target_schema);
                 });
             }
-            cached_mut = mutation(target_schema, dht::decorated_key(pie.key()), pie._cached_entry->partition());
+            cached_mut = mutation(target_schema, pie.key().dk, pie._cached_entry->partition());
         }
     });
 

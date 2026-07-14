@@ -106,11 +106,11 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const log_record
 
     _net_data_size += total_size;
     _record_count++;
-    if (!_min_token || header.key.dk.token() < *_min_token) {
-        _min_token = header.key.dk.token();
+    if (!_min_token || header.key.token() < *_min_token) {
+        _min_token = header.key.token();
     }
-    if (!_max_token || header.key.dk.token() > *_max_token) {
-        _max_token = header.key.dk.token();
+    if (!_max_token || header.key.token() > *_max_token) {
+        _max_token = header.key.token();
     }
 
     // Add padding to align record
