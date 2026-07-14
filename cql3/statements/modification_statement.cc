@@ -802,6 +802,16 @@ void modification_statement::add_operation(std::unique_ptr<operation> op) {
 
     if (op->requires_lwt()) {
         _requires_lwt = true;
+        // If we have two operations on the same column, e.g., 'r = r + 1,
+        // r = r + 2', both would use the same old value of r and the result
+        // will not be useful. So it's not allowed.
+        for (const auto& existing : _column_operations) {
+            if (existing->requires_lwt() && existing->column.ordinal_id == op->column.ordinal_id) {
+                throw exceptions::invalid_request_exception(
+                    format("Multiple arithmetic SET operations on column {} in the same statement",
+                           op->column.name_as_text()));
+            }
+        }
     }
 
     if (op->column.is_counter()) {
@@ -813,6 +823,16 @@ void modification_statement::add_operation(std::unique_ptr<operation> op) {
     }
 
     _column_operations.push_back(std::move(op));
+}
+
+column_set modification_statement::lwt_arithmetic_columns() const {
+    column_set result(s->all_columns_count());
+    for (const auto& op : _column_operations) {
+        if (op->requires_lwt()) {
+            result.set(op->column.ordinal_id);
+        }
+    }
+    return result;
 }
 
 void modification_statement::inc_cql_stats(bool is_internal) const {
