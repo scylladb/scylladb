@@ -188,6 +188,12 @@ public:
     gms::feature quiesce_topology_enhanced { *this, "QUIESCE_TOPOLOGY_ENHANCED"sv };
     gms::feature tablet_pow2_convergence { *this, "TABLET_POW2_CONVERGENCE"sv };
     gms::feature fetch_column_mappings_on_tablet_migration { *this, "FETCH_COLUMN_MAPPINGS_ON_TABLET_MIGRATION"sv };
+    // Gates the repair_get_table_size RPC verb used to auto-detect small user
+    // tables for the RBNO small table optimization. The coordinator only probes
+    // table sizes when the whole cluster supports this feature, avoiding doomed
+    // RPCs (and their warnings) to nodes that do not register the verb during a
+    // rolling upgrade.
+    gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

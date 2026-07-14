@@ -2970,6 +2970,10 @@ future<> repair_service::init_ms_handlers() {
         });
     });
 
+    ser::repair_rpc_verbs::register_repair_get_table_size(&ms, [this] (const rpc::client_info& cinfo, table_id table) -> future<uint64_t> {
+        co_return co_await local_table_on_disk_size(get_db(), table);
+    });
+
 
     return make_ready_future<>();
 }

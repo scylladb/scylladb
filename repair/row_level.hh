@@ -112,6 +112,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 public:
     struct config {
         utils::updateable_value<bool> enable_small_table_optimization_for_rbno = utils::updateable_value<bool>(true);
+        utils::updateable_value<uint64_t> small_table_optimization_for_rbno_max_table_size = utils::updateable_value<uint64_t>(1073741824);
         utils::updateable_value<uint32_t> repair_hints_batchlog_flush_cache_time_in_ms = utils::updateable_value<uint32_t>(60*1000);
         utils::updateable_value<double> repair_partition_count_estimation_ratio = utils::updateable_value<double>(0.1);
         utils::updateable_value<float> critical_disk_utilization_level = utils::updateable_value<float>(0.98);

@@ -348,6 +348,86 @@ async def test_small_table_optimization_repair(manager):
     assert len(rows) == 1
 
 
+@pytest.mark.parametrize("reason", ["rebuild", "bootstrap", "decommission"])
+async def test_small_table_optimization_for_rbno_auto_detect_by_size(manager, reason):
+    """Verify that the small table optimization is automatically enabled for a
+    user table during repair based node operations based on the table's on-disk
+    size, controlled by the small_table_optimization_for_rbno_max_table_size
+    config option.
+
+    Two user tables are created without listing any of them in the extra tables
+    config option. One table is left empty (below the size threshold) and the
+    other is populated and flushed so its on-disk size exceeds the threshold.
+    During the node operation the small table must be optimized (single range)
+    while the large one must fall back to the regular ranged repair. The decision
+    is made by probing the table size on the replicas the operation syncs from,
+    so it must hold for the join style operations where the data lives on the
+    peers (bootstrap, rebuild) as well as for decommission where the data is
+    local to the coordinating node.
+    """
+    ks = "auto_opt_ks"
+    small_tbl = "small_tbl"
+    big_tbl = "big_tbl"
+    # A tiny threshold so that any flushed sstable exceeds it, while an empty
+    # table stays below it.
+    config = {
+        "enable_small_table_optimization_for_rbno": True,
+        "small_table_optimization_for_rbno_max_table_size": 1024,
+        # bootstrap and decommission are not repair based by default, so enable
+        # them explicitly (rebuild already is).
+        "allowed_repair_based_node_ops": "replace,removenode,rebuild,bootstrap,decommission",
+    }
+    cmdline = ["--smp", "1", "--logger-log-level", "repair=info"]
+    # decommission removes a node, so start with a spare so that the RF=2
+    # keyspace still has enough replicas afterwards.
+    initial_nodes = 3 if reason == "decommission" else 2
+    servers = await manager.servers_add(initial_nodes, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND TABLETS = {{'enabled': false}}")
+    cql.execute(f"CREATE TABLE {ks}.{small_tbl} (pk int PRIMARY KEY, v int)")
+    cql.execute(f"CREATE TABLE {ks}.{big_tbl} (pk int PRIMARY KEY, v text)")
+    # Populate only the big table and flush it so its on-disk size is well above
+    # the configured threshold. The small table is left empty (0 bytes on disk)
+    # and stays below the threshold.
+    for i in range(100):
+        cql.execute(f"INSERT INTO {ks}.{big_tbl} (pk, v) VALUES ({i}, '{'x' * 200}')")
+    for s in servers:
+        await manager.api.keyspace_flush(s.ip_addr, ks)
+
+    # The sync-data repair is coordinated on the node that is joining or leaving,
+    # so its log records the per-keyspace and per-table decisions. For bootstrap
+    # the coordinator is the newly added node, which does not exist yet, so the
+    # log is opened and scanned from the beginning after the node has joined.
+    if reason == "bootstrap":
+        coordinator = await manager.server_add(config=config, cmdline=cmdline,
+                                               property_file={"dc": "dc1", "rack": "rack99"})
+        log = await manager.server_open_log(coordinator.server_id)
+        mark = None
+    else:
+        coordinator = servers[-1]
+        log = await manager.server_open_log(coordinator.server_id)
+        mark = await log.mark()
+        if reason == "rebuild":
+            await manager.rebuild_node(coordinator.server_id)
+        else:
+            await manager.decommission_node(coordinator.server_id)
+
+    # The empty small table is auto-detected as small (optimized), the populated
+    # big table exceeds the threshold and uses the regular ranged repair.
+    await log.wait_for(
+        f"small table optimization size check keyspace={ks}, table={small_tbl}, .*small_table_optimization=true",
+        from_mark=mark)
+    await log.wait_for(
+        f"small table optimization size check keyspace={ks}, table={big_tbl}, .*small_table_optimization=false",
+        from_mark=mark)
+    await log.wait_for(
+        f"sync data for keyspace={ks}, status=started, reason={reason}, "
+        f"small_table_optimization_tables=1, normal_tables=1",
+        from_mark=mark)
+
+
 async def test_repair_rejects_equal_start_and_end_token(manager):
     """Verify that repair rejects a request where startToken == endToken.
     When start == end, the wrapping range (T, T] covers the full token ring,

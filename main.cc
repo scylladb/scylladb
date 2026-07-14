@@ -1933,6 +1933,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto repair_config = sharded_parameter([&] {
                 return repair_service::config{
                     .enable_small_table_optimization_for_rbno = cfg->enable_small_table_optimization_for_rbno,
+                    .small_table_optimization_for_rbno_max_table_size = cfg->small_table_optimization_for_rbno_max_table_size,
                     .repair_hints_batchlog_flush_cache_time_in_ms = cfg->repair_hints_batchlog_flush_cache_time_in_ms,
                     .repair_partition_count_estimation_ratio = cfg->repair_partition_count_estimation_ratio,
                     .critical_disk_utilization_level = cfg->critical_disk_utilization_level,

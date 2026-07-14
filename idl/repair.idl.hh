@@ -119,3 +119,4 @@ verb [[with_client_info]] repair_set_estimated_partitions (uint32_t repair_meta_
 verb [[with_client_info]] repair_get_diff_algorithms () -> std::vector<row_level_diff_detect_algorithm>;
 verb [[with_client_info]] repair_update_compaction_ctrl (locator::global_tablet_id gid, service::frozen_topology_guard topo_guard);
 verb [[with_client_info]] repair_update_repaired_at_for_merge(table_id);
+verb [[with_client_info]] repair_get_table_size(table_id table) -> uint64_t;
