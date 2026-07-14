@@ -24,6 +24,7 @@ from test.pylib.skip_types import skip_env
 import asyncio
 import ctypes
 import ctypes.util
+import os
 import pytest
 import logging
 import time
@@ -3370,6 +3371,11 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
         await wait_for_sc_raft_series_gone(manager, src)
 
 
+# Shared-memory segment of the ClockBound daemon, which the clockbound backend
+# opens when the node starts (CLOCKBOUND_SHM_DEFAULT_PATH_V1 in clock-bound).
+CLOCKBOUND_SHM_PATH = '/var/run/clockbound/shm1'
+
+
 async def test_leader_leases_write_read_and_leader_change(
         manager: ScyllaClusterManager, leaseguard_config):
     """
@@ -3389,7 +3395,9 @@ async def test_leader_leases_write_read_and_leader_change(
         deferred-commit path that waits for the deposed lease to expire),
       - a node restart preserves data,
       - with leases on, a node configured with a zero lease duration fails to
-        start.
+        start,
+      - with leases on, a node configured with the clockbound backend fails to
+        start on a host that has no ClockBound shared-memory segment.
 
     The leases_on variant drives the real adjtimex-backed clock, so it asserts
     read locality where the host clock can sustain a lease: 2*maxerror must fit
@@ -3571,6 +3579,15 @@ async def test_leader_leases_write_read_and_leader_change(
         await manager.server_add(
             config=config | {'strongly_consistent_raft_leader_lease_duration_in_ms': 0},
             cmdline=cmdline, expected_error='strongly_consistent_raft_leader_lease_duration_in_ms must be positive')
+
+    # The clockbound backend opens the daemon's shared-memory segment when the
+    # node starts and fails the start if the segment is missing. A host that
+    # runs the daemon has the segment, so the check needs one that does not.
+    if leases_on and not os.path.exists(CLOCKBOUND_SHM_PATH):
+        logger.info("Adding a node with the clockbound backend, expecting it to fail to start")
+        await manager.server_add(
+            config=config | {'strongly_consistent_raft_leader_lease_clock_source': 'clockbound'},
+            cmdline=cmdline, expected_error='Failed to open ClockBound context')
 
     await gather_safely(*[manager.server_stop_gracefully(s.server_id)
                           for i, s in enumerate(servers) if i != leader_idx])
