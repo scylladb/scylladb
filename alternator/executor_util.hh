@@ -115,7 +115,7 @@ inline constexpr int max_auxiliary_table_name_length = 222;
 
 /// validate_table_name() validates the TableName parameter in a request - it
 /// should be called in CreateTable, and in other requests only when noticing
-/// that the named table doesn't exist. 
+/// that the named table doesn't exist.
 /// The DynamoDB developer guide, https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules
 /// specifies that table "names must be between 3 and 255 characters long and
 /// can contain only the following characters: a-z, A-Z, 0-9, _ (underscore),
@@ -193,6 +193,12 @@ future<> verify_create_permission(bool enforce_authorization, bool warn_authoriz
 // adds mappings from key attribute names to their DynamoDB type string into
 // attribute_types.
 void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string, std::string>* attribute_types = nullptr, const std::map<sstring, sstring>* tags = nullptr);
+
+// Returns how many of the *leading* clustering-key columns of the given
+// GSI schema are genuine, user-specified RANGE key attributes or std::nullopt
+// when the number of genuine RANGE keys cannot be determined (e.g., due to a
+// corrupted tag value).
+std::optional<uint8_t> genuine_gsi_range_key_count(const schema&, const std::map<sstring, sstring>* tags);
 
 /// is_big() checks approximately if the given JSON value is "bigger" than
 /// the given big_size number of bytes. The goal is to *quickly* detect
