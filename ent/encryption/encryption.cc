@@ -571,7 +571,7 @@ public:
                 logg.warn("{}", problems);
             }
         } catch (...) {
-            std::throw_with_nested(exceptions::configuration_exception((std::stringstream{} << "Validation failed:" << std::current_exception()).str()));
+            std::throw_with_nested(exceptions::configuration_exception(fmt::format("Validation failed: {}", std::current_exception())));
         }
     }
 
