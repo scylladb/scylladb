@@ -1955,6 +1955,62 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
+    bool has_tablet_transitions() const {
+        auto tm = get_token_metadata_ptr();
+        for (auto&& e : tm->tablets().all_table_groups()) {
+            auto& base_table = e.first;
+            if (!tm->tablets().get_tablet_map(base_table).transitions().empty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // This function must not release and reacquire the guard, callers rely
+    // on the fact that the block which calls this is atomic.
+    std::variant<group0_guard, node_to_work_on> get_bootstrap_to_preempt_tablet_migration(group0_guard guard) {
+        auto work = get_next_task(std::move(guard));
+        return std::visit(overloaded_functor{
+            [] (group0_guard&& guard) -> std::variant<group0_guard, node_to_work_on> {
+                return std::move(guard);
+            },
+            [] (cancel_requests&& cancel) -> std::variant<group0_guard, node_to_work_on> {
+                return std::move(cancel.guard);
+            },
+            [] (start_vnodes_cleanup&& cleanup) -> std::variant<group0_guard, node_to_work_on> {
+                return std::move(cleanup.guard);
+            },
+            [] (node_to_work_on&& node) -> std::variant<group0_guard, node_to_work_on> {
+                if (node.request && *node.request == topology_request::join) {
+                    return std::move(node);
+                }
+                return std::move(node.guard);
+            },
+        }, std::move(work));
+    }
+
+    // Returns std::nullopt if preemption consumed the guard and started a node transition.
+    future<std::optional<group0_guard>> maybe_preempt_now(group0_guard guard) {
+        auto ts = guard.write_timestamp();
+        auto work = get_bootstrap_to_preempt_tablet_migration(std::move(guard));
+        if (auto* node = std::get_if<node_to_work_on>(&work)) {
+            if (ts != node->guard.write_timestamp()) {
+                // We rely on the fact that get_bootstrap_to_preempt_tablet_migration() does not release the guard
+                // so that tablet metadata reading and updates are atomic.
+                on_internal_error(rtlogger, "get_bootstrap_to_preempt_tablet_migration() retook the guard");
+            }
+            co_await handle_node_transition(std::move(*node));
+            co_return std::nullopt;
+        }
+        guard = std::get<group0_guard>(std::move(work));
+        if (ts != guard.write_timestamp()) {
+            // We rely on the fact that get_bootstrap_to_preempt_tablet_migration() does not release the guard
+            // so that tablet metadata reading and updates are atomic.
+            on_internal_error(rtlogger, "get_bootstrap_to_preempt_tablet_migration() retook the guard");
+        }
+        co_return std::move(guard);
+    }
+
     // When "drain" is true, we migrate tablets only as long as there are nodes to drain
     // and then change the transition state to write_both_read_old. Also, while draining,
     // we ignore pending topology requests which normally interrupt load balancing.
@@ -1978,6 +2034,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         });
 
         _tablets_ready = false;
+
+        if (!drain) {
+            if (auto new_guard = co_await maybe_preempt_now(std::move(guard))) {
+                guard = std::move(*new_guard);
+            } else {
+                co_return;
+            }
+        }
 
         // Build table_id -> request_id mapping for ongoing restore requests
         // so that we can find the owning request when a restore transition fails.
@@ -3548,8 +3612,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     // Since after bootstrapping a new node some nodes lost some ranges they need to cleanup
                     muts = mark_nodes_as_cleanup_needed(node, false);
                     topology_mutation_builder builder(node.guard.write_timestamp());
-                    builder.del_transition_state()
-                           .set_version(_topo_sm._topology.version + 1)
+                    if (has_tablet_transitions()) {
+                        builder.set_transition_state(topology::transition_state::tablet_migration);
+                    } else {
+                        builder.del_transition_state();
+                    }
+                    builder.set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
                            .set("node_state", node_state::normal);
                     muts.emplace_back(builder.build());
@@ -3674,8 +3742,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     topology_mutation_builder builder(node.guard.write_timestamp());
                     cleanup_ignored_nodes_on_left(builder, node.id);
-                    builder.del_transition_state()
-                            .with_node(node.id)
+                    if (has_tablet_transitions()) {
+                        builder.set_transition_state(topology::transition_state::tablet_migration);
+                    } else {
+                        builder.del_transition_state();
+                    }
+                    builder.with_node(node.id)
                             .set("node_state", node_state::left);
                     muts.push_back(builder.build());
                     co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
@@ -3847,9 +3919,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         co_return true;
     };
 
-    // Called when there is no ongoing topology transition.
-    // Used to start new topology transitions using node requests or perform node operations
-    // that don't change the topology (like rebuild).
+    // Used to start node topology transitions from the idle state machine path, or from
+    // tablet_migration when a join request preempts tablet migration scheduling.
+    // Also performs node operations that don't change the topology (like rebuild).
     future<> handle_node_transition(node_to_work_on&& node) {
         rtlogger.info("coordinator fiber found a node to work on id={} state={}", node.id, node.rs->state);
 
@@ -4474,6 +4546,17 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_start_tablet_mig
     rtlogger.debug("Evaluating tablet balance");
 
     auto tm = get_token_metadata_ptr();
+    if (has_tablet_transitions()) {
+        utils::chunked_vector<canonical_mutation> updates;
+        updates.emplace_back(
+            topology_mutation_builder(guard.write_timestamp())
+                .set_transition_state(topology::transition_state::tablet_migration)
+                .set_version(_topo_sm._topology.version + 1)
+                .build());
+        co_await update_topology_state(std::move(guard), std::move(updates), "Resuming tablet migration");
+        co_return std::nullopt;
+    }
+
     auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
     if (plan.empty()) {
         rtlogger.debug("Tablet load balancer did not make any plan");
