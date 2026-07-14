@@ -29,7 +29,7 @@ extern seastar::logger logstor_logger;
 // LSA region.  When the cache evicts the entry under memory pressure it zeroes
 // _cached_entry via the back-pointer stored inside cached_mutation_entry.
 class primary_index_entry {
-    dht::decorated_key _key;
+    primary_index_key _key;
     index_entry _e;
     // Non-owning slot pointing into the shared cache region.
     // Empty when no cached mutation exists for this key.
@@ -42,7 +42,7 @@ class primary_index_entry {
 public:
     friend class cache_tracker;
 
-    primary_index_entry(dht::decorated_key key, index_entry e)
+    primary_index_entry(primary_index_key key, index_entry e)
         : _key(std::move(key))
         , _e(std::move(e))
     { }
@@ -75,7 +75,7 @@ public:
     }
 
     size_t memory_usage() const noexcept {
-        return sizeof(primary_index_entry) + _key.external_memory_usage();
+        return sizeof(primary_index_entry) + _key.dk.external_memory_usage();
     }
 
     bool is_head() const noexcept { return _flags._head; }
@@ -85,18 +85,58 @@ public:
     bool with_train() const noexcept { return _flags._train; }
     void set_train(bool v) noexcept { _flags._train = v; }
 
-    const dht::decorated_key& key() const noexcept { return _key; }
+    const primary_index_key& key() const noexcept { return _key; }
     const index_entry& entry() const noexcept { return _e; }
 
     friend class primary_index;
+};
 
-    friend dht::ring_position_view ring_position_view_to_compare(const primary_index_entry& e) { return e._key; }
+inline dht::ring_position_view ring_position_view_to_compare(const primary_index_key& key) {
+    return key.dk;
+}
+
+struct primary_index_key_cmp {
+
+    dht::ring_position_comparator cmp;
+
+    primary_index_key_cmp(const schema& s) : cmp(s) {}
+
+    std::strong_ordering operator()(const primary_index_key& lhs, const primary_index_key& rhs) const noexcept {
+        return cmp(lhs.dk, rhs.dk);
+    }
+    std::strong_ordering operator()(int64_t lhs, const primary_index_key& rhs) const noexcept {
+        return dht::tri_compare_raw(lhs, rhs.token().raw());
+    }
+    std::strong_ordering operator()(const primary_index_key& lhs, int64_t rhs) const noexcept {
+        return dht::tri_compare_raw(lhs.token().raw(), rhs);
+    }
+    std::strong_ordering operator()(const primary_index_entry& lhs, const primary_index_entry& rhs) const noexcept {
+        return cmp(lhs.key().dk, rhs.key().dk);
+    }
+    std::strong_ordering operator()(const primary_index_entry& lhs, const primary_index_key& rhs) const noexcept {
+        return cmp(lhs.key().dk, rhs.dk);
+    }
+    std::strong_ordering operator()(const primary_index_key& lhs, const primary_index_entry& rhs) const noexcept {
+        return cmp(lhs.dk, rhs.key().dk);
+    }
+    std::strong_ordering operator()(const primary_index_entry& lhs, int64_t rhs) const noexcept {
+        return (*this)(lhs.key(), rhs);
+    }
+    std::strong_ordering operator()(int64_t lhs, const primary_index_entry& rhs) const noexcept {
+        return (*this)(lhs, rhs.key());
+    }
+    std::strong_ordering operator()(const primary_index_entry& lhs, const dht::ring_position_view& rhs) const noexcept {
+        return cmp(lhs.key().dk, rhs);
+    }
+    std::strong_ordering operator()(const dht::ring_position_view& lhs, const primary_index_entry& rhs) const noexcept {
+        return cmp(lhs, rhs.key().dk);
+    }
 };
 
 class primary_index final {
 public:
     using partitions_type = double_decker<int64_t, primary_index_entry,
-                            dht::raw_token_less_comparator, dht::ring_position_comparator,
+                            dht::raw_token_less_comparator, primary_index_key_cmp,
                             16, bplus::key_search::linear>;
 private:
     partitions_type _partitions;
@@ -147,7 +187,7 @@ private:
             auto next_key = chunk_end->key();
             _partitions.erase_and_dispose(begin, chunk_end, dispose);
             co_await coroutine::maybe_yield();
-            begin = _partitions.lower_bound(next_key, dht::ring_position_comparator(*_schema));
+            begin = _partitions.lower_bound(next_key, primary_index_key_cmp(*_schema));
         }
     }
 
@@ -187,7 +227,7 @@ public:
     }
 
     std::optional<index_entry> get(const primary_index_key& key) const {
-        auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
+        auto it = _partitions.find(key, primary_index_key_cmp(*_schema));
         if (it != _partitions.end()) {
             return it->_e;
         }
@@ -195,7 +235,7 @@ public:
     }
 
     bool is_record_alive(const primary_index_key& key, log_location location) {
-        auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
+        auto it = _partitions.find(key, primary_index_key_cmp(*_schema));
         if (it != _partitions.end()) {
             return it->_e.location == location;
         } else {
@@ -204,7 +244,7 @@ public:
     }
 
     bool update_record_location(const primary_index_key& key, log_location old_location, log_location new_location) {
-        auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
+        auto it = _partitions.find(key, primary_index_key_cmp(*_schema));
         if (it != _partitions.end()) {
             if (it->_e.location == old_location) {
                 it->_e.location = new_location;
@@ -224,7 +264,7 @@ public:
 
     std::pair<bool, std::optional<index_entry>> insert(const primary_index_key& key, index_entry new_entry, entry_cmp_fn cmp = default_entry_cmp) {
         partitions_type::bound_hint hint;
-        auto i = _partitions.lower_bound(key.dk, dht::ring_position_comparator(*_schema), hint);
+        auto i = _partitions.lower_bound(key, primary_index_key_cmp(*_schema), hint);
         if (hint.match) {
             if (cmp(i->_e, new_entry) <= 0) {
                 // Overwriting with newer data: evict stale cached mutation.
@@ -238,14 +278,14 @@ public:
                 return {false, std::make_optional(i->_e)};
             }
         } else {
-            auto it = _partitions.emplace_before(i, key.dk.token().raw(), hint, key.dk, std::move(new_entry));
+            auto it = _partitions.emplace_before(i, key.token().raw(), hint, key, std::move(new_entry));
             on_entry_added(*it);
             return {true, std::nullopt};
         }
     }
 
     bool erase(const primary_index_key& key, log_location loc) {
-        auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
+        auto it = _partitions.find(key, primary_index_key_cmp(*_schema));
         if (it != _partitions.end() && it->_e.location == loc) {
             it.erase_and_dispose(dht::raw_token_less_comparator{}, make_entry_disposer());
             return true;
@@ -254,7 +294,7 @@ public:
     }
 
     future<> erase(const dht::partition_range& pr) {
-        dht::ring_position_comparator cmp(*_schema);
+        primary_index_key_cmp cmp(*_schema);
         auto begin_pos = dht::ring_position_view::for_range_start(pr);
         auto end_pos = dht::ring_position_view::for_range_end(pr);
 
@@ -282,18 +322,18 @@ public:
     size_t get_key_count() const noexcept { return _key_count; }
     size_t get_memory_usage() const noexcept { return _memory_usage; }
 
-    partitions_type::const_iterator find(const dht::decorated_key& key) const {
-        return _partitions.find(key, dht::ring_position_comparator(*_schema));
+    partitions_type::const_iterator find(const primary_index_key& key) const {
+        return _partitions.find(key, primary_index_key_cmp(*_schema));
     }
 
     // First entry with key >= pos (for positioning at range start)
     partitions_type::const_iterator lower_bound(const dht::ring_position_view& pos) const {
-        return _partitions.lower_bound(pos, dht::ring_position_comparator(*_schema));
+        return _partitions.lower_bound(pos, primary_index_key_cmp(*_schema));
     }
 
     // First entry with key strictly > key (for advancing past a key after a yield)
-    partitions_type::const_iterator upper_bound(const dht::decorated_key& key) const {
-        return _partitions.upper_bound(key, dht::ring_position_comparator(*_schema));
+    partitions_type::const_iterator upper_bound(const primary_index_key& key) const {
+        return _partitions.upper_bound(key, primary_index_key_cmp(*_schema));
     }
 
 };

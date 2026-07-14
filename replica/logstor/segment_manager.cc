@@ -1669,7 +1669,7 @@ future<> compaction_manager_impl::split_compaction(replica::table& t, compaction
                 return want_data::yes;
             },
             [&index, &bufs, &classifier] (log_location read_location, log_record record) -> future<> {
-                auto& cb = bufs[classifier(record.header.key.dk.token())];
+                auto& cb = bufs[classifier(record.header.key.token())];
                 co_await cb.rewrite_record(index, read_location, std::move(record));
             }
         );
@@ -1744,7 +1744,7 @@ void segment_manager_impl::write_to_separator(table& t, log_location prev_loc, l
     auto* index_ptr = &t.logstor_index();
     log_record_writer writer(std::move(record));
 
-    auto& buf = t.get_logstor_separator_buffer(key.dk.token(), writer.size());
+    auto& buf = t.get_logstor_separator_buffer(key.token(), writer.size());
 
     if (buf.held_segments.empty() || buf.held_segments.back().id() != seg_ref.id()) {
         buf.held_segments.push_back(seg_ref);

@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/future.hh>
+#include "dht/decorated_key.hh"
 #include "query/query-request.hh"
 #include "readers/from_mutations.hh"
 #include "keys/keys.hh"
@@ -130,10 +131,12 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
 future<std::optional<mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
     auto op = index.start_read();
 
+    primary_index_key pk(dk);
+
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     auto* cache = bypass_cache ? nullptr : index.cache_tracker();
 
-    auto it = index.find(dk);
+    auto it = index.find(pk);
     if (it == index.end()) {
         co_return std::nullopt;
     }
@@ -162,7 +165,7 @@ future<std::optional<mutation>> logstor::read(const schema& s, const primary_ind
     // We must re-find the entry because the iterator may have been invalidated
     // across the co_await above.
     if (cache) {
-        auto it = index.find(dk);
+        auto it = index.find(pk);
         if (it != index.end() && it->entry().location == entry_for_read.location) {
             cache->populate(*it, m);
         }
@@ -180,7 +183,7 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
         dht::partition_range _pr;
         query::partition_slice _slice;
         tracing::trace_state_ptr _trace_state;
-        std::optional<dht::decorated_key> _last_key; // owns the key, safe across yields
+        std::optional<primary_index_key> _last_key; // owns the key, safe across yields
         mutation_reader_opt _current_partition_reader;
         dht::ring_position_comparator _cmp;
 
@@ -247,7 +250,7 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
                 auto current_key = it->key();
 
                 auto guard = reader_permit::awaits_guard(_permit);
-                auto mut = co_await _logstor->read(*_schema, _index, current_key, _slice);
+                auto mut = co_await _logstor->read(*_schema, _index, current_key.dk, _slice);
 
                 _last_key = current_key; // mark as visited even if not found (tombstoned)
 

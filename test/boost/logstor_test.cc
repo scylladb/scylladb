@@ -160,8 +160,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
 
     auto sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
     BOOST_REQUIRE_EQUAL(sh.table, schema->id());
-    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.dk.token());
-    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.dk.token());
+    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.token());
+    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.token());
 }
 
 // Checks that a raw write buffer can hold and seal a record whose serialized size is exactly max_record_size().
@@ -378,14 +378,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
     BOOST_REQUIRE(std::holds_alternative<segment_header::full>(maybe_header->v));
     auto& full = std::get<segment_header::full>(maybe_header->v);
     auto expected_first_token = std::min({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     auto expected_last_token = std::max({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     BOOST_REQUIRE_EQUAL(full.table, schema->id());
     BOOST_REQUIRE_EQUAL(full.first_token, expected_first_token);
