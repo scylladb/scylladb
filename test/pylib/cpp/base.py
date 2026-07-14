@@ -54,7 +54,6 @@ DEFAULT_SCYLLA_ARGS = [
     "--unsafe-bypass-fsync=1",
     "--kernel-page-cache=1",
     "--blocked-reactor-notify-ms=2000000",
-    "--collectd=0",
     "--max-networking-io-control-blocks=1000",
 ]
 DEFAULT_CUSTOM_ARGS = ["-c2 -m2G"]
