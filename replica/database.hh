@@ -770,7 +770,7 @@ private:
             std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
-            compaction::compaction_type_options::component_rewrite::update_sstable_id update_id = compaction::compaction_type_options::component_rewrite::update_sstable_id::yes);
+            sstables::update_sstable_id update_id = sstables::update_sstable_id::yes);
 public:
     // Rewrite a component (e.g., Statistics) on all sstables matching `filter`
     // in every view of every compaction group in every storage group that
@@ -781,7 +781,7 @@ public:
             std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
-            compaction::compaction_type_options::component_rewrite::update_sstable_id update_id = compaction::compaction_type_options::component_rewrite::update_sstable_id::yes);
+            sstables::update_sstable_id update_id = sstables::update_sstable_id::yes);
 private:
     // Returns a sstable set that can be safely used for purging any expired tombstone in a compaction group.
     // Only the sstables in the compaction group is not sufficient, since there might be other compaction

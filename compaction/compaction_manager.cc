@@ -2430,7 +2430,7 @@ future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> c
             std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
-            compaction_type_options::component_rewrite::update_sstable_id update_id) {
+            sstables::update_sstable_id update_id) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten_sstables;
     co_await rewrite_sstables_component(t, std::move(filter),
             compaction_type_options::make_component_rewrite(component, std::move(modifier), update_id),

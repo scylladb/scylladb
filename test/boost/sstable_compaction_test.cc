@@ -7542,7 +7542,7 @@ SEASTAR_FIXTURE_TEST_CASE(failure_when_adding_new_sstable_test_gcs, gcs_fixture,
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
-static future<> test_perform_component_rewrite_single_sstable(compaction::compaction_type_options::component_rewrite::update_sstable_id update_id) {
+static future<> test_perform_component_rewrite_single_sstable(sstables::update_sstable_id update_id) {
     return test_env::do_with_async([update_id] (test_env& env) {
         simple_schema ss;
         auto s = ss.schema();
@@ -7603,11 +7603,11 @@ static future<> test_perform_component_rewrite_single_sstable(compaction::compac
 }
 
 SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_with_backup) {
-    return test_perform_component_rewrite_single_sstable(compaction::compaction_type_options::component_rewrite::update_sstable_id::yes);
+    return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::yes);
 }
 
 SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_without_backup) {
-    return test_perform_component_rewrite_single_sstable(compaction::compaction_type_options::component_rewrite::update_sstable_id::no);
+    return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::no);
 }
 
 SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {

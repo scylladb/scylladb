@@ -99,8 +99,7 @@ public:
         sstables::component_type component_to_rewrite;
         std::function<void(sstables::sstable&)> modifier;
 
-        using update_sstable_id = bool_class<class update_sstable_id_tag>;
-        update_sstable_id update_id = update_sstable_id::yes;
+        sstables::update_sstable_id update_id = sstables::update_sstable_id::yes;
     };
 private:
     using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split, major, component_rewrite>;
@@ -141,7 +140,7 @@ public:
         return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables});
     }
 
-    static compaction_type_options make_component_rewrite(component_type component, std::function<void(sstables::sstable&)> modifier, component_rewrite::update_sstable_id update_id = component_rewrite::update_sstable_id::yes) {
+    static compaction_type_options make_component_rewrite(component_type component, std::function<void(sstables::sstable&)> modifier, sstables::update_sstable_id update_id = sstables::update_sstable_id::yes) {
         return compaction_type_options(component_rewrite{.component_to_rewrite = component, .modifier = std::move(modifier), .update_id = update_id});
     }
 

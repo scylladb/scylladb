@@ -1436,7 +1436,7 @@ table::perform_component_rewrite(
         std::function<bool(const sstables::shared_sstable&)> filter,
         sstables::component_type component,
         std::function<void(sstables::sstable&)> modifier,
-        compaction::compaction_type_options::component_rewrite::update_sstable_id update_id) {
+        sstables::update_sstable_id update_id) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten;
     auto cgs = sg.compaction_groups_immediate();
     auto& cm = get_compaction_manager();
@@ -1461,7 +1461,7 @@ table::perform_component_rewrite(
         std::function<bool(const sstables::shared_sstable&)> filter,
         sstables::component_type component,
         std::function<void(sstables::sstable&)> modifier,
-        compaction::compaction_type_options::component_rewrite::update_sstable_id update_id) {
+        sstables::update_sstable_id update_id) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten;
     auto sgs = storage_groups_for_token_range(range);
     for (auto& sg : sgs) {
