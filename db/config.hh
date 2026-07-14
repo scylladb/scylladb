@@ -156,6 +156,20 @@ struct tablets_mode_t {
     static std::unordered_map<sstring, mode> map(); // for enum_option<>
 };
 
+// Selects the bounded-clock backend used by the LeaseGuard raft leader-lease
+// mechanism to obtain a trusted upper/lower bound on wall-clock time.
+struct raft_clock_source_t {
+    enum class source : int8_t {
+        // Derive the bound from the kernel clock's synchronization state and
+        // maximum error, as reported by adjtimex(2). Always available.
+        adjtimex = 0,
+        // Derive the bound from the AWS ClockBound daemon, which exposes a
+        // (earliest, latest) true-time interval via shared memory.
+        clockbound = 1,
+    };
+    static std::unordered_map<sstring, source> map(); // for enum_option<>
+};
+
 class config final : public utils::config_file {
 public:
     config();
@@ -330,6 +344,7 @@ public:
     named_value<uint32_t> group0_raft_op_timeout_in_ms;
     named_value<bool> strongly_consistent_raft_leader_leases_enabled;
     named_value<uint32_t> strongly_consistent_raft_leader_lease_duration_in_ms;
+    named_value<enum_option<raft_clock_source_t>> strongly_consistent_raft_leader_lease_clock_source;
     named_value<bool> cross_node_timeout;
     named_value<uint32_t> internode_send_buff_size_in_bytes;
     named_value<uint32_t> internode_recv_buff_size_in_bytes;
@@ -769,6 +784,7 @@ extern template struct utils::config_file::named_value<enum_option<db::experimen
 extern template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+extern template struct utils::config_file::named_value<enum_option<db::raft_clock_source_t>>;
 extern template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
 extern template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
 extern template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;

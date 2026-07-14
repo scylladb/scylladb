@@ -326,6 +326,13 @@ const config_type& config_type_for<enum_option<db::tablets_mode_t>>() {
 }
 
 template <>
+const config_type& config_type_for<enum_option<db::raft_clock_source_t>>() {
+    static config_type ct(
+        "raft clock source", printable_to_json<enum_option<db::raft_clock_source_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<db::config::hinted_handoff_enabled_type>() {
     static config_type ct("hinted handoff enabled", hinted_handoff_enabled_to_json);
     return ct;
@@ -514,6 +521,23 @@ template <>
 class convert<enum_option<db::tablets_mode_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::tablets_mode_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::raft_clock_source_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::raft_clock_source_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1152,6 +1176,17 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Duration (Delta) in milliseconds of a Raft leader lease for strongly-consistent tables, "
             "used when strongly_consistent_raft_leader_leases_enabled is true. Should be on the order "
             "of the Raft election timeout (~1 second by default).")
+    , strongly_consistent_raft_leader_lease_clock_source(this, "strongly_consistent_raft_leader_lease_clock_source", liveness::MustRestart, value_status::Used, raft_clock_source_t::source::adjtimex,
+            "Bounded-clock backend used by Raft leader leases (LeaseGuard) to obtain a trusted bound "
+            "on wall-clock time. Used when strongly_consistent_raft_leader_leases_enabled is true. "
+            "Can be set to the following values:\n"
+            "\n"
+            "\tadjtimex: derive the clock bound from the kernel clock synchronization state and maximum "
+            "error reported by adjtimex(2). Always available; the default.\n"
+            "\tclockbound: derive the clock bound from the AWS ClockBound daemon (via shared memory). "
+            "Requires the clockbound daemon to be running; the node fails to start otherwise.\n"
+            "\n"
+            "Read once when a raft group starts.")
     /**
     * @Group Inter-node settings
     */
@@ -2136,6 +2171,12 @@ std::unordered_map<sstring, db::tablets_mode_t::mode> db::tablets_mode_t::map() 
             };
 }
 
+std::unordered_map<sstring, db::raft_clock_source_t::source> db::raft_clock_source_t::map() {
+    return {{"adjtimex", db::raft_clock_source_t::source::adjtimex},
+            {"clockbound", db::raft_clock_source_t::source::clockbound}
+            };
+}
+
 template struct utils::config_file::named_value<seastar::log_level>;
 
 // Explicit instantiation definitions for all named_value<T> specializations
@@ -2169,6 +2210,7 @@ template struct utils::config_file::named_value<enum_option<db::experimental_fea
 template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+template struct utils::config_file::named_value<enum_option<db::raft_clock_source_t>>;
 template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
 template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
 template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;
