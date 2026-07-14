@@ -199,12 +199,24 @@ public:
     shared_sstable make_sstable(schema_ptr schema,
             const data_dictionary::storage_options& storage,
             generation_type generation,
+            optimized_optional<sstable_id> sstable_identifier,
             sstable_state state = sstable_state::normal,
             sstable_version_types v = get_highest_sstable_version(),
             sstable_format_types f = sstable_format_types::big,
             db_clock::time_point now = db_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
+    shared_sstable make_sstable(schema_ptr schema,
+            const data_dictionary::storage_options& storage,
+            generation_type generation,
+            sstable_state state = sstable_state::normal,
+            sstable_version_types v = get_highest_sstable_version(),
+            sstable_format_types f = sstable_format_types::big,
+            db_clock::time_point now = db_clock::now(),
+            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
+            size_t buffer_size = default_sstable_buffer_size) {
+        return make_sstable(std::move(schema), storage, generation, std::nullopt, state, v, f, now, std::move(error_handler_gen), buffer_size);
+    }
 
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint) const {
         SCYLLA_ASSERT(_storage != nullptr);

@@ -2415,7 +2415,9 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
 
     sstable_id sid;
-    if (generation().is_uuid_based()) {
+    if (_sstable_identifier) {
+        sid = *_sstable_identifier;
+    } else if (generation().is_uuid_based()) {
         sid = sstable_id(generation().as_uuid());
     } else {
         sid = sstable_id(utils::UUID_gen::get_time_UUID());
@@ -3963,6 +3965,7 @@ mutation_source sstable::as_mutation_source() {
 sstable::sstable(schema_ptr schema,
         const data_dictionary::storage_options& storage,
         generation_type generation,
+        optimized_optional<sstable_id> sstable_identifier,
         sstable_state state,
         version_types v,
         format_types f,
@@ -3987,6 +3990,7 @@ sstable::sstable(schema_ptr schema,
     , _large_data_handler(large_data_handler)
     , _corrupt_data_handler(corrupt_data_handler)
     , _manager(manager)
+    , _sstable_identifier(std::move(sstable_identifier))
     , _ignore_component_digest_mismatch(_manager.get_config().ignore_component_digest_mismatch)
 {
     manager.add(this);

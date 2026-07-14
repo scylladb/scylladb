@@ -211,6 +211,7 @@ public:
     sstable(schema_ptr schema,
             const data_dictionary::storage_options& storage,
             generation_type generation,
+            optimized_optional<sstable_id> sstable_identifier,
             sstable_state state,
             version_types v,
             format_types f,

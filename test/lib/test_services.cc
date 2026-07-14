@@ -418,11 +418,15 @@ test_env::make_sstable(schema_ptr schema, sstring dir, sstables::generation_type
         dir = std::filesystem::path(dir).parent_path().native();
     }
     auto storage = _impl->storage;
+    optimized_optional<sstable_id> sid_opt;
     std::visit(overloaded_functor {
         [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
-        [] (data_dictionary::storage_options::object_storage& o) { o.location = std::nullopt; },
+        [&] (data_dictionary::storage_options::object_storage& o) {
+            o.location = std::nullopt;
+            sid_opt = sstable_id(generation.as_uuid());
+        },
     }, storage.value);
-    return _impl->mgr.make_sstable(std::move(schema), storage, generation, state, v, f, now, default_io_error_handler_gen(), buffer_size);
+    return _impl->mgr.make_sstable(std::move(schema), storage, generation, sid_opt, state, v, f, now, default_io_error_handler_gen(), buffer_size);
 }
 
 shared_sstable

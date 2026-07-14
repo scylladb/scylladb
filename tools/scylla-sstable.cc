@@ -370,7 +370,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             const auto dir_path = sst_path.parent_path();
             options = data_dictionary::make_local_options(dir_path);
         }
-        auto sst = sst_man.make_sstable(schema, options, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
+        auto sst = sst_man.make_sstable(schema, options, ed.generation, ed.sid, sstables::sstable_state::normal, ed.version, ed.format);
 
         try {
             auto open_cfg = sstables::sstable_open_config{

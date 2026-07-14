@@ -54,7 +54,7 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         replica::table& t = db.find_column_family(id);
         auto erm = t.get_effective_replication_map();
         auto& sstm = t.get_sstables_manager();
-        auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, state, desc.version, desc.format);
+        auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, desc.sid, state, desc.version, desc.format);
         sstables::sstable_open_config cfg { .unsealed_sstable = true };
         // load() with unsealed_sstable=true opens the SSTable without requiring a "sealed"
         // registry entry — the registry entry is still in "creating" state at this point,
