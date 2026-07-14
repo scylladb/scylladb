@@ -221,11 +221,17 @@ future<std::unique_ptr<http::reply>> response_compressor::generate_reply(std::un
     response_compressor::compression_type ct = find_compression(accept_encoding, response_body.size());
     if (ct != response_compressor::compression_type::none) {
         rep->add_header("Content-Encoding", get_encoding_name(ct));
-        return compress(ct, cfg, std::move(response_body)).then([rep = std::move(rep), content_type] (chunked_content compressed) mutable {
+        return compress(ct, cfg, std::move(response_body)).then([this, rep = std::move(rep), content_type] (chunked_content compressed) mutable {
             rep->write_body(content_type, flatten(std::move(compressed)));
+            if (cfg.alternator_response_crc32_header()) {
+                rep->add_header("x-amz-crc32", compute_crc32(rep->_content));
+            }
             return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));
         });
     } else {
+        if (cfg.alternator_response_crc32_header()) {
+            rep->add_header("x-amz-crc32", compute_crc32(response_body));
+        }
         // Note that despite the move, response_body (std::string) is copied
         // into an sstring when passed to write_body().
         rep->write_body(content_type, std::move(response_body));
@@ -262,6 +268,26 @@ private:
     }
 };
 
+// A data_sink_impl that collects written buffers into a chunked_content
+// without copying or flattening. Used to buffer a body_writer's output
+// while computing a CRC32 over it.
+class chunked_content_sink_impl : public data_sink_impl {
+    chunked_content& _cc;
+public:
+    explicit chunked_content_sink_impl(chunked_content& cc) : _cc(cc) {}
+    future<> put(std::span<temporary_buffer<char>> data) override {
+        for (auto& buf : data) {
+            if (!buf.empty()) {
+                _cc.push_back(std::move(buf));
+            }
+        }
+        return make_ready_future<>();
+    }
+    future<> close() override {
+        return make_ready_future<>();
+    }
+};
+
 body_writer compress(response_compressor::compression_type ct, const db::config& cfg, body_writer&& bw) {
     return [bw = std::move(bw), ct, level = cfg.alternator_response_gzip_compression_level()](output_stream<char>&& out) mutable -> future<> {
         output_stream_options opts;
@@ -287,13 +313,40 @@ body_writer compress(response_compressor::compression_type ct, const db::config&
 
 future<std::unique_ptr<http::reply>> response_compressor::generate_reply(std::unique_ptr<http::reply> rep, sstring accept_encoding, std::optional<std::string_view> content_type, body_writer&& body_writer) {
     response_compressor::compression_type ct = find_compression(accept_encoding, std::numeric_limits<size_t>::max());
+    auto bw = std::move(body_writer);
     if (ct != response_compressor::compression_type::none) {
         rep->add_header("Content-Encoding", get_encoding_name(ct));
-        rep->write_body(content_type, compress(ct, cfg, std::move(body_writer)));
-    } else {
-        rep->write_body(content_type, std::move(body_writer));
+        bw = compress(ct, cfg, std::move(bw));
     }
-    return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));
+    if (!cfg.alternator_response_crc32_header()) {
+        rep->write_body(content_type, std::move(bw));
+        co_return std::move(rep);
+    }
+    // If we're still here we were asked to compute the CRC and we need the
+    // entire buffer to compute it but only have a body_writer. Unfortunately,
+    // this means that we need to ask the body writer to produce its entire
+    // output and buffer it all in memory. But at least we'll save this body
+    // in non-contiguous chunks as we don't need a huge contiguous allocation.
+    chunked_content chunks;
+    {
+        output_stream_options opts;
+        opts.trim_to_size = true;
+        co_await bw(output_stream<char>(data_sink(std::make_unique<chunked_content_sink_impl>(chunks)), compressed_buffer_size, opts));
+    }
+    uLong crc = ::crc32(0L, Z_NULL, 0);
+    for (const auto& buf : chunks) {
+        crc = ::crc32(crc, reinterpret_cast<const Bytef*>(buf.get()), buf.size());
+        co_await coroutine::maybe_yield();
+    }
+    rep->add_header("x-amz-crc32", fmt::format("{}", static_cast<uint32_t>(crc)));
+    rep->write_body(content_type, [chunks = std::move(chunks)](output_stream<char>&& out_) mutable -> future<> {
+        auto out = std::move(out_);
+        for (auto& buf : chunks) {
+            co_await out.write(std::move(buf));
+        }
+        co_await out.close();
+    });
+    co_return std::move(rep);
 }
 
 } // namespace alternator

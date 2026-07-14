@@ -529,6 +529,7 @@ public:
     named_value<bool> alternator_http_response_disable_content_type_header;
     named_value<bool> alternator_http_response_disable_date_header;
     named_value<sstring> alternator_http_response_server_header;
+    named_value<bool> alternator_response_crc32_header;
 
     named_value<bool> abort_on_ebadf;
 
