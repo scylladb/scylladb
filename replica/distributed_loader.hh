@@ -80,7 +80,8 @@ class distributed_loader {
             std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
     static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
         get_sstables_from(sharded<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg,
-        noncopyable_function<future<>(global_table_ptr&, sharded<sstables::sstable_directory>&)> start_dir);
+        noncopyable_function<future<>(global_table_ptr&, sharded<sstables::sstable_directory>&)> start_dir,
+        bool need_mutate_level);
 
 public:
     static future<> init_system_keyspace(sharded<db::system_keyspace>&, sharded<locator::effective_replication_map_factory>&, sharded<replica::database>&);

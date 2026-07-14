@@ -227,15 +227,19 @@ distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<d
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
 distributed_loader::get_sstables_from_upload_dir(sharded<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg) {
+    bool need_mutate_level = true;
     return get_sstables_from(db, ks, cf, cfg, [] (auto& global_table, auto& directory) {
         return directory.start(global_table.as_sharded_parameter(),
             sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
         );
-    });
+    }, need_mutate_level);
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
 distributed_loader::get_sstables_from_object_store(sharded<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring type, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> get_abort_src) {
+    // Do not mutate the source sstable's level.
+    // The sstable level would be mutated to 0, if needed, later on by download_sstable.
+    bool need_mutate_level = false;
     return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, type, prefix, sstables=std::move(sstables), get_abort_src] (auto& global_table, auto& directory) {
         return directory.start(global_table.as_sharded_parameter(),
             sharded_parameter([bucket, endpoint, type, prefix, get_abort_src] {
@@ -245,13 +249,14 @@ distributed_loader::get_sstables_from_object_store(sharded<replica::database>& d
             }),
             sstables,
             &error_handler_gen_for_upload_dir);
-    });
+    }, need_mutate_level);
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
 distributed_loader::get_sstables_from(sharded<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg,
-        noncopyable_function<future<>(global_table_ptr&, sharded<sstables::sstable_directory>&)> start_dir) {
-    return seastar::async([&db, ks = std::move(ks), cf = std::move(cf), start_dir = std::move(start_dir), cfg] {
+        noncopyable_function<future<>(global_table_ptr&, sharded<sstables::sstable_directory>&)> start_dir,
+        bool need_mutate_level) {
+    return seastar::async([&db, ks = std::move(ks), cf = std::move(cf), start_dir = std::move(start_dir), cfg, need_mutate_level] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get();
         auto table_id = global_table->schema()->id();
         auto allow_numerical_generations = !global_table->get_storage_options().is_object_storage_type();
@@ -263,7 +268,7 @@ distributed_loader::get_sstables_from(sharded<replica::database>& db, sstring ks
         std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards(this_smp_shard_count());
         lock_table(global_table, directory).get();
         sstables::sstable_directory::process_flags flags {
-            .need_mutate_level = true,
+            .need_mutate_level = need_mutate_level,
             .allow_loading_materialized_view = false,
             .sort_sstables_according_to_owner = false,
             .allow_numerical_generations = allow_numerical_generations,

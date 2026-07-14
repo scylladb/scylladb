@@ -14,6 +14,7 @@
 #include "replica/database.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/error_injection.hh"
 
 future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger) {

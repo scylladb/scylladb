@@ -261,6 +261,9 @@ private:
     future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
         sst_classification_info downloaded_sstables(this_smp_shard_count());
         for (const auto& sstable : sstables) {
+            // For now, tablet-aware restore doesn't need to mutate sstable level to 0
+            // since we support only restoring to empty tables and so we can keep the sstable levels on backup.
+            // Once we support restoring onto live tables we may want to mutate the ingested sstables' level to 0.
             auto min_info = co_await download_sstable(_db.local(), _table, sstable, llog);
             downloaded_sstables[min_info.shard].emplace_back(min_info);
         }
