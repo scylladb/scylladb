@@ -273,6 +273,9 @@ if(NOT TARGET libdeflate::libdeflate)
     add_library(libdeflate::libdeflate ALIAS libdeflate::libdeflate_static)
   endif()
 endif()
+# The ClockBound client library is found through the config files Conan
+# generates.
+find_package(clockbound REQUIRED CONFIG)
 find_package(libxcrypt REQUIRED)
 find_package(p11-kit REQUIRED)
 find_package(Snappy REQUIRED)

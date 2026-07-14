@@ -13,15 +13,13 @@ class ScyllaBuildDependencies(ConanFile):
     settings = "os", "arch", "compiler", "build_type"
 
     requires = (
-        # TODO: remove the comment when actual library will be used
-        # "clock-bound/3.0.0-rc.0",
+        "clock-bound/3.0.0-rc.0",
         "libdeflate/1.25",
         "xxhash/0.8.4",
     )
 
     default_options = {
-        # TODO: remove the comment when actual library will be used
-        # "clock-bound/*:shared": True,
+        "clock-bound/*:shared": True,
         "libdeflate/*:shared": True,
         "xxhash/*:shared": True,
     }
