@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <fmt/format.h>
 #include "dht/decorated_key.hh"
+#include "dht/ring_position.hh"
 #include "mutation/canonical_mutation.hh"
 #include "mutation/timestamp.hh"
 
@@ -32,6 +33,8 @@ struct log_location {
 
 struct primary_index_key {
     dht::decorated_key dk;
+
+    const dht::token& token() const noexcept { return dk.token(); }
 };
 
 struct index_entry {
