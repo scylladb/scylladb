@@ -2406,7 +2406,7 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
                     return want_data::yes;
                 },
                 [&index, &bufs, &classifier] (log_location read_location, const log_record_header& record_header, log_record_bytes_view record_bytes) -> future<> {
-                    auto& cb = bufs.bufs[classifier(record_header.key.dk.token())];
+                    auto& cb = bufs.bufs[classifier(record_header.key.token())];
                     co_await cb.rewrite_record(index, read_location, record_header, record_bytes);
                 }
             );
@@ -2765,7 +2765,7 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
             [seg_ref, &db] (log_location prev_loc, const log_record_header& record_header, log_record_bytes_view record_bytes) -> future<> {
                 try {
                     auto& t = db.find_column_family(record_header.table);
-                    auto& cg = t.get_logstor_group(record_header.key.dk.token());
+                    auto& cg = t.get_logstor_group(record_header.key.token());
                     auto writer = log_record_bytes_writer(record_header, record_bytes);
 
                     co_await cg.write_to_separator(std::move(writer), seg_ref, std::nullopt,
