@@ -697,7 +697,7 @@ static void prepopulate(const raw_cql_test_config& cfg) {
         conn->stop().get();
         std::cout << "Pre-populated " << cfg.partitions << " partitions" << std::endl;
     } catch (...) {
-        std::cerr << "Population failed: " << std::current_exception() << std::endl;
+        fmt::print(std::cerr, "Population failed: {}\n", std::current_exception());
         throw;
     }
 }
@@ -744,7 +744,7 @@ static void workload_main(const raw_cql_test_config& cfg, sharded<abort_source>*
     try {
         wait_for_compactions(cfg);
     } catch (...) {
-        std::cerr << "Compaction wait failed: " << std::current_exception() << std::endl;
+        fmt::print(std::cerr, "Compaction wait failed: {}\n", std::current_exception());
         throw;
     }
     if (!cfg.connection_per_request && cfg.workload != "connect") {
@@ -755,7 +755,7 @@ static void workload_main(const raw_cql_test_config& cfg, sharded<abort_source>*
                 return prepare_thread_connections(*shared_cfg);
             }).get();
         } catch (...) {
-            std::cerr << "Connection preparation failed: " << std::current_exception() << std::endl;
+            fmt::print(std::cerr, "Connection preparation failed: {}\n", std::current_exception());
             throw;
         }
     }
@@ -876,7 +876,7 @@ std::function<int(int, char**)> perf_cql_raw(std::function<int(int, char**)> scy
                 try {
                     workload_main(c, &as);
                 } catch (...) {
-                    std::cerr << "Perf test failed: " << std::current_exception() << std::endl;
+                    fmt::print(std::cerr, "Perf test failed: {}\n", std::current_exception());
                     raise(SIGKILL); // abnormal shutdown to signal test failure
                 }
                 raise(SIGINT); // normal shutdown request after test completion

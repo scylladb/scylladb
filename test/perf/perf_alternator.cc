@@ -535,7 +535,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
                 try {
                     workload_main(c, &as);
                 } catch(...) {
-                    std::cerr << "Test failed: " << std::current_exception() << std::endl;
+                    fmt::print(std::cerr, "Test failed: {}\n", std::current_exception());
                     raise(SIGKILL); // request abnormal shutdown
                 }
                 raise(SIGINT); // request shutdown
