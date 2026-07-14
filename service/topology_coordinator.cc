@@ -2684,6 +2684,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         auto tm = get_token_metadata_ptr();
         auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
+        std::unordered_set<table_id> finalized_tables;
+        for (auto table_id : plan.resize_plan().finalize_resize) {
+            for (auto colocated_table_id : tm->tablets().all_table_groups().at(table_id)) {
+                finalized_tables.insert(colocated_table_id);
+            }
+        }
+        if (!finalized_tables.empty()) {
+            // CDC resize diffs are generated from the latest loaded stream set,
+            // so refresh it before computing mutations for another generation.
+            co_await _cdc_gens.load_cdc_tablet_streams(std::make_optional(std::move(finalized_tables)));
+        }
 
         utils::chunked_vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
@@ -2706,8 +2717,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});
             _vb_coordinator->generate_tablet_resize_updates(updates, guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
 
-            for (auto table_id : tm->tablets().all_table_groups().at(table_id)) {
-                co_await _cdc_gens.generate_tablet_resize_update(updates, table_id, new_tablet_map, guard.write_timestamp());
+            for (auto colocated_table_id : tm->tablets().all_table_groups().at(table_id)) {
+                co_await _cdc_gens.generate_tablet_resize_update(updates, colocated_table_id, new_tablet_map, guard.write_timestamp());
             }
 
             const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);

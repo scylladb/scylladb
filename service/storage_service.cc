@@ -664,6 +664,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     rtlogger.debug("reload raft topology state");
     std::unordered_set<raft::server_id> prev_normal = _topology_state_machine._topology.normal_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
     std::optional<std::unordered_set<locator::host_id>> prev_released;
+    auto previous_tstate = _topology_state_machine._topology.tstate;
     if (!_topology_state_machine._topology.is_empty()) {
         prev_released = get_released_nodes(_topology_state_machine._topology, get_token_metadata());
     }
@@ -686,6 +687,16 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     co_await _sys_ks.local().save_local_enabled_features(topology.enabled_features, false);
 
     auto saved_tmpr = get_token_metadata_ptr();
+
+    const bool reload_cdc_streams_before_publishing_tablets = previous_tstate == topology::transition_state::tablet_resize_finalization
+            || previous_tstate == topology::transition_state::tablet_split_finalization;
+    if (reload_cdc_streams_before_publishing_tablets && !hint.cdc_streams_reloaded) {
+        // Full topology reload paths do not have mutation context. If we were in
+        // resize/split finalization, refresh CDC streams before publishing the
+        // finalized tablet map locally.
+        co_await load_cdc_streams();
+    }
+
     {
         rtlogger.debug("topology_state_load: waiting for token metadata lock");
         auto tmlock = co_await get_token_metadata_lock();
@@ -743,6 +754,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             tablets = co_await replica::read_tablet_metadata(_qp);
         }
         tablets->set_balancing_enabled(topology.tablet_balancing_enabled);
+
         tmptr->set_tablets(std::move(*tablets));
 
         if (_feature_service.parallel_tablet_draining) {
