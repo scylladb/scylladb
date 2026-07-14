@@ -19,6 +19,7 @@
 #include <variant>
 
 #include "seastarx.hh"
+#include "utils/property.hh"
 
 namespace cql3 {
 
@@ -26,9 +27,9 @@ namespace statements {
 
 class property_definitions {
 public:
-    using map_type = std::map<sstring, sstring>;
-    using list_type = std::vector<sstring>;
-    using extended_map_type = std::map<sstring, std::variant<sstring, list_type>>;
+    using map_type = utils::property_string_map;
+    using list_type = utils::property_string_list;
+    using extended_map_type = utils::extended_property_map;
     using value_type = std::variant<sstring, extended_map_type>;
     using properties_map_type = std::unordered_map<sstring, value_type>;
 protected:
