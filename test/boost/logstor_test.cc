@@ -324,8 +324,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
 
     auto sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
     BOOST_REQUIRE_EQUAL(sh.table, schema->id());
-    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.dk.token());
-    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.dk.token());
+    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.token());
+    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.token());
 }
 
 // Checks that a raw write buffer can hold and seal a record whose serialized size is exactly max_record_size().
@@ -559,7 +559,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     };
 
     std::sort(entries.begin(), entries.end(), [&] (const entry& a, const entry& b) {
-        return dht::decorated_key::less_comparator(schema)(a.key.dk, b.key.dk);
+        return a.key.token() < b.key.token();
     });
 
     auto insert = [&] (const entry& e, api::timestamp_type ts) {
@@ -585,11 +585,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[4].loc.size));
-    BOOST_REQUIRE(index.find(entries[0].key.dk) != index.end());
-    BOOST_REQUIRE(index.find(entries[1].key.dk) == index.end());
-    BOOST_REQUIRE(index.find(entries[2].key.dk) == index.end());
-    BOOST_REQUIRE(index.find(entries[3].key.dk) == index.end());
-    BOOST_REQUIRE(index.find(entries[4].key.dk) != index.end());
+    BOOST_REQUIRE(index.find(entries[0].key) != index.end());
+    BOOST_REQUIRE(index.find(entries[1].key) == index.end());
+    BOOST_REQUIRE(index.find(entries[2].key) == index.end());
+    BOOST_REQUIRE(index.find(entries[3].key) == index.end());
+    BOOST_REQUIRE(index.find(entries[4].key) != index.end());
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[1].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[2].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[3].loc), 1);
@@ -793,14 +793,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
     BOOST_REQUIRE(std::holds_alternative<segment_header::full>(maybe_header->v));
     auto& full = std::get<segment_header::full>(maybe_header->v);
     auto expected_first_token = std::min({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     auto expected_last_token = std::max({
-        seen_records[0].header.key.dk.token(),
-        seen_records[1].header.key.dk.token(),
-        seen_records[2].header.key.dk.token(),
+        seen_records[0].header.key.token(),
+        seen_records[1].header.key.token(),
+        seen_records[2].header.key.token(),
     });
     BOOST_REQUIRE_EQUAL(full.table, schema->id());
     BOOST_REQUIRE_EQUAL(full.first_token, expected_first_token);
