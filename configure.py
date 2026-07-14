@@ -1379,6 +1379,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/raft/group0_voter_handler.cc',
                 'service/raft/raft_sys_table_storage.cc',
                 'service/raft/bounded_clock_adjtimex.cc',
+                'service/raft/bounded_clock_clockbound.cc',
                 'serializer.cc',
                 'release.cc',
                 'service/raft/raft_rpc.cc',
@@ -2383,6 +2384,13 @@ if os.path.exists(kmipc_lib):
     libs += f' {kmipc_lib}'
     user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
 
+# AWS ClockBound bounded-clock backend. Its C client library (libclockbound.a)
+# is built from the clock-bound git submodule (the clock-bound-ffi workspace
+# member) via the clockbound_lib ninja rule, and linked into any binary that
+# includes the backend. The backend uses the plain C interface in
+# clock-bound/clock-bound-ffi/include/clockbound.h.
+user_cflags += ' -Iclock-bound/clock-bound-ffi/include'
+
 cpp_jwt_encryption_sources = [
     'ent/encryption/azure_host.cc',
     'ent/encryption/azure_key_provider.cc',
@@ -2660,6 +2668,12 @@ def write_build_file(f,
         aws_errors_gen_hh = '{}/utils/s3/aws_error_definitions_generated.hh'.format(aws_errors_gen_dir)
         aws_errors_gen_cc = '{}/utils/s3/aws_error_definitions_generated.cc'.format(aws_errors_gen_dir)
         aws_errors_gen_obj = aws_errors_gen_cc.replace('.cc', '.o')
+        f.write(textwrap.dedent('''\
+            rule clockbound_lib.{mode}
+              command = CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --release --manifest-path=clock-bound/Cargo.toml -p clock-bound-ffi --target-dir=$builddir/{mode}/clockbound $
+                        && cp $builddir/{mode}/clockbound/release/libclockbound.a $out
+              description = CLOCKBOUND_LIB $out
+            ''').format(mode=mode, rustc_wrapper=rustc_wrapper))
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
@@ -2720,6 +2734,12 @@ def write_build_file(f,
             if has_rust:
                 parent_mode = modes[mode].get('parent_mode', mode)
                 objs.append(f'$builddir/{parent_mode}/rust-{parent_mode}/librust_combined.a')
+            # Link libclockbound.a into any binary that includes the ClockBound
+            # backend object (it references clockbound_* symbols). Adding it to
+            # objs makes it a link input and a build dependency, so ninja builds
+            # the library first.
+            if 'service/raft/bounded_clock_clockbound.cc' in srcs:
+                objs.append(f'$builddir/{mode}/libclockbound.a')
             if binary in cpp_apps:
                 # binary only needs the C++ standard library, no additional
                 # libraries.
@@ -2891,6 +2911,7 @@ def write_build_file(f,
         if 'parent_mode' not in modes[mode]:
             librust = '$builddir/{}/rust-{}/librust_combined'.format(mode, mode)
             f.write('build {}.a: rust_lib.{} rust/Cargo.lock\n  depfile={}.d\n'.format(librust, mode, librust))
+        f.write('build $builddir/{mode}/libclockbound.a: clockbound_lib.{mode} clock-bound/Cargo.lock\n'.format(mode=mode))
         for grammar in antlr3_grammars:
             outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,
