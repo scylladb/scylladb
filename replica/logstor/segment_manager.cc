@@ -1437,10 +1437,18 @@ future<> segment_manager_impl::stop() {
     }
     logstor_logger.info("Stopping segment manager");
 
+    // stop admitting new writes and external operations
+    co_await _async_gate.close();
+
+    // let accepted writes finish and be written to separator buffer
+    co_await _writes_phaser.advance_and_await();
+
+    // abort separator task queue and fiber. it should be drained at this point since all tasks hold the write phaser.
+    logstor_logger.debug("Stopping separator fiber and flushing separator buffers");
     _separator_task_queue.abort(std::make_exception_ptr(seastar::abort_requested_exception()));
     co_await std::move(_separator_fiber).handle_exception([] (std::exception_ptr) {});
 
-    co_await _async_gate.close();
+    co_await _compaction_mgr.flush_all_separator_buffers(std::nullopt);
 
     if (_active_segment) {
         co_await _active_segment->stop();
@@ -1450,14 +1458,14 @@ future<> segment_manager_impl::stop() {
         co_await _switch_segment_fut->get_future().handle_exception([] (std::exception_ptr) {});
     }
 
-    co_await _segment_pool.stop();
+    logstor_logger.debug("Stopping compaction manager and buffer pool");
+    co_await _compaction_mgr.stop();
+    co_await _compaction_buffer_pool.stop();
 
+    logstor_logger.debug("Stopping segment pool");
+    co_await _segment_pool.stop();
     _segment_freed_cv.broken();
     co_await std::move(_reserve_replenisher);
-
-    co_await _compaction_mgr.stop();
-
-    co_await _compaction_buffer_pool.stop();
 
     co_await _file_mgr.stop();
 
@@ -1556,8 +1564,6 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 }
 
 future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_group& cg, write_source source) {
-    auto holder = _async_gate.hold();
-
     const auto sealed_size = wb.sealed_size(block_alignment);
 
     if (sealed_size > _cfg.segment_size) {
@@ -1626,17 +1632,13 @@ future<> segment_manager_impl::request_segment_switch() {
 }
 
 future<> segment_manager_impl::switch_active_segment() {
-    auto holder = _async_gate.hold();
-
     auto new_seg = co_await get_segment(write_source::normal_write);
 
     auto old_seg = std::exchange(_active_segment, std::move(new_seg));
 
     if (old_seg) {
         // close old segment in background
-        (void)with_gate(_async_gate, [old_seg] {
-            return old_seg->stop();
-        }).finally([old_seg] {}).handle_exception([] (std::exception_ptr) {});
+        (void)old_seg->stop().finally([old_seg] {}).handle_exception([] (std::exception_ptr) {});
     }
 
     // trigger separator flush for separator buffers that hold old segments
@@ -1658,10 +1660,6 @@ future<> segment_manager_impl::replenish_reserve() {
             logstor_logger.debug("Reserve replenisher stopping due to abort");
             break;
         } catch (...) {
-            if (_async_gate.is_closed()) {
-                logstor_logger.debug("Reserve replenisher stopping due to gate close");
-                break;
-            }
             retry = true;
             logstor_logger.warn("Exception in reserve replenisher: {}, will retry", std::current_exception());
         }
@@ -1709,7 +1707,11 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         // no free segments - wait for a segment to be freed.
         // compaction might fail to free segments now, but can succeed later as data is freed.
         // for now let's solve it by waiting with a timeout to re-trigger compaction periodically.
-        co_await _segment_freed_cv.wait(std::chrono::seconds(5));
+        try {
+            co_await _segment_freed_cv.wait(std::chrono::seconds(5));
+        } catch (seastar::broken_condition_variable&) {
+            co_return coroutine::return_exception(abort_requested_exception());
+        }
     }
 }
 
