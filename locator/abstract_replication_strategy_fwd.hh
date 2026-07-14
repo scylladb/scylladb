@@ -13,6 +13,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include "locator/types.hh"
+#include "utils/property.hh"
 
 /// Forward declarations, lightweight pointer typedefs and replication
 /// strategy option types for locator/abstract_replication_strategy.hh.
@@ -35,7 +36,7 @@ using mutable_static_effective_replication_map_ptr = seastar::shared_ptr<static_
 using static_erm_ptr = static_effective_replication_map_ptr;
 using mutable_static_erm_ptr = mutable_static_effective_replication_map_ptr;
 
-using replication_strategy_config_option = std::variant<seastar::sstring, rack_list>;
-using replication_strategy_config_options = std::map<seastar::sstring, replication_strategy_config_option>;
+using replication_strategy_config_option = utils::property_value;
+using replication_strategy_config_options = utils::extended_property_map;
 
 } // namespace locator
