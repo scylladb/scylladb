@@ -1593,7 +1593,7 @@ bool sstable::should_update_repaired_at(int64_t repaired_at) const {
 future<shared_sstable> sstable::link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
         component_type component,
         std::function<void(sstable&)> modifier,
-        bool update_sstable_id) {
+        update_sstable_id update_id) {
     if (!is_component_rewrite_supported(component)) {
         on_internal_error(sstlog, "Only Statistics component can be rewritten.");
     }
@@ -1606,7 +1606,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
     }
 
-    return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_sstable_id] {
+    return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_id] {
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
 
@@ -1619,7 +1619,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         // If unchanged, reuse the existing _components->scylla_metadata instead.
         scylla_metadata metadata;
         read_simple<component_type::Scylla>(metadata).get();
-        if (update_sstable_id) {
+        if (update_id) {
             metadata.set_sstable_identifier();
         }
 

@@ -404,7 +404,7 @@ SEASTAR_TEST_CASE(wrong_range) {
     });
 }
 
-future<sstable_ptr> mutate_sstable_level(test_env& env, sstable_ptr sstp, const std::string& dir_path, uint32_t new_level, bool update_sstable_id = false) {
+future<sstable_ptr> mutate_sstable_level(test_env& env, sstable_ptr sstp, const std::string& dir_path, uint32_t new_level, sstables::update_sstable_id update_id = sstables::update_sstable_id::no) {
     auto modifier = [new_level] (sstables::sstable& sst) {
         sst.mutate_sstable_level(new_level);
     };
@@ -412,7 +412,7 @@ future<sstable_ptr> mutate_sstable_level(test_env& env, sstable_ptr sstp, const 
         return env.make_sstable(sstp->get_schema(), dir_path, sstp->get_version());
     };
 
-    auto new_sst = co_await sstp->link_with_rewritten_component(std::move(creator), component_type::Statistics, modifier, update_sstable_id);
+    auto new_sst = co_await sstp->link_with_rewritten_component(std::move(creator), component_type::Statistics, modifier, update_id);
     co_await sstp->unlink();
     sstp = new_sst;
 
@@ -951,7 +951,7 @@ static future<> test_component_digest_persistence(component_type component, ssta
             original_digest = sst_original->get_component_digest(component);
             BOOST_REQUIRE(original_digest.has_value());
 
-            sst_original = mutate_sstable_level(env, sst_original, dir_path, 10, true).get();
+            sst_original = mutate_sstable_level(env, sst_original, dir_path, 10, sstables::update_sstable_id::yes).get();
             entry_desc.generation = sst_original->generation();
 
             auto new_digest = sst_original->get_component_digest(component);

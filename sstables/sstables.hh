@@ -1191,7 +1191,7 @@ public:
     future<shared_sstable> link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
             component_type component,
             std::function<void(sstable&)> modifier,
-            bool update_sstable_id);
+            update_sstable_id);
     // Must be called in a seastar thread
     void write_component_with_metadata(component_type type, scylla_metadata metadata);
 };
