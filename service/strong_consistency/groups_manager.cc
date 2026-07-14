@@ -20,6 +20,8 @@
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_timeout.hh"
+#include "service/raft/bounded_clock_adjtimex.hh"
+#include "service/raft/bounded_clock_clockbound.hh"
 #include "service/storage_proxy.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
@@ -228,20 +230,47 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _raft_replay_buffer(raft_replay_buffer)
     , _resize_tracker(resize_tracker.local())
 {
+    // Construct the selected LeaseGuard clock backend eagerly, but only when
+    // leader leases are enabled: the clockbound backend's constructor throws
+    // (failing node start) if the ClockBound shared-memory segment is missing
+    // or unreadable, which must not happen when leases are off. The selected
+    // source is fixed for the process lifetime (MustRestart config option).
+    // With leases off the clock only measures elapsed time, which a leader
+    // uses to wait out a lease a deposed leader left (see
+    // raft::server::configuration::leaseguard_configuration::enabled), so it is
+    // adjtimex regardless of the selected source.
     const auto& db_config = _db.get_config();
     _lease_duration = lease_duration(db_config);
-    // Log once per node (not once per shard or per raft group): the options are
-    // MustRestart, so every group on the node uses the same setting.
-    if (this_shard_id() == 0) {
-        if (db_config.strong_consistency_enable_leases()) {
-            logger.info("LeaseGuard leader leases enabled (lease duration {}ms)", _lease_duration.count());
+    if (db_config.strong_consistency_enable_leases()) {
+        using source = db::lease_clock_source_t::source;
+        const char* backend_name = nullptr;
+        switch (db_config.strong_consistency_lease_clock_source()) {
+        case source::adjtimex:
+            _bounded_clock = std::make_unique<service::bounded_clock_adjtimex>();
+            backend_name = "adjtimex";
+            break;
+        case source::clockbound:
+            _bounded_clock = std::make_unique<service::bounded_clock_clockbound>();
+            backend_name = "clockbound";
+            break;
+        }
+        // Log once per node (not once per shard) now that the backend has been
+        // successfully constructed, so the line records a backend that is in use.
+        // A clockbound constructor that throws (no readable segment) propagates
+        // and fails node start.
+        if (this_shard_id() == 0) {
+            logger.info("LeaseGuard leader leases enabled; using '{}' bounded-clock backend "
+                        "(lease duration {}ms)", backend_name, _lease_duration.count());
             if (_lease_duration > lease_duration_warn_threshold) {
                 logger.warn("LeaseGuard lease duration {}ms is above {}ms: after every leader change "
                             "a group's writes stall for up to the lease duration",
                             _lease_duration.count(),
                             std::chrono::duration_cast<std::chrono::milliseconds>(lease_duration_warn_threshold).count());
             }
-        } else {
+        }
+    } else {
+        _bounded_clock = std::make_unique<service::bounded_clock_adjtimex>();
+        if (this_shard_id() == 0) {
             logger.info("LeaseGuard leader leases disabled");
         }
     }
@@ -372,9 +401,10 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     // leases on left, which lets leases be enabled or disabled one node at a
     // time. The clock is owned by this manager (per shard) and outlives the
     // server.
+    SCYLLA_ASSERT(_bounded_clock);
     config.leaseguard = raft::server::configuration::leaseguard_configuration {
         .delta = _lease_duration,
-        .clock = _bounded_clock,
+        .clock = *_bounded_clock,
         .enabled = _db.get_config().strong_consistency_enable_leases(),
     };
 
