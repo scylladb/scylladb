@@ -33,6 +33,8 @@
 
 #include <fmt/ranges.h>
 
+#include <limits>
+
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -119,6 +121,15 @@ std::string_view format_as(row_level_diff_detect_algorithm algo) {
     return "unknown";
 }
 
+// Whether the node operation is one for which the small table optimization is
+// supported. It only makes sense for operations that sync the whole ring
+// (bootstrap, rebuild, decommission). User tables are only size-probed for these.
+static bool small_table_optimization_reason_supported(streaming::stream_reason reason) {
+    return reason == streaming::stream_reason::bootstrap ||
+           reason == streaming::stream_reason::rebuild ||
+           reason == streaming::stream_reason::decommission;
+}
+
 bool should_enable_small_table_optimization_for_rbno(bool enable_small_table_optimization_for_rbno, sstring keyspace, streaming::stream_reason reason) {
     bool small_table_optimization = false;
     if (enable_small_table_optimization_for_rbno) {
@@ -129,13 +140,94 @@ bool should_enable_small_table_optimization_for_rbno(bool enable_small_table_opt
             "system_auth",
             "system_traces"
         };
-        if (reason == streaming::stream_reason::bootstrap ||
-            reason == streaming::stream_reason::rebuild ||
-            reason == streaming::stream_reason::decommission) {
+        if (small_table_optimization_reason_supported(reason)) {
             small_table_optimization = small_table_optimization_enabled_ks.contains(keyspace);
         }
     }
     return small_table_optimization;
+}
+
+// Probe the on-disk size of a user table on the local node and on the given
+// neighbor nodes (the replicas the node operation syncs from), and return the
+// largest size reported by any of them. This is used to decide whether a user
+// table is small enough for the small table optimization: for the join style
+// operations (bootstrap, replace, rebuild) the local node is still (mostly)
+// empty, so the size has to be read from the source replicas; for decommission
+// the data is still local.
+static future<uint64_t> get_max_table_on_disk_size(repair_service& rs, repair_uniq_id id,
+        const sstring& keyspace, const sstring& cf, table_id table,
+        const std::vector<locator::host_id>& nodes) {
+    uint64_t max_size = co_await local_table_on_disk_size(rs.get_db(), table);
+    co_await coroutine::parallel_for_each(nodes, [&] (locator::host_id node) -> future<> {
+        try {
+            auto size = co_await ser::repair_rpc_verbs::send_repair_get_table_size(&rs.get_messaging(), node, table);
+            max_size = std::max(max_size, size);
+        } catch (...) {
+            // If a replica cannot report the size (e.g. an old node without the
+            // verb, or a transient error), be conservative and treat the table as
+            // too big for the optimization.
+            rlogger.warn("repair[{}]: Failed to get table size for {}.{} from node={}: {}. Treating table as not small.",
+                    id.uuid(), keyspace, cf, node, std::current_exception());
+            max_size = std::numeric_limits<uint64_t>::max();
+        }
+    });
+    co_return max_size;
+}
+
+// Partition the tables of a keyspace into those that should use the small table
+// optimization (small_cfs) and the rest (normal_cfs). All tables of the small
+// system keyspaces are always optimized; user tables are optimized only when
+// their on-disk size (probed on the replicas we sync from) is small enough.
+static future<std::pair<std::vector<sstring>, std::vector<sstring>>>
+partition_tables_for_small_table_optimization(repair_service& rs, replica::database& db, repair_uniq_id id,
+        const sstring& keyspace, std::vector<sstring> cfs, streaming::stream_reason reason,
+        const std::vector<locator::host_id>& neighbor_nodes) {
+    bool enable_small_table_optimization = rs.get_config().enable_small_table_optimization_for_rbno();
+    uint64_t max_table_size = rs.get_config().small_table_optimization_for_rbno_max_table_size();
+    // The size based auto-detection probes table sizes on the sync neighbors via
+    // the repair_get_table_size RPC verb, so it is only used when the whole
+    // cluster supports it. Until then, user tables fall back to the regular
+    // ranged repair (the always optimized small system keyspaces are unaffected).
+    bool size_probe_supported = db.features().small_table_optimization_size_probe;
+
+    // Whether the small table optimization applies to the whole keyspace
+    // regardless of size (the always optimized small system keyspaces). This is
+    // a keyspace level decision, so compute it once.
+    bool keyspace_always_small = should_enable_small_table_optimization_for_rbno(enable_small_table_optimization, keyspace, reason);
+    // Whether user tables of this keyspace should be auto-detected by their
+    // on-disk size. Only done for the supported reasons and when the whole
+    // cluster supports the size probe RPC verb.
+    bool auto_detect_by_size = !keyspace_always_small && enable_small_table_optimization &&
+            size_probe_supported && small_table_optimization_reason_supported(reason);
+
+    std::vector<sstring> small_cfs;
+    std::vector<sstring> normal_cfs;
+    if (!auto_detect_by_size) {
+        // Either an always optimized system keyspace (all tables small) or the
+        // size based auto-detection does not apply (all tables normal).
+        (keyspace_always_small ? small_cfs : normal_cfs) = std::move(cfs);
+        co_return std::make_pair(std::move(small_cfs), std::move(normal_cfs));
+    }
+
+    // Probe the size of all user tables in parallel and classify each table as
+    // small or normal based on its max on-disk size across the replicas we sync
+    // from. The classification and the push into the result vectors run
+    // synchronously (no preemption point between them), so pushing directly from
+    // the parallel loop is safe.
+    co_await coroutine::parallel_for_each(cfs, [&] (sstring& cf) -> future<> {
+        table_id table;
+        try {
+            table = db.find_uuid(keyspace, cf);
+        } catch (replica::no_such_column_family&) {
+            co_return;
+        }
+        uint64_t size = co_await get_max_table_on_disk_size(rs, id, keyspace, cf, table, neighbor_nodes);
+        bool small = size <= max_table_size;
+        rlogger.info("repair[{}]: small table optimization size check keyspace={}, table={}, size={}, max_table_size={}, small_table_optimization={}",
+                id.uuid(), keyspace, cf, size, max_table_size, small);
+        (small ? small_cfs : normal_cfs).push_back(std::move(cf));
+    });
+    co_return std::make_pair(std::move(small_cfs), std::move(normal_cfs));
 }
 
 static size_t get_nr_tables(const replica::database& db, const sstring& keyspace) {
@@ -612,6 +704,17 @@ future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, co
             // once. However, shared sstables should exist for a short-time only.
             const auto& table = db.find_column_family(keyspace, cf);
             return table.estimated_partitions_in_range(range);
+        },
+        uint64_t(0),
+        std::plus<uint64_t>()
+    );
+}
+
+future<uint64_t> local_table_on_disk_size(seastar::sharded<replica::database>& db, table_id table) {
+    return db.map_reduce0(
+        [table] (const replica::database& db) -> uint64_t {
+            const auto* cf = find_column_family_if_exists(db, table, false);
+            return cf ? uint64_t(cf->get_stats().live_disk_space_used.on_disk) : uint64_t(0);
         },
         uint64_t(0),
         std::plus<uint64_t>()
@@ -1490,58 +1593,88 @@ future<> repair::data_sync_repair_task_impl::run() {
 
     auto id = get_repair_uniq_id();
 
-    size_t ranges_reduced_factor = 1;
-    bool small_table_optimization = should_enable_small_table_optimization_for_rbno(rs.get_config().enable_small_table_optimization_for_rbno(), keyspace, _reason);
-    if (small_table_optimization) {
-        auto range = dht::token_range(dht::token_range::bound(dht::minimum_token(), false), dht::token_range::bound(dht::maximum_token(), false));
-        ranges_reduced_factor = _ranges.size();
-        _ranges = {range};
-        std::unordered_set<locator::host_id> nodes;
-        for (auto& [_, neighbor] : _neighbors) {
-            for (auto& n : neighbor.all) {
-                nodes.insert(n);
-            }
-        }
-        auto nodes_vec = std::vector<locator::host_id>(nodes.begin(), nodes.end());
-        _neighbors = {{range, repair_neighbors(nodes_vec, nodes_vec)}};
+    // Partition the tables of the keyspace into those that should use the small
+    // table optimization and the rest. Both groups are repaired in the same
+    // operation, but the small group syncs the whole ring as a single range from
+    // all replicas, while the rest use the ranges and neighbors computed by the
+    // node operation driver.
+    auto cfs = list_column_families(db, keyspace);
+    _cfs_size = cfs.size();
+    if (cfs.empty()) {
+        rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid(), keyspace);
+        co_return;
     }
+    // The set of replica nodes this operation syncs from, used to probe table
+    // sizes for the size based small table optimization auto-detection.
+    std::unordered_set<locator::host_id> neighbor_nodes;
+    for (auto& [_, neighbor] : _neighbors) {
+        for (auto& n : neighbor.all) {
+            neighbor_nodes.insert(n);
+        }
+    }
+    auto neighbor_nodes_vec = std::vector<locator::host_id>(neighbor_nodes.begin(), neighbor_nodes.end());
+
+    auto [small_cfs, normal_cfs] = co_await partition_tables_for_small_table_optimization(
+            rs, db, id, keyspace, std::move(cfs), _reason, neighbor_nodes_vec);
 
     auto start_time = std::chrono::steady_clock::now();
-    rlogger.info("repair[{}]: sync data for keyspace={}, status=started, reason={}, small_table_optimization={}", id.uuid(), keyspace, _reason, small_table_optimization);
-    co_await module->run(id, [this, &rs, id, &db, keyspace, ranges_reduced_factor, small_table_optimization, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as, frozen_topology_guard = _frozen_topology_guard] () mutable {
-        auto cfs = list_column_families(db, keyspace);
-        _cfs_size = cfs.size();
-        if (cfs.empty()) {
-            rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid(), keyspace);
-            return;
+    rlogger.info("repair[{}]: sync data for keyspace={}, status=started, reason={}, small_table_optimization_tables={}, normal_tables={}",
+            id.uuid(), keyspace, _reason, small_cfs.size(), normal_cfs.size());
+    co_await module->run(id, [this, &rs, id, &db, keyspace, small_cfs = std::move(small_cfs), normal_cfs = std::move(normal_cfs), germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as, frozen_topology_guard = _frozen_topology_guard] () mutable {
+        // A group of tables to be repaired together with a common set of ranges
+        // and neighbors.
+        struct repair_group {
+            std::vector<table_id> table_ids;
+            dht::token_range_vector ranges;
+            std::unordered_map<dht::token_range, repair_neighbors> neighbors;
+            bool small_table_optimization;
+            size_t ranges_reduced_factor;
+        };
+        std::vector<repair_group> groups;
+        if (!normal_cfs.empty()) {
+            groups.push_back(repair_group{get_table_ids(db, keyspace, normal_cfs), ranges, neighbors, false, 1});
         }
-        auto table_ids = get_table_ids(db, keyspace, cfs);
+        if (!small_cfs.empty()) {
+            auto range = dht::token_range(dht::token_range::bound(dht::minimum_token(), false), dht::token_range::bound(dht::maximum_token(), false));
+            std::unordered_set<locator::host_id> nodes;
+            for (auto& [_, neighbor] : neighbors) {
+                for (auto& n : neighbor.all) {
+                    nodes.insert(n);
+                }
+            }
+            auto nodes_vec = std::vector<locator::host_id>(nodes.begin(), nodes.end());
+            groups.push_back(repair_group{get_table_ids(db, keyspace, small_cfs), {range},
+                    {{range, repair_neighbors(nodes_vec, nodes_vec)}}, true, ranges.size()});
+        }
+
         std::vector<future<>> repair_results;
-        repair_results.reserve(this_smp_shard_count());
+        repair_results.reserve(groups.size() * this_smp_shard_count());
         task_as.check();
-        for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges_reduced_factor, ranges, neighbors, reason, germs, small_table_optimization, parent_data = get_repair_uniq_id().task_info, frozen_topology_guard] (repair_service& local_repair) mutable -> future<> {
-                auto data_centers = std::vector<sstring>();
-                auto hosts = std::vector<sstring>();
-                auto ignore_nodes = std::unordered_set<locator::host_id>();
-                bool hints_batchlog_flushed = false;
-                auto ranges_parallelism = std::nullopt;
-                auto flush_time = gc_clock::time_point();
-                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
-                        local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::move(neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
-                        frozen_topology_guard, tablet_repair_sched_info{}, ranges_reduced_factor);
-                co_await task->done();
-            });
-            repair_results.push_back(std::move(f));
+        for (auto& group : groups) {
+            for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
+                auto f = rs.container().invoke_on(shard, [keyspace, table_ids = group.table_ids, id, ranges_reduced_factor = group.ranges_reduced_factor, group_ranges = group.ranges, group_neighbors = group.neighbors, reason, germs, small_table_optimization = group.small_table_optimization, parent_data = get_repair_uniq_id().task_info, frozen_topology_guard] (repair_service& local_repair) mutable -> future<> {
+                    auto data_centers = std::vector<sstring>();
+                    auto hosts = std::vector<sstring>();
+                    auto ignore_nodes = std::unordered_set<locator::host_id>();
+                    bool hints_batchlog_flushed = false;
+                    auto ranges_parallelism = std::nullopt;
+                    auto flush_time = gc_clock::time_point();
+                    auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
+                            local_repair, germs->get().shared_from_this(), std::move(group_ranges), std::move(table_ids),
+                            id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::move(group_neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
+                            frozen_topology_guard, tablet_repair_sched_info{}, ranges_reduced_factor);
+                    co_await task->done();
+                });
+                repair_results.push_back(std::move(f));
+            }
         }
-        when_all(repair_results.begin(), repair_results.end()).then([keyspace] (std::vector<future<>> results) mutable {
+        when_all(repair_results.begin(), repair_results.end()).then([] (std::vector<future<>> results) mutable {
             std::vector<sstring> errors;
-            for (unsigned shard = 0; shard < results.size(); shard++) {
-                auto& f = results[shard];
+            for (unsigned i = 0; i < results.size(); i++) {
+                auto& f = results[i];
                 if (f.failed()) {
                     auto ep = f.get_exception();
-                    errors.push_back(format("shard {}: {}", shard, ep));
+                    errors.push_back(format("{}", ep));
                 }
             }
             if (!errors.empty()) {
@@ -1561,8 +1694,8 @@ future<> repair::data_sync_repair_task_impl::run() {
         return make_exception_future<>(ep);
     });
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
-    rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded, reason={}, small_table_optimization={}, duration={}",
-            id.uuid(), keyspace, _reason, small_table_optimization, duration);
+    rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded, reason={}, duration={}",
+            id.uuid(), keyspace, _reason, duration);
 }
 
 future<std::optional<double>> repair::data_sync_repair_task_impl::expected_total_workload() const {
