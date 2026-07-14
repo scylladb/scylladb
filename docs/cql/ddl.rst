@@ -965,17 +965,21 @@ Compression options
 The ``compression`` options define if and how the sstables of the table are compressed. The following sub-options are
 available:
 
-========================= =============== =============================================================================
- Option                    Default         Description
-========================= =============== =============================================================================
- ``sstable_compression``   LZ4Compressor   The compression algorithm to use. Available compressors are
-                                           LZ4Compressor, SnappyCompressor, DeflateCompressor, and ZstdCompressor.
- ``chunk_length_in_kb``    4               On disk SSTables are compressed by block (to allow random reads). This
-                                           defines the size (in KB) of the block. Bigger values may improve the
-                                           compression rate, but increases the minimum size of data to be read from disk
-                                           for a read. Allowed values are powers of two between 1 and 128.
- ``crc_check_chance``      1.0             Not implemented (option value is ignored).
-========================= =============== =============================================================================
+========================= ======================== =============================================================================
+ Option                    Default                  Description
+========================= ======================== =============================================================================
+ ``sstable_compression``   LZ4WithDictsCompressor   The compression algorithm to use. Available compressors are
+                                                    LZ4Compressor, LZ4WithDictsCompressor, SnappyCompressor,
+                                                    DeflateCompressor, ZstdCompressor, ZstdWithDictsCompressor.
+ ``chunk_length_in_kb``    4                        On disk SSTables are compressed by block (to allow random reads). This
+                                                    defines the size (in KB) of the block. Bigger values may improve the
+                                                    compression rate, but increases the minimum size of data to be read from disk
+                                                    for a read. Allowed values are powers of two between 1 and 128.
+ ``compression_level``     3                        Compression level for ZstdCompressor and ZstdWithDictsCompressor. 
+                                                    Higher levels provide better compression ratios at the cost of speed.
+                                                    Allowed values are integers between 1 and 22.
+ ``crc_check_chance``      1.0                      Not implemented (option value is ignored).
+========================= ======================== =============================================================================
 
 .. crc_check_chance was promoted to a top-level table option since Cassandra 3.0, but we didn't do this.
 
