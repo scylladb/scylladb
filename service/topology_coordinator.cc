@@ -2114,10 +2114,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (advance_in_background(gid, tablet_state.rebuild_repair, "rebuild_repair", [&] {
                         utils::get_local_injector().inject("rebuild_repair_stage_fail",
                             [] { throw std::runtime_error("rebuild_repair failed due to error injection"); });
-                        if (!trinfo.pending_replica) {
-                            rtlogger.info("Skipped tablet rebuild repair of {} as no pending replica found", gid);
-                            return make_ready_future<>();
-                        }
                         auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(gid.tablet), trinfo);
                         if (tsi.read_from.empty()) {
                             rtlogger.info("Skipped tablet rebuild repair of {} as no tablet replica was found", gid);
