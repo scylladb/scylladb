@@ -468,7 +468,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     db::all_batches_replayed all_replayed = all_batches_replayed::yes;
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
     // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
-    auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
+    auto throttle = _replay_rate / std::max<uint64_t>(1, _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners());
     utils::rate_limiter limiter(throttle);
 
     auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
@@ -509,7 +509,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     db::all_batches_replayed all_replayed = all_batches_replayed::yes;
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
     // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
-    auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
+    auto throttle = _replay_rate / std::max<uint64_t>(1, _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners());
     utils::rate_limiter limiter(throttle);
 
     auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
