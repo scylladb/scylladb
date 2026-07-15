@@ -46,6 +46,7 @@
 
 #include "types/types.hh"
 #include "sstables/types.hh"
+#include "sstables/sstable_position.hh"
 #include "checksum_utils.hh"
 
 class reader_permit;
@@ -325,7 +326,7 @@ public:
         uint64_t chunk_len; // variable size of compressed chunk
         unsigned offset; // offset into chunk after uncompressing it
     };
-    chunk_and_offset locate(uint64_t position, const compression::segmented_offsets::accessor& accessor);
+    chunk_and_offset locate(uint64_t position, const compression::segmented_offsets::accessor& accessor) const;
 
     unsigned uncompressed_chunk_length() const noexcept {
         return chunk_len;
@@ -371,12 +372,12 @@ using stream_creator_fn = std::function<future<input_stream<char>>(uint64_t, uin
 // as long as we have *sstables* work in progress, we need to keep the whole
 // sstable alive, and the compression metadata is only a part of it.
 input_stream<char> make_compressed_file_k_l_format_input_stream(stream_creator_fn stream_creator,
-                sstables::compression* cm, uint64_t offset, size_t len,
+                sstables::compression* cm, disk_read_range range,
                 class file_input_stream_options options, reader_permit permit,
                 std::optional<uint32_t> digest);
 
 input_stream<char> make_compressed_file_m_format_input_stream(stream_creator_fn stream_creator,
-                sstables::compression* cm, uint64_t offset, size_t len,
+                sstables::compression* cm, disk_read_range range,
                 class file_input_stream_options options, reader_permit permit,
                 std::optional<uint32_t> digest);
 
