@@ -923,7 +923,7 @@ future<std::pair<std::vector<sstring>, uint32_t>> sstable::read_and_parse_toc(fi
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc(sstable_open_config cfg) noexcept {
-    if (_recognized_components.size()) {
+    if (_recognized_components) {
         co_return;
     }
 
@@ -938,13 +938,13 @@ future<> sstable::read_toc(sstable_open_config cfg) noexcept {
                     continue;
                 }
                 try {
-                    _recognized_components.insert(reverse_map(c, sstable_version_constants::get_component_map(_version)));
+                    add_component(reverse_map(c, sstable_version_constants::get_component_map(_version)));
                 } catch (std::out_of_range& oor) {
                     _unrecognized_components.push_back(c);
                     sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, toc_filename());
                 }
             }
-            if (!_recognized_components.size()) {
+            if (!_recognized_components) {
                 throw_malformed_sstable_exception("Empty TOC", toc_filename());
             }
         });
@@ -958,32 +958,36 @@ future<> sstable::read_toc(sstable_open_config cfg) noexcept {
 
 void sstable::generate_toc() {
     // Creating table of components.
-    _recognized_components.insert(component_type::TOC);
-    _recognized_components.insert(component_type::Statistics);
-    _recognized_components.insert(component_type::Digest);
+    add_component(component_type::TOC);
+    add_component(component_type::Statistics);
+    add_component(component_type::Digest);
     if (has_summary_and_index(_version)) {
-        _recognized_components.insert(component_type::Index);
-        _recognized_components.insert(component_type::Summary);
+        add_component(component_type::Index);
+        add_component(component_type::Summary);
     } else {
-        _recognized_components.insert(component_type::Partitions);
-        _recognized_components.insert(component_type::Rows);
+        add_component(component_type::Partitions);
+        add_component(component_type::Rows);
     }
-    _recognized_components.insert(component_type::Data);
+    add_component(component_type::Data);
     if (_schema->bloom_filter_fp_chance() != 1.0) {
-        _recognized_components.insert(component_type::Filter);
+        add_component(component_type::Filter);
     }
     if (!_schema->get_compressor_params().compression_enabled()) {
-        _recognized_components.insert(component_type::CRC);
+        add_component(component_type::CRC);
     } else {
-        _recognized_components.insert(component_type::CompressionInfo);
+        add_component(component_type::CompressionInfo);
     }
-    _recognized_components.insert(component_type::Scylla);
+    add_component(component_type::Scylla);
 }
 
 future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_components() const {
     std::unordered_map<component_type, file> files;
-    for (auto c : _recognized_components) {
+    auto bits = _recognized_components;
+    while (bits) {
+        auto idx = __builtin_ctz(bits);
+        auto c = static_cast<component_type>(idx);
         files.emplace(c, co_await open_file(c, open_flags::ro));
+        bits &= bits - 1;
     }
     co_return std::move(files);
 }
@@ -1060,12 +1064,12 @@ void sstable::write_toc(std::unique_ptr<crc32_digest_file_writer> w) {
     sstlog.debug("Writing TOC file {} ", toc_filename());
 
     do_write_simple(*w, [&] (version_types v, file_writer& w) {
-        for (auto&& key : _recognized_components) {
+        for_each_component([&] (component_type key) {
             // new line character is appended to the end of each component name.
             auto value = sstable_version_constants::get_component_map(v).at(key) + "\n";
             bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
             write(v, w, b);
-        }
+        });
     });
 
     _components_digests.map[component_type::TOC] = w->full_checksum();
@@ -2741,7 +2745,7 @@ uint64_t sstable::filter_size() const {
 }
 
 bool sstable::has_component(component_type f) const {
-    return _recognized_components.contains(f);
+    return (_recognized_components & component_mask(f)) != 0;
 }
 
 std::optional<bool> sstable::originated_on_this_node() const {
@@ -2839,10 +2843,10 @@ sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& 
 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
     std::vector<std::pair<component_type, sstring>> all;
-    all.reserve(_recognized_components.size() + _unrecognized_components.size());
-    for (auto& c : _recognized_components) {
+    all.reserve(__builtin_popcount(_recognized_components) + _unrecognized_components.size());
+    for_each_component([&] (component_type c) {
         all.push_back(std::make_pair(c, sstable_version_constants::get_component_map(_version).at(c)));
-    }
+    });
     for (auto& c : _unrecognized_components) {
         all.push_back(std::make_pair(component_type::Unknown, c));
     }
