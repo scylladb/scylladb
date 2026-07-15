@@ -39,6 +39,30 @@ DEFAULT_CMDLINE = [
     ]
 
 
+@pytest.fixture(params=[
+    pytest.param(False, id="leases_off"),
+    pytest.param(True, id="leases_on"),
+])
+def leaseguard_config(request):
+    """Config overlay parametrizing LeaseGuard leader leases on/off.
+
+    Uses the default adjtimex bounded-clock backend (clock source is left at its
+    default), so the leases_on variants assume the test host clock is
+    NTP/PTP-synchronized; otherwise LeaseGuard defers commits and the affected
+    tests could time out (see test_leader_leases_write_read_and_leader_change).
+
+    Merge the returned dict into the scylla config passed to servers_add/
+    server_add, e.g. ``config=DEFAULT_CONFIG | leaseguard_config``.
+    """
+    if request.param:
+        return {
+            'strongly_consistent_raft_leader_leases_enabled': True,
+            # Short lease so a deposed leader's lease expires quickly.
+            'strongly_consistent_raft_leader_lease_duration_in_ms': 1000,
+        }
+    return {'strongly_consistent_raft_leader_leases_enabled': False}
+
+
 async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str,
                           expected_host_id: str | None = None):
     """Wait until `s` reports a leader for `group_id` - with `expected_host_id`, until it
@@ -130,15 +154,15 @@ async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table:
     rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
     return str(rows[0].raft_group_id)
 
-async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
+async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str, leaseguard_config):
 
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE
     # In dev mode, stretch the strongly consistent raft group tick interval to
     # 20s so that any unwanted waiting on a raft tick during group startup shows
     # up as a multi-second delay, caught by the <10s assertion below.
-    default_config = DEFAULT_CONFIG | {'error_injections_at_startup': []}
-    config_with_big_ticks = DEFAULT_CONFIG | {'error_injections_at_startup': [{
+    default_config = DEFAULT_CONFIG | leaseguard_config | {'error_injections_at_startup': []}
+    config_with_big_ticks = DEFAULT_CONFIG | leaseguard_config | {'error_injections_at_startup': [{
         'name': 'strongly-consistent-raft-group-tick-interval-in-ms',
         'value': '20000'
     }]}
@@ -342,7 +366,7 @@ async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
     # To check that the servers can be stopped gracefully. By default the test runner just kills them.
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
-async def test_multi_shard_write_read(manager: ScyllaClusterManager):
+async def test_multi_shard_write_read(manager: ScyllaClusterManager, leaseguard_config):
     """
     Verify that strongly consistent tables work correctly on non-shard-0.
 
@@ -359,7 +383,7 @@ async def test_multi_shard_write_read(manager: ScyllaClusterManager):
     """
     logger.info("Bootstrapping cluster with 4 shards per node")
     cmdline = DEFAULT_CMDLINE + ['--smp=4']
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG | leaseguard_config, cmdline=cmdline, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     logger.info("Creating a strongly-consistent keyspace with 4 tablets")
@@ -1331,7 +1355,7 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         assert len(rows) == 1
         assert rows[0].v == 13
 
-async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
+async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager, leaseguard_config):
     """
     Verify that after a non-replica node learns the leader location via a redirect,
     subsequent write requests from that node go directly to the leader without a redirect.
@@ -1347,7 +1371,6 @@ async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """
     cmdline = [
         '--logger-log-level', 'cql_server=trace',
-        '--experimental-features', 'strongly-consistent-tables',
     ]
     # 2 racks with 2 nodes each
     property_file = [
@@ -1356,7 +1379,7 @@ async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
         {"dc": "dc1", "rack": "rack2"},
         {"dc": "dc1", "rack": "rack2"},
     ]
-    servers = await manager.servers_add(4, cmdline=cmdline, property_file=property_file)
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG | leaseguard_config, cmdline=cmdline, property_file=property_file)
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -1430,7 +1453,7 @@ async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
             assert rows[0].value == 25
 
 @pytest.mark.asyncio
-async def test_read_forwarding(manager: ScyllaClusterManager):
+async def test_read_forwarding(manager: ScyllaClusterManager, leaseguard_config):
     """
     Verify read forwarding behavior for strongly consistent tables:
     - CL=QUORUM reads (linearizable) are forwarded to the raft leader
@@ -1443,7 +1466,7 @@ async def test_read_forwarding(manager: ScyllaClusterManager):
     """
 
     logger.info("Bootstrapping cluster")
-    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG | leaseguard_config, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -1524,7 +1547,7 @@ async def test_read_forwarding(manager: ScyllaClusterManager):
                 assert rows[0].c == i * 10, f"Linearizability violation: pk={100 + i}, expected c={i * 10}, got c={rows[0].c}"
 
 
-async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterManager):
+async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterManager, leaseguard_config):
     """
     Verify that if a raft group leader goes down, a non-replica node can still
     successfully write by detecting the stale leader cache entry and evicting it.
@@ -1538,7 +1561,7 @@ async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterMa
       so a new leader can be elected and the second write can succeed.
     """
     cmdline = DEFAULT_CMDLINE + ['--smp=1']
-    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG | leaseguard_config, cmdline=cmdline, auto_rack_dc='my_dc')
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
