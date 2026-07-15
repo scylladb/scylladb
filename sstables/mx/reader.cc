@@ -1188,10 +1188,10 @@ public:
     data_consume_rows_context_m(const schema& s,
                                 const shared_sstable& sst,
                                 Consumer& consumer,
-                                input_stream<char> && input,
-                                uint64_t start,
-                                uint64_t maxlen)
-        : data_consumer::continuous_data_consumer<data_consume_rows_context_m<Consumer>>(consumer.permit(), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
+                                std::unique_ptr<data_consumer::continuous_data_consumer_input_stream> input,
+                                sstable_position start,
+                                std::optional<sstable_position> end)
+        : data_consumer::continuous_data_consumer<data_consume_rows_context_m<Consumer>>(consumer.permit(), std::move(input), start, end)
         , _consumer(consumer)
         , _sst(sst)
         , _header(sst->get_serialization_header())
@@ -1587,15 +1587,17 @@ private:
                     on_internal_error(sstlog, "mx reader: integrity checking not supported for single-partition reversed reads");
                 }
                 auto reversed_context = data_consume_reversed_partition<DataConsumeRowsContext>(
-                        *_schema, _sst, *_index_reader, _consumer, { begin, *end });
+                        *_schema, _sst, *_index_reader, _consumer,
+                        { sstable_position::from_logical(begin), sstable_position::from_logical(*end) });
                 _context = std::move(reversed_context.the_context);
                 _reversed_read_sstable_position = &reversed_context.current_position_in_sstable;
             } else {
-                _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, _integrity);
+                _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer,
+                        { sstable_position::from_logical(begin), sstable_position::from_logical(*end) }, _integrity);
             }
         } else {
-            sstable::disk_read_range drr{begin, *end};
-            auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
+            sstable::disk_read_range drr{sstable_position::from_logical(begin), sstable_position::from_logical(*end)};
+            auto last_end = _fwd_mr ? _sst->end_position() : drr.end;
             _read_enabled = bool(drr);
             _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, _integrity);
         }

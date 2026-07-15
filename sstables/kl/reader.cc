@@ -1098,8 +1098,8 @@ public:
     data_consume_rows_context(const schema&,
                               const shared_sstable sst,
                               mp_row_consumer_k_l& consumer,
-                              input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-                : continuous_data_consumer(consumer.permit(), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
+                              std::unique_ptr<data_consumer::continuous_data_consumer_input_stream> input, sstable_position start, std::optional<sstable_position> end)
+                : continuous_data_consumer(consumer.permit(), std::move(input), start, end)
                 , _consumer(consumer)
                 , _sst(std::move(sst))
                 , _gen(do_process_state())
@@ -1348,10 +1348,11 @@ private:
 
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
-            _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, integrity_check::no);
+            _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer,
+                    { sstable_position::from_logical(begin), sstable_position::from_logical(*end) }, integrity_check::no);
         } else {
-            sstable::disk_read_range drr{begin, *end};
-            auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
+            sstable::disk_read_range drr{sstable_position::from_logical(begin), sstable_position::from_logical(*end)};
+            auto last_end = _fwd_mr ? _sst->end_position() : drr.end;
             _read_enabled = bool(drr);
             _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, integrity_check::no);
         }
