@@ -162,7 +162,6 @@ async def test_raft_limited_voters_retain_coordinator(manager: ManagerClient):
         f"The coordinator {coordinator_id} should be a voter (but is not)"
 
 
-@pytest.mark.xfail(reason="SCYLLADB-3026: voter deadlock on graceful leader shutdown")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_raft_voters_stop_leader_keeps_quorum(manager: ManagerClient, build_mode: str):
     """
