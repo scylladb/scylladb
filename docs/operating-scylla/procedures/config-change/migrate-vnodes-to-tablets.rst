@@ -46,24 +46,48 @@ the removal of current limitations.
 Prerequisites
 -------------
 
+Cluster state
+~~~~~~~~~~~~~
+
 * All nodes in the cluster must be **up and running**. You can check the status
   of all nodes with
   :doc:`nodetool status </operating-scylla/nodetool-commands/status/>`.
 * All nodes must be running ScyllaDB 2026.2 or later.
+* Disk utilization on every node should be **below 50%**. This headroom helps
+  prevent problems during the migration's resharding phase, which temporarily
+  requires additional disk space.
+
+Keyspace and table configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* The keyspace's replication strategy must be the **NetworkTopologyStrategy**,
+  and its replication factor must equal the number of racks to ensure that the
+  keyspace will be :term:`RF-rack-valid <RF-rack-valid keyspace>` after the
+  migration. If your configuration requires changes, see
+  :doc:`Update Topology Strategy From Simple to Network </operating-scylla/procedures/cluster-management/update-topology-strategy-from-simple-to-network>`
+  and :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`.
+* All tables in the keyspace should have ``tombstone_gc`` mode set to ``repair``
+  to prevent tombstone garbage collection from running during migration.
+  For guidance, see :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`.
 
 Limitations
 -----------
 
 The current migration procedure has the following limitations:
 
+* Only **single-DC clusters** are supported.
 * **No schema changes** during the migration. Do not create, alter, or drop
   tables in the migrating keyspace until the migration is finished.
 * **No topology changes** during the migration. Do not add, remove, decommission,
-  or replace nodes while a migration is in progress.
+  replace, or rebuild nodes while a migration is in progress.
+* **No repair** operations during the migration. Do not run ``nodetool repair``
+  on the migrating keyspace while a migration is in progress.
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
 * Only **CQL base tables** can be migrated. Materialized views, secondary
   indexes, CDC tables, and Alternator tables are not supported.
 * Tables with **counters** or **LWTs** cannot be migrated.
+* Only tables using the **Incremental Compaction Strategy (ICS)** can be migrated.
+  Other compaction strategies are not supported.
 
 Overview
 --------
