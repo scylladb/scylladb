@@ -591,8 +591,7 @@ private:
     }
 public:
     cached_file_impl(cached_file& cf, tracing::trace_state_ptr trace_state = {})
-        : file_impl(*get_file_impl(cf.get_file()))
-        , _cf(cf)
+        : _cf(cf)
         , _trace_state(std::move(trace_state))
     { }
 
