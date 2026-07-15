@@ -77,13 +77,15 @@ public:
 
     future<std::optional<mutation>> read(schema_ptr schema, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
 
-    /// Create a mutation reader for a specific key
+    // Create a mutation reader for a partition range.
     mutation_reader make_reader(schema_ptr schema,
                                        const primary_index& index,
                                        reader_permit permit,
                                        const dht::partition_range& pr,
                                        const query::partition_slice& slice,
-                                       tracing::trace_state_ptr trace_state = nullptr);
+                                       tracing::trace_state_ptr trace_state = nullptr,
+                                       streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                                       mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
     void set_trigger_compaction_hook(std::function<void()> fn);
     void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn);
