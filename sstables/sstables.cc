@@ -3310,6 +3310,22 @@ bool uses_legacy_dk_order(sstable_version_types v) {
     return v != sstable_version_types::ms;
 }
 
+// Whether the index of a compressed sstable holds physical (chunk position,
+// chunk size, offset inside chunk) rather than logical (i.e. pre-compression)
+// positions of rows and partitions. An uncompressed sstable always holds logical
+// positions.
+bool index_holds_physical_positions(sstable_version_types v) {
+    return false;
+}
+
+// Physically indexed formats put the compressed length in a header and a footer
+// for each chunk. Use the header to find the next chunk. Use the footer to find
+// the previous chunk. Thus, a reader can move in both directions in Data.db
+// without CompressionInfo.db.
+bool chunk_has_length_framing(sstable_version_types v) {
+    return index_holds_physical_positions(v);
+}
+
 component_type sstable::component_from_sstring(version_types v, const sstring &s) {
     try {
         return reverse_map(s, sstable_version_constants::get_component_map(v));
