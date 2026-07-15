@@ -146,7 +146,7 @@ future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index&
     }
 
     if (lookup->cached_mutation) {
-        co_return std::move(*lookup->cached_mutation);
+        co_return mutation(s, dk, std::move(*lookup->cached_mutation));
     }
 
     auto record = co_await _segment_manager.read(lookup->entry.location);

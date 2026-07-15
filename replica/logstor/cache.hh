@@ -119,7 +119,7 @@ public:
 
     void evict(const primary_index_entry&);
 
-    std::optional<mutation> lookup(const primary_index_entry&, schema_ptr);
+    std::optional<mutation_partition> lookup(const primary_index_entry&, schema_ptr);
 
     void populate(const primary_index_entry&, const mutation&);
 
