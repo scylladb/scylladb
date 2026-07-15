@@ -8,6 +8,7 @@
 #include "service/raft/raft_sys_table_storage.hh"
 
 #include "cql3/untyped_result_set.hh"
+#include "cql3/untyped_result_set_idl_utils.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "raft/raft.hh"
@@ -102,10 +103,8 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
         }
         raft::term_t term = raft::term_t(row.get_as<int64_t>("term"));
         raft::index_t idx = raft::index_t(row.get_as<int64_t>("index"));
-        auto raw_data = row.get_view("data");
-        auto in = ser::as_input_stream(raw_data);
         using data_variant_type = decltype(raft::log_entry::data);
-        data_variant_type data = ser::deserialize(in, std::type_identity<data_variant_type>());
+        data_variant_type data = cql3::ser::deserialize_blob_as<data_variant_type>(row, "data");
 
         log.emplace_back(make_lw_shared<const raft::log_entry>(
             raft::log_entry{.term = term, .idx = idx, .data = std::move(data)}));
