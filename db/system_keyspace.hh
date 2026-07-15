@@ -212,6 +212,7 @@ public:
     static constexpr auto VIEW_BUILDING_TASKS = "view_building_tasks";
     static constexpr auto CLIENT_ROUTES = "client_routes";
     static constexpr auto VERSIONS = "versions";
+    static constexpr auto ONE_ROW = "one_row";
     static constexpr auto BATCHES = "batches";
     static constexpr auto AVAILABLE_RANGES = "available_ranges";
     static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
