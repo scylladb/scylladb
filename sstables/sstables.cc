@@ -3415,11 +3415,11 @@ future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> ss
         // adapter.
         if (_version >= sstable_version_types::mc) {
             co_return std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(
-                make_compressed_file_m_format_input_stream(stream_creator, &_components->compression,
+                make_compressed_file_m_format_input_stream(stream_creator, &_components->compression, _version,
                     range, std::move(options), permit, digest));
         }
         co_return std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(
-            make_compressed_file_k_l_format_input_stream(stream_creator, &_components->compression,
+            make_compressed_file_k_l_format_input_stream(stream_creator, &_components->compression, _version,
                 range, std::move(options), permit, digest));
     }
 
@@ -3477,7 +3477,7 @@ future<input_stream<char>> sstable::data_stream_compressed_chunks(
         co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
     };
     if (_components->compression && _version >= sstable_version_types::mc) {
-        co_return make_compressed_raw_file_input_stream(stream_creator, &_components->compression, std::move(options), permit, digest);
+        co_return make_compressed_raw_file_input_stream(stream_creator, &_components->compression, _version, std::move(options), permit, digest);
     }
 
     uint64_t pos = 0;

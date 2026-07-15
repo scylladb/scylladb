@@ -19,6 +19,7 @@
 #include "compressor.hh"
 #include "exceptions.hh"
 #include "unimplemented.hh"
+#include "sstables/version.hh"
 #include "segmented_compress_params.hh"
 #include "utils/assert.hh"
 #include "utils/unqualified_name.hh"
@@ -317,6 +318,7 @@ class compressed_file_data_source_impl : public data_source_impl {
     uint64_t _end_pos;
 public:
     compressed_file_data_source_impl(sstables::stream_creator_fn stream_creator, sstables::compression* cm,
+                sstables::sstable_version_types version,
                 sstables::disk_read_range range, file_input_stream_options options,
                 reader_permit permit, std::optional<uint32_t> digest)
             : _compression_metadata(cm)
@@ -485,6 +487,7 @@ private:
 
 public:
     compressed_raw_file_data_source_impl(sstables::stream_creator_fn stream_creator, sstables::compression* cm,
+                sstables::sstable_version_types version,
                 file_input_stream_options options,
                 reader_permit permit, std::optional<uint32_t> digest)
             : _compression_metadata(cm)
@@ -569,9 +572,9 @@ template <bool check_digest>
 class compressed_raw_file_data_source : public data_source {
 public:
     compressed_raw_file_data_source(sstables::stream_creator_fn stream_creator, sstables::compression* cm,
-            file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest)
+            sstables::sstable_version_types version, file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest)
         : data_source(std::make_unique<compressed_raw_file_data_source_impl<check_digest>>(
-                std::move(stream_creator), cm, std::move(options), std::move(permit), digest))
+                std::move(stream_creator), cm, version, std::move(options), std::move(permit), digest))
         {}
 };
 
@@ -579,25 +582,25 @@ template <ChecksumUtils ChecksumType, bool check_digest, compressed_checksum_mod
 class compressed_file_data_source : public data_source {
 public:
     compressed_file_data_source(sstables::stream_creator_fn stream_creator, sstables::compression* cm,
-            sstables::disk_read_range range, file_input_stream_options options, reader_permit permit,
+            sstables::sstable_version_types version, sstables::disk_read_range range, file_input_stream_options options, reader_permit permit,
             std::optional<uint32_t> digest)
         : data_source(std::make_unique<compressed_file_data_source_impl<ChecksumType, check_digest, mode>>(
-                std::move(stream_creator), cm, range, std::move(options), std::move(permit), digest))
+                std::move(stream_creator), cm, version, range, std::move(options), std::move(permit), digest))
         {}
 };
 
 template <ChecksumUtils ChecksumType, compressed_checksum_mode mode>
 inline input_stream<char> make_compressed_file_input_stream(sstables::stream_creator_fn stream_creator, sstables::compression *cm,
-        sstables::disk_read_range range,
+        sstables::sstable_version_types version, sstables::disk_read_range range,
         file_input_stream_options options, reader_permit permit,
         std::optional<uint32_t> digest)
 {
     if (digest) [[unlikely]] {
         return input_stream<char>(compressed_file_data_source<ChecksumType, true, mode>(
-                std::move(stream_creator), cm, range, std::move(options), std::move(permit), digest));
+                std::move(stream_creator), cm, version, range, std::move(options), std::move(permit), digest));
     }
     return input_stream<char>(compressed_file_data_source<ChecksumType, false, mode>(
-            std::move(stream_creator), cm, range, std::move(options), std::move(permit), digest));
+            std::move(stream_creator), cm, version, range, std::move(options), std::move(permit), digest));
 }
 
 // compressed_file_data_sink_impl works as a filter for a file output stream,
@@ -612,7 +615,8 @@ class compressed_file_data_sink_impl : public data_sink_impl {
     size_t _pos = 0;
     uint32_t _full_checksum;
 public:
-    compressed_file_data_sink_impl(output_stream<char> out, sstables::compression* cm)
+    compressed_file_data_sink_impl(output_stream<char> out, sstables::compression* cm,
+            sstables::sstable_version_types version)
             : _out(std::move(out))
             , _compression_metadata(cm)
             , _offsets(_compression_metadata->offsets.get_writer())
@@ -680,15 +684,17 @@ template <typename ChecksumType, compressed_checksum_mode mode>
 requires ChecksumUtils<ChecksumType>
 class compressed_file_data_sink : public data_sink {
 public:
-    compressed_file_data_sink(output_stream<char> out, sstables::compression* cm)
+    compressed_file_data_sink(output_stream<char> out, sstables::compression* cm,
+            sstables::sstable_version_types version)
         : data_sink(std::make_unique<compressed_file_data_sink_impl<ChecksumType, mode>>(
-                std::move(out), cm)) {}
+                std::move(out), cm, version)) {}
 };
 
 template <typename ChecksumType, compressed_checksum_mode mode>
 requires ChecksumUtils<ChecksumType>
 inline output_stream<char> make_compressed_file_output_stream(output_stream<char> out,
          sstables::compression* cm,
+         sstables::sstable_version_types version,
          const compression_parameters& cp,
          compressor_ptr p) {
     cm->set_compressor(std::move(p));
@@ -700,41 +706,42 @@ inline output_stream<char> make_compressed_file_output_stream(output_stream<char
     // defaults to 1.0.
     cm->options.elements.push_back({{"crc_check_chance"}, {"1.0"}});
 
-    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm));
+    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm, version));
 }
 
 input_stream<char> sstables::make_compressed_file_k_l_format_input_stream(stream_creator_fn stream_creator,
-        sstables::compression* cm, disk_read_range range,
+        sstables::compression* cm, sstable_version_types version, disk_read_range range,
         class file_input_stream_options options, reader_permit permit,
         std::optional<uint32_t> digest)
 {
     return make_compressed_file_input_stream<adler32_utils, compressed_checksum_mode::checksum_chunks_only>(
-            std::move(stream_creator), cm, range, std::move(options), std::move(permit), digest);
+            std::move(stream_creator), cm, version, range, std::move(options), std::move(permit), digest);
 }
 
 input_stream<char> sstables::make_compressed_file_m_format_input_stream(stream_creator_fn stream_creator,
-        sstables::compression *cm, disk_read_range range,
+        sstables::compression *cm, sstable_version_types version, disk_read_range range,
         class file_input_stream_options options, reader_permit permit,
         std::optional<uint32_t> digest) {
     return make_compressed_file_input_stream<crc32_utils, compressed_checksum_mode::checksum_all>(
-            std::move(stream_creator), cm, range, std::move(options), std::move(permit), digest);
+            std::move(stream_creator), cm, version, range, std::move(options), std::move(permit), digest);
 }
 
 output_stream<char> sstables::make_compressed_file_m_format_output_stream(output_stream<char> out,
         sstables::compression* cm,
+        sstable_version_types version,
         const compression_parameters& cp,
         compressor_ptr p) {
     return make_compressed_file_output_stream<crc32_utils, compressed_checksum_mode::checksum_all>(
-            std::move(out), cm, cp, std::move(p));
+            std::move(out), cm, version, cp, std::move(p));
 }
 
 input_stream<char> sstables::make_compressed_raw_file_input_stream(sstables::stream_creator_fn stream_creator, sstables::compression *cm,
-        file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest)
+        sstable_version_types version, file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest)
 {
     if (digest) [[unlikely]] {
         return input_stream<char>(compressed_raw_file_data_source<true>(
-                std::move(stream_creator), cm, std::move(options), std::move(permit), digest));
+                std::move(stream_creator), cm, version, std::move(options), std::move(permit), digest));
     }
     return input_stream<char>(compressed_raw_file_data_source<false>(
-            std::move(stream_creator), cm, std::move(options), std::move(permit), digest));
+            std::move(stream_creator), cm, version, std::move(options), std::move(permit), digest));
 }

@@ -733,7 +733,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         sstables::compression c;
         // this initializes "c"
         auto os = make_file_output_stream(f, file_output_stream_options()).get();
-        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, cp, make_lz4_sstable_compressor_for_tests());
+        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, sstables::sstable_version_types::me, cp, make_lz4_sstable_compressor_for_tests());
 
         // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
         temporary_buffer<char> buf1(c.uncompressed_chunk_length());
@@ -756,7 +756,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
             auto stream_creator = [f](uint64_t pos, uint64_t len, file_input_stream_options options)->future<input_stream<char>> {
                 co_return input_stream<char>(make_file_data_source(std::move(f), pos, len, std::move(options)));
             };
-            return make_compressed_file_m_format_input_stream(stream_creator, &c,
+            return make_compressed_file_m_format_input_stream(stream_creator, &c, sstables::sstable_version_types::me,
                     sstables::disk_read_range(sstables::sstable_position::from_logical(0),
                                               sstables::sstable_position::from_logical(uncompressed_size)),
                     opts, semaphore.make_permit(), std::nullopt);
