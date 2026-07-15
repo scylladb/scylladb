@@ -484,14 +484,10 @@ public:
         return false;
     }
 
-    future<> erase(const dht::partition_range& pr) {
-        primary_index_key_cmp cmp(*_schema);
-        auto begin_pos = dht::ring_position_view::for_range_start(pr);
-        auto end_pos = dht::ring_position_view::for_range_end(pr);
-
+    future<> erase(dht::token_range tr) {
         co_await erase_range_gently(
-                _partitions.lower_bound(begin_pos, cmp),
-                [this, &cmp, end_pos] { return _partitions.lower_bound(end_pos, cmp); }
+                position_at_range_start(tr),
+                [this, &tr] { return position_at_range_end(tr); }
             );
     }
 
