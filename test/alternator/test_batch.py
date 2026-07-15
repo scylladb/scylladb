@@ -353,6 +353,12 @@ def test_batch_get_item_two_tables(test_table, test_table_s):
     assert multiset(got_items1) == multiset(items1)
     assert multiset(got_items2) == multiset(items2)
 
+# We can't ask to read from zero tables - an empty RequestItems is not valid.
+def test_batch_get_item_zero(test_table_s):
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.meta.client.batch_get_item(RequestItems={})
+
+
 # Test what do we get if we try to read two *missing* values in addition to
 # an existing one. It turns out the missing items are simply not returned,
 # with no sign they are missing.
