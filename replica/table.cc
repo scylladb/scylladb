@@ -2390,15 +2390,22 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
         make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list)), std::move(removed_sstables)};
 }
 
+sstables::atomic_deletion
+table::make_atomic_deletion(std::vector<sstables::shared_sstable> sstables_to_remove) {
+    return get_sstables_manager().make_atomic_deletion(std::move(sstables_to_remove));
+}
+
 future<>
 table::delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove) {
     try {
         auto gh = _sstable_deletion_gate.hold();
-        co_await get_sstables_manager().delete_atomically(std::move(sstables_to_remove));
+        auto deletion = make_atomic_deletion(std::move(sstables_to_remove));
+        co_await deletion.commit();
+        co_await deletion.execute();
     } catch (...) {
         // There is nothing more we can do here.
         // Any remaining SSTables will eventually be re-compacted and re-deleted.
-        tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::current_exception());
+        tlogger.error("SSTables deletion failed: {}. Ignored.", std::current_exception());
     }
 }
 
@@ -2913,6 +2920,7 @@ future<> table::drop_quarantined_sstables() {
     class quarantine_removal_updater : public row_cache::external_updater_impl {
         table& _t;
         std::vector<sstables::shared_sstable>& _removed;
+        std::optional<sstables::atomic_deletion>& _deletion;
         struct compaction_group_update {
             lw_shared_ptr<sstables::sstable_set> new_main_sstables;
             lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables;
@@ -2921,8 +2929,10 @@ future<> table::drop_quarantined_sstables() {
         std::unordered_map<compaction_group*, compaction_group_update> _cg_updates;
 
     public:
-        explicit quarantine_removal_updater(table& t, std::vector<sstables::shared_sstable>& removed)
-            : _t(t), _removed(removed) {}
+        // Note: \c deletion is an output parameter filled by prepare() for the committed atomic_deletion object.
+        // If engaged after co_await prepare(), the user should co_await deletion->execute() to complete the atomic deletion process.
+        explicit quarantine_removal_updater(table& t, std::vector<sstables::shared_sstable>& removed, std::optional<sstables::atomic_deletion>& deletion)
+            : _t(t), _removed(removed), _deletion(deletion) {}
 
         virtual future<> prepare() override {
             _t.for_each_compaction_group([&] (compaction_group& cg) {
@@ -2955,7 +2965,10 @@ future<> table::drop_quarantined_sstables() {
                     .removed_main_sstables = std::move(removed_main)
                 };
             });
-            co_return;
+            if (!_removed.empty()) {
+                _deletion.emplace(_t.make_atomic_deletion(_removed));
+                co_await _deletion->commit();
+            }
         }
 
         virtual void execute() override {
@@ -2969,8 +2982,9 @@ future<> table::drop_quarantined_sstables() {
             }
         }
 
-        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, std::vector<sstables::shared_sstable>& removed) {
-            return std::make_unique<quarantine_removal_updater>(t, removed);
+        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, std::vector<sstables::shared_sstable>& removed,
+                                                                       std::optional<sstables::atomic_deletion>& deletion) {
+            return std::make_unique<quarantine_removal_updater>(t, removed, deletion);
         }
     };
 
@@ -2983,13 +2997,17 @@ future<> table::drop_quarantined_sstables() {
     auto permit = co_await get_sstable_list_permit();
 
     std::vector<sstables::shared_sstable> removed;
-    auto updater = row_cache::external_updater(quarantine_removal_updater::make(*this, removed));
+    std::optional<sstables::atomic_deletion> deletion;
+    auto gh = _sstable_deletion_gate.hold();
+    auto updater = row_cache::external_updater(quarantine_removal_updater::make(*this, removed, deletion));
     co_await _cache.invalidate(std::move(updater));
 
     _cache.refresh_snapshot();
     rebuild_statistics();
 
-    co_await delete_sstables_atomically(permit, std::move(removed));
+    if (deletion) {
+        co_await deletion->execute();
+    }
 }
 
 bool storage_group::no_compacted_sstable_undeleted() const {
@@ -3002,7 +3020,7 @@ bool storage_group::no_compacted_sstable_undeleted() const {
 
 // Gets the list of all sstables in the column family, including ones that are
 // not used for active queries because they have already been compacted, but are
-// waiting for delete_atomically() to return.
+// waiting for atomic deletion to complete.
 //
 // As long as we haven't deleted them, compaction needs to ensure it doesn't
 // garbage-collect a tombstone that covers data in an sstable that may not be
@@ -3024,6 +3042,16 @@ lw_shared_ptr<const sstable_list> table::get_sstables_including_compacted_undele
 
 const std::vector<sstables::shared_sstable>& compaction_group::compacted_undeleted_sstables() const noexcept {
     return _sstables_compacted_but_not_deleted;
+}
+
+bool table::tablet_has_compacted_undeleted_sstables(locator::tablet_id tid) const {
+    auto* sg = _sg_manager->maybe_storage_group_for_id(_schema, tid.value());
+    if (!sg) {
+        return false;
+    }
+    return std::ranges::any_of(sg->compaction_groups_immediate(), [] (const auto& cg) {
+        return !cg->compacted_undeleted_sstables().empty();
+    });
 }
 
 lw_shared_ptr<memtable_list>
@@ -5808,11 +5836,11 @@ future<> compaction_group::cleanup() {
     }
 
     if (!_sstables_compacted_but_not_deleted.empty()) {
-        co_await _t.delete_sstables_atomically(permit, _sstables_compacted_but_not_deleted);
-        // delete_sstables_atomically swallows exceptions, so this always runs.
-        // Any SSTables that failed to delete will eventually be re-compacted
-        // and re-deleted.
+        auto gh = _t._sstable_deletion_gate.hold();
+        auto deletion = _t.make_atomic_deletion(_sstables_compacted_but_not_deleted);
+        co_await deletion.commit();
         _sstables_compacted_but_not_deleted.clear();
+        co_await deletion.execute();
         _t.rebuild_statistics();
     }
     if (utils::get_local_injector().enter("tablet_cleanup_failure_post_deletion")) {

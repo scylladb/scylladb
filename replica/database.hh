@@ -124,6 +124,7 @@ enum class sstable_state;
 class sstable;
 class storage_manager;
 class sstables_manager;
+class atomic_deletion;
 class sstable_set;
 class directory_semaphore;
 struct sstable_files_snapshot;
@@ -650,6 +651,7 @@ public:
 
     void notify_bootstrap_or_replace_end();
 
+private:
     // Ensures that concurrent preemptible mutations to sstable lists will produce correct results.
     // User will hold this permit until done with all updates. As soon as it's released, another concurrent
     // attempt to update the lists will be able to proceed.
@@ -691,8 +693,13 @@ public:
     };
     // NOTE: Always use this interface for deleting SSTables in the table, since it guarantees
     // synchronization with concurrent iterations.
+    // Returns an object that lets callers control the commit point explicitly:
+    // commit() makes deletion durable, and execute() performs best-effort physical deletion.
+    sstables::atomic_deletion make_atomic_deletion(std::vector<sstables::shared_sstable> sstables_to_remove);
+    // Ignores all errors. Use make_atomic_deletion() for fine-grained error handling.
     future<> delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove);
 
+public:
     // Precondition: table needs tablet splitting.
     // Returns true if all storage of table is ready for splitting.
     bool all_storage_groups_split();
@@ -1161,6 +1168,8 @@ public:
     const sstables::sstable_set& get_sstable_set() const;
     lw_shared_ptr<const sstable_list> get_sstables() const;
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
+    // For tests only.
+    bool tablet_has_compacted_undeleted_sstables(locator::tablet_id) const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
     future<> drop_quarantined_sstables();
     size_t sstables_count() const;

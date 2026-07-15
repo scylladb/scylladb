@@ -93,15 +93,15 @@ public:
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
-    virtual future<> wipe(sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept override;
+    virtual future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
-    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
-    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
+    virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
+    virtual bool operator==(const storage&) const noexcept override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
     virtual future<uint64_t> free_space() const override {
         return seastar::fs_avail(prefix());
@@ -509,8 +509,8 @@ static inline fs::path parent_path(const sstring& fname) {
     return fs::canonical(fs::path(fname)).parent_path();
 }
 
-future<> filesystem_storage::wipe(sstable& sst, const atomic_delete_context* ctx) noexcept {
-    auto sync = ctx ? sync_dir::no : sync_dir::yes;
+future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion) noexcept {
+    auto sync = deletion ? sync_dir::no : sync_dir::yes;
     // We must be able to generate toc_filename()
     // in order to delete the sstable.
     // Running out of memory here will terminate.
@@ -580,33 +580,50 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_delete_context* ctx
     }
 }
 
-future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
-    atomic_delete_context res;
+class filesystem_atomic_deletion_impl : public atomic_deletion_impl {
+    opened_directory& _base_dir;
+    sstring _pending_delete_log;
+    std::unordered_set<sstring> _prefixes;
 
-    for (const auto& sst : ssts) {
-        auto prefix = sst->_storage->prefix();
-        res.prefixes.insert(prefix);
+public:
+    filesystem_atomic_deletion_impl(opened_directory& base_dir)
+        : _base_dir(base_dir)
+    {
     }
 
-    res.pending_delete_log = co_await sstable_directory::create_pending_deletion_log(_base_dir, ssts);
-    co_return std::move(res);
-}
+    future<> commit(const std::vector<shared_sstable>& ssts) override {
+        for (const auto& sst : ssts) {
+            auto prefix = sst->get_storage().prefix();
+            _prefixes.insert(prefix);
+        }
 
-future<> filesystem_storage::atomic_delete_complete(atomic_delete_context ctx) const {
-    co_await coroutine::parallel_for_each(ctx.prefixes, [] (const auto& dir) -> future<> {
-        co_await sync_directory(dir);
-    });
+        _pending_delete_log = co_await sstable_directory::create_pending_deletion_log(_base_dir, ssts);
+    }
+
+    future<> finalize() override {
+        co_await coroutine::parallel_for_each(_prefixes, [] (const auto& dir) -> future<> {
+            co_await sync_directory(dir);
+        });
 
         // Once all sstables are deleted, the log file can be removed.
         // Note: the log file will be removed also if unlink failed to remove
         // any sstable and ignored the error.
-        const auto& log = ctx.pending_delete_log;
         try {
-            co_await remove_file(log);
-            sstlog.debug("{} removed.", log);
+            co_await remove_file(_pending_delete_log);
+            sstlog.debug("{} removed.", _pending_delete_log);
         } catch (...) {
-            sstlog.warn("Error removing {}: {}. Ignoring.", log, std::current_exception());
+            sstlog.warn("Error removing {}: {}. Ignoring.", _pending_delete_log, std::current_exception());
         }
+    }
+};
+
+std::unique_ptr<atomic_deletion_impl> filesystem_storage::make_atomic_deletion_impl() const {
+    return std::make_unique<filesystem_atomic_deletion_impl>(_base_dir);
+}
+
+bool filesystem_storage::operator==(const storage& other) const noexcept {
+    auto* other_fs = dynamic_cast<const filesystem_storage*>(&other);
+    return other_fs && sstable_directory::compare_sstable_storage_prefix(_base_dir.native(), other_fs->_base_dir.native());
 }
 
 future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc) {
@@ -667,7 +684,7 @@ public:
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
-    future<> wipe(sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept override;
+    future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept override;
     future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
@@ -675,8 +692,8 @@ public:
 
     future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     future<> destroy(const sstable& sst) override;
-    future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
-    future<> atomic_delete_complete(atomic_delete_context ctx) const override;
+    std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
+    bool operator==(const storage&) const noexcept override;
     future<> remove_by_registry_entry(entry_descriptor desc) override;
     future<uint64_t> free_space() const override {
         // assumes infinite space on s3/gs (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
@@ -857,7 +874,7 @@ future<> object_storage_base::change_state(const sstable& sst, sstable_state sta
     co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.manager().get_local_host_id(), sst.generation(), state);
 }
 
-future<> object_storage_base::wipe(sstable& sst, const atomic_delete_context* ctx) noexcept {
+future<> object_storage_base::wipe(sstable& sst, const atomic_deletion* deletion) noexcept {
     // Mark the sstable for deletion so that destroy() — called when the
     // last shared_sstable reference is dropped — will delete the cloud
     // objects.
@@ -877,7 +894,7 @@ future<> object_storage_base::wipe(sstable& sst, const atomic_delete_context* ct
     // FIXME: unlike filesystem_storage::wipe, this implementation does not
     // catch exceptions from sstables_registry calls and may return an
     // exceptional future, breaking the contract documented on storage::wipe.
-    if (!ctx) {
+    if (!deletion) {
         co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.manager().get_local_host_id(), sst.generation(), status_removing);
     }
 }
@@ -925,18 +942,46 @@ future<> object_storage_base::destroy(const sstable& sst) {
     }
 }
 
-future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
-    std::vector<generation_type> gens;
-    gens.reserve(ssts.size());
-    for (auto& sst : ssts) {
-        gens.push_back(sst->generation());
+class object_storage_atomic_deletion_impl : public atomic_deletion_impl {
+    table_id _owner;
+    const char* _status_removing;
+    std::vector<generation_type> _generations;
+
+public:
+    object_storage_atomic_deletion_impl(table_id owner, const char* status_removing)
+        : _owner(owner)
+        , _status_removing(status_removing)
+    {
     }
-    co_await ssts.front()->manager().sstables_registry().batch_update_entry_status(owner(), ssts.front()->manager().get_local_host_id(), gens, status_removing);
-    co_return atomic_delete_context{};
+
+    future<> commit(const std::vector<shared_sstable>& ssts) override {
+        _generations.reserve(ssts.size());
+        for (auto& sst : ssts) {
+            _generations.push_back(sst->generation());
+        }
+        co_await ssts.front()->manager().sstables_registry().batch_update_entry_status(_owner, ssts.front()->manager().get_local_host_id(), _generations, _status_removing);
+    }
+
+    future<> finalize() override {
+        // commit() marks all SSTables as removing in the registry. During
+        // atomic_deletion::execute(), each sstable::unlink() calls wipe(),
+        // which deletes the object-storage components and removes the registry
+        // entry for that SSTable. There is no batch-level state left to clean up.
+        return make_ready_future<>();
+    }
+};
+
+std::unique_ptr<atomic_deletion_impl> object_storage_base::make_atomic_deletion_impl() const {
+    return std::make_unique<object_storage_atomic_deletion_impl>(owner(), status_removing);
 }
 
-future<> object_storage_base::atomic_delete_complete(atomic_delete_context ctx) const {
-    co_return;
+bool object_storage_base::operator==(const storage& other) const noexcept {
+    auto* other_object = dynamic_cast<const object_storage_base*>(&other);
+    return other_object
+            && _type == other_object->_type
+            && _client.get() == other_object->_client.get()
+            && _bucket == other_object->_bucket
+            && _location == other_object->_location;
 }
 
 future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
