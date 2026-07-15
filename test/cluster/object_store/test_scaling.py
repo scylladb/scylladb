@@ -8,11 +8,14 @@
 import asyncio
 import time
 import logging
+import re
+import uuid
 import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.object_storage import keyspace_options
 from test.cluster.util import new_test_keyspace, wait_for_no_pending_topology_transition
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
@@ -34,12 +37,13 @@ async def test_scaling(manager: ManagerClient, object_storage):
         'object_storage_endpoints': objconf,
         'experimental_features': ['keyspace-storage-options'],
     }
+    cmdline = ['--logger-log-level', 'sstable=debug']
 
     # Create initial 3-node cluster, one node per rack
     logger.info("Creating initial 3-node cluster")
     servers = []
     for rack in range(num_racks):
-        server = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": f"r{rack}"})
+        server = await manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc1", "rack": f"r{rack}"})
         servers.append(server)
 
     cql = manager.get_cql()
@@ -63,6 +67,105 @@ async def test_scaling(manager: ManagerClient, object_storage):
             assert i in rows, f"Missing row with pk={i}"
             assert rows[i] == i * 10, f"Wrong value for pk={i}: expected {i * 10}, got {rows[i]}"
 
+    def verify_uuid_sstable_generation(generation):
+        match = re.fullmatch(r"([0-9a-z]{4})_([0-9a-z]{4})_([0-9a-z]{5})([0-9a-z]{13})", generation)
+        assert match is not None
+        assert int(match.group(2), 36) < 24 * 60 * 60
+        assert int(match.group(3), 36) < 10_000_000
+        assert int(match.group(4), 36) < 1 << 64
+
+    def encode_base36(value):
+        digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+        if value == 0:
+            return "0"
+        result = ""
+        while value:
+            value, digit = divmod(value, 36)
+            result = digits[digit] + result
+        return result
+
+    def encode_uuid_sstable_generation(generation_uuid):
+        seconds, decimicroseconds = divmod(generation_uuid.time, 10_000_000)
+        days, seconds = divmod(seconds, 24 * 60 * 60)
+        lsb = generation_uuid.int & ((1 << 64) - 1)
+        generation = f"{encode_base36(days):0>4}_{encode_base36(seconds):0>4}_{encode_base36(decimicroseconds):0>5}{encode_base36(lsb):0>13}"
+        verify_uuid_sstable_generation(generation)
+        return generation
+
+    def parse_node_reference(reference):
+        parts = reference.split("/")
+        assert len(parts) == 3
+        assert parts[0] == "nodes"
+        host_id = str(uuid.UUID(parts[1]))
+        generation = parts[2]
+        verify_uuid_sstable_generation(generation)
+        return host_id, generation
+
+    async def verify_object_storage_namespace(server, live_servers, ks):
+        """Verify object-storage namespace layout and reference counts through REST API."""
+        await manager.disable_tablet_balancing()
+        try:
+            for node in live_servers:
+                await manager.api.disable_autocompaction(node.ip_addr, ks, "test")
+            for node in live_servers:
+                await manager.api.flush_keyspace(node.ip_addr, ks)
+
+            params = {
+                "endpoint": object_storage.address,
+                "bucket": object_storage.bucket_name,
+            }
+            table_id = str(await manager.get_table_id(ks, "test"))
+
+            live_hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 30)
+
+            async def get_object_storage_refs():
+                sstables = await manager.api.client.get_json("/storage_service/object_storage/sstables", host=server.ip_addr, params=params)
+                assert sstables
+                refs = {}
+                for sstable in sstables:
+                    sstable_id = str(uuid.UUID(sstable["sstable_id"]))
+                    references = sstable.get("references", [])
+                    assert sstable["num_references"] == len(references)
+                    assert references, f"SSTable {sstable_id} has no object-storage references"
+                    for reference in references:
+                        host_id, generation = parse_node_reference(reference)
+                        key = (sstable_id, host_id, generation)
+                        assert key not in refs
+                        refs[key] = reference
+                return sstables, refs
+
+            async def get_node_registry_refs(host):
+                rows = await cql.run_async("SELECT table_id, node_owner, generation, sstable_id, status FROM system.sstables", host=host)
+                refs = {}
+                for row in rows:
+                    if str(row.table_id) != table_id:
+                        continue
+                    if row.status != "sealed":
+                        continue
+                    sstable_id = str(row.sstable_id if row.sstable_id is not None else row.generation)
+                    generation = encode_uuid_sstable_generation(row.generation)
+                    key = (sstable_id, str(row.node_owner), generation)
+                    assert key not in refs
+                    refs[key] = row.status
+                return refs
+
+            async def get_registry_refs():
+                registry_refs = {}
+                for refs in await asyncio.gather(*(get_node_registry_refs(host) for host in live_hosts)):
+                    for key, status in refs.items():
+                        assert key not in registry_refs
+                        registry_refs[key] = status
+                return registry_refs
+
+            sstables, object_storage_refs = await get_object_storage_refs()
+            registry_refs = await get_registry_refs()
+            assert object_storage_refs.keys() == registry_refs.keys(), f"Only in object_storage: {object_storage_refs.keys() - registry_refs.keys()}\nOnly in registry: {registry_refs.keys() - object_storage_refs.keys()}"
+            logger.info("Verified %d object-storage SSTables and %d references", len(sstables), len(object_storage_refs))
+        finally:
+            for node in live_servers:
+                await manager.api.enable_autocompaction(node.ip_addr, ks, "test")
+            await manager.enable_tablet_balancing()
+
     async with new_test_keyspace(manager, keyspace_options(object_storage, rf=rf)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, value int);")
 
@@ -72,19 +175,16 @@ async def test_scaling(manager: ManagerClient, object_storage):
         logger.info("Populating table with %d rows", NUM_ROWS)
         await populate_table(cql, ks, NUM_ROWS)
 
-        # Flush to ensure data is on object storage
-        for server in servers:
-            await manager.api.flush_keyspace(server.ip_addr, ks)
-
         # Verify initial data
         logger.info("Verifying initial data")
         await verify_data(cql, ks, NUM_ROWS)
+        await verify_object_storage_namespace(servers[0], servers, ks)
 
         # Add one node to each rack
         logger.info("Adding 3 new nodes (one per rack)")
         new_servers = []
         for rack in range(num_racks):
-            server = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": f"r{rack}"})
+            server = await manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc1", "rack": f"r{rack}"})
             new_servers.append(server)
 
         # Wait for tablet load balancer to finish migrating tablets
@@ -95,6 +195,7 @@ async def test_scaling(manager: ManagerClient, object_storage):
         # Verify data after scale-up
         logger.info("Verifying data after adding nodes")
         await verify_data(cql, ks, NUM_ROWS)
+        await verify_object_storage_namespace(servers[0], servers + new_servers, ks)
 
         # Verify tablets are distributed across all 6 nodes
         tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
@@ -122,3 +223,4 @@ async def test_scaling(manager: ManagerClient, object_storage):
         # Verify data after scale-down
         logger.info("Verifying data after decommissioning nodes")
         await verify_data(cql, ks, NUM_ROWS)
+        await verify_object_storage_namespace(new_servers[0], new_servers, ks)
