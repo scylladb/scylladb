@@ -32,9 +32,12 @@
 #include "idl/logstor.dist.hh"
 #include "idl/logstor.dist.impl.hh"
 #include "replica/logstor/segment_io.hh"
+#include "replica/database.hh"
 #include "schema/schema_builder.hh"
 #include <seastar/core/simple-stream.hh>
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/mutation_reader_assertions.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/tmpdir.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/error_injection.hh"
@@ -2660,4 +2663,307 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
     };
     BOOST_REQUIRE(left_records == expected_left);
     BOOST_REQUIRE(right_records == expected_right);
+}
+
+// Everything a reader test needs: a started logstor holding a single compaction group, and a
+// semaphore to take read permits from. Tests fill the group with populate() and read it back
+// through make_reader().
+struct reader_test_env {
+    schema_ptr schema{make_kv_schema()};
+    tmpdir dir;
+    shared_logstor_cache cache;
+    logstor ls{make_test_logstor_config(dir.path()), cache.shared_tracker};
+    std::optional<test_compaction_group_handle> cg;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    reader_test_env() {
+        ls.do_recovery_for_test().get();
+        ls.start().get();
+        cg.emplace(schema, ls);
+    }
+
+    ~reader_test_env() {
+        cg.reset();
+        ls.stop().get();
+    }
+
+    void populate(std::span<const mutation> ms) {
+        write_and_flush_segment(ls, *cg, ms);
+    }
+
+    mutation_reader make_reader(const dht::partition_range& pr,
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) {
+        return ls.make_reader(schema, cg->logstor_index(), semaphore.make_permit(), pr,
+                schema->full_slice(), nullptr, fwd, fwd_mr);
+    }
+};
+
+// Distinct key-value mutations in token order, which is also the order a reader produces them in.
+std::vector<mutation> make_token_ordered_mutations(schema_ptr schema, size_t count) {
+    std::vector<mutation> ms;
+    for (const auto& key : make_token_ordered_keys(schema, count)) {
+        ms.push_back(make_kv_mutation(schema, key, "value-" + key, api::timestamp_type(1)));
+    }
+    return ms;
+}
+
+dht::partition_range singular_range(const mutation& m) {
+    return dht::partition_range::make_singular(m.decorated_key());
+}
+
+// The range between two mutations, excluding both.
+dht::partition_range range_between(const mutation& lower, const mutation& upper) {
+    using bound = dht::partition_range::bound;
+    return dht::partition_range(bound(dht::ring_position(lower.decorated_key()), false),
+            bound(dht::ring_position(upper.decorated_key()), false));
+}
+
+// Both readers fill their buffer by draining a reader made for the partition they are on, so that
+// reader has to be bounded by the buffer size the caller asked for. Without that, a caller that
+// shrank its buffer is served the partition reader's own, much larger, default.
+SEASTAR_THREAD_TEST_CASE(test_logstor_readers_honor_max_buffer_size) {
+    reader_test_env env;
+    auto ms = make_token_ordered_mutations(env.schema, 2);
+    env.populate(ms);
+
+    // Fills the reader with the smallest buffer bound there is and tells whether it stopped short
+    // of the end of the partition it was on. An unbounded partition reader hands over the whole
+    // partition, its end included, in one go.
+    auto stops_inside_the_partition = [] (mutation_reader rd) {
+        rd.set_max_buffer_size(1);
+        rd.fill_buffer().get();
+        bool saw_partition_end = false;
+        while (!rd.is_buffer_empty()) {
+            saw_partition_end |= rd.pop_mutation_fragment().is_end_of_partition();
+        }
+        rd.close().get();
+        return !saw_partition_end;
+    };
+
+    BOOST_REQUIRE(stops_inside_the_partition(env.make_reader(singular_range(ms[0]))));
+    BOOST_REQUIRE(stops_inside_the_partition(env.make_reader(query::full_partition_range)));
+}
+
+// Checks that a reader over a singular partition range honors the mutation_reader
+// contract: next_partition() called before the partition was entered must not skip
+// it, a caller that may fast-forward the reader is served the following ranges, and
+// a forwarding reader produces a partition in clustering sub-streams.
+SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_partition_navigation) {
+    reader_test_env env;
+    auto ms = make_token_ordered_mutations(env.schema, 2);
+    env.populate(ms);
+
+    const auto& first = ms[0];
+    const auto& second = ms[1];
+
+    assert_that(env.make_reader(singular_range(first)))
+            .produces(first)
+            .produces_end_of_stream();
+
+    // next_partition() before the partition was entered must not skip it.
+    assert_that(env.make_reader(singular_range(first)))
+            .next_partition()
+            .produces_partition_start(first.decorated_key())
+            .next_partition()
+            .produces_end_of_stream();
+
+    // A reader that may be fast-forwarded has to serve the ranges it is moved to, so a
+    // single-partition reader must not be used for it: make_reader() hands out the range
+    // reader instead, which serves a singular range too.
+    assert_that(env.make_reader(singular_range(first), streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
+            .produces(first)
+            .produces_end_of_stream()
+            .fast_forward_to(singular_range(second))
+            .produces(second)
+            .produces_end_of_stream();
+
+    // In forwarding mode the partition is produced in clustering sub-streams.
+    assert_that(env.make_reader(singular_range(first), streamed_mutation::forwarding::yes))
+            .produces_partition_start(first.decorated_key())
+            .produces_end_of_stream()
+            .fast_forward_to(position_range::all_clustered_rows())
+            .produces_row_with_key(clustering_key::make_empty())
+            .produces_end_of_stream();
+}
+
+// Checks that next_partition() does not skip a partition when the reader's buffer ran out right
+// at the end of the previous one, and that it does skip what is left of a partition the reader
+// is in the middle of.
+SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_next_partition_at_buffer_boundary) {
+    reader_test_env env;
+    auto ms = make_token_ordered_mutations(env.schema, 4);
+    env.populate(ms);
+
+    // A buffer this small holds a single fragment, so the reader runs out of buffer at every
+    // fragment boundary, the ones inside a partition included.
+    auto at_partition_end = env.make_reader(query::full_partition_range);
+    at_partition_end.set_max_buffer_size(1);
+    auto at_partition_end_assertions = assert_that(std::move(at_partition_end));
+    for (const auto& m : ms) {
+        at_partition_end_assertions.produces_partition_start(m.decorated_key())
+                .produces_row_with_key(clustering_key::make_empty())
+                .produces_partition_end()
+                .next_partition();
+    }
+    at_partition_end_assertions.produces_end_of_stream();
+
+    // Called with the partition entered but not consumed, next_partition() drops the rest of it
+    // and moves on to the one that follows.
+    auto mid_partition = env.make_reader(query::full_partition_range);
+    mid_partition.set_max_buffer_size(1);
+    auto mid_partition_assertions = assert_that(std::move(mid_partition));
+    for (const auto& m : ms) {
+        mid_partition_assertions.produces_partition_start(m.decorated_key())
+                .next_partition();
+    }
+    mid_partition_assertions.produces_end_of_stream();
+}
+
+// Checks that the range reader serves the bounds of the partition range it was given. It scans
+// the index by token, with both ends of the token range inclusive, so keys that fall outside the
+// range have to be filtered out by key once their records were read.
+SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_honors_partition_range_bounds) {
+    using bound = dht::partition_range::bound;
+
+    reader_test_env env;
+    auto ms = make_token_ordered_mutations(env.schema, 5);
+    env.populate(ms);
+
+    auto pos = [] (const mutation& m) { return dht::ring_position(m.decorated_key()); };
+
+    assert_that(env.make_reader(query::full_partition_range))
+            .produces(ms)
+            .produces_end_of_stream();
+
+    // [1, 3]
+    assert_that(env.make_reader(dht::partition_range(bound(pos(ms[1]), true), bound(pos(ms[3]), true))))
+            .produces(ms[1])
+            .produces(ms[2])
+            .produces(ms[3])
+            .produces_end_of_stream();
+
+    // (1, 3)
+    assert_that(env.make_reader(dht::partition_range(bound(pos(ms[1]), false), bound(pos(ms[3]), false))))
+            .produces(ms[2])
+            .produces_end_of_stream();
+
+    // (-inf, 1]
+    assert_that(env.make_reader(dht::partition_range(std::nullopt, bound(pos(ms[1]), true))))
+            .produces(ms[0])
+            .produces(ms[1])
+            .produces_end_of_stream();
+
+    // [3, +inf)
+    assert_that(env.make_reader(dht::partition_range(bound(pos(ms[3]), true), std::nullopt)))
+            .produces(ms[3])
+            .produces(ms[4])
+            .produces_end_of_stream();
+
+    // Bounds given by token only, without a key.
+    assert_that(env.make_reader(dht::partition_range(
+                    bound(dht::ring_position::starting_at(ms[2].token()), true),
+                    bound(dht::ring_position::ending_at(ms[3].token()), true))))
+            .produces(ms[2])
+            .produces(ms[3])
+            .produces_end_of_stream();
+}
+
+// Checks that a reader that may be fast-forwarded serves every range it is moved to, including
+// ranges that hold nothing and ranges it is moved to before the current partition was consumed.
+SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_fast_forward_to) {
+    reader_test_env env;
+    auto ms = make_token_ordered_mutations(env.schema, 5);
+    env.populate(ms);
+
+    auto make_forwardable_reader = [&] {
+        return env.make_reader(singular_range(ms[0]), streamed_mutation::forwarding::no,
+                mutation_reader::forwarding::yes);
+    };
+
+    assert_that(make_forwardable_reader())
+            .produces(ms[0])
+            .produces_end_of_stream()
+            .fast_forward_to(singular_range(ms[2]))
+            .produces(ms[2])
+            .produces_end_of_stream()
+            .fast_forward_to(singular_range(ms[4]))
+            .produces(ms[4])
+            .produces_end_of_stream();
+
+    // A range with nothing in it is served as an empty stream, and does not end the reader:
+    // it still serves the range it is moved to next.
+    assert_that(make_forwardable_reader())
+            .produces(ms[0])
+            .produces_end_of_stream()
+            .fast_forward_to(range_between(ms[1], ms[2]))
+            .produces_end_of_stream()
+            .fast_forward_to(singular_range(ms[3]))
+            .produces(ms[3])
+            .produces_end_of_stream();
+
+    // Forwarding out of a partition that was entered but not consumed.
+    auto mid_partition = make_forwardable_reader();
+    mid_partition.set_max_buffer_size(1);
+    assert_that(std::move(mid_partition))
+            .produces_partition_start(ms[0].decorated_key())
+            .fast_forward_to(singular_range(ms[1]))
+            .produces(ms[1])
+            .produces_end_of_stream();
+}
+
+// The index scan hands the reader one batch of entries at a time, so a scan of more partitions
+// than a batch holds has to carry on across batches without dropping, repeating or reordering a
+// partition.
+SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_scans_across_index_batches) {
+    reader_test_env env;
+    // Comfortably more than the reader's read-ahead, so the scan takes several batches.
+    auto ms = make_token_ordered_mutations(env.schema, 25);
+    env.populate(ms);
+
+    assert_that(env.make_reader(query::full_partition_range))
+            .produces(ms)
+            .produces_end_of_stream();
+
+    assert_that(env.make_reader(query::full_partition_range)).has_monotonic_positions();
+}
+
+// Checks that a range reader in forwarding mode produces every partition in clustering
+// sub-streams, and that next_partition() is what moves it to the next partition.
+SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_streamed_mutation_forwarding) {
+    reader_test_env env;
+    auto ms = make_token_ordered_mutations(env.schema, 3);
+    env.populate(ms);
+
+    auto assertions = assert_that(env.make_reader(query::full_partition_range, streamed_mutation::forwarding::yes));
+    for (const auto& m : ms) {
+        assertions.produces_partition_start(m.decorated_key())
+                .produces_end_of_stream()
+                .fast_forward_to(position_range::all_clustered_rows())
+                .produces_row_with_key(clustering_key::make_empty())
+                .produces_end_of_stream()
+                .next_partition();
+    }
+    assertions.produces_end_of_stream();
+}
+
+// Checks that a range holding no key ends the stream right away, whether the key it asks for was
+// never written or the range simply falls between two keys that were.
+SEASTAR_THREAD_TEST_CASE(test_logstor_reader_produces_nothing_for_empty_ranges) {
+    reader_test_env env;
+    auto ms = make_token_ordered_mutations(env.schema, 3);
+    // Everything but the middle mutation, so that its key is the one missing from a populated index.
+    const std::array written = {ms[0], ms[2]};
+    env.populate(written);
+
+    assert_that(env.make_reader(singular_range(ms[1])))
+            .produces_end_of_stream();
+
+    assert_that(env.make_reader(singular_range(ms[1]), streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
+            .produces_end_of_stream();
+
+    // The keys that were written bound this range without being in it, so the reader has to read
+    // their records and then filter both of them out.
+    assert_that(env.make_reader(range_between(ms[0], ms[2])))
+            .produces_end_of_stream();
 }

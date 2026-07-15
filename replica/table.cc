@@ -237,7 +237,7 @@ table::make_mutation_reader(schema_ptr s,
     }
 
     if (_logstor) [[unlikely]] {
-        return _logstor->make_reader(s, logstor_index(), std::move(permit), range, slice, std::move(trace_state));
+        return _logstor->make_reader(s, logstor_index(), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
     }
 
     std::vector<mutation_reader> readers;
