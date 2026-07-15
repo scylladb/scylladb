@@ -46,6 +46,7 @@
 #include "sstables/index_reader.hh"
 #include "sstables/sstable_version.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/consumer.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
 #include "sstables/object_storage_client.hh"
@@ -2052,14 +2053,23 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
         auto ostream = make_file_output_stream(std::move(ofile), options).get();
         auto close_ostream = defer([&ostream] noexcept { ostream.close().get(); });
 
-        auto istream = sst->data_stream(0, sst->data_size(), permit, nullptr, nullptr).get();
-        auto close_istream = defer([&istream] noexcept { istream.close().get(); });
-
-        istream.consume([&] (temporary_buffer<char> buf) {
-            return ostream.write(buf.get(), buf.size()).then([] {
-                return consumption_result<char>(continue_consuming{});
-            });
-        }).get();
+        // Read the whole data file decompressed and write it out. data_stream()
+        // decompresses if needed and handles both compressed and uncompressed
+        // files; we drain it buffer by buffer until it reports end of file (an
+        // empty buffer).
+        auto istream = sst->data_stream(sst->full_range(), permit, nullptr, nullptr).get();
+        auto close_istream = defer([&istream] noexcept { istream->close().get(); });
+        while (true) {
+            temporary_buffer<char> buf;
+            istream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                buf = std::move(data);
+                return continue_consuming{};
+            }).get();
+            if (buf.empty()) {
+                break;
+            }
+            ostream.write(buf.get(), buf.size()).get();
+        }
         ostream.flush().get();
 
         sst_log.info("Sstable {} decompressed into {}", sst->get_filename(), output_filename);

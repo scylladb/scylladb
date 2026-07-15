@@ -97,7 +97,7 @@ private:
     }
 public:
 
-    partition_header_context(input_stream<char>&& input, uint64_t start, uint64_t maxlen, reader_permit permit)
+    partition_header_context(std::unique_ptr<data_consumer::continuous_data_consumer_input_stream> input, uint64_t start, uint64_t maxlen, reader_permit permit)
                 : continuous_data_consumer(std::move(permit), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
                 , _gen(do_process_state())
     {}
@@ -288,7 +288,7 @@ private:
         }
     }
 public:
-    row_body_skipping_context(input_stream<char>&& input, uint64_t start, uint64_t maxlen, reader_permit permit, column_translation ct)
+    row_body_skipping_context(std::unique_ptr<data_consumer::continuous_data_consumer_input_stream> input, uint64_t start, uint64_t maxlen, reader_permit permit, column_translation ct)
                 : continuous_data_consumer(std::move(permit), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
                 , _gen(do_process_state())
                 , _column_translation(std::move(ct))
@@ -402,13 +402,14 @@ class partition_reversing_data_source_impl final : public data_source_impl {
         FINISHED
     } _state = state::RANGE_END;
 private:
-    future<input_stream<char>> data_stream(size_t start, size_t end) {
-        return _sst->data_stream(start, end - start, _permit, _trace_state, {});
+    future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> data_stream(size_t start, size_t end) {
+        return _sst->data_stream(sstable::disk_read_range(sstable_position::from_logical(start), sstable_position::from_logical(end)),
+                _permit, _trace_state, nullptr);
     }
     future<temporary_buffer<char>> data_read(uint64_t start, uint64_t end) {
         return _sst->data_read(start, end - start, _permit);
     }
-    future<input_stream<char>> last_row_stream(size_t row_size) {
+    future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> last_row_stream(size_t row_size) {
         if (_cached_read.size() < row_size) {
             if (_clustering_range_start + _current_read_size < _row_end) {
                 _cached_read = co_await data_read(std::min(_row_end - _current_read_size, _row_end - row_size), _row_end);
@@ -417,7 +418,8 @@ private:
             }
             _current_read_size = std::min(max_read_size, _current_read_size * 2);
         }
-        co_return seastar::util::as_input_stream(_cached_read.share(_cached_read.size() - row_size, row_size));
+        co_return std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(
+                seastar::util::as_input_stream(_cached_read.share(_cached_read.size() - row_size, row_size)));
     }
     temporary_buffer<char> last_row(size_t row_size) {
         auto tmp = _cached_read.share(_cached_read.size() - row_size, row_size);
@@ -444,7 +446,7 @@ private:
         }
     }
 
-    future<> emplace_row_skipping_context(input_stream<char> row_stream, uint64_t row_start, uint64_t row_end) {
+    future<> emplace_row_skipping_context(std::unique_ptr<data_consumer::continuous_data_consumer_input_stream> row_stream, uint64_t row_start, uint64_t row_end) {
         if (_row_skipping_context) {
             co_await _row_skipping_context->close();
         }
