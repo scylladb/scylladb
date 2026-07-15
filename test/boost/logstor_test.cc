@@ -390,7 +390,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
         }
     } accounting;
 
-    primary_index index(schema, accounting);
+    primary_index index(schema, accounting, nullptr);
 
     const auto pk0 = primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()};
     const auto pk1 = primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()};
@@ -543,7 +543,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
         }
     } accounting;
 
-    primary_index index(schema, accounting);
+    primary_index index(schema, accounting, nullptr);
 
     struct entry {
         primary_index_key key;
@@ -585,11 +585,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[4].loc.size));
-    BOOST_REQUIRE(index.find(entries[0].key) != index.end());
-    BOOST_REQUIRE(index.find(entries[1].key) == index.end());
-    BOOST_REQUIRE(index.find(entries[2].key) == index.end());
-    BOOST_REQUIRE(index.find(entries[3].key) == index.end());
-    BOOST_REQUIRE(index.find(entries[4].key) != index.end());
+    BOOST_REQUIRE(index.get(entries[0].key).has_value());
+    BOOST_REQUIRE(!index.get(entries[1].key).has_value());
+    BOOST_REQUIRE(!index.get(entries[2].key).has_value());
+    BOOST_REQUIRE(!index.get(entries[3].key).has_value());
+    BOOST_REQUIRE(index.get(entries[4].key).has_value());
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[1].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[2].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[3].loc), 1);

@@ -75,7 +75,7 @@ public:
 
     future<> write(const mutation&, compaction_group&, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout);
 
-    future<std::optional<mutation>> read(const schema&, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
+    future<std::optional<mutation>> read(schema_ptr schema, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
 
     /// Create a mutation reader for a specific key
     mutation_reader make_reader(schema_ptr schema,
