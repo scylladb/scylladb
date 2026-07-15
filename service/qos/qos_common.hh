@@ -37,11 +37,12 @@ enum class include_effective_names { yes, no };
  * the query with internal client_state with an 'infinite' timeout, or a default
  * state with short timeout.
  * for queries that are executed in context of group0 operations it is important to have
- * a long timeout so the query doesn't fail the group0 client spuriously. in the context
- * of user commands, however, a shorter timeout is preferred. in other cases, the default
- * unspecified behavior may be sufficient.
+ * a long timeout so the query doesn't fail the group0 client spuriously. The same applies
+ * to the initial cache load done during node startup, where a spurious timeout would abort
+ * the whole boot. In the context of user commands, however, a shorter timeout is preferred.
+ * in other cases, the default unspecified behavior may be sufficient.
  */
-enum class query_context { group0, user, unspecified };
+enum class query_context { group0, startup, user, unspecified };
 
 /**
  *  a structure that holds the configuration for

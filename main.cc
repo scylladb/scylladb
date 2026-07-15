@@ -2625,7 +2625,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             // update the service level cache after the SL data accessor and auth service are initialized.
-            sl_controller.local().update_cache(qos::update_both_cache_levels::yes).get();
+            // This is a local read of system tables (service levels and roles) that seeds the cache once
+            // at boot, independently of group0 log replay. Use the startup query context so it isn't bound
+            // by the short user-facing timeout, which would otherwise abort startup on a spurious timeout.
+            sl_controller.local().update_cache(qos::update_both_cache_levels::yes, qos::query_context::startup).get();
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
                 lifecycle_notifier.local().register_subscriber(&controller);
