@@ -103,8 +103,11 @@ The path in `name`:
   spellings of the same location (e.g. `/mnt/backup` and `/mnt/backup/`) refer
   to the same endpoint.
 
-**Note:** The storage backend is not wired up yet, so an endpoint of 
-`type: posix` cannot be used as a keyspace's storage yet.
+Objects are stored as plain files at `<path>/<bucket>/<object>`, with parent
+directories created on demand and pruned again when objects are deleted. Object
+names that would escape the `<path>/<bucket>` directory (for example via `..`)
+are rejected. A copy is a hardlink, and a subsequent overwrite of either side
+unlinks first, so copies stay independent like they would in an object store.
 
 ## Creating keyspace with S3
 
