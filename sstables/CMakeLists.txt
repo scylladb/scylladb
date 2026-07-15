@@ -12,6 +12,7 @@ target_sources(sstables
     mx/reader.cc
     mx/writer.cc
     object_storage_client.cc
+    posix_object_storage_client.cc
     prepended_input_stream.cc
     random_access_reader.cc
     sstable_directory.cc
