@@ -19,8 +19,11 @@ from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
+from test.pylib.skip_types import skip_env
 
 import asyncio
+import ctypes
+import ctypes.util
 import pytest
 import logging
 import time
@@ -36,6 +39,70 @@ DEFAULT_CMDLINE = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug'
     ]
+
+
+class _Timex(ctypes.Structure):
+    """struct timex, as ntp_adjtime(2) fills it in.
+
+    Only `status` and `maxerror` are read; the remaining fields are declared so
+    the struct has the right size and layout.
+    """
+    _fields_ = [("modes", ctypes.c_uint), ("offset", ctypes.c_long),
+                ("freq", ctypes.c_long), ("maxerror", ctypes.c_long),
+                ("esterror", ctypes.c_long), ("status", ctypes.c_int),
+                ("constant", ctypes.c_long), ("precision", ctypes.c_long),
+                ("tolerance", ctypes.c_long), ("time_sec", ctypes.c_long),
+                ("time_usec", ctypes.c_long), ("tick", ctypes.c_long),
+                ("ppsfreq", ctypes.c_long), ("jitter", ctypes.c_long),
+                ("shift", ctypes.c_int), ("stabil", ctypes.c_long),
+                ("jitcnt", ctypes.c_long), ("calcnt", ctypes.c_long),
+                ("errcnt", ctypes.c_long), ("stbcnt", ctypes.c_long),
+                ("tai", ctypes.c_int), ("_pad", ctypes.c_char * 44)]
+
+
+# Mirrors the constant ntp_adjtime(2) reports; see sys/timex.h.
+_TIME_ERROR = 5
+
+
+def host_clock_bounds():
+    """Sample the host's kernel NTP state: (usable, maxerror_us).
+
+    `usable` must stay in lockstep with the `synced` predicate the adjtimex
+    backend computes in service/raft/bounded_clock_adjtimex.cc (see the
+    `const bool synced = ...` line): if the two ever disagree, this guard stops
+    predicting whether the server can actually hold a lease.
+
+    The servers run on this same host, so sampling here is representative.
+    """
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    tx = _Timex()
+    state = libc.ntp_adjtime(ctypes.byref(tx))
+    usable = not (state < 0 or state == _TIME_ERROR)
+    return usable, tx.maxerror
+
+
+@pytest.fixture(params=[
+    pytest.param(False, id="leases_off"),
+    pytest.param(True, id="leases_on"),
+])
+def leaseguard_config(request):
+    """Config overlay parametrizing LeaseGuard leader leases on/off.
+
+    Uses the default adjtimex bounded-clock backend and lease duration (both
+    options are left at their defaults). The leases_on variant is skipped when
+    the host clock is not synchronized: LeaseGuard cannot hold a lease then, so
+    the variant would only repeat leases_off. The fallback paths for an
+    unusable clock are covered deterministically by test/raft/fsm_test.cc and
+    test/raft/randomized_nemesis_test.cc.
+
+    Merge the returned dict into the scylla config passed to servers_add/
+    server_add, e.g. ``config=DEFAULT_CONFIG | leaseguard_config``.
+    """
+    if request.param:
+        usable, _ = host_clock_bounds()
+        if not usable:
+            skip_env("host clock is not NTP/PTP synchronized, so LeaseGuard cannot hold a lease")
+    return {'strongly_consistent_raft_leader_leases_enabled': request.param}
 
 
 async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str,
@@ -127,15 +194,15 @@ async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table:
     rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
     return str(rows[0].raft_group_id)
 
-async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
+async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str, leaseguard_config):
 
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE
     # In dev mode, stretch the strongly consistent raft group tick interval to
     # 20s so that any unwanted waiting on a raft tick during group startup shows
     # up as a multi-second delay, caught by the <10s assertion below.
-    default_config = DEFAULT_CONFIG | {'error_injections_at_startup': []}
-    config_with_big_ticks = DEFAULT_CONFIG | {'error_injections_at_startup': [{
+    default_config = DEFAULT_CONFIG | leaseguard_config | {'error_injections_at_startup': []}
+    config_with_big_ticks = DEFAULT_CONFIG | leaseguard_config | {'error_injections_at_startup': [{
         'name': 'strongly-consistent-raft-group-tick-interval-in-ms',
         'value': '20000'
     }]}
@@ -339,7 +406,7 @@ async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
     # To check that the servers can be stopped gracefully. By default the test runner just kills them.
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
-async def test_multi_shard_write_read(manager: ScyllaClusterManager):
+async def test_multi_shard_write_read(manager: ScyllaClusterManager, leaseguard_config):
     """
     Verify that strongly consistent tables work correctly on non-shard-0.
 
@@ -356,7 +423,7 @@ async def test_multi_shard_write_read(manager: ScyllaClusterManager):
     """
     logger.info("Bootstrapping cluster with 4 shards per node")
     cmdline = DEFAULT_CMDLINE + ['--smp=4']
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG | leaseguard_config, cmdline=cmdline, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     logger.info("Creating a strongly-consistent keyspace with 4 tablets")
@@ -1331,7 +1398,7 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         assert len(rows) == 1
         assert rows[0].v == 13
 
-async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
+async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager, leaseguard_config):
     """
     Verify that after a non-replica node learns the leader location via a redirect,
     subsequent write requests from that node go directly to the leader without a redirect.
@@ -1347,7 +1414,6 @@ async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """
     cmdline = [
         '--logger-log-level', 'cql_server=trace',
-        '--experimental-features', 'strongly-consistent-tables',
     ]
     # 2 racks with 2 nodes each
     property_file = [
@@ -1356,7 +1422,7 @@ async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
         {"dc": "dc1", "rack": "rack2"},
         {"dc": "dc1", "rack": "rack2"},
     ]
-    servers = await manager.servers_add(4, cmdline=cmdline, property_file=property_file)
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG | leaseguard_config, cmdline=cmdline, property_file=property_file)
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -1430,7 +1496,7 @@ async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
             assert rows[0].value == 25
 
 @pytest.mark.asyncio
-async def test_read_forwarding(manager: ScyllaClusterManager):
+async def test_read_forwarding(manager: ScyllaClusterManager, leaseguard_config):
     """
     Verify read forwarding behavior for strongly consistent tables:
     - CL=QUORUM reads (linearizable) are forwarded to the raft leader
@@ -1443,7 +1509,7 @@ async def test_read_forwarding(manager: ScyllaClusterManager):
     """
 
     logger.info("Bootstrapping cluster")
-    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG | leaseguard_config, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -1584,7 +1650,7 @@ async def test_linearizable_read_waits_for_leader_apply(manager: ScyllaClusterMa
             assert await read_on_leader(ConsistencyLevel.QUORUM) == 2
 
 
-async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterManager):
+async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterManager, leaseguard_config):
     """
     Verify that if a raft group leader goes down, a non-replica node can still
     successfully write by detecting the stale leader cache entry and evicting it.
@@ -1598,7 +1664,7 @@ async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterMa
       so a new leader can be elected and the second write can succeed.
     """
     cmdline = DEFAULT_CMDLINE + ['--smp=1']
-    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG | leaseguard_config, cmdline=cmdline, auto_rack_dc='my_dc')
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
