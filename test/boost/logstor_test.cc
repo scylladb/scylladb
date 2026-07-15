@@ -570,7 +570,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_largest_accepted_record_can_be_separated) 
 
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 1u);
 
-    auto actual = ls.read(*schema, cg.logstor_index(), key, schema->full_slice()).get();
+    auto actual = ls.read(schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
     assert_that(*actual).is_equal_to(expected);
 }
@@ -793,8 +793,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     BOOST_REQUIRE(pk0_after->location != pk0_before->location);
     BOOST_REQUIRE(pk1_after->location != pk1_before->location);
 
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
+    assert_that(*ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*ls.read(schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
 }
 
 // Checks that a compaction whose index updates fail returns its buffer to the pool. This failure
@@ -833,16 +833,16 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_failing_index_update_returns_it
     setup_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
     // The records are readable whichever location the index kept for them.
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
+    assert_that(*ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*ls.read(schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
 
     // The buffer of the failed compaction is back in the pool, so compaction still runs.
     setup_guard.reset();
     ls.get_compaction_manager().submit(cg);
     auto compaction_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
-    assert_that(*ls.read(*schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
+    assert_that(*ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*ls.read(schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
 }
 
 // Checks that primary_index accounting callbacks track live bytes across
@@ -881,7 +881,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
         }
     } accounting;
 
-    primary_index index(schema, accounting);
+    primary_index index(schema, accounting, nullptr);
 
     const auto pk0 = make_index_key(*schema, make_kv_mutation(schema, "pk0", "v0").decorated_key());
     const auto pk1 = make_index_key(*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key());
@@ -1034,7 +1034,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
         }
     } accounting;
 
-    primary_index index(schema, accounting);
+    primary_index index(schema, accounting, nullptr);
 
     struct entry {
         primary_index_key key;
@@ -1076,11 +1076,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[4].loc.size));
-    BOOST_REQUIRE(index.find(entries[0].key) != index.end());
-    BOOST_REQUIRE(index.find(entries[1].key) == index.end());
-    BOOST_REQUIRE(index.find(entries[2].key) == index.end());
-    BOOST_REQUIRE(index.find(entries[3].key) == index.end());
-    BOOST_REQUIRE(index.find(entries[4].key) != index.end());
+    BOOST_REQUIRE(index.get(entries[0].key).has_value());
+    BOOST_REQUIRE(!index.get(entries[1].key).has_value());
+    BOOST_REQUIRE(!index.get(entries[2].key).has_value());
+    BOOST_REQUIRE(!index.get(entries[3].key).has_value());
+    BOOST_REQUIRE(index.get(entries[4].key).has_value());
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[1].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[2].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[3].loc), 1);
@@ -1987,7 +1987,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     BOOST_REQUIRE(entry_after_flush->location.segment != entry_before_flush->location.segment);
     BOOST_REQUIRE_EQUAL(entry_after_flush->location.segment.value, snapshot.front().segment_id.value);
 
-    auto actual = ls.read(*schema, cg.logstor_index(), key, schema->full_slice()).get();
+    auto actual = ls.read(schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
     assert_that(*actual).is_equal_to(expected);
 }
@@ -2048,7 +2048,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_discarded_group_does_not_free_its_unflushe
     BOOST_REQUIRE(entry_after_discard);
     BOOST_REQUIRE(entry_after_discard->location == entry_before_discard->location);
 
-    auto actual = ls.read(*schema, cg.logstor_index(), key, schema->full_slice()).get();
+    auto actual = ls.read(schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
     assert_that(*actual).is_equal_to(expected);
 }
@@ -2087,7 +2087,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_closed_group_takes_no_separator_writes) {
     // The write itself succeeded and the record is readable where it was written.
     BOOST_REQUIRE(cg.logstor_index().get(make_index_key(*schema, key)));
 
-    auto actual = ls.read(*schema, cg.logstor_index(), key, schema->full_slice()).get();
+    auto actual = ls.read(schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
     assert_that(*actual).is_equal_to(expected);
 }
@@ -2424,9 +2424,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     BOOST_REQUIRE(!new_segment_ids.contains(stale_pk0_location->location.segment));
     BOOST_REQUIRE(!new_segment_ids.contains(stale_pk1_location->location.segment));
 
-    auto actual_pk0 = ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
-    auto actual_pk1 = ls.read(*schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
-    auto actual_pk2 = ls.read(*schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
+    auto actual_pk0 = ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk1 = ls.read(schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk2 = ls.read(schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
 
     BOOST_REQUIRE(actual_pk0);
     BOOST_REQUIRE(actual_pk1);
@@ -2513,9 +2513,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     BOOST_REQUIRE(live_pk1_after->location == live_pk1_before->location);
     BOOST_REQUIRE(live_pk2_after->location == live_pk2_before->location);
 
-    auto actual_pk0 = ls.read(*schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
-    auto actual_pk1 = ls.read(*schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
-    auto actual_pk2 = ls.read(*schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
+    auto actual_pk0 = ls.read(schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk1 = ls.read(schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
+    auto actual_pk2 = ls.read(schema, cg.logstor_index(), pk2_v0.decorated_key(), schema->full_slice()).get();
 
     BOOST_REQUIRE(actual_pk0);
     BOOST_REQUIRE(actual_pk1);
@@ -2638,7 +2638,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
 
     // All the records are readable, from whichever group they ended up in.
     for (const auto& expected : {k0, k1, k2_v1, k3, k4, k5}) {
-        auto actual = ls.read(*schema, index, expected.decorated_key(), schema->full_slice()).get();
+        auto actual = ls.read(schema, index, expected.decorated_key(), schema->full_slice()).get();
         BOOST_REQUIRE(actual);
         assert_that(*actual).is_equal_to(expected);
     }

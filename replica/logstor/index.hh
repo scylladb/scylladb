@@ -9,7 +9,9 @@
 
 #include "dht/decorated_key.hh"
 #include "dht/ring_position.hh"
+#include <functional>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <optional>
 #include "types.hh"
 #include "utils/bptree.hh"
 #include "utils/double-decker.hh"
@@ -138,6 +140,12 @@ public:
     using partitions_type = double_decker<int64_t, primary_index_entry,
                             dht::raw_token_less_comparator, primary_index_key_cmp,
                             16, bplus::key_search::linear>;
+
+    struct read_lookup_result {
+        index_entry entry;
+        std::optional<mutation> cached_mutation;
+    };
+
 private:
     partitions_type _partitions;
     schema_ptr _schema;
@@ -147,8 +155,8 @@ private:
     mutable utils::phased_barrier _reads_phaser{"logstor_primary_index"};
 
     // Non-owning pointer to the cache tracker; null when the cache is not set up.
-    // Mutable so that logically-const methods (lookup_cache, populate_cache) can
-    // call non-const methods on the tracker (touch, insert) for LRU accounting.
+    // Mutable so that logically-const methods can call non-const methods on the
+    // tracker (touch, insert) for LRU accounting.
     mutable cache_tracker* _cache_tracker = nullptr;
 
     // Currently we support a single subscriber for space accounting which is the segment manager.
@@ -198,22 +206,15 @@ private:
     }
 
 public:
-    explicit primary_index(schema_ptr schema, space_accounting_subscriber& space_accounting)
+    explicit primary_index(schema_ptr schema, space_accounting_subscriber& space_accounting, cache_tracker* ct)
         : _partitions(dht::raw_token_less_comparator{})
         , _schema(std::move(schema))
+        , _cache_tracker(ct)
         , _space_accounting(space_accounting)
         {}
 
     void set_schema(schema_ptr s) {
         _schema = std::move(s);
-    }
-
-    void set_cache_tracker(cache_tracker* ct) noexcept {
-        _cache_tracker = ct;
-    }
-
-    cache_tracker* cache_tracker() const noexcept {
-        return _cache_tracker;
     }
 
     future<> drain_cache() {
@@ -239,6 +240,33 @@ public:
             return it->_e;
         }
         return std::nullopt;
+    }
+
+    std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, schema_ptr target_schema, bool cache_enabled) const {
+        auto it = find(key);
+        if (it == _partitions.end()) {
+            return std::nullopt;
+        }
+
+        read_lookup_result result{.entry = it->entry()};
+        if (cache_enabled && _cache_tracker) {
+            result.cached_mutation = _cache_tracker->lookup(*it, std::move(target_schema));
+        }
+        return result;
+    }
+
+    bool populate_cache(const primary_index_key& key, log_location read_location, const mutation& m) const {
+        if (!_cache_tracker) {
+            return false;
+        }
+
+        auto it = find(key);
+        if (it == _partitions.end() || it->entry().location != read_location) {
+            return false;
+        }
+
+        _cache_tracker->populate(*it, m);
+        return true;
     }
 
     bool is_record_alive(const primary_index_key& key, log_location location) {
@@ -334,10 +362,12 @@ public:
     size_t get_key_count() const noexcept { return _key_count; }
     size_t get_memory_usage() const noexcept { return _memory_usage; }
 
+private:
     partitions_type::const_iterator find(const primary_index_key& key) const {
         return _partitions.find(key, primary_index_key_cmp(*_schema));
     }
 
+public:
     // First entry with key >= pos (for positioning at range start)
     partitions_type::const_iterator lower_bound(const dht::ring_position_view& pos) const {
         return _partitions.lower_bound(pos, primary_index_key_cmp(*_schema));
