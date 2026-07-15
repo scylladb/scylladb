@@ -77,7 +77,7 @@ public:
 
     future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout);
 
-    future<std::optional<mutation>> read(const schema&, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
+    future<std::optional<mutation>> read(schema_ptr schema, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
 
     // Debug introspection for SELECT * FROM MUTATION_FRAGMENTS(): returns one
     // mutation source per place the key's data currently lives in - the
