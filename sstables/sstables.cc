@@ -4308,7 +4308,9 @@ public:
         , _type(type)
         , _last_component(cfg.last_component)
         , _leave_unsealed(cfg.leave_unsealed)
-    {}
+    {
+        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed);
+    }
 private:
     future<> load_metadata() const {
         if (!co_await _sst->_storage->exists(*_sst, component_type::Scylla)) {
@@ -4381,13 +4383,8 @@ public:
     }
 };
 
-std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, std::string_view component_filename, sstable_stream_sink_cfg cfg) {
-    auto desc_result = parse_path(component_filename, schema->ks_name(), schema->cf_name());
-    if (!desc_result) {
-        throw_malformed_sstable_exception(desc_result.error());
-    }
-    auto desc = std::move(*desc_result);
-    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, state, desc.version, desc.format);
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, const entry_descriptor& desc, sstable_stream_sink_cfg cfg) {
+    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, desc.sid, state, desc.version, desc.format);
 
     auto type = desc.component;
     // Don't write actual TOC. Write temp, if successful, storage::seal will rename this to actual

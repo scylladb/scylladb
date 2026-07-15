@@ -58,13 +58,13 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
     for (auto it = components.cbegin(); it != components.cend(); ++it) {
         try {
             auto descriptor = sstable->get_descriptor(it->first);
+            descriptor.generation = gen;
             auto sstable_sink =
                 sstables::create_stream_sink(table.schema(),
                                              table.get_sstables_manager(),
                                              table.get_storage_options(),
                                              sstables::sstable_state::normal,
-                                             sstables::sstable::component_basename(
-                                                 table.schema()->ks_name(), table.schema()->cf_name(), descriptor.version, gen, descriptor.format, it->first),
+                                             descriptor,
                                              sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend(), .leave_unsealed = true});
             auto out = co_await sstable_sink->output(foptions, stream_options);
 
@@ -100,7 +100,7 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
                 if (shards.size() != 1) {
                     on_internal_error(logger, "Fully-contained sstable must belong to one shard only");
                 }
-                logger.debug("SSTable shards {}", fmt::join(shards, ", "));
+                logger.debug("SSTable gen={} sid={}: shards {}", gen, sst->sstable_identifier(), fmt::join(shards, ", "));
                 co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format};
             }
         } catch (...) {

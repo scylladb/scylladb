@@ -441,13 +441,18 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
         stream_options.write_behind = file_stream_write_behind;
 
         auto& table = db.find_column_family(meta.table);
+        auto schema = table.schema();
         if (meta.fops == file_ops::stream_sstables || meta.fops == file_ops::load_sstables) {
             auto& sstm = table.get_sstables_manager();
             // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
             // left sealed on the table directory.
             sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables,
                                                     .leave_unsealed = true };
-            auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, cfg);
+            auto desc_result = sstables::parse_path(std::filesystem::path(meta.filename), schema->ks_name(), schema->cf_name());
+            if (!desc_result) {
+                throw std::runtime_error(fmt::format("Cannot stream blob in {}.{}: file={}: {}", schema->ks_name(), schema->cf_name(), meta.filename, desc_result.error()));
+            }
+            auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), *desc_result, cfg);
             auto out = co_await sstable_sink->output(foptions, stream_options);
             co_return output_result{
                 [sstable_sink = std::move(sstable_sink), &meta, &db, &vbw](store_result res) -> future<> {
