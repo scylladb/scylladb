@@ -2467,8 +2467,43 @@ def write_build_file(f,
     rustc_target = pick_rustc_target('wasm32-wasi', 'wasm32-wasip1')
     # If compiler cache is available, prefix the compiler with it
     cxx_with_cache = f'{compiler_cache} {args.cxx}' if compiler_cache else args.cxx
-    # For Rust, sccache is used via RUSTC_WRAPPER environment variable
-    rustc_wrapper = f'RUSTC_WRAPPER={compiler_cache} ' if compiler_cache and 'sccache' in compiler_cache and args.sccache_rust else ''
+    if compiler_cache and 'sccache' in compiler_cache:
+        # With sccache, its default is to run compilations via a background
+        # daemon shared with (and possibly already running for) other,
+        # unrelated builds. This is inconvenient for interactive builds
+        # because of SCYLLADB-2913: The compilation processes run in a
+        # different process group, so interrupting the build with control-C
+        # leaves all the compilation processes running until completion.
+        # There is no way to tell sccache not to use a build server at all -
+        # its developers consider a build server to be necessary for multiple
+        # concurrent compilations to efficiently connect to a remote cache.
+        # We work around the problem with two environment variables:
+        # * SCCACHE_NO_DAEMON=1 tells sccache to not daemonize (double-fork
+        #   and detach) the server it starts, so the server (and the
+        #   compilations it runs) stays in ninja's process group and dies
+        #   with it on Ctrl-C.
+        # * SCCACHE_SERVER_UDS gives sccache a per-build Unix-domain socket
+        #   instead of the default TCP port shared by every sccache
+        #   invocation on the machine. We embed $$PPID in the path: ninja
+        #   writes $$ to get a literal $ in the variable value, which the
+        #   shell expands as $PPID (ninja's own PID, since each rule command
+        #   runs in a shell spawned directly by ninja). All compilations
+        #   within one ninja run share the same PID, so they all use the
+        #   same server. Different ninja runs have different PIDs, so they
+        #   get distinct socket paths, eliminating any "address already in
+        #   use" conflicts and guaranteeing each build starts a fresh server
+        #   in the right process group.
+        sccache_env = f'SCCACHE_NO_DAEMON=1 SCCACHE_SERVER_UDS={os.path.abspath(outdir)}/sccache-$$PPID.sock '
+        cxx_with_cache = f'{sccache_env}{cxx_with_cache}'
+    else:
+        sccache_env = ''
+    # For Rust, sccache is used via RUSTC_WRAPPER environment variable.
+    # The same environment variables as in cxx_with_cache above are needed,
+    # and for the same reasons.
+    if compiler_cache and 'sccache' in compiler_cache and args.sccache_rust:
+        rustc_wrapper = f'{sccache_env}RUSTC_WRAPPER={compiler_cache} '
+    else:
+        rustc_wrapper = ''
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
