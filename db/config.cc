@@ -1616,7 +1616,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "This penalty is incurred only for tables with Alternator Streams enabled.")
     , alternator_timeout_in_ms(this, "alternator_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "The server-side timeout for completing Alternator API requests.")
-    , alternator_ttl_period_in_seconds(this, "alternator_ttl_period_in_seconds", value_status::Used,
+    , alternator_ttl_period_in_seconds(this, "alternator_ttl_period_in_seconds", liveness::LiveUpdate, value_status::Used,
         60*60*24,
         "The default period for Alternator's expiration scan. Alternator attempts to scan every table within that period.")
     , alternator_describe_endpoints(this, "alternator_describe_endpoints", liveness::LiveUpdate, value_status::Used,
