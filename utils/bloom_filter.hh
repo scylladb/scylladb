@@ -29,7 +29,6 @@ private:
     static thread_local struct stats {
         uint64_t memory_size = 0;
     } _shard_stats;
-    stats& _stats = _shard_stats;
 
 public:
     int num_hashes() { return _hash_count; }
