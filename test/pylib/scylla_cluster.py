@@ -2257,3 +2257,176 @@ async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], te
         yield manager
     finally:
         await manager.stop()
+
+
+async def main():
+    """Start a local Scylla cluster and hold it until the user presses Enter.
+
+    Intended for interactive development and manual testing.
+
+    Object-storage integration: if the S3_SERVER_ADDRESS_FOR_TEST and
+    S3_SERVER_PORT_FOR_TEST environment variables are exported before this
+    script is run, the cluster will automatically pick them up and configure
+    object_storage_endpoints accordingly.
+    """
+    import argparse
+    import sys
+    from test.pylib.minio_server import MinioServer
+
+    parser = argparse.ArgumentParser(
+        description="Start a local Scylla cluster",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  # Three nodes, dc1, separate racks (default)\n"
+            "  %(prog)s\n\n"
+            "  # Single node\n"
+            "  %(prog)s --nodes 1\n\n"
+            "  # Custom multi-DC topology\n"
+            "  %(prog)s --topology dc1:rack1 dc1:rack2 dc2:rack1\n"
+        ),
+    )
+    parser.add_argument(
+        "--mode",
+        default="dev",
+        choices=["dev", "debug", "release", "sanitize"],
+        help="Build mode used to locate the scylla binary (default: dev)",
+    )
+    parser.add_argument(
+        "--scylla",
+        default=None,
+        metavar="PATH",
+        help="Path to scylla binary (default: build/<mode>/scylla relative to repo root)",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--nodes",
+        type=int,
+        default=3,
+        metavar="N",
+        help="Number of nodes, all in dc1 with separate racks (default: 3)",
+    )
+    group.add_argument(
+        "--topology",
+        nargs="+",
+        metavar="DC:RACK",
+        help="Per-node dc:rack assignments, e.g. dc1:rack1 dc1:rack2 dc2:rack1",
+    )
+    parser.add_argument(
+        "--workdir",
+        default=None,
+        metavar="DIR",
+        help="Base directory under which server working directories are created (default: system temp)",
+    )
+    parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="Keep server working directories after the cluster stops",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logger = logging.getLogger("scylla_cluster")
+    logger.setLevel(logging.INFO)
+
+    # Resolve per-node property files (dc / rack).
+    if args.topology:
+        property_files: list[dict[str, str]] = []
+        for entry in args.topology:
+            if ":" not in entry:
+                parser.error(f"--topology entries must be DC:RACK, got: {entry!r}")
+            dc, rack = entry.split(":", 1)
+            property_files.append({"dc": dc, "rack": rack})
+    else:
+        property_files = [{"dc": "dc1", "rack": f"rack{i + 1}"} for i in range(args.nodes)]
+
+    node_count = len(property_files)
+
+    # Resolve scylla binary path.
+    scylla_exe = args.scylla or str(pathlib.Path(TOP_SRC_DIR) / f"build/{args.mode}/scylla")
+
+    # Auto-configure object storage if the S3 env vars are present.
+    s3_address = os.environ.get(MinioServer.ENV_ADDRESS)
+    s3_port = os.environ.get(MinioServer.ENV_PORT)
+    extra_config: dict[str, Any] = {}
+    if s3_address and s3_port:
+        s3_url = f"http://{s3_address}:{s3_port}"
+        extra_config["object_storage_endpoints"] = MinioServer.create_conf(
+            s3_url, MinioServer.DEFAULT_REGION
+        )
+        logger.info("Object storage endpoint configured: %s", s3_url)
+
+    # Create working directory.
+    tempdir = tempfile.mkdtemp(suffix="-scylla-cluster", dir=args.workdir)
+
+    host_registry = HostRegistry()
+    version = get_current_version_description(scylla_exe)
+
+    def create_server(create_cfg: ScyllaCluster.CreateServerParams) -> ScyllaServer:
+        return ScyllaServer(
+            mode=args.mode,
+            version=(create_cfg.version or version),
+            vardir=tempdir,
+            logger=create_cfg.logger,
+            cluster_name=create_cfg.cluster_name,
+            ip_addr=create_cfg.ip_addr,
+            seeds=create_cfg.seeds,
+            cmdline_options=create_cfg.cmdline_from_test,
+            config_options=extra_config | create_cfg.config_from_test,
+            property_file=create_cfg.property_file,
+            append_env={},
+            server_encryption=create_cfg.server_encryption,
+        )
+
+    cluster = ScyllaCluster(logger, host_registry, 0, create_server)
+    # Set is_running=True before add_servers so that stop() works even if
+    # startup fails partway through.
+    cluster.is_running = True
+
+    try:
+        print(f"Starting {node_count}-node cluster  [{scylla_exe}] ...")
+        await cluster.add_servers(node_count, property_file=property_files)
+    except Exception as exc:
+        print(f"Error: failed to start cluster: {exc}", file=sys.stderr)
+        await cluster.stop()
+        if not args.keep:
+            shutil.rmtree(tempdir, ignore_errors=True)
+        sys.exit(1)
+
+    try:
+        servers = cluster.running_servers()
+        sep = "─" * 52
+        print(f"\n{sep}")
+        print(f"  Cluster running  ({len(servers)} node(s))")
+        print(sep)
+        for s in servers:
+            print(f"  {s.ip_addr:<18}  {s.datacenter}/{s.rack}")
+        first_ip = servers[0].ip_addr
+        print(f"\n  cqlsh {first_ip}")
+        print(f"  nodetool -h {first_ip} status")
+        print(f"  curl http://{first_ip}:10000/storage_service/hostid/local")
+        if s3_address and s3_port:
+            print(f"\n  Object storage : {s3_url}")
+        print(f"\n  Working dir    : {tempdir}")
+        print(f"{sep}\n")
+
+        try:
+            input("Press Enter to stop the cluster: ")
+        except KeyboardInterrupt:
+            print()
+    finally:
+        print("Stopping cluster...")
+        if args.keep:
+            await cluster.stop()
+            print(f"Data preserved in: {tempdir}")
+        else:
+            await cluster.uninstall()
+            shutil.rmtree(tempdir, ignore_errors=True)
+        print("Done.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
