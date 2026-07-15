@@ -807,6 +807,56 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_basic_flushes_records) {
     }
 }
 
+// Checks that flush() seals and writes a partially filled head buffer even when the sync timer has not expired.
+SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flushes_partial_buffer_with_large_sync_period) {
+    auto schema = make_kv_schema();
+    constexpr size_t buffer_size = 4 * 1024;
+    constexpr auto sync_period = std::chrono::hours(1);
+
+    test_flush_controller flush_ctl;
+    buffered_writer writer(make_buffered_writer_config(buffer_size, 3, 0, sync_period), [&flush_ctl] (write_buffer& wb) {
+        return flush_ctl(wb);
+    });
+
+    writer.start().get();
+    auto stop = defer([&writer] {
+        writer.stop().get();
+    });
+
+    std::vector<log_record> expected;
+    std::vector<future<log_location_with_holder>> persisted;
+    for (size_t i = 0; i < 3; ++i) {
+        auto record = make_buffered_writer_record(schema, i, sstring(fmt::format("value{}", i)), api::timestamp_type(150 + i));
+        expected.push_back(record);
+        auto accepted = writer.write_to_buffer(log_record_writer(record), test_timeout()).get();
+        persisted.push_back(std::move(accepted.persisted));
+    }
+
+    BOOST_REQUIRE(flush_ctl.flushed_buffers.empty());
+
+    auto flush = writer.flush();
+    flush_ctl.wait_for_flush_starts(1);
+
+    std::vector<log_location> locations;
+    for (auto& fut : persisted) {
+        locations.push_back(wait_for_persisted(fut));
+    }
+
+    flush.get();
+
+    BOOST_REQUIRE_EQUAL(flush_ctl.flushed_buffers.size(), 1u);
+    BOOST_REQUIRE_EQUAL(flush_ctl.flushed_buffers.front().record_count, expected.size());
+
+    const auto actual = flush_ctl.all_records();
+    assert_records_in_order(schema, actual, expected);
+
+    BOOST_REQUIRE_EQUAL(locations.size(), expected.size());
+    for (size_t i = 0; i < locations.size(); ++i) {
+        auto read_back = read_record_at_location(flush_ctl.buffer_for_segment(locations[i].segment), locations[i]);
+        assert_log_record_matches(schema, read_back, expected[i]);
+    }
+}
+
 // Checks that a paused tail flush can fill the ring, queue later writes, and then drain them without losing order.
 SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_paused_flush_fills_ring_then_drains) {
     auto schema = make_kv_schema();

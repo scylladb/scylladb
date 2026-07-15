@@ -355,6 +355,10 @@ void buffered_writer::cancel_head_flush_timer() noexcept {
     _head_deadline_expired = false;
 }
 
+void buffered_writer::on_queued_writes_changed() noexcept {
+    _queued_writes_changed.broadcast();
+}
+
 void buffered_writer::on_queued_write_removed(const queued_write& w) noexcept {
     _queued_write_bytes -= w.write_size;
 }
@@ -438,6 +442,7 @@ future<bool> buffered_writer::reclaim_completed_tails() {
         state.reset();
         ++_tail;
         reclaimed = true;
+        _tail_advanced.broadcast();
 
         co_await coroutine::maybe_yield();
     }
@@ -466,6 +471,10 @@ future<bool> buffered_writer::drain_queued_writes() {
             fail_queued_write(request, std::current_exception());
         }
         co_await coroutine::maybe_yield();
+    }
+
+    if (removed_queued_writes) {
+        on_queued_writes_changed();
     }
 
     co_return removed_queued_writes;
@@ -506,6 +515,54 @@ future<> buffered_writer::stop() {
     logstor_logger.info("Write buffer stopped");
 }
 
+future<> buffered_writer::flush() {
+    auto holder = _async_gate.hold();
+
+    // Snapshot the queue insertion boundary. New writes pushed after this point
+    // get higher ids and are not our responsibility.
+    const uint64_t target_next_id = _next_queued_write_id;
+
+    auto preflush_queued_writes_gone = [this, target_next_id] {
+        return _queued_writes.empty() || _queued_writes.front().id >= target_next_id;
+    };
+
+    // Drain or let expire all writes that were queued when flush() was called.
+    while (!preflush_queued_writes_gone()) {
+        co_await drain_queued_writes();
+        co_await _queued_writes_changed.wait(preflush_queued_writes_gone);
+    }
+
+    // If the current head buffer is non-empty, flush() must first move _head
+    // past it so the consumer can dispatch that buffer. The head slot itself
+    // is always the buffer that writers are still appending to, so as long as
+    // _head stays unchanged that buffer is not yet eligible for dispatch.
+    //
+    // There are two cases:
+    // 1. The head buffer is empty. There is nothing new to seal, so flush()
+    //    only needs to wait for buffers that were already dispatched or are
+    //    already behind _head.
+    // 2. The head buffer is non-empty. flush() must rotate _head to the next
+    //    ring slot. After that rotation, the old head becomes dispatchable and
+    //    the new _head value is the tail boundary that proves the old head was
+    //    fully flushed and reclaimed.
+    auto head_before_forced_rotation = _head;
+    while (_head == head_before_forced_rotation && head_buf().has_data()) {
+        if (maybe_advance_head()) {
+            break;
+        }
+        // Ring is full; wait for tail flush to free a slot.
+        co_await _tail_advanced.wait();
+    }
+
+    // Wait until all buffers that flush() is responsible for are flushed and
+    // reclaimed. If the head was empty, this is just the current _head. If the
+    // head had data, this is the new post-rotation _head, which means the old
+    // head buffer is now behind the tail.
+    co_await _tail_advanced.when([this, flush_tail_goal = _head] {
+        return _tail >= flush_tail_goal;
+    });
+}
+
 future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer writer, db::timeout_clock::time_point timeout, compaction_group* cg, seastar::gate::holder cg_holder) {
     auto holder = _async_gate.hold();
 
@@ -529,7 +586,7 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
 
     const bool queue_was_empty = _queued_writes.empty();
     const auto write_size = writer.size();
-    queued_write request(std::move(writer), cg, std::move(cg_holder), timeout, write_size);
+    queued_write request(std::move(writer), cg, std::move(cg_holder), timeout, _next_queued_write_id++, write_size);
     auto accepted = request.accepted_pr.get_future();
     _queued_write_bytes += write_size;
     _queued_writes.push_back(std::move(request), timeout);
@@ -577,6 +634,7 @@ future<> buffered_writer::consumer_loop() {
             auto request = std::move(_queued_writes.front());
             _queued_writes.pop_front();
             on_queued_write_removed(request);
+            on_queued_writes_changed();
             fail_queued_write(request, std::make_exception_ptr(seastar::gate_closed_exception()));
             co_await coroutine::maybe_yield();
         }

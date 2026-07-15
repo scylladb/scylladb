@@ -348,13 +348,15 @@ class buffered_writer {
         compaction_group* cg;
         seastar::gate::holder cg_holder;
         db::timeout_clock::time_point timeout;
+        uint64_t id;
         size_t write_size;
 
-        queued_write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout, size_t write_size)
+        queued_write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout, uint64_t id, size_t write_size)
             : writer(std::move(writer))
             , cg(cg)
             , cg_holder(std::move(cg_holder))
             , timeout(timeout)
+            , id(id)
             , write_size(write_size) {
         }
 
@@ -371,6 +373,7 @@ class buffered_writer {
         void operator()(queued_write& w) noexcept {
             owner->on_queued_write_removed(w);
             w.fail_timeout();
+            owner->on_queued_writes_changed();
         }
     };
 
@@ -379,12 +382,23 @@ class buffered_writer {
     // advances, a flush completes, a tail is reclaimed, or shutdown begins.
     seastar::condition_variable _consumer_progress_cv;
 
+    // Notified when queued writes are removed or expired, so flush() can wait
+    // for the pre-flush queue boundary to advance.
+    seastar::condition_variable _queued_writes_changed;
+
+    // Notified when the tail is advanced by the consumer.
+    seastar::condition_variable _tail_advanced;
+
     seastar::expiring_fifo<queued_write, on_queued_write_expiry, db::timeout_clock> _queued_writes;
     size_t _queued_write_bytes{0};
     size_t _max_queued_write_bytes{0};
 
     seastar::timer<db::timeout_clock> _head_flush_timer;
     bool _head_deadline_expired = false;
+
+    // Monotonically increasing id assigned to queued writes. flush() snapshots
+    // this counter and waits until all queued writes with lower ids are gone.
+    uint64_t _next_queued_write_id = 0;
 
     seastar::gate _async_gate;
 
@@ -415,6 +429,7 @@ class buffered_writer {
 
     void on_queued_write_removed(const queued_write&) noexcept;
     void fail_queued_write(queued_write&, std::exception_ptr) noexcept;
+    void on_queued_writes_changed() noexcept;
 
     void arm_head_flush_timer();
     void on_head_flush_timer() noexcept;
@@ -431,6 +446,7 @@ public:
 
     future<> start();
     future<> stop();
+    future<> flush();
 
     future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
     future<log_location_with_holder> write(log_record_writer, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
