@@ -502,7 +502,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 3);
 
     // range erase pk1: removes pk1 entry (loc4), frees via accounting  →  {pk0: loc3, pk2: loc5}
-    index.erase(dht::partition_range::make_singular(pk1.dk)).get();
+    dht::token_range pk1_range(
+            std::optional(interval_bound(pk1.token(), true)),
+            std::optional(interval_bound(pk1.token(), true)));
+    index.erase(pk1_range).get();
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size + loc5.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 4u);
@@ -578,9 +581,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
     BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[1].loc.size + entries[2].loc.size + entries[3].loc.size + entries[4].loc.size));
 
-    index.erase(dht::partition_range(
-            dht::partition_range::bound(entries[1].key.dk, true),
-            dht::partition_range::bound(entries[3].key.dk, true))).get();
+    dht::token_range range(
+            std::optional(interval_bound(entries[1].key.token(), true)),
+            std::optional(interval_bound(entries[3].key.token(), true)));
+    index.erase(range).get();
 
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
