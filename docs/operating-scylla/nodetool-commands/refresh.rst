@@ -1,91 +1,77 @@
 Nodetool refresh
 ================
 
-**refresh** - Load newly placed SSTables to the system without a restart.
+**refresh** - Load newly placed SSTables to the system without a restart. This is the only supported way to upload SSTables directly to a node, placing them directly in the node's data directory is not supported and will lead to failures.
 
-Add the files to the upload directory, by default it is located under ``/var/lib/scylla/data/keyspace_name/table_name-UUID/upload``
+Copy the files to the table's upload directory, by default it is located under ``/var/lib/scylla/data/keyspace_name/table_name-UUID/upload``.
 
-:doc:`Materialized Views (MV)</cql/mv/>` and :doc:`Secondary Indexes (SI)</cql/secondary-indexes/>` of the upload table, and if they exist, they are automatically updated. Uploading MV or SI SSTables is not required and will fail.
+If the table has any :doc:`Materialized Views (MV)</cql/mv/>` or :doc:`Secondary Indexes (SI)</cql/secondary-indexes/>`, content view updates will be generated from the uploaded sstables. Uploading MV or SI SSTables is not required and will fail.
 
+.. _nodetool-refresh-local:
 
-.. note:: ScyllaDB node will ignore the partitions in the sstables which are not assigned to this node. For example, if sstable are copied from a different node.
+Local refresh
+-------------
 
+SSTables are copied from the upload directory to the table's data directory and added to the table's SSTable registry.
 
-Execute the ``nodetool refresh`` command 
+After the upload, ScyllaDB will run cleanup on the uploaded SSTables, to remove any partition which is not owned by the target node.
+Use ``--skip-cleanup`` to skip this step. Note that this can lead to increased disk utilization, use only if you are certain the SSTables contain only data owned by the target node.
 
-``nodetool refresh <my_keyspace> <my_table>``
+The uploaded SSTables may disrupt the SSTable layout maintained by the table's compaction strategy. To remedy this, ScyllaDB runs an off-strategy compaction after the upload.
+Use ``--skip-reshape`` to skip this step. Note that this can lead to increased read amplification and increased latencies due to reads having to consult more SSTables than optimal.
 
-For example:
+Although this is the default mode for ``nodetool refresh``, using this mode to restore backed up SSTables is not efficient, for restoring backup use :ref:`--load-and-stream <nodetool-refresh-load-and-stream>` instead.
+Use local upload if you are certain that uploaded SSTables contain data only for the target node.
 
-``/var/lib/scylla/data/nba/player_stats-91cd2060f99d11e6a47/upload``
+This mode is not supported for tablets.
 
-``nodetool refresh nba player_stats``
+Syntax:
+
+.. code::
+
+    nodetool refresh <my_keyspace> <my_table> [--skip-cleanup] [--skip-reshape]
+
+Example:
+
+.. code::
+
+    cp /path/to/my/sstables/* /var/lib/scylla/data/nba/player_stats-91cd2060f99d11e6a47/upload``
+
+    nodetool refresh nba player_stats
 
 .. _nodetool-refresh-load-and-stream:
 
-
 Load and Stream
 ---------------
+
+SSTables are read and each partition is streamed to its respective replica(s). Allows efficient upload of SSTables to a cluster.
+Each SSTable has to be uploaded only once, as ``--load-and-stream`` will ensure that all partitions reach their respective replicas.
+The ``--scope`` and ``--primary-replica-only`` options can be used to filter the set of target replicas for each partition.
+
+Syntax:
 
 .. code::
 
    nodetool refresh <my_keyspace> <my_table> [(--load-and-stream | -las) [[(--primary-replica-only | -pro)] | [--scope <scope>]]]
 
-The Load and Stream feature extends nodetool refresh. 
+Filter target replicas
+^^^^^^^^^^^^^^^^^^^^^^
 
-The ``--load-and-stream`` option loads arbitrary sstables into the cluster by reading the sstable data and streaming each partition to the replica(s) that owns it. In addition, the ``--scope`` and ``--primary-replica-only`` options are applied to filter the set of target replicas for each partition.  For example, say the old cluster has 6 nodes and the new cluster has 3 nodes. One can copy the sstables from the old cluster to any of the new nodes and trigger refresh with load and stream.
+By default, each partition is streamed to all nodes which are replicas for the partition.
+This can be inefficient in a large cluster, especially if there are multiple Datacenters.
+Constraining the subset of replicas where data will be streamed to allows orchestrating concurrent upload to multiple nodes without duplicate work -- the same partition being streamed to a replica from multiple source nodes.
 
+There are two options available to manipulate the replica(s) to stream data to: ``--primary-replica-only`` and ``--scope``.
+The two are mutually exclusive.
 
+The ``--primary-replica-only`` (or ``-pro``) option makes ScyllaDB only stream each partition to its primary replica.
+After all SSTables are uploaded to the cluster, a repair is required to replicate data to all replicas.
 
+The ``--scope`` parameter allows for more advanced constraining of the subset of nodes where data will be streamed:
 
-
-Load and Stream make restores and migrations much easier:
-
-* You can place sstable from every node to every node
-* No need to run nodetool cleanup to remove unused data
-
-With ``--primary-replica-only`` (or ``-pro``) option, only the primary replica of each partition in an sstable will be used as the target. 
-``--primary-replica-only`` must be applied together with ``--load-and-stream``.
-``--primary-replica-only`` cannot be used with ``--scope``, they are mutually exclusive.
-``--primary-replica-only`` requires repair to be run after the load and stream operation is completed. 
-
-
-Scope
------
-
-The `scope` parameter describes the subset of cluster nodes where you want to load data:
-
-* `node` - On the local node.
-* `rack` - On the local rack.
-* `dc` - In the datacenter (DC) where the local node lives.
-* `all` (default) - Everywhere across the cluster.
-
-Scope supports a variety of options for filtering out the destination nodes.
-On one extreme, one node is given all SStables with the scope ``all``; on the other extreme, all
-nodes are loading only their own SStables with the scope ``node``. In between, you can choose
-a subset of nodes to load only SStables that belong to the rack or DC.
-
-This option is only valid when using the ``--load-and-stream`` option.
-
-
-Skip cleanup
----------------
-
-.. code::
-
-   nodetool refresh <my_keyspace> <my_table> [--skip-cleanup]
-
-When loading an SSTable, Scylla will cleanup it from keys that the node is not responsible for. To skip this step, use the ``--skip-cleanup`` option.
-See :ref:`nodetool cleanup <nodetool-cleanup-cmd>`.
-
-
-Skip reshape
----------------
-
-.. code::
-
-   nodetool refresh <my_keyspace> <my_table> [--skip-reshape]
-
-When refreshing, the SSTables to load might be out of shape, Scylla will attempt to reshape them if that's the case. To skip this step, use the ``--skip-reshape`` option.
+* ``node`` - the local node (roughly equivalent to :ref:`local refresh <nodetool-refresh-local>`)
+* ``rack`` - replicas in the local rack
+* ``dc`` - replicas in the local datacenter (DC)
+* ``all`` (default) - all replicas in the cluster
 
 .. include:: nodetool-index.rst
