@@ -35,7 +35,7 @@ from botocore.exceptions import ClientError
 
 from test.pylib.skip_types import skip_env
 
-from .util import new_test_table, scylla_config_temporary
+from .util import new_test_table, scylla_config_temporary, random_string, full_query
 from .test_cql_rbac import new_dynamodb, new_role
 
 # Utility function for trying to find a local process which is listening to
@@ -158,7 +158,7 @@ def wait_for_log(logfile, pattern, re_flags=re.MULTILINE, timeout=5):
     contents = logfile.read()
     prog = re.compile(pattern, re_flags)
     if prog.search(contents):
-        return
+        return contents
     end = time.time() + timeout
     while time.time() < end:
         s = logfile.read()
@@ -168,7 +168,7 @@ def wait_for_log(logfile, pattern, re_flags=re.MULTILINE, timeout=5):
             # the entire content since the beginning of this wait :-(
             contents = contents + s
             if prog.search(contents):
-                return
+                return contents
         time.sleep(0.1)
     pytest.fail(f'Timed out ({timeout} seconds) looking for {pattern} in log file. Got:\n' + contents)
 
@@ -273,3 +273,36 @@ def test_log_authorization_failure(dynamodb, cql, logfile, test_table_s, enforce
                 else:
                     assert operation_succeeded
                 wait_for_log(logfile, f'^WARN .*SELECT access on table.*{test_table_s.name} is denied to role {role}.*client address')
+
+
+# A variant of test_batch.py::test_batch_write_item_large that uses the
+# always_use_lwt write isolation mode, so the large batch is guaranteed
+# to be written using LWT. This reproduced issue #8183: a large LWT write
+# from BatchWriteItem could cause an oversized contiguous allocation inside
+# paxos_response_handler::accept_proposal. Before the fix for #8183, this
+# test would elicit an "oversized allocation" error in Scylla's log, which
+# this test detects.
+def test_batch_write_item_large_lwt_allocation(dynamodb, logfile):
+    with new_test_table(dynamodb,
+            Tags=[{'Key': 'system:write_isolation', 'Value': 'always_use_lwt'}],
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'N' } ]) as table:
+        long_content = 'x'*50000
+        p = random_string()
+        request_items = {
+            table.name: [{'PutRequest': {'Item': {'p': p, 'c': i, 'content': long_content}}} for i in range(25)]
+        }
+        write_reply = table.meta.client.batch_write_item(RequestItems=request_items)
+        # In Alternator (all tests in this file are scylla_only) so the
+        # entire batch write is accepted - there are no WCU limits.
+        assert write_reply['UnprocessedItems'] == {}
+        # Sanity check - check that the write was successfully done by
+        # reading the items back.
+        assert full_query(table, KeyConditionExpression='p=:p', ExpressionAttributeValues={':p': p}
+            ) == [{'p': p, 'c': i, 'content': long_content} for i in range(25)]
+    # Wait for the log message about the table being dropped. Any log
+    # messages related to the earlier batch write will have to have been
+    # flushed earlier and we'll be able to see them.
+    contents = wait_for_log(logfile, f'Dropping keyspace alternator_{table.name}')
+    # Check that no "oversized allocation" error was logged.
+    assert 'oversized allocation' not in contents

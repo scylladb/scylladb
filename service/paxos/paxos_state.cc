@@ -31,6 +31,11 @@
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
 
+#include "bytes_ostream.hh"
+#include "mutation/mutation.hh"
+#include "mutation/atomic_cell.hh"
+#include "mutation/timestamp.hh"
+
 namespace service::paxos {
 
 logging::logger paxos_state::logger("paxos");
@@ -650,20 +655,51 @@ future<> paxos_store::save_paxos_promise(const schema& s, const partition_key& k
 
 future<> paxos_store::save_paxos_proposal(const schema& s, const proposal& proposal, db::timeout_clock::time_point timeout) {
     const auto state_schema = co_await get_paxos_state_schema(s, timeout);
+
+    // The following code is equivalent to the CQL statement:
+    // UPDATE state_schema USING TIMESTAMP ? AND TTL ? SET promise = ?,
+    //    proposal_ballot = ?, proposal = ? WHERE row_key = ?
+    // But "proposal" can be large and CQL requires a contiguous bytes
+    // buffer for blob parameters (this was issue #8183). So we build the
+    // mutation directly using bytes_ostream for proposal's serialization.
     partition_key_view key = proposal.update.key();
-    co_await execute_cql_with_timeout(
-            format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET promise = ?, proposal_ballot = ?, proposal = ? WHERE row_key = ?{}", 
-                state_schema->ks_name(), state_schema->cf_name(), 
-                paxos_state_cf_filter(s, *state_schema)
-            ),
-            timeout,
-            utils::UUID_gen::micros_timestamp(proposal.ballot),
-            paxos_ttl_sec(s),
-            proposal.ballot,
-            proposal.ballot,
-            ser::serialize_to_buffer<bytes>(proposal.update),
-            to_legacy(*key.get_compound_type(s), key.representation())
-        );
+    mutation m{state_schema, partition_key::from_single_value(
+        *state_schema,
+        to_legacy(*key.get_compound_type(s), key.representation()))};
+
+    // Clustering key: cf_id for system.paxos (vnodes), empty for per-table
+    // paxos (tablets).
+    const clustering_key ck = state_schema->cf_name() == db::system_keyspace::PAXOS
+        ? clustering_key::from_single_value(*state_schema, uuid_type->decompose(data_value(s.id().uuid())))
+        : clustering_key::make_empty();
+
+    const api::timestamp_type ts = utils::UUID_gen::micros_timestamp(proposal.ballot);
+    const gc_clock::duration ttl_dur{paxos_ttl_sec(s)};
+    const gc_clock::time_point expiry = gc_clock::now() + ttl_dur;
+
+    // Write proposal.ballot to both "promise" and "proposal_ballot" columns.
+    const auto ballot_bytes = timeuuid_type->decompose(data_value(timeuuid_native_type{proposal.ballot}));
+    const column_definition& promise_cdef = *state_schema->get_column_definition("promise");
+    const column_definition& proposal_ballot_cdef = *state_schema->get_column_definition("proposal_ballot");
+    m.set_clustered_cell(ck, promise_cdef,
+        atomic_cell::make_live(*promise_cdef.type, ts, bytes_view(ballot_bytes), expiry, ttl_dur));
+    m.set_clustered_cell(ck, proposal_ballot_cdef,
+        atomic_cell::make_live(*proposal_ballot_cdef.type, ts, bytes_view(ballot_bytes), expiry, ttl_dur));
+
+    // Write the serialized proposal.update to the "proposal" column,
+    // without a contiguous allocation for the entire serialized blob.
+    const column_definition& proposal_cdef = *state_schema->get_column_definition("proposal");
+    bytes_ostream serialized_proposal;
+    ser::serialize(serialized_proposal, proposal.update);
+    auto it = serialized_proposal.begin();
+    const bytes_view first_frag = it != serialized_proposal.end() ? *it++ : bytes_view{};
+    const ser::buffer_view<bytes_ostream::fragment_iterator> proposal_bv{
+        first_frag, serialized_proposal.size(), it};
+    m.set_clustered_cell(ck, proposal_cdef,
+        atomic_cell::make_live(*proposal_cdef.type, ts, proposal_bv, expiry, ttl_dur));
+
+    co_await _sys_ks.query_processor().proxy().mutate_locally(
+        m, nullptr, db::commitlog::force_sync(state_schema->static_props().wait_for_sync_to_commitlog), timeout);
 }
 
 future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decision, db::timeout_clock::time_point timeout) {
@@ -676,19 +712,44 @@ future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decis
     // sp::begin_and_repair_paxos will exclude an accepted proposal if it is older than the most
     // recent commit.
     partition_key_view key = decision.update.key();
-    co_await execute_cql_with_timeout(
-            format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null, "
-                   "most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ?{}",
-                state_schema->ks_name(), state_schema->cf_name(), 
-                paxos_state_cf_filter(s, *state_schema)
-            ),
-            timeout,
-            utils::UUID_gen::micros_timestamp(decision.ballot),
-            paxos_ttl_sec(s),
-            decision.ballot,
-            ser::serialize_to_buffer<bytes>(decision.update),
-            to_legacy(*key.get_compound_type(s), key.representation())
-        );
+
+    const auto row_key = to_legacy(*key.get_compound_type(s), key.representation());
+    mutation m{state_schema, partition_key::from_single_value(*state_schema, row_key)};
+
+    const clustering_key ck = state_schema->cf_name() == db::system_keyspace::PAXOS
+        ? clustering_key::from_single_value(*state_schema, uuid_type->decompose(data_value(s.id().uuid())))
+        : clustering_key::make_empty();
+
+    const api::timestamp_type ts = utils::UUID_gen::micros_timestamp(decision.ballot);
+    const gc_clock::duration ttl_dur{paxos_ttl_sec(s)};
+    const gc_clock::time_point expiry = gc_clock::now() + ttl_dur;
+    const gc_clock::time_point now = gc_clock::now();
+
+    const column_definition& proposal_ballot_cdef = *state_schema->get_column_definition("proposal_ballot");
+    const column_definition& proposal_cdef = *state_schema->get_column_definition("proposal");
+    const column_definition& most_recent_commit_at_cdef = *state_schema->get_column_definition("most_recent_commit_at");
+    const column_definition& most_recent_commit_cdef = *state_schema->get_column_definition("most_recent_commit");
+
+    // SET proposal_ballot = null, proposal = null: create tombstones.
+    m.set_clustered_cell(ck, proposal_ballot_cdef, atomic_cell::make_dead(ts, now));
+    m.set_clustered_cell(ck, proposal_cdef, atomic_cell::make_dead(ts, now));
+
+    const auto ballot_bytes = timeuuid_type->decompose(data_value(timeuuid_native_type{decision.ballot}));
+    m.set_clustered_cell(ck, most_recent_commit_at_cdef,
+        atomic_cell::make_live(*most_recent_commit_at_cdef.type, ts, bytes_view(ballot_bytes), expiry, ttl_dur));
+
+    // Pass the serialized_decision as a fragmented buffer_view to avoid a large contiguous allocation.
+    bytes_ostream serialized_decision;
+    ser::serialize(serialized_decision, decision.update);
+    auto it = serialized_decision.begin();
+    const bytes_view first_frag = it != serialized_decision.end() ? *it++ : bytes_view{};
+    const ser::buffer_view<bytes_ostream::fragment_iterator> decision_bv{
+        first_frag, serialized_decision.size(), it};
+    m.set_clustered_cell(ck, most_recent_commit_cdef,
+        atomic_cell::make_live(*most_recent_commit_cdef.type, ts, decision_bv, expiry, ttl_dur));
+
+    co_await _sys_ks.query_processor().proxy().mutate_locally(
+        m, nullptr, db::commitlog::force_sync(state_schema->static_props().wait_for_sync_to_commitlog), timeout);
 }
 
 future<> paxos_store::delete_paxos_decision(const schema& s, const partition_key& key, utils::UUID ballot, db::timeout_clock::time_point timeout) {
