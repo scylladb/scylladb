@@ -6759,7 +6759,7 @@ void storage_service::init_messaging_service() {
     });
     ser::streaming_rpc_verbs::register_clone_sstable(&_messaging.local(),
             [this] (const rpc::client_info& cinfo, streaming::clone_sstable_request req) -> future<streaming::stream_files_response> {
-        co_return co_await streaming::clone_sstable_handler(_db.local(), _view_building_worker.local(), req);
+        co_return co_await streaming::clone_sstable_handler(_db.local(), _view_building_worker.local(), _feature_service, req);
     });
     ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [this] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
         return handle_raft_rpc(dst_id, [cmd = std::move(cmd), term, cmd_index] (auto& ss) {

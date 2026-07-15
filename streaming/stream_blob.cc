@@ -24,6 +24,7 @@
 #include "sstables/types.hh"
 #include "idl/streaming.dist.hh"
 #include "service/topology_guard.hh"
+#include "gms/feature_service.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
@@ -805,8 +806,9 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
 
             if (sst->get_storage().is_object_storage()) {
                 // Clone path for object-storage SSTables: send CLONE_SSTABLE RPC
-                // to each target.  The destination performs server-side S3/GCS
-                // CopyObject and loads the clone.
+                // to each target.  The destination may add a reference to the sstable
+                // when the SSTABLE_REFERENCE_SHARING feature is enabled, or
+                // perform server-side S3/GCS CopyObject, and finally it loads the clone.
                 //
                 // Rolling-upgrade safety: object-storage keyspaces can only be
                 // created when the KEYSPACE_STORAGE_OPTIONS cluster feature is
@@ -825,6 +827,10 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                     clone_req.sstable_meta.state = sst_state;
                     clone_req.dst_shard_id = target.shard;
                     clone_req.topo_guard = req.topo_guard;
+
+                    // FIXME: to pin the sstable while being cloned, create a temporary reference on behalf
+                    // of the target node that would be removed by it once it creates its own reference,
+                    // or be removed by this node on rpc failure.
 
                     co_await ser::streaming_rpc_verbs::send_clone_sstable(&ms, target.node, clone_req);
                 }
@@ -884,7 +890,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     co_return resp;
 }
 
-future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, streaming::clone_sstable_request req) {
+future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, const gms::feature_service& features, streaming::clone_sstable_request req) {
     stream_files_response resp;
 
     // Reuse the "stream_mutation_fragments" injection point so all existing
@@ -914,27 +920,25 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
     auto generation = sstables::generation_type(meta.generation);
     auto version = static_cast<sstables::sstable_version_types>(meta.version);
     auto format = static_cast<sstables::sstable_format_types>(meta.format);
-    // The descriptor carries the ORIGINAL generation from the source node.
-    // Server-side copy the S3/GCS objects to a fresh generation owned
-    // by this (destination) node.  The source holds shared_sstable
-    // refs that keep the original objects alive until we confirm.
-    //
-    // We only need the component list (from the TOC) so that clone()
-    // knows which S3 objects to copy.  load_metadata() is the lightest
-    // public API that populates it — a full load() would also validate
-    // metadata, compute shards, and open data files, all of which we
-    // throw away immediately after cloning.
     replica::table& t = db.find_column_family(req.table);
     auto& sstm = t.get_sstables_manager();
     auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, meta.id, state, version, format);
-    co_await orig_sst->load_metadata();
+    bool use_reference_sharing = features.sstable_reference_sharing;
+    if (!use_reference_sharing) {
+        // The copy path only needs the component list (from the TOC) so that
+        // clone() knows which objects to copy.  load_metadata() is lighter than
+        // load(), which also validates metadata, computes shards, and opens data files.
+        co_await orig_sst->load_metadata();
+    }
     auto new_gen = t.get_sstable_generation_generator()();
-    // clone() server-side copies the S3/GCS objects to a fresh generation and
-    // creates the registry entry in "creating" state (leave_unsealed=true).
+    // With reference sharing, clone() creates a registry entry and a reference
+    // to the source sstable_id instead of copying component objects.
+    // clone() creates the registry entry in "creating" state (leave_unsealed=true).
     // The entry is transitioned to "sealed" later by load_sstable_for_tablet()
     // → add_new_sstable_and_update_cache() → on_add callback → seal_sstable().
-    auto desc = co_await orig_sst->clone(new_gen, /*leave_unsealed=*/true);
-    blogger.debug("stream_sstables[{}] Cloned {} -> {} on destination", req.ops_id, desc.generation, new_gen);
+    auto desc = co_await orig_sst->clone(new_gen, /*leave_unsealed=*/true, /*may_use_reference_sharing=*/use_reference_sharing);
+    blogger.debug("stream_sstables[{}] Cloned {} -> {} on destination using {}", req.ops_id, generation, new_gen,
+        use_reference_sharing ? "reference sharing" : "server-side copy");
     co_await load_sstable_for_tablet(req.ops_id, db, vbw, req.table, state, std::move(desc), req.dst_shard_id);
     co_return resp;
 }

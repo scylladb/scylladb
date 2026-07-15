@@ -197,7 +197,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
 
 // The handler for the CLONE_SSTABLE verb. The destination node performs a
 // server-side S3/GCS CopyObject for a single SSTable and loads the clone.
-future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, streaming::clone_sstable_request req);
+future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, const gms::feature_service& features, streaming::clone_sstable_request req);
 
 // Ask the src node to stream sstables to dst node for table in the given token range using TABLET_STREAM_FILES verb.
 future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id, replica::table& table, const dht::token_range& range, const locator::host_id& src, const locator::host_id& dst, seastar::shard_id dst_shard_id, netw::messaging_service& ms, abort_source& as, service::frozen_topology_guard topo_guard);
