@@ -358,6 +358,10 @@ private:
                 : self._partitions.end();
     }
 
+    const_iterator upper_bound(dht::token token) const {
+        return _partitions.upper_bound(token.raw(), primary_index_key_cmp{*_schema});
+    }
+
 public:
     explicit primary_index(schema_ptr schema, space_accounting_subscriber& space_accounting, cache_tracker* ct)
         : _partitions(dht::raw_token_less_comparator{})
@@ -419,6 +423,16 @@ public:
         return result;
     }
 
+    // Returns the cached mutation for an entry the caller already holds from scan(), or nullopt
+    // when the entry holds nothing or the cache is not set up. Counts a hit or a miss and touches
+    // the LRU, like the read path does. The entry must belong to this index.
+    std::optional<mutation> lookup_cached(const primary_index_entry& e, schema_ptr target_schema) const {
+        if (!_cache_tracker) {
+            return std::nullopt;
+        }
+        return _cache_tracker->lookup(e, std::move(target_schema));
+    }
+
     std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, schema_ptr target_schema, bool cache_enabled) const {
         auto it = find_key(key);
         if (it == _partitions.end()) {
@@ -426,8 +440,8 @@ public:
         }
 
         read_lookup_result result{.entry = it->entry()};
-        if (cache_enabled && _cache_tracker) {
-            result.cached_mutation = _cache_tracker->lookup(*it, std::move(target_schema));
+        if (cache_enabled) {
+            result.cached_mutation = lookup_cached(*it, std::move(target_schema));
         }
         return result;
     }
@@ -532,31 +546,9 @@ public:
         }
     }
 
-    auto begin() const noexcept { return _partitions.begin(); }
-    auto end() const noexcept { return _partitions.end(); }
-
     bool empty() const noexcept { return _partitions.empty(); }
     size_t get_key_count() const noexcept { return _key_count; }
     size_t get_memory_usage() const noexcept { return _memory_usage; }
-
-public:
-    // First entry with key >= pos (for positioning at range start)
-    partitions_type::const_iterator lower_bound(const dht::ring_position_view& pos) const {
-        return _partitions.lower_bound(pos, primary_index_key_cmp(*_schema));
-    }
-
-    partitions_type::const_iterator lower_bound(dht::token token) const {
-        return _partitions.lower_bound(token.raw(), primary_index_key_cmp(*_schema));
-    }
-
-    // First entry with key strictly > key (for advancing past a key after a yield)
-    partitions_type::const_iterator upper_bound(const primary_index_key& key) const {
-        return _partitions.upper_bound(key, primary_index_key_cmp(*_schema));
-    }
-
-    partitions_type::const_iterator upper_bound(dht::token token) const {
-        return _partitions.upper_bound(token.raw(), primary_index_key_cmp(*_schema));
-    }
 
 };
 

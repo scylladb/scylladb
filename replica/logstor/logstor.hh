@@ -14,6 +14,7 @@
 #include <seastar/core/scheduling.hh>
 #include "db/cache_tracker.hh"
 #include "readers/mutation_reader.hh"
+#include "readers/mutation_reader_fwd.hh"
 #include "replica/logstor/compaction.hh"
 #include "readers/mutation_source.hh"
 #include "types.hh"
@@ -88,13 +89,15 @@ public:
     // since the cache entry may be evicted before the source is read from.
     std::map<sstring, mutation_source> make_mutation_sources_for_dump(schema_ptr, const primary_index&, const dht::decorated_key&, reader_permit);
 
-    /// Create a mutation reader for a specific key
+    // Create a mutation reader for a partition range.
     mutation_reader make_reader(schema_ptr schema,
                                        const primary_index& index,
                                        reader_permit permit,
                                        const dht::partition_range& pr,
                                        const query::partition_slice& slice,
-                                       tracing::trace_state_ptr trace_state = nullptr);
+                                       tracing::trace_state_ptr trace_state = nullptr,
+                                       streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                                       mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
     future<> flush_to_separator();
 
