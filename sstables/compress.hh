@@ -441,11 +441,18 @@ input_stream<char> make_compressed_file_m_format_input_stream(stream_creator_fn 
 input_stream<char> make_compressed_raw_file_input_stream(sstables::stream_creator_fn stream_creator, sstables::compression *cm,
         sstable_version_types version, file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest);
 
+// Observer invoked after each compressed chunk is written, with the chunk's
+// post-compression position, its pre-compression position (the sum of the
+// lengths of all prior buffers), its post-compression size and its
+// pre-compression (uncompressed) size.
+using compressed_chunk_observer = std::function<void(uint64_t post_compression_pos, uint64_t pre_compression_pos, uint64_t size, uint64_t uncompressed_size)>;
+
 output_stream<char> make_compressed_file_m_format_output_stream(output_stream<char> out,
                 sstables::compression* cm,
                 sstable_version_types version,
                 const compression_parameters& cp,
-                compressor_ptr);
+                compressor_ptr,
+                compressed_chunk_observer observer = {});
 
 
 std::map<sstring, sstring> options_from_compression(const compression& c);
