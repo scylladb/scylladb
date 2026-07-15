@@ -21,6 +21,7 @@
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/client_fwd.hh"
+#include "utils/s3/throttling_controller.hh"
 
 using namespace seastar;
 class memory_data_sink_buffers;
@@ -128,8 +129,12 @@ class client : public enable_shared_from_this<client> {
         uint64_t write_bytes = 0;
         uint64_t prefetch_bytes = 0;
         uint64_t downloads_starving_on_max_concurrency = 0;
+        uint64_t write_throttles = 0;
+        uint64_t read_throttles = 0;
+        std::unique_ptr<throttling_controller> write_limiter;
+        std::unique_ptr<throttling_controller> read_limiter;
         seastar::metrics::metric_groups metrics;
-        group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn);
+        group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn, const throttling_controller_factory& tcf);
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
@@ -137,6 +142,7 @@ class client : public enable_shared_from_this<client> {
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     std::unique_ptr<seastar::http::retry_strategy> _retry_strategy;
+    throttling_controller_factory _throttling_controller_factory;
 
     struct private_tag {};
 
@@ -150,6 +156,7 @@ class client : public enable_shared_from_this<client> {
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
 
     http::client::reply_handler wrap_handler(http::request& request,
+                                                           group_client& gc,
                                                            http::client::reply_handler handler,
                                                            std::optional<http::reply::status_type> expected);
 
@@ -177,9 +184,10 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr);
+    client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr, throttling_controller_factory tcf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<seastar::http::retry_strategy> rs, throttling_controller_factory tcf, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
