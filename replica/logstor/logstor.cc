@@ -90,6 +90,11 @@ const compaction_manager& logstor::get_compaction_manager() const noexcept {
     return _segment_manager.get_compaction_manager();
 }
 
+std::unique_ptr<primary_index> logstor::make_primary_index(schema_ptr schema, bool cache_enabled) {
+    return std::make_unique<primary_index>(schema, cache_enabled ? &_cache_tracker : nullptr);
+}
+
+
 future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout) {
     primary_index_key key(m.decorated_key());
     table_id table = m.schema()->id();
@@ -128,47 +133,31 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
     });
 }
 
-future<std::optional<mutation>> logstor::read(const schema& s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
+future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
     auto op = index.start_read();
 
     primary_index_key pk(dk);
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
-    auto* cache = bypass_cache ? nullptr : index.cache_tracker();
-
-    auto it = index.find(pk);
-    if (it == index.end()) {
+    auto lookup = index.lookup_for_read(pk, s, !bypass_cache);
+    if (!lookup) {
         co_return std::nullopt;
     }
 
-    // lookup in cache
-    if (cache) {
-        auto cached_mut = cache->lookup(*it, s.shared_from_this());
-        if (cached_mut) {
-            co_return std::move(*cached_mut);
-        }
+    if (lookup->cached_mutation) {
+        co_return std::move(*lookup->cached_mutation);
     }
 
-    // Cache miss (or bypass): read from disk using the entry we already have.
-    // copy the entry. we want to remember the original entry that we use for the read. the entry may change while we read.
-    const index_entry entry_for_read = it->entry();
-    auto record = co_await _segment_manager.read(entry_for_read.location);
+    auto record = co_await _segment_manager.read(lookup->entry.location);
 
     if (record.mut.key() != dk.key()) [[unlikely]] {
         on_internal_error(logstor_logger, format("Key mismatch reading log entry: expected {}, got {}", dk.key(), record.mut.key()));
     }
 
-    mutation m = record.mut.to_mutation(s.shared_from_this());
+    mutation m = record.mut.to_mutation(s);
 
-    // Populate the cache with the freshly deserialized mutation.
-    // Skipped when bypass_cache is set.
-    // We must re-find the entry because the iterator may have been invalidated
-    // across the co_await above.
-    if (cache) {
-        auto it = index.find(pk);
-        if (it != index.end() && it->entry().location == entry_for_read.location) {
-            cache->populate(*it, m);
-        }
+    if (!bypass_cache) {
+        index.populate_cache(pk, lookup->entry.location, m);
     }
 
     co_return std::move(m);
@@ -250,7 +239,7 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
                 auto current_key = it->key();
 
                 auto guard = reader_permit::awaits_guard(_permit);
-                auto mut = co_await _logstor->read(*_schema, _index, current_key.dk, _slice);
+                auto mut = co_await _logstor->read(_schema, _index, current_key.dk, _slice);
 
                 _last_key = current_key; // mark as visited even if not found (tombstoned)
 

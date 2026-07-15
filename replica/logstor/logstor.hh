@@ -62,16 +62,11 @@ public:
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
 
-    cache_tracker& get_cache_tracker() noexcept {
-        return _cache_tracker;
-    }
-    const cache_tracker& get_cache_tracker() const noexcept {
-        return _cache_tracker;
-    }
+    std::unique_ptr<primary_index> make_primary_index(schema_ptr schema, bool cache_enabled);
 
     future<> write(const mutation&, compaction_group&, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout);
 
-    future<std::optional<mutation>> read(const schema&, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
+    future<std::optional<mutation>> read(schema_ptr schema, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
 
     /// Create a mutation reader for a specific key
     mutation_reader make_reader(schema_ptr schema,
