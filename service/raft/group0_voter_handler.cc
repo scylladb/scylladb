@@ -606,6 +606,11 @@ future<> group0_voter_handler::update_nodes(
     }
 
     co_await _group0.modify_voters(voters_add, voters_del, as);
+
+    // Marks a fully completed voter recalculation, including any resulting config change. Logged unconditionally
+    // (also when the diff is empty and modify_voters() is a no-op), so that tests can count the occurrences to know
+    // a refresh really ran, instead of guessing with a timeout.
+    rvlogger.debug("Voter update done");
 }
 
 group0_voter_calculator::group0_voter_calculator(std::optional<size_t> voters_max)
