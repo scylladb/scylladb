@@ -927,6 +927,62 @@ def test_select_system_table(cql):
             grant(cql, 'SELECT', roles_table, user1)
             eventually_authorized(lambda: user1_session.execute(f'SELECT * FROM {roles_table}'))
 
+# Test that EXECUTE permission is enforced for user-defined functions called
+# in SELECT without FROM (a ScyllaDB CQL extension). The backing system.one_row
+# table is readable by everyone, so only EXECUTE on the function is required
+# (no SELECT grant on any table).
+def test_udf_permissions_select_without_from(cql, scylla_only):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
+        fun_body = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return i + 1;'"
+        with new_function(cql, keyspace, fun_body) as fun:
+            with new_user(cql) as username:
+                with new_session(cql, username) as user_session:
+                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                        check_enforced(cql, username, permission='EXECUTE', resource=resource,
+                                function=lambda: user_session.execute(f"SELECT {keyspace}.{fun}(1)"))
+
+# Test that native functions (like now(), count()) do not require EXECUTE
+# permission when used in SELECT without FROM.
+def test_native_functions_select_without_from(cql, scylla_only):
+    with new_user(cql) as username:
+        with new_session(cql, username) as user_session:
+            # A user with no special permissions should be able to call
+            # native functions in SELECT without FROM.
+            eventually_authorized(lambda: user_session.execute("SELECT now()"))
+
+# Test that EXECUTE permission is enforced on all UDA sub-functions in
+# SELECT without FROM, in particular on REDUCEFUNC, which is never invoked
+# on this path but is part of the aggregate.
+def test_uda_subfunc_permissions_select_without_from(cql, scylla_only):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
+        acc_body = "(a bigint, b bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return a+b'"
+        fin_body = "(a bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return a'"
+        with new_function(cql, keyspace, acc_body) as acc, \
+             new_function(cql, keyspace, acc_body) as red, \
+             new_function(cql, keyspace, fin_body) as fin:
+            aggr_body = f"(bigint) SFUNC {acc} STYPE bigint REDUCEFUNC {red} FINALFUNC {fin} INITCOND 0"
+            with new_aggregate(cql, keyspace, aggr_body) as uda:
+                with new_user(cql) as username:
+                    with new_session(cql, username) as user_session:
+                        # EXECUTE on the aggregate, SFUNC, and FINALFUNC, but
+                        # not on REDUCEFUNC: the SELECT must be rejected.
+                        grant(cql, 'EXECUTE', f'function {keyspace}.{uda}(bigint)', username)
+                        grant(cql, 'EXECUTE', f'function {keyspace}.{acc}(bigint, bigint)', username)
+                        grant(cql, 'EXECUTE', f'function {keyspace}.{fin}(bigint)', username)
+                        def run():
+                            user_session.execute(f"SELECT {keyspace}.{uda}(1)")
+                        eventually_unauthorized(run)
+                        grant(cql, 'EXECUTE', f'function {keyspace}.{red}(bigint, bigint)', username)
+                        eventually_authorized(run)
+
+# SELECT without FROM runs on the system.one_row virtual table, which must
+# therefore be readable by every user without any grant (like system.local
+# and system.peers) - also when read explicitly with a FROM clause.
+def test_select_system_one_row_without_grants(cql, scylla_only):
+    with new_user(cql) as username:
+        with new_session(cql, username) as user_session:
+            eventually_authorized(lambda: user_session.execute("SELECT * FROM system.one_row"))
+
 # Reproducer for SCYLLADB-1221: a non-privileged user could bypass
 # authorization by exploiting the BATCH prepared cache population bug.
 # A failed BATCH execution was incorrectly populating the
