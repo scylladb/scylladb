@@ -345,6 +345,10 @@ private:
                 : self._partitions.end();
     }
 
+    const_iterator upper_bound(dht::token token) const {
+        return _partitions.upper_bound(token.raw(), primary_index_key_cmp{*_schema});
+    }
+
 public:
     explicit primary_index(schema_ptr schema, cache_tracker* ct)
         : _partitions(dht::raw_token_less_comparator{})
@@ -502,31 +506,9 @@ public:
         }
     }
 
-    auto begin() const noexcept { return _partitions.begin(); }
-    auto end() const noexcept { return _partitions.end(); }
-
     bool empty() const noexcept { return _partitions.empty(); }
     size_t get_key_count() const noexcept { return _key_count; }
     size_t get_memory_usage() const noexcept { return _memory_usage; }
-
-public:
-    // First entry with key >= pos (for positioning at range start)
-    partitions_type::const_iterator lower_bound(const dht::ring_position_view& pos) const {
-        return _partitions.lower_bound(pos, primary_index_key_cmp(*_schema));
-    }
-
-    partitions_type::const_iterator lower_bound(dht::token token) const {
-        return _partitions.lower_bound(token.raw(), primary_index_key_cmp(*_schema));
-    }
-
-    // First entry with key strictly > key (for advancing past a key after a yield)
-    partitions_type::const_iterator upper_bound(const primary_index_key& key) const {
-        return _partitions.upper_bound(key, primary_index_key_cmp(*_schema));
-    }
-
-    partitions_type::const_iterator upper_bound(dht::token token) const {
-        return _partitions.upper_bound(token.raw(), primary_index_key_cmp(*_schema));
-    }
 
 };
 
