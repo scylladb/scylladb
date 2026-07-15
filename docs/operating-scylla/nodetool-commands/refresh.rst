@@ -74,4 +74,31 @@ The ``--scope`` parameter allows for more advanced constraining of the subset of
 * ``dc`` - replicas in the local datacenter (DC)
 * ``all`` (default) - all replicas in the cluster
 
+Compatibility with Apache Cassandra SSTables
+--------------------------------------------
+
+Uploading SSTable from Apache Cassandra is supported. For the supported SSTable versions, see `ScyllaDB SSTable Format </architecture/sstable/>`_. Note that SSTables using Trie-Based Indexes are `not` supported.
+
+If your SSTables are using a version unsupported by ScyllaDB, use `nodetool upgradesstables <https://cassandra.apache.org/doc/latest/cassandra/managing/tools/sstable/sstableupgrade.html>`_ to downgrade them to a supported one.
+
+Known Problems
+^^^^^^^^^^^^^^
+
+Digest mismatch
+~~~~~~~~~~~~~~~
+
+Apache Cassandra and ScyllaDB slightly diverged on how digests are calculated on SSTable Data components.
+For compressed SSTables, Apache Cassandra allows for a trailing zero-sized (pre-compression) chunk in the Data component.
+This chunk has no data but has non-zero size after compression.
+This trailing chunk is ignored by ScyllaDB and thus excluded from the Digest calculation, therefore the digest calculated by ScyllaDB will not match that in the Digest component.
+Consequently ScyllaDB will reject the SSTable file.
+
+Example:
+
+.. code::
+
+    sstables::malformed_sstable_exception Failed to read partition from SSTable .../me-71-big-Data.db due to Digest mismatch: expected=1580246239, actual=3782253270
+
+Workaround: delete the Digest component (``me-*-big-Digest.crc32``) and remove it from the TOC file (``me-*-big-TOC.txt``) too.
+
 .. include:: nodetool-index.rst
