@@ -16,6 +16,7 @@
 #include "gms/gossiper.hh"
 #include "raft/raft.hh"
 #include "raft_group0.hh"
+#include "utils/error_injection.hh"
 
 namespace service {
 
@@ -606,6 +607,10 @@ future<> group0_voter_handler::update_nodes(
     }
 
     co_await _group0.modify_voters(voters_add, voters_del, as);
+
+    // Marks a fully completed voter recalculation, including any resulting config change. Tests wait on this
+    // injection's enter counter to know a refresh really ran, instead of guessing with a timeout.
+    utils::get_local_injector().inject("group0_voter_update_nodes_done", [] {});
 }
 
 group0_voter_calculator::group0_voter_calculator(std::optional<size_t> voters_max)
