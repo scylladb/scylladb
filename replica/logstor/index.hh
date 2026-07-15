@@ -145,7 +145,7 @@ public:
 
     struct read_lookup_result {
         index_entry entry;
-        std::optional<mutation> cached_mutation;
+        std::optional<mutation_partition> cached_mutation;
     };
 
 private:
