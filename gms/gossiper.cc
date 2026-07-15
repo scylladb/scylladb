@@ -2141,6 +2141,16 @@ future<> gossiper::do_stop_gossiping() {
         auto local_generation = my_ep_state->get_heart_beat_state().get_generation();
         logger.info("Announcing shutdown");
         co_await add_local_application_state(application_state::STATUS, versioned_value::shutdown(true));
+
+        // Injection point for SCYLLADB-3026: once STATUS=SHUTDOWN is announced, this
+        // node is excluded from its own gossiper::get_live_members() while it is still
+        // the group0 topology coordinator (the coordinator fiber is aborted only later
+        // in the shutdown sequence). Pausing here holds that window open so a concurrent
+        // topology operation (e.g. a replace) can drive update_nodes() with self missing
+        // from the node list, reproducing the voter deadlock deterministically.
+        co_await utils::get_local_injector().inject(
+                "gossiper_pause_after_shutdown_announce", utils::wait_for_message(60s));
+
         auto live_endpoints = _live_endpoints;
         co_await coroutine::parallel_for_each(live_endpoints, [this, &local_generation] (locator::host_id id) -> future<> {
             logger.info("Sending a GossipShutdown to {} with generation {}", id, local_generation);
