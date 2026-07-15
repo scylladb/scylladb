@@ -491,12 +491,28 @@ future<> group0_voter_handler::update_nodes(
         co_return co_await _group0.modify_voters({}, nodes_removed, as);
     }
 
+    // Nothing to calculate on the bootstrapping discovery leader: it has just written its own join
+    // request, so it sits in `new_nodes` (node_state::none) and gets no replica state below, while
+    // already being a voter from the initial configuration - tripping the voter invariant below.
+    // Checking `normal_nodes` also covers the follow-up window where the leader is in
+    // `transition_nodes`; topology::is_empty() would not, as it counts `transition_nodes` too.
+    if (_topology.normal_nodes.empty()) {
+        co_return;
+    }
+
     auto& raft_server = _group0.group0_server();
 
     const auto& leader_id = raft_server.current_leader();
 
     // Load the current cluster members
     const auto& group0_config = raft_server.get_configuration();
+
+    // The node sets below are derived from the gossiper state, which is only fully populated once gossiping is
+    // running. Bail out early otherwise, so a not-yet-settled gossiper cannot trip the voter invariant below.
+    if (!_gossiper.is_enabled()) {
+        rvlogger.debug("Gossiper is not enabled yet, skipping the voter update");
+        co_return;
+    }
 
     const auto& nodes_alive = _gossiper.get_live_members();
     const auto& nodes_dead = _gossiper.get_unreachable_members();
@@ -571,6 +587,50 @@ future<> group0_voter_handler::update_nodes(
             continue;
         }
         add_node(id, *node, _gossiper.is_alive(locator::host_id{id.uuid()}));
+    }
+
+    // Ensure the current node is present in the nodes list, even if it is not in the gossiper's live or dead
+    // members (e.g., during its own shutdown, when it drops out of its own get_live_members() while still being
+    // the group0 leader driving this calculation). This code runs on the group0 leader, which is a voter and must
+    // be part of the calculation for the quorum math to be correct; add_node() derives votership from the config,
+    // and the leader is effectively alive here (that it is missing from the live members is precisely the bug).
+    //
+    // FIXME(SCYLLADB-86): this relies on the leader still being a member of the group 0 config with topology
+    // state (add_node() ignores non-members, and without a replica state there is nothing to add it with). An
+    // obsolete modify_config initiated by a superseded topology coordinator - though appended and committed by
+    // the current leader, as config changes only go through the leader - can remove the leader from the config,
+    // silently leaving it out of the calculation until the committed change forces it to step down; fixing the
+    // underlying config races is out of scope here.
+    const auto self_id = raft_server.id();
+    if (!nodes.contains(self_id)) {
+        if (const auto* node = get_replica_state(self_id, true)) {
+            add_node(self_id, *node, true);
+        }
+    }
+
+    // Every voting config member is expected to be present in the nodes list (a still-bootstrapping node has no
+    // topology state yet, but must not be a voter before it fully joins).
+    //
+    // Such a voter cannot just be left alone - it still counts towards the raft quorum, while the distribution below is
+    // sized from `nodes` only and would undercount, which is exactly the failure mode of SCYLLADB-3026.
+    //
+    // All the inputs (group 0 configuration, topology and gossiper state) are local and read under the voter lock, so
+    // a voter missing here means the local state is inconsistent rather than merely stale.
+    //
+    // FIXME(SCYLLADB-86): an obsolete modify_config initiated by a superseded topology coordinator - though appended
+    // and committed by the current leader, as config changes only go through the leader - can still grant votership to
+    // a node with no topology state. This should become unreachable once those config races are fixed.
+    for (const auto& member : group0_config.current) {
+        const raft::server_id id = member.addr.id;
+        if (group0_config.can_vote(id) != raft::is_voter::yes) {
+            continue;
+        }
+        if (!nodes.contains(id)) {
+            // The bootstrapping discovery leader is handled by the early return at the top of update_nodes(), and the
+            // leader itself is added by the "self" block above, so reaching this point is unexpected.
+            on_internal_error(rvlogger,
+                    format("group0 voter {} is absent from the node list (no topology state)", id));
+        }
     }
 
     std::unordered_set<raft::server_id> voters_add;
