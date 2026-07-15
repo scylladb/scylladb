@@ -205,6 +205,20 @@ void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map
 // tag to either "0" or "1" genuine user-specified range keys.
 uint8_t genuine_range_key_count(const schema&, const std::map<sstring, sstring>* tags);
 
+/// The genuine user-specified partition key and sort key sizes
+/// of a schema.
+struct key_sizes {
+    uint8_t pk_size;
+    uint8_t sk_size;
+    uint8_t total_size;
+};
+
+// Returns the number of partition key columns and genuine sort key
+// columns (see genuine_range_key_count() above) of the given schema,
+// GSIs may have a composite (multi-attribute) partition key of up to 4
+// HASH columns and a composite sort key of up to 4 RANGE columns.
+key_sizes get_key_sizes(const schema_ptr schema);
+
 /// is_big() checks approximately if the given JSON value is "bigger" than
 /// the given big_size number of bytes. The goal is to *quickly* detect
 /// oversized JSON that, for example, is too large to be serialized to a

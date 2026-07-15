@@ -180,6 +180,12 @@ uint8_t genuine_range_key_count(const schema& schema, const std::map<sstring, ss
     return range_keys_to_report;
 }
 
+key_sizes get_key_sizes(const schema_ptr schema) {
+    uint8_t pk_size = schema->partition_key_size();
+    uint8_t sk_size = genuine_range_key_count(*schema, db::get_tags_of_table(schema));
+    return key_sizes{pk_size, sk_size, pk_size + sk_size};
+}
+
 void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string, std::string>* attribute_types, const std::map<sstring, sstring>* tags) {
     rjson::value key_schema = rjson::empty_array();
 
