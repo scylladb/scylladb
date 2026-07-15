@@ -1321,8 +1321,8 @@ static unsigned get_cas_shard(const schema& s, dht::token token, const locator::
 }
 
 cas_shard::cas_shard(const schema& s, dht::token token)
-    : _token_guard(s.table(), token)
-    , _shard(get_cas_shard(s, token, *_token_guard.get_erm()))
+    : _erm{s.table().get_effective_replication_map()}
+    , _shard(get_cas_shard(s, token, *_erm))
 {
 }
 
@@ -6982,13 +6982,10 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
 
     auto key = partition_ranges[0].start()->value().as_decorated_key();
     const auto token = key.token();
-    auto effective_replication_map = [cas_shard = std::move(cas_shard), schema, token] () mutable -> locator::effective_replication_map_ptr {
-        auto token_guard = std::move(cas_shard).token_guard();
-        if (get_cas_shard(*schema, token, *token_guard.get_erm()) != this_shard_id()) {
-            on_internal_error(paxos::paxos_state::logger, "storage_proxy::cas called on a wrong shard");
-        }
-        return token_guard.get_erm();
-    }();
+    
+    if (get_cas_shard(*schema, token, *(cas_shard.get_erm())) != this_shard_id()) {
+        on_internal_error(paxos::paxos_state::logger, "storage_proxy::cas called on a wrong shard");
+    }
 
     // In case a nullptr is passed to this function (i.e. the caller isn't interested in
     // existing value) we fabricate an "empty"  read_command that does nothing,
@@ -7001,7 +6998,7 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
     shared_ptr<paxos_response_handler> handler;
     try {
         handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
-                std::move(effective_replication_map),
+                std::move(cas_shard).get_erm(),
                 query_options.trace_state, query_options.permit,
                 std::move(key),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
