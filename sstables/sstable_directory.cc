@@ -133,7 +133,7 @@ sstable_directory::sstable_directory(replica::table& table,
     , _storage_opts(std::move(storage_opts))
     , _state(sstable_state::upload)
     , _error_handler_gen(error_handler_gen)
-    , _storage(make_storage(_manager, *_storage_opts, _state))
+    , _storage(make_storage(_manager, _schema, *_storage_opts, _state))
     , _lister(std::make_unique<sstable_directory::restore_components_lister>(_storage_opts->value,
                                                                              std::move(sstables)))
     , _sharder_ptr(std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()))
@@ -170,7 +170,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _storage_opts(std::move(storage_opts))
     , _state(state)
     , _error_handler_gen(error_handler_gen)
-    , _storage(make_storage(_manager, *_storage_opts, _state))
+    , _storage(make_storage(_manager, _schema, *_storage_opts, _state))
     , _lister(make_components_lister())
     , _sharder_ptr(std::holds_alternative<unique_sharder_ptr>(sharder) ? std::move(std::get<unique_sharder_ptr>(sharder)) : nullptr)
     , _sharder(_sharder_ptr ? *_sharder_ptr : *std::get<const dht::sharder*>(sharder))

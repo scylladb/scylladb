@@ -631,6 +631,7 @@ future<> filesystem_storage::unlink_component(const sstable& sst, component_type
 class object_storage_base : public sstables::storage {
 protected:
     sstring _type;
+    schema_ptr _schema;
     shared_ptr<sstables::object_storage_client> _client;
     sstring _bucket;
     std::variant<sstring, table_id> _location;
@@ -653,8 +654,9 @@ protected:
         return _as;
     }
 public:
-    object_storage_base(sstring type, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
+    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
         : _type(type) 
+        , _schema(std::move(schema))
         , _client(std::move(client))
         , _bucket(std::move(bucket))
         , _location(std::move(loc))
@@ -716,8 +718,8 @@ public:
 
 class s3_storage : public object_storage_base {
 public:
-    s3_storage(shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
-        : object_storage_base("S3", std::move(client), std::move(bucket), std::move(loc), as)
+    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
+        : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), as)
     {}
 
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
@@ -996,7 +998,7 @@ future<> object_storage_base::clone(const sstable& sst, generation_type gen, boo
     sstlog.debug("clone sst: {} generation={}: done", sst.get_filename(), gen);
 }
 
-std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstable_state state) {
+std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state) {
     return std::visit(overloaded_functor {
         [state] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstables::storage> {
             if (loc.dir.empty()) {
@@ -1012,10 +1014,10 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
                 on_internal_error(sstlog, fmt::format("{} storage options is missing 'location'", os.name()));
             }
             if (s_opts.is_s3_type()) {
-                return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
             }
             if (s_opts.is_gs_type()) {
-                return std::make_unique<sstables::object_storage_base>("GS", manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
             }
             throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }
