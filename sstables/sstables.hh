@@ -53,6 +53,7 @@
 
 class sstable_assertions;
 class cached_file;
+class memory_data_sink_buffers;
 
 namespace data_dictionary {
 class storage_options;
@@ -711,6 +712,7 @@ private:
     void write_compression();
 
     future<> read_scylla_metadata() noexcept;
+    future<std::unique_ptr<memory_data_sink_buffers>> serialize_scylla_metadata(scylla_metadata metadata) const;
 
     void write_scylla_metadata(shard_id shard,
                                run_identifier identifier,
@@ -924,6 +926,7 @@ public:
     const scylla_metadata* get_scylla_metadata() const {
         return _components->scylla_metadata ? &*_components->scylla_metadata : nullptr;
     }
+    future<std::unique_ptr<scylla_metadata>> copy_scylla_metadata();
 
     run_id run_identifier() const {
         return _run_identifier;
@@ -1136,7 +1139,7 @@ public:
     // Clones this sstable with a new generation, under the same location as the original one.
     // If leave_unsealed is true, the destination sstable is left unsealed.
     // Implementation is underlying storage specific.
-    future<entry_descriptor> clone(generation_type new_generation, bool leave_unsealed = false) const;
+    future<entry_descriptor> clone(generation_type new_generation, bool leave_unsealed = false, bool may_use_reference_sharing = false);
 
     struct lesser_reclaimed_memory {
         // comparator class to be used by the _reclaimed set in sstables manager

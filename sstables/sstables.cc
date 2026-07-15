@@ -64,6 +64,7 @@
 #include "utils/cached_file.hh"
 #include "utils/stall_free.hh"
 #include "utils/checked-file-impl.hh"
+#include "utils/memory_data_sink.hh"
 #include "db/extensions.hh"
 #include "sstables/partition_index_cache.hh"
 #include "db/large_data_handler.hh"
@@ -988,8 +989,19 @@ future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_
     co_return std::move(files);
 }
 
-future<entry_descriptor> sstable::clone(generation_type new_generation, bool leave_unsealed) const {
-    return _storage->clone(*this, new_generation, leave_unsealed);
+future<entry_descriptor> sstable::clone(generation_type new_generation, bool leave_unsealed, bool may_use_reference_sharing) {
+    return _storage->clone(*this, new_generation, leave_unsealed, may_use_reference_sharing);
+}
+
+future<std::unique_ptr<scylla_metadata>> sstable::copy_scylla_metadata() {
+    if (_components->scylla_metadata) {
+        co_return std::make_unique<scylla_metadata>(*_components->scylla_metadata);
+    }
+    co_return co_await seastar::async([this] {
+        auto metadata = std::make_unique<sstables::scylla_metadata>();
+        read_simple<component_type::Scylla>(*metadata).get();
+        return metadata;
+    });
 }
 
 future<size_t> sstable::num_references() const {
@@ -1608,6 +1620,10 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
     if (!has_scylla_component()) {
         on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+    }
+
+    if (_storage->is_object_storage() && !update_id) {
+        on_internal_error(sstlog, "Cannot keep sstable id when rewriting object-storage sstable component");
     }
 
     return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_id] {
@@ -2344,6 +2360,18 @@ sstable::read_scylla_metadata() noexcept {
             auto computed_digest = co_await compute_component_file_digest(component_type::Scylla);
             validate_component_digest(component_type::Scylla, computed_digest);
         });
+    });
+}
+
+future<std::unique_ptr<memory_data_sink_buffers>> sstable::serialize_scylla_metadata(scylla_metadata metadata) const {
+    co_return co_await seastar::async([this, metadata = std::move(metadata)] mutable {
+        metadata.digest = serialized_checksum(_version, metadata.data);
+        auto bufs = std::make_unique<memory_data_sink_buffers>();
+        auto out = data_sink(std::make_unique<memory_data_sink>(*bufs));
+        auto w = file_writer(output_stream<char>(std::move(out), sstable_buffer_size), component_name(*this, component_type::Scylla));
+        write(_version, w, metadata);
+        w.close();
+        return bufs;
     });
 }
 

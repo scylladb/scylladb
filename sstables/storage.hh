@@ -25,6 +25,7 @@
 #include "sstables/shared_sstable.hh"
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/types.hh"
 #include "locator/host_id.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/small_vector.hh"
@@ -99,19 +100,19 @@ class storage {
     }
 
 public:
-    // Clone an sstable to a new generation, hard-linking all components except those in excluded_components.
-    // The new sstable is created with a TemporaryTOC, so it will be removed on restart if not sealed.
+    // Clone an sstable to a new generation, linking or copying all components except those in excluded_components.
     virtual future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
-            const std::unordered_set<component_type>& excluded_components) const {
-        SCYLLA_ASSERT(false && "link_with_excluded_components not implemented");
-    }
+            const std::unordered_set<component_type>& excluded_components,
+            optimized_optional<sstable_id> new_sid = {}) const = 0;
     virtual ~storage() {}
 
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
 
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring name) const = 0;
-    virtual future<entry_descriptor> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const = 0;
+    // `may_use_reference_sharing` is a hint: storage backends may ignore it
+    // and use their natural clone method.
+    virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const = 0;
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
@@ -141,7 +142,7 @@ public:
 };
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
-future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, sstring prefix, generation_type gen);
+future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid);
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);

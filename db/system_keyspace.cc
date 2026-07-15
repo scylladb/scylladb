@@ -3498,7 +3498,7 @@ future<> system_keyspace::sstables_registry_create_entry(table_id tid, locator::
     if (desc.sid) {
         sid.emplace(desc.sid->id);
     } else {
-        slogger.warn("sstables_registry_create_entry: sstable with generation={} has no sstable_id", desc.generation);   // For now
+        on_internal_error(slogger, fmt::format("sstables_registry_create_entry: sstable with generation={} has no sstable_id", desc.generation));
     }
     co_await execute_cql(req, tid.id, node_owner.uuid(), desc.generation, status, sid, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
 }
@@ -3553,7 +3553,7 @@ future<> system_keyspace::sstables_registry_list(table_id tid, locator::host_id 
         if (row.has("sstable_id")) {
             sid = sstables::sstable_id(row.get_as<utils::UUID>("sstable_id"));
         } else {
-            slogger.warn("sstables_registry_list: sstable with generation={} has no sstable_id", gen);   // For now
+            on_internal_error(slogger, fmt::format("sstables_registry_list: sstable with generation={} has no sstable_id", gen));
         }
         auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
         auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));

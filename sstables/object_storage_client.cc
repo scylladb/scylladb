@@ -40,9 +40,13 @@ sstables::object_name::object_name(std::string_view bucket, std::string_view pre
     : _name(fmt::format("/{}/{}/{}", bucket, prefix, type))
 {}
 
-sstables::object_name::object_name(std::string_view bucket, std::string_view prefix, const generation_type& gen, std::string_view type)
-    : _name(fmt::format("/{}/{}/{}/{}", bucket, prefix, gen, type))
-{}
+sstables::object_name::object_name(std::string_view bucket, std::string_view prefix, const sstable_id& sid, std::string_view type)
+    : _name(fmt::format("/{}/{}/{}/{}", bucket, prefix, sid, type))
+{
+    if (!sid) {
+        on_internal_error(sstlog, fmt::format("SSTable identifier is required for object storage: bucket={} prefix={}", bucket, prefix));
+    }
+}
 sstables::object_name::object_name(std::string_view bucket, std::string_view object) 
     : _name(fmt::format("/{}/{}", bucket, object))
 {}

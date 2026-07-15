@@ -19,6 +19,7 @@
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
 #include "sstables/storage.hh"
+#include "sstables/types.hh"
 
 namespace seastar {
 class abort_source;
@@ -43,8 +44,6 @@ class abstract_lister;
 
 namespace sstables {
 
-class generation_type;
-
 class object_name {
     std::string _name;
 public:
@@ -53,7 +52,7 @@ public:
     // Used by native backup/restore with externally supplied prefixes
     // following the foreign Scylla Manager bucket layout.
     object_name(std::string_view bucket, std::string_view prefix, std::string_view type);
-    object_name(std::string_view bucket, std::string_view prefix, const generation_type&, std::string_view type);
+    object_name(std::string_view bucket, std::string_view prefix, const sstable_id&, std::string_view type);
     object_name(std::string_view bucket, std::string_view object);
 
     std::string_view bucket() const;

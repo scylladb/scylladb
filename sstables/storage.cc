@@ -72,7 +72,8 @@ private:
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
     future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
-            const std::unordered_set<component_type>& excluded_components) const override;
+            const std::unordered_set<component_type>& excluded_components,
+            optimized_optional<sstable_id> new_sid = {}) const override;
 
     future<> change_dir(sstring new_dir) {
         auto old_dir = std::exchange(_dir, opened_directory(new_dir));
@@ -91,7 +92,7 @@ public:
 
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring name) const override;
-    virtual future<entry_descriptor> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
+    virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -422,7 +423,8 @@ future<> filesystem_storage::create_links(const sstable& sst, const std::filesys
 }
 
 future<> filesystem_storage::link_with_excluded_components(const sstable& sst, generation_type new_gen,
-        const std::unordered_set<component_type>& excluded_components) const {
+        const std::unordered_set<component_type>& excluded_components,
+        optimized_optional<sstable_id>) const {
     sstlog.trace("link_with_excluded_components: {} -> generation={} excluded={}",
             sst.get_filename(), new_gen, excluded_components);
 
@@ -452,7 +454,7 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring name) const {
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
     co_await create_links_common(sst, snapshot_dir.native(), sst._generation, link_mode::default_mode);
 }
-future<entry_descriptor> filesystem_storage::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
+future<entry_descriptor> filesystem_storage::clone(sstable& sst, generation_type gen, bool leave_unsealed, bool) const {
     sstlog.debug("Cloning {} dir={} generation={} leave_unsealed={}", sst.get_filename(), _dir.path().native(), gen, leave_unsealed);
     co_await create_links_common(sst, _dir.path().native(), gen, leave_unsealed ? link_mode::leave_unsealed : link_mode::default_mode);
     auto desc = sst.get_descriptor(component_type::TOC);
@@ -657,9 +659,9 @@ protected:
     object_name make_object_name(const sstable& sst, component_type type) const;
     object_name make_object_name(const sstable& sst, sstring comp, generation_type gen) const;
 
-    // Construct the object name for a reference: {prefix}/{gen}/refs/nodes/{host_id}/{gen}
-    object_name make_ref_object_name(generation_type gen, locator::host_id host_id) const {
-        return object_name(_bucket, prefix(), gen, fmt::format("refs/nodes/{}/{}", host_id, gen));
+    // Construct the object name for a reference: {prefix}/{sstable_id}/refs/nodes/{host_id}/{gen}
+    object_name make_ref_object_name(sstable_id sid, generation_type gen, locator::host_id host_id) const {
+        return object_name(_bucket, prefix(), sid, fmt::format("refs/nodes/{}/{}", host_id, gen));
     }
 
     table_id owner() const {
@@ -686,7 +688,7 @@ public:
 
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring name) const override;
-    future<entry_descriptor> clone(const sstable& sst, generation_type gen, bool leave_unsealed) const override;
+    future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
@@ -705,14 +707,16 @@ public:
         // assumes infinite space on s3/gs (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
     }
+    future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
+            const std::unordered_set<component_type>& excluded_components,
+            optimized_optional<sstable_id> new_sid = {}) const override;
     future<> unlink_component(const sstable& sst, component_type) noexcept override;
     future<size_t> num_references(const sstable& sst) const override;
 
     sstable_id get_sstable_identifier(const sstable& sst) const {
         auto sid = sst.sstable_identifier();
         if (!sid) {
-            // We cannot assert that yet since we don't pass the sstable_id yet in the clone_sstable rpc
-            sstlog.warn("SSTable on object storage with generation={} has no sstable_id", sst.generation());
+            on_internal_error(sstlog, fmt::format("SSTable on object storage with generation={} has no sstable_id", sst.generation()));
         }
         return *sid;
     }
@@ -725,15 +729,12 @@ public:
         return _client->object_exists(make_object_name(sst, type), abort_source());
     }
 
-    // FIXME: pass sstable_id when reference sharing is introduced. At this point
-    // only this node's reference can exist, using the same generation as the
-    // object-storage prefix.
-    future<size_t> num_references(generation_type gen) const;
-    future<> delete_components(sstable_version_types version, generation_type gen, bool log_errors) const;
+    future<size_t> num_references(sstable_id sid) const;
+    future<> delete_components(sstable_version_types version, sstable_id sid, bool log_errors) const;
 
     bool is_object_storage() const override { return true; }
 
-    future<> put_object(object_name name, ::memory_data_sink_buffers bufs) {
+    future<> put_object(object_name name, ::memory_data_sink_buffers bufs) const {
         return _client->put_object(std::move(name), std::move(bufs), abort_source());
     }
     future<> copy_object(object_name src, object_name dst) const {
@@ -775,7 +776,7 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
 
     auto ret = _uses_foreign_location
             ? object_name(_bucket, prefix(), sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp))
-            : object_name(_bucket, prefix(), gen, comp);
+            : object_name(_bucket, prefix(), get_sstable_identifier(sst), comp);
     sstlog.trace("make_object_name: sstable_id={} generation={} comp={}: {}", sst.sstable_identifier(), gen, comp, ret.str());
     return ret;
 }
@@ -786,34 +787,34 @@ static future<> collect_lister_entries(abstract_lister& lister, object_storage_r
     }
 }
 
-future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, generation_type gen) {
+future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid) {
     object_storage_reference_names refs;
     try {
-        auto refs_prefix = fmt::format("{}/{}/refs/", prefix, gen);
+        auto refs_prefix = fmt::format("{}/{}/refs/", prefix, sid);
         auto lister = client.make_object_lister(std::move(bucket), refs_prefix, [] (const std::filesystem::path&, const directory_entry&) { return true; });
         co_await with_closeable(std::move(lister), [&refs] (abstract_lister& lister) {
             return collect_lister_entries(lister, refs);
         });
     } catch (...) {
-        throw std::runtime_error(fmt::format("Failed to list references: prefix={} generation={}: {}", prefix, gen, std::current_exception()));
+        throw std::runtime_error(fmt::format("Failed to list references: prefix={} sstable_id={}: {}", prefix, sid, std::current_exception()));
     }
     co_return refs;
 }
 
-future<size_t> object_storage_base::num_references(generation_type gen) const {
-    auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), gen);
+future<size_t> object_storage_base::num_references(sstable_id sid) const {
+    auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
     co_return refs.size();
 }
 
 future<size_t> object_storage_base::num_references(const sstable& sst) const {
-    return num_references(sst.generation());
+    return num_references(get_sstable_identifier(sst));
 }
 
-future<> object_storage_base::delete_components(sstable_version_types version, generation_type gen, bool log_errors) const {
+future<> object_storage_base::delete_components(sstable_version_types version, sstable_id sid, bool log_errors) const {
     auto prefix = this->prefix();
-    auto delete_component = [this, &prefix, &gen, log_errors] (std::string_view component) -> future<> {
+    auto delete_component = [this, &prefix, &sid, log_errors] (std::string_view component) -> future<> {
         try {
-            co_await delete_object(object_name(_bucket, prefix, gen, component));
+            co_await delete_object(object_name(_bucket, prefix, sid, component));
         } catch (const storage_io_error& e) {
             if (e.code().value() != ENOENT) {
                 throw;
@@ -822,7 +823,7 @@ future<> object_storage_base::delete_components(sstable_version_types version, g
             if (!log_errors) {
                 throw;
             }
-            sstlog.warn("Failed to delete {} object {} for generation={}: {}", _type, component, gen, std::current_exception());
+            sstlog.warn("Failed to delete {} object {} for sstable_id={}: {}", _type, component, sid, std::current_exception());
         }
     };
 
@@ -842,7 +843,7 @@ void object_storage_base::open(sstable& sst) {
     auto host_id = sst.manager().get_local_host_id();
     sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
 
-    auto ref_name = make_ref_object_name(sst.generation(), host_id);
+    auto ref_name = make_ref_object_name(sid, sst.generation(), host_id);
     put_object(ref_name, memory_data_sink_buffers()).get();
 
     memory_data_sink_buffers bufs;
@@ -991,9 +992,10 @@ future<> object_storage_base::destroy(const sstable& sst) {
     }
 
     auto node_owner = sst.manager().get_local_host_id();
+    auto sid = get_sstable_identifier(sst);
 
     // Remove this node's reference to the sstable
-    auto ref_name = make_ref_object_name(sst.generation(), node_owner);
+    auto ref_name = make_ref_object_name(sid, sst.generation(), node_owner);
     co_await delete_object(ref_name);
 
     // Only delete components if no references remain
@@ -1003,7 +1005,7 @@ future<> object_storage_base::destroy(const sstable& sst) {
         // destroy() is called fire-and-forget from the shared_ptr deleter.
         // Any objects that could not be deleted here will be retried on the
         // next startup via garbage_collect() which handles "removing" entries.
-        co_await delete_components(sst.get_version(), sst.generation(), true);
+        co_await delete_components(sst.get_version(), sid, true);
     }
 
     // Remove the registry entry only after S3 objects are cleaned up.
@@ -1044,7 +1046,12 @@ future<> object_storage_base::atomic_delete_complete(atomic_delete_context ctx) 
 }
 
 future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) {
-    auto ref_name = make_ref_object_name(desc.generation, node_owner);
+    if (!desc.sid) {
+        on_internal_error(sstlog, fmt::format("Cannot remove SSTable on object storage with generation={} from registry: has no sstable_id", desc.generation));
+    }
+    auto sid = *desc.sid;
+
+    auto ref_name = make_ref_object_name(sid, desc.generation, node_owner);
     try {
         co_await delete_object(ref_name);
     } catch (const storage_io_error& e) {
@@ -1053,13 +1060,13 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, lo
         }
     }
 
-    auto remaining_refs = co_await num_references(desc.generation);
+    auto remaining_refs = co_await num_references(sid);
     if (remaining_refs) {
         sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), remaining_refs);
         co_return;
     }
 
-    co_await delete_components(desc.version, desc.generation, false);
+    co_await delete_components(desc.version, sid, false);
     sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), remaining_refs);
 }
 
@@ -1077,25 +1084,42 @@ future<> object_storage_base::snapshot(const sstable& sst, sstring name) const {
     co_return;
 }
 
-future<entry_descriptor> object_storage_base::clone(const sstable& sst, generation_type gen, bool leave_unsealed) const {
-    sstlog.trace("clone sst: {} generation={} leave_unsealed={}", sst.get_filename(), gen, leave_unsealed);
+future<> object_storage_base::link_with_excluded_components(const sstable& sst, generation_type new_gen,
+        const std::unordered_set<component_type>& excluded_components,
+        optimized_optional<sstable_id> new_sid) const {
+    auto sid = new_sid ? *new_sid : sstable_id(new_gen.as_uuid());
+    auto prefix = this->prefix();
+    co_await coroutine::parallel_for_each(sst.all_components(), [this, &sst, sid, &excluded_components, &prefix] (const std::pair<component_type, sstring>& p) -> future<> {
+        if (excluded_components.contains(p.first)) {
+            co_return;
+        }
+        co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second));
+    });
+}
 
-    // Register the cloned sstable as "creating" in the registry
-    auto sid = get_sstable_identifier(sst);
+future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing) const {
+    sstlog.debug("Cloning {} sstable_id={} generation={}: new_generation={} leave_unsealed={} may_use_reference_sharing={}",
+            sst.get_filename(), sst.sstable_identifier(), sst.generation(),
+            gen, leave_unsealed, may_use_reference_sharing);
+
+    auto sid = may_use_reference_sharing ? get_sstable_identifier(sst) : sstable_id(gen.as_uuid());
     entry_descriptor desc(gen, sid, sst.get_version(), sst.get_format(), component_type::TOC);
     desc.state = sst.state();
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
-    auto ref_name = make_ref_object_name(gen, node_owner);
+    auto ref_name = make_ref_object_name(sid, gen, node_owner);
     co_await _client->put_object(ref_name, memory_data_sink_buffers(), abort_source());
-    auto refs = co_await num_references(desc.generation);
+    auto refs = co_await num_references(sid);
     sstlog.debug("Cloned {} reference {} num_references={}", sst.get_filename(), ref_name, refs);
 
-    // Copy all component objects from the source to the destination generation.
-    co_await coroutine::parallel_for_each(sst.all_components(), [this, &sst, &gen] (const std::pair<component_type, sstring>& p) -> future<> {
-        co_await copy_object(make_object_name(sst, p.second, sst.generation()), make_object_name(sst, p.second, gen));
-    });
+    if (!may_use_reference_sharing) {
+        co_await link_with_excluded_components(sst, gen, {component_type::Scylla}, sid);
+        auto scylla_metadata = co_await sst.copy_scylla_metadata();
+        scylla_metadata->set_sstable_identifier(sid);
+        auto scylla_metadata_bufs = co_await sst.serialize_scylla_metadata(std::move(*scylla_metadata));
+        co_await put_object(object_name(_bucket, prefix(), sid, sstable_version_constants::get_component_map(sst.get_version()).at(component_type::Scylla)), std::move(*scylla_metadata_bufs));
+    }
 
     if (!leave_unsealed) {
         // Mark the cloned sstable as sealed in the registry
