@@ -4623,6 +4623,12 @@ future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(
     }
 
     auto tmptr = get_token_metadata_ptr();
+
+    if (!tmptr->tablets().balancing_enabled()) {
+        rtlogger.debug("Skipping retrying failed rebuilds because tablet balancing is disabled");
+        co_return false;
+    }
+
     utils::chunked_vector<canonical_mutation> updates;
     for (auto& ks_name : _db.get_tablets_keyspaces()) {
         auto& ks = _db.find_keyspace(ks_name);
