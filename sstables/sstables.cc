@@ -53,6 +53,7 @@
 #include "progress_monitor.hh"
 #include "compress.hh"
 #include "checksummed_data_source.hh"
+#include "digest_checked_data_source.hh"
 #include "index_reader.hh"
 #include "downsampling.hh"
 #include <boost/algorithm/string.hpp>
@@ -1323,14 +1324,18 @@ future<uint32_t> sstable::compute_component_file_digest(component_type type) con
     co_return co_await compute_component_file_digest(std::move(f), size);
 }
 
-future<uint32_t> sstable::compute_component_file_digest(file f, size_t size) const {
-    return with_closeable(make_file_input_stream(std::move(f), 0, size, {.buffer_size = sstable_buffer_size}), [] (input_stream<char>& in) -> future<uint32_t> {
+static future<uint32_t> do_compute_component_file_digest(file f, size_t size, file_input_stream_options options) {
+    return with_closeable(make_file_input_stream(std::move(f), 0, size, options), [] (input_stream<char>& in) -> future<uint32_t> {
         uint32_t digest = crc32_utils::init_checksum();
         while (auto buf = co_await in.read()) {
             digest = crc32_utils::checksum(digest, buf.get(), buf.size());
         }
         co_return digest;
     });
+}
+
+future<uint32_t> sstable::compute_component_file_digest(file f, size_t size) const {
+    return do_compute_component_file_digest(std::move(f), size, {.buffer_size = sstable_buffer_size});
 }
 
 void sstable::validate_component_digest(component_type type, uint32_t computed_digest) const {
@@ -4346,6 +4351,13 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
                 // extensions should remove themselves if required.
                 scylla_metadata tmp;
                 uint64_t size = co_await _file.size();
+
+                auto scylla_digest = _sst->get_component_digest(component_type::Scylla);
+                if (scylla_digest) {
+                    auto computed = co_await do_compute_component_file_digest(_file, size - sizeof(uint32_t), {.buffer_size = default_sstable_buffer_size});
+                    _sst->validate_component_digest(component_type::Scylla, computed);
+                }
+
                 auto r = file_random_access_reader(_file, size, default_sstable_buffer_size);
                 co_await parse(*_sst->get_schema(), _sst->get_version(), r, tmp);
                 co_await r.close();
@@ -4364,7 +4376,17 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
                 });
                 co_return seastar::util::as_input_stream(std::move(bufs));
             }
-            co_return make_file_input_stream(_file, options);
+
+            auto stream = make_file_input_stream(_file, options);
+            auto digest = _sst->get_component_digest(_type);
+            auto len = co_await _file.size();
+            if (digest) {
+                co_return make_digest_checked_input_stream(std::move(stream), len, *digest, [&](sstring what) {
+                    throw_malformed_sstable_exception(what);
+                });
+            }
+
+            co_return stream;
         }
     };
 

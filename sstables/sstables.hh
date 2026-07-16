@@ -759,11 +759,12 @@ private:
     // and so max_local_deletion_time should be discarded for those.
     void validate_max_local_deletion_time();
     void validate_partitioner();
+    future<> validate_scylla_digest_value();
+public:
     void validate_component_digest(component_type type, uint32_t computed_digest) const;
     // Read component data and validate the digest.
     future<> validate_component_digest(component_type type);
-    future<> validate_scylla_digest_value();
-public:
+    
     using skip_data_digest = bool_class<struct skip_data_digest_tag>;
     future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
 private:
