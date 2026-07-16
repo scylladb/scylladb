@@ -11,13 +11,12 @@ from __future__ import annotations
 import asyncio
 import ssl
 import tempfile
-import urllib.parse
 from concurrent.futures.thread import ThreadPoolExecutor
 from multiprocessing import Event
 from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
-from test.pylib.runner import PHASE_REPORT_KEY
+from test.pylib.runner import PHASE_REPORT_KEY, MANAGER_LOGS_KEY, make_failed_test_dir
 from test.cluster.object_store.conftest import make_object_storage
 from test.pylib.random_tables import RandomTables
 from test.pylib.skip_types import skip_env
@@ -79,9 +78,6 @@ def pytest_addoption(parser):
     add_s3_options(parser)
     parser.addoption('--skip-internet-dependent-tests', action='store_true', default=False,
                      help='Skip tests which depend on artifacts from the internet')
-    parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
-                     help='Provide the URL to artifacts directory to generate the link to failed tests directory '
-                          'with logs')
 
 
 conn_logger = logging.getLogger("conn_messages")
@@ -218,7 +214,6 @@ async def manager_internal(request: pytest.FixtureRequest, manager_api_sock_path
 @pytest.fixture(scope="function")
 async def manager(request: pytest.FixtureRequest,
                   manager_internal: Callable[[], ManagerClient],
-                  record_property: Callable[[str, object], None],
                   suite_log_dir: Path,
                   testpy_uname: str,
                   build_mode: str) -> AsyncGenerator[ManagerClient]:
@@ -232,6 +227,12 @@ async def manager(request: pytest.FixtureRequest,
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
     await manager_client.before_test(test_case_name, test_log)
+    # Publish what pytest_runtest_makereport needs to attach this test's logs on
+    # failure (single source of truth), so it doesn't re-derive these paths.
+    request.node.stash[MANAGER_LOGS_KEY] = {
+        "client": manager_client,
+        "logs": {"pytest.log": test_log, "test_py.log": test_py_log_test},
+    }
     yield manager_client
     # `request.node.stash` contains reports stored per phase in `pytest_runtest_makereport`
     # from where we can retrieve test failure.
@@ -248,29 +249,15 @@ async def manager(request: pytest.FixtureRequest,
         found_errors = await manager_client.check_all_errors(check_all_errors=(request.node.get_closest_marker("check_nodes_for_errors") is not None))
 
         if failed or found_errors:
-            # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
-            # all related logs in one dir.
-            # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
-            failed_test_dir_path = suite_log_dir / "failed_test" / test_case_name.translate(
-                str.maketrans('[]', '()'))
-            failed_test_dir_path.mkdir(parents=True, exist_ok=True)
-
-        if failed:
-            await manager_client.gather_related_logs(
-                failed_test_dir_path,
-                {'pytest.log': test_log, 'test_py.log': test_py_log_test}
-            )
-            with open(failed_test_dir_path / "stacktrace.txt", "w") as f:
-                f.write(call_report.longreprtext)
-            if request.config.getoption('artifacts_dir_url') is not None:
-                # get the relative path to the tmpdir for the failed directory
-                dir_path_relative = f"{failed_test_dir_path.as_posix()[failed_test_dir_path.as_posix().find('testlog'):]}"
-                full_url = urllib.parse.urljoin(request.config.getoption('artifacts_dir_url') + '/',
-                                                urllib.parse.quote(dir_path_relative))
-                record_property("TEST_LOGS", full_url)
+            # Server logs / traceback / links are attached by pytest_runtest_makereport;
+            # here we only need the dir for the manager-specific found_errors files below.
+            failed_test_dir_path = make_failed_test_dir(request.config, build_mode, test_case_name)
 
         cluster_status = await manager_client.after_test(test_case_name, not failed)
     finally:
+        # Drop the stash entry before closing the client so a teardown-phase
+        # failure report doesn't gather logs through a stopped client.
+        request.node.stash[MANAGER_LOGS_KEY] = None
         await manager_client.stop()  # Stop client session and close driver after each test
 
     if cluster_status is not None and cluster_status["server_broken"] and not failed:
