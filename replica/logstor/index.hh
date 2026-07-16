@@ -141,9 +141,135 @@ public:
                             dht::raw_token_less_comparator, primary_index_key_cmp,
                             16, bplus::key_search::linear>;
 
+    using entry_reference = std::reference_wrapper<const primary_index_entry>;
+
     struct read_lookup_result {
         index_entry entry;
         std::optional<mutation> cached_mutation;
+    };
+
+private:
+    using iterator = typename partitions_type::iterator;
+    using const_iterator = typename partitions_type::const_iterator;
+
+public:
+
+    // Stateful cursor over a token range in the primary index.
+    //
+    // This type intentionally does not expose index iterators. Call `next_batch()` repeatedly
+    // to consume the scan in token order. The scan remembers the last fully returned token and,
+    // on the next call, re-seeks from that resume point instead of keeping raw iterators alive.
+    //
+    // Use it like this:
+    //   - construct it with `index.scan()` or `index.scan(range)`;
+    //   - call `next_batch(max_entries)` with the maximum number of entries you want to handle
+    //     in one batch, knowing that the scan will never split a token run;
+    //   - consume every entry in the returned batch synchronously;
+    //   - if you yield, call `next_batch()` again after resuming.
+    //
+    // The scan is not a snapshot. Later batches observe whatever is currently in the index.
+    class token_range_scan {
+        const primary_index* _index;
+        dht::token_range _range;
+        std::optional<dht::token> _last_token;
+        bool _exhausted = false;
+
+    public:
+        // A contiguous chunk of index entries returned by `next_batch()`.
+        //
+        // `entries` are references to entries currently stored in the index, so they are only
+        // meant for immediate consumption. Do not keep them across yields or index mutations.
+        // The scan only preserves token position, not entry handles.
+        //
+        // `first_token` and `last_token` are useful for tracing and resume bookkeeping.
+        // `entry_count` is the number of entries in `entries`.
+        // `exhausted` tells whether this batch reached the end of the requested range.
+        //
+        // Each batch contains all entries for every token it includes. If adding the next token
+        // would exceed `max_entries`, the scan stops before that token instead of breaking the
+        // token group in half (except if the first token itself exceeds `max_entries`, in which
+        // case the batch will contain only that token).
+        struct batch {
+            utils::small_vector<entry_reference, 16> entries;
+            dht::token first_token;
+            dht::token last_token;
+            bool exhausted;
+            size_t entry_count;
+        };
+
+        token_range_scan(const primary_index& index, dht::token_range range) noexcept
+            : _index(&index)
+            , _range(std::move(range)) {
+        }
+
+        dht::token_range unread_range() const {
+            if (!_last_token) {
+                return _range;
+            }
+            return dht::token_range(
+                    dht::token_range::bound(*_last_token, false),
+                    _range.end());
+        }
+
+        bool exhausted() const noexcept {
+            return _exhausted;
+        }
+
+        void reset() noexcept {
+            _last_token.reset();
+            _exhausted = false;
+        }
+
+        std::optional<batch> next_batch(size_t max_entries) {
+            if (_exhausted) {
+                return std::nullopt;
+            }
+
+            auto current = _index->position_at_range_start(unread_range());
+            auto end = _index->position_at_range_end(_range);
+            if (current == end) {
+                _exhausted = true;
+                _last_token.reset();
+                return std::nullopt;
+            }
+
+            batch next{
+                .first_token = current->key().token(),
+                .last_token = current->key().token(),
+                .exhausted = false,
+                .entry_count = 0,
+            };
+
+            while (current != end) {
+                auto token = current->key().token();
+                auto token_end = _index->upper_bound(token);
+                if (_range.end() && _range.end()->value() == token) {
+                    token_end = end;
+                }
+
+                auto token_entry_count = size_t(std::distance(current, token_end));
+                if (next.entry_count != 0 && next.entry_count + token_entry_count > max_entries) {
+                    break;
+                }
+
+                next.last_token = token;
+                next.entries.reserve(next.entries.size() + token_entry_count);
+                for (; current != token_end; ++current) {
+                    next.entries.push_back(std::cref(*current));
+                }
+                next.entry_count += token_entry_count;
+            }
+
+            next.exhausted = current == end;
+            if (next.exhausted) {
+                _exhausted = true;
+                _last_token.reset();
+            } else {
+                _last_token = next.last_token;
+            }
+
+            return next;
+        }
     };
 
 private:
@@ -199,6 +325,26 @@ private:
         }
     }
 
+    auto find_key(this auto& self, const primary_index_key& key) {
+        return self._partitions.find(key, primary_index_key_cmp{*self._schema});
+    }
+
+    auto position_at_range_start(this auto& self, const dht::token_range& tr) -> decltype(self._partitions.begin()) {
+        return tr.start()
+                ? (tr.start()->is_inclusive()
+                    ? self._partitions.lower_bound(tr.start()->value().raw(), primary_index_key_cmp{*self._schema})
+                    : self._partitions.upper_bound(tr.start()->value().raw(), primary_index_key_cmp{*self._schema}))
+                : self._partitions.begin();
+    }
+
+    auto position_at_range_end(this auto& self, const dht::token_range& tr) -> decltype(self._partitions.end()) {
+        return tr.end()
+                ? (tr.end()->is_inclusive()
+                    ? self._partitions.upper_bound(tr.end()->value().raw(), primary_index_key_cmp{*self._schema})
+                    : self._partitions.lower_bound(tr.end()->value().raw(), primary_index_key_cmp{*self._schema}))
+                : self._partitions.end();
+    }
+
 public:
     explicit primary_index(schema_ptr schema, cache_tracker* ct)
         : _partitions(dht::raw_token_less_comparator{})
@@ -212,8 +358,11 @@ public:
 
     future<> drain_cache() {
         if (_cache_tracker) {
-            for (auto& pie : _partitions) {
-                _cache_tracker->evict(pie);
+            auto scan = this->scan();
+            while (auto batch = scan.next_batch(1024)) {
+                for (const auto& pie : batch->entries) {
+                    _cache_tracker->evict(pie.get());
+                }
                 co_await coroutine::maybe_yield();
             }
         }
@@ -227,8 +376,12 @@ public:
         return _reads_phaser.advance_and_await();
     }
 
+    token_range_scan scan(const dht::token_range& tr = dht::token_range()) const {
+        return token_range_scan(*this, tr);
+    }
+
     std::optional<index_entry> get(const primary_index_key& key) const {
-        auto it = _partitions.find(key, primary_index_key_cmp(*_schema));
+        auto it = find_key(key);
         if (it != _partitions.end()) {
             return it->_e;
         }
@@ -236,7 +389,7 @@ public:
     }
 
     std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, schema_ptr target_schema, bool cache_enabled) const {
-        auto it = find(key);
+        auto it = find_key(key);
         if (it == _partitions.end()) {
             return std::nullopt;
         }
@@ -249,7 +402,7 @@ public:
     }
 
     bool populate_cache(const primary_index_key& key, const mutation& m) const {
-        auto it = find(key);
+        auto it = find_key(key);
         if (it == _partitions.end() || !_cache_tracker) {
             return false;
         }
@@ -259,7 +412,7 @@ public:
     }
 
     bool populate_cache(const primary_index_key& key, log_location read_location, const mutation& m) const {
-        auto it = find(key);
+        auto it = find_key(key);
         if (it == _partitions.end() || !_cache_tracker || it->entry().location != read_location) {
             return false;
         }
@@ -268,8 +421,8 @@ public:
         return true;
     }
 
-    bool is_record_alive(const primary_index_key& key, log_location location) {
-        auto it = _partitions.find(key, primary_index_key_cmp(*_schema));
+    bool is_record_alive(const primary_index_key& key, log_location location) const {
+        auto it = find_key(key);
         if (it != _partitions.end()) {
             return it->_e.location == location;
         } else {
@@ -278,7 +431,7 @@ public:
     }
 
     bool update_record_location(const primary_index_key& key, log_location old_location, log_location new_location) {
-        auto it = _partitions.find(key, primary_index_key_cmp(*_schema));
+        auto it = find_key(key);
         if (it != _partitions.end()) {
             if (it->_e.location == old_location) {
                 it->_e.location = new_location;
@@ -319,7 +472,7 @@ public:
     }
 
     bool erase(const primary_index_key& key, log_location loc) {
-        auto it = _partitions.find(key, primary_index_key_cmp(*_schema));
+        auto it = find_key(key);
         if (it != _partitions.end() && it->_e.location == loc) {
             it.erase_and_dispose(dht::raw_token_less_comparator{}, make_entry_disposer());
             return true;
@@ -356,20 +509,23 @@ public:
     size_t get_key_count() const noexcept { return _key_count; }
     size_t get_memory_usage() const noexcept { return _memory_usage; }
 
-private:
-    partitions_type::const_iterator find(const primary_index_key& key) const {
-        return _partitions.find(key, primary_index_key_cmp(*_schema));
-    }
-
 public:
     // First entry with key >= pos (for positioning at range start)
     partitions_type::const_iterator lower_bound(const dht::ring_position_view& pos) const {
         return _partitions.lower_bound(pos, primary_index_key_cmp(*_schema));
     }
 
+    partitions_type::const_iterator lower_bound(dht::token token) const {
+        return _partitions.lower_bound(token.raw(), primary_index_key_cmp(*_schema));
+    }
+
     // First entry with key strictly > key (for advancing past a key after a yield)
     partitions_type::const_iterator upper_bound(const primary_index_key& key) const {
         return _partitions.upper_bound(key, primary_index_key_cmp(*_schema));
+    }
+
+    partitions_type::const_iterator upper_bound(dht::token token) const {
+        return _partitions.upper_bound(token.raw(), primary_index_key_cmp(*_schema));
     }
 
 };

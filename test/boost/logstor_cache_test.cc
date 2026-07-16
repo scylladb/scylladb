@@ -279,6 +279,64 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
     index.drain_cache().get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_resumes_across_batches_by_token) {
+    auto schema = make_logstor_schema();
+    primary_index index(schema, nullptr);
+
+    insert_same_token_keys(index, *schema, 7, 0, 2);
+    insert_same_token_keys(index, *schema, 11, 100, 3);
+    insert_same_token_keys(index, *schema, 19, 200, 2);
+
+    auto scan = index.scan();
+
+    auto batch0 = scan.next_batch(3);
+    BOOST_REQUIRE(batch0);
+    BOOST_REQUIRE_EQUAL(batch0->first_token, dht::token::from_int64(7));
+    BOOST_REQUIRE_EQUAL(batch0->last_token, dht::token::from_int64(7));
+    BOOST_REQUIRE_EQUAL(batch0->entry_count, 2u);
+    BOOST_REQUIRE(!batch0->exhausted);
+
+    auto batch1 = scan.next_batch(3);
+    BOOST_REQUIRE(batch1);
+    BOOST_REQUIRE_EQUAL(batch1->first_token, dht::token::from_int64(11));
+    BOOST_REQUIRE_EQUAL(batch1->last_token, dht::token::from_int64(11));
+    BOOST_REQUIRE_EQUAL(batch1->entry_count, 3u);
+    BOOST_REQUIRE(!batch1->exhausted);
+
+    auto batch2 = scan.next_batch(3);
+    BOOST_REQUIRE(batch2);
+    BOOST_REQUIRE_EQUAL(batch2->first_token, dht::token::from_int64(19));
+    BOOST_REQUIRE_EQUAL(batch2->last_token, dht::token::from_int64(19));
+    BOOST_REQUIRE_EQUAL(batch2->entry_count, 2u);
+    BOOST_REQUIRE(batch2->exhausted);
+
+    BOOST_REQUIRE(!scan.next_batch(3));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_token_batch_intact) {
+    auto schema = make_logstor_schema();
+    primary_index index(schema, nullptr);
+
+    insert_same_token_keys(index, *schema, 23, 0, 5);
+    insert_same_token_keys(index, *schema, 29, 100, 1);
+
+    auto scan = index.scan();
+
+    auto batch0 = scan.next_batch(2);
+    BOOST_REQUIRE(batch0);
+    BOOST_REQUIRE_EQUAL(batch0->first_token, dht::token::from_int64(23));
+    BOOST_REQUIRE_EQUAL(batch0->last_token, dht::token::from_int64(23));
+    BOOST_REQUIRE_EQUAL(batch0->entry_count, 5u);
+    BOOST_REQUIRE(!batch0->exhausted);
+
+    auto batch1 = scan.next_batch(2);
+    BOOST_REQUIRE(batch1);
+    BOOST_REQUIRE_EQUAL(batch1->first_token, dht::token::from_int64(29));
+    BOOST_REQUIRE_EQUAL(batch1->last_token, dht::token::from_int64(29));
+    BOOST_REQUIRE_EQUAL(batch1->entry_count, 1u);
+    BOOST_REQUIRE(batch1->exhausted);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_exchange) {
     auto schema = make_logstor_schema();
     shared_logstor_cache cache;
