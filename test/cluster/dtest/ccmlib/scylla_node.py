@@ -6,19 +6,19 @@
 
 from __future__ import annotations
 
+import argparse
 import glob
+import locale
+import logging
 import os
 import re
-import time
-import locale
 import subprocess
+import time
 from collections import namedtuple
-from itertools import chain
 from functools import cached_property
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-import logging
-
 
 from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
@@ -584,27 +584,70 @@ class ScyllaNode:
         else:
             self.cluster.manager.api.flush_all_keyspaces(node_ip=self.address())
 
-    def compact(self, keyspace: str = "", tables: str | None = ()) -> None:
-        compact_cmd = ["compact"]
+    def compact(self, keyspace: str = "", tables: tuple | list = ()) -> None:
+        node_ip = self.address()
         if keyspace:
-            compact_cmd.append(keyspace)
-        compact_cmd += tables
-        self.nodetool(" ".join(compact_cmd))
+            self.cluster.manager.api.keyspace_compaction(
+                node_ip=node_ip,
+                keyspace=keyspace,
+                table=",".join(tables) if tables else None,
+            )
+        else:
+            self.cluster.manager.api.compact(node_ip=node_ip)
 
     def drain(self, block_on_log: bool = False) -> None:
+        """Drain the node via the REST API."""
         mark = self.mark_log()
-        self.nodetool("drain")
+        self.cluster.manager.api.drain(node_ip=self.address())
         if block_on_log:
             self.watch_log_for("DRAINED", from_mark=mark)
 
-    def repair(self, options: list[str] | None = None, **kwargs) -> tuple[str, str]:
-        cmd = ["repair"]
-        if options:
-            cmd.extend(options)
-        return self.nodetool(" ".join(cmd), **kwargs)
+    def repair(self, options: list[str] | None = None) -> None:
+        """
+        Supports: repair [keyspace] [table]
+        Flags: --source-dc/-dc mapped to dataCenters parameter.
+        """
+        keyspace, table, data_centers = self._parse_repair_options(options or [])
+
+        self.cluster.manager.api.repair_and_wait(
+            node_ip=self.address(),
+            keyspace=keyspace,
+            table=table,
+            data_centers=data_centers,
+        )
+
+    @staticmethod
+    def _parse_repair_options(options: list[str]) -> tuple[str, str, str]:
+        parser = argparse.ArgumentParser(description="Parse repair options")
+        parser.add_argument("-dc", "--source-dc", type=str, default="", help="data center name")
+        parser.add_argument("keyspace", nargs="?", default="", help="keyspace to repair")
+        parser.add_argument("table", nargs="?", default="", help="table to repair")
+        args = parser.parse_args(options)
+        return args.keyspace, args.table, args.source_dc
 
     def decommission(self) -> None:
         self.cluster.manager.decommission_node(server_id=self.server_id)
+
+    def take_snapshot(self, keyspace: str, tag: str, tables: list[str] | None = None) -> None:
+        self.cluster.manager.api.take_snapshot(node_ip=self.address(), ks=keyspace, tag=tag, tables=tables)
+
+    def clear_snapshot(self, tag: str, keyspace: str = "") -> None:
+        self.cluster.manager.api.delete_snapshot(node_ip=self.address(), tag=tag, keyspace=keyspace)
+
+    def load_new_sstables(self, keyspace: str, table: str, load_and_stream: bool = False) -> None:
+        self.cluster.manager.api.load_new_sstables(
+            node_ip=self.address(), keyspace=keyspace, table=table,
+            load_and_stream=load_and_stream)
+
+    def rebuild(self, source_dc: str | None = None, timeout: float = 1000) -> None:
+        self.cluster.manager.api.rebuild_node(host_ip=self.address(), timeout=timeout, source_dc=source_dc)
+
+    def scrub(self, keyspace: str = "", table: str = "", scrub_mode: str = "ABORT") -> None:
+        self.cluster.manager.api.keyspace_scrub_sstables(
+            node_ip=self.address(), ks=keyspace, scrub_mode=scrub_mode, table=table)
+
+    def get_endpoints(self, keyspace: str, table: str, key: str) -> list:
+        return self.cluster.manager.api.natural_endpoints(node_ip=self.address(), keyspace=keyspace, table=table, key=key)
 
     def get_sstables(self, keyspace, column_family, ignore_unsealed=True, cleanup_unsealed=False):
         keyspace_dir = os.path.join(self.get_path(), 'data', keyspace)
@@ -711,9 +754,8 @@ class ScyllaNode:
 
         if datafiles is None and keyspace is not None and self.is_running():
             tag = "sstable-dump-{}".format(uuid.uuid1())
-            kts = ",".join(f"{keyspace}.{column_family}" for column_family in column_families)
             self.debug(f"run_scylla_sstable(): creating snapshot with tag {tag} to be used for sstable dumping")
-            self.nodetool(f"snapshot -t {tag} {kts}")
+            self.take_snapshot(keyspace=keyspace, tag=tag, tables=list(column_families))
             sstables = []
             for column_family in column_families:
                 sstables.extend(glob.glob(os.path.join(self.get_path(), 'data', keyspace, f"{column_family}-*/snapshots/{tag}/*-Data.db")))
@@ -753,7 +795,7 @@ class ScyllaNode:
         # above failed, leave the snapshot with the sstables around for
         # post-mortem analysis.
         if tag is not None:
-            self.nodetool(f"clearsnapshot -t {tag} {keyspace}")
+            self.clear_snapshot(tag=tag, keyspace=keyspace)
 
         return ret
 

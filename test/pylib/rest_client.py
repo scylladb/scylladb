@@ -221,11 +221,12 @@ class ScyllaRESTAPIClient:
                                timeout = timeout)
         logger.debug("decommission_node %s finished", host_ip)
 
-    async def rebuild_node(self, host_ip: str, timeout: float) -> None:
+    async def rebuild_node(self, host_ip: str, timeout: float, source_dc: str | None = None) -> None:
         """Initiate rebuild of a node with host_ip"""
-        logger.debug("rebuild_node %s", host_ip)
-        await self.client.post("/storage_service/rebuild", host = host_ip,
-                               timeout = timeout)
+        logger.debug("rebuild_node %s source_dc=%s", host_ip, source_dc)
+        params = {"source_dc": source_dc} if source_dc else {}
+        await self.client.post("/storage_service/rebuild", host=host_ip,
+                               timeout=timeout, params=params)
         logger.debug("rebuild_node %s finished", host_ip)
 
     async def get_gossip_generation_number(self, node_ip: str, target_ip: str) -> int:
@@ -354,8 +355,9 @@ class ScyllaRESTAPIClient:
     async def keyspace_upgrade_sstables(self, node_ip: str, ks: str) -> None:
         await self.client.get(f"/storage_service/keyspace_upgrade_sstables/{ks}", host=node_ip)
 
-    async def keyspace_scrub_sstables(self, node_ip: str, ks: str, scrub_mode: str) -> None:
-        await self.client.get(f"/storage_service/keyspace_scrub/{ks}", host=node_ip,  params={"scrub_mode": scrub_mode})
+    async def keyspace_scrub_sstables(self, node_ip: str, ks: str, scrub_mode: str, table: str = "") -> None:
+        params = {"scrub_mode": scrub_mode, **({"cf": table} if table else {})}
+        await self.client.get(f"/storage_service/keyspace_scrub/{ks}", host=node_ip, params=params)
 
     async def disable_injection(self, node_ip: str, injection: str) -> None:
         await self.client.delete(f"/v2/error_injection/injection/{quote(injection, safe='')}", host=node_ip)
@@ -404,6 +406,10 @@ class ScyllaRESTAPIClient:
     async def flush_all_keyspaces(self, node_ip: str) -> None:
         """Flush all keyspaces"""
         await self.client.post(f"/storage_service/flush", host=node_ip)
+
+    async def drain(self, node_ip: str) -> None:
+        """Drain the node (flush + stop listening for connections)"""
+        await self.client.post("/storage_service/drain", host=node_ip)
 
     async def backup(self, node_ip: str, ks: str, table: str, tag: str, dest: str, bucket: str, prefix: str, **kwargs) -> str:
         """Backup keyspace's snapshot"""
@@ -467,6 +473,14 @@ class ScyllaRESTAPIClient:
             params['table'] = ','.join(tables)
         await self.client.post(f"/storage_service/tablets/snapshots", host=node_ip, params=params)
 
+    async def delete_snapshot(self, node_ip: str, tag: str, keyspace: str = "") -> None:
+        """Delete a snapshot by tag, optionally filtered by keyspace"""
+        params = {
+            "tag": tag,
+            **({"kn": keyspace} if keyspace else {}),
+        }
+        await self.client.delete("/storage_service/snapshots", host=node_ip, params=params)
+
     async def cleanup_keyspace(self, node_ip: str, ks: str) -> None:
         """Cleanup keyspace"""
         await self.client.post(f"/storage_service/keyspace_cleanup/{ks}", host=node_ip)
@@ -496,6 +510,10 @@ class ScyllaRESTAPIClient:
         if table is not None:
             url += f"?cf={table}"
         await self.client.post(url, host=node_ip)
+
+    async def compact(self, node_ip: str) -> None:
+        """Compact all keyspaces on the node"""
+        await self.client.post("/storage_service/compact", host=node_ip)
 
     async def keyspace_compaction(self, node_ip: str, keyspace: str, table: Optional[str] = None, consider_only_existing_data: bool = False) -> None:
         """Compact the specified or all tables in the keyspace"""
@@ -572,6 +590,28 @@ class ScyllaRESTAPIClient:
                 "await_completion": "true",
             }
             await self.client.post_json(f"/storage_service/tablets/repair", host=node_ip, params=params)
+
+    async def repair_and_wait(self, node_ip: str, keyspace: str = "", table: str = "", data_centers: str = "") -> None:
+        """Issue repair_async and poll repair_status until completion.
+
+        If keyspace is empty, repairs all non-system keyspaces.
+        """
+        params = {k: v for k, v in (("columnFamilies", table), ("dataCenters", data_centers)) if v}
+        if not keyspace:
+            keyspaces = await self.client.get_json("/storage_service/keyspaces", host=node_ip, params={"type": "non_local_strategy"})
+            for ks in keyspaces:
+                await self._repair_keyspace(node_ip, ks, params)
+        else:
+            await self._repair_keyspace(node_ip, keyspace, params)
+
+    async def _repair_keyspace(self, node_ip: str, keyspace: str, params: dict) -> None:
+        """Repair a single keyspace and wait for completion."""
+        sequence_number = await self.client.post_json(
+            f"/storage_service/repair_async/{keyspace}", host=node_ip, params=params or None)
+        status = await self.client.get_json(
+            "/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
+        if status != "SUCCESSFUL":
+            raise RuntimeError(f"Repair on {node_ip} failed: keyspace={keyspace}, sequence_number={sequence_number}, status={status}")
 
     def __get_autocompaction_url(self, keyspace: str, table: Optional[str] = None) -> str:
         """Return autocompaction url for the given keyspace/table"""
