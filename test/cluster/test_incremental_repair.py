@@ -1115,7 +1115,7 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     if new_coord != coord:
         logger.warning(f"Topology coordinator changed from {coord} to {new_coord} after restart")
         coord = new_coord
-        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        coord_serv = await manager.find_server_by_host_id(servers, coord)
         coord_log = await manager.server_open_log(coord_serv.server_id)
         post_marks_pos = await coord_log.mark()
 
