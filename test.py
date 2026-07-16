@@ -351,6 +351,8 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append(f'--random-seed={options.random_seed}')
     if options.gather_metrics:
         args.append('--gather-metrics')
+    if options.artifacts_dir_url:
+        args.append(f'--artifacts_dir_url={options.artifacts_dir_url}')
     if options.timeout:
         args.append(f'--timeout={options.timeout}')
     if options.session_timeout:

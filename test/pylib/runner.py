@@ -15,6 +15,7 @@ import random
 import shutil
 import sys
 import time
+import urllib.parse
 from argparse import BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count
@@ -129,6 +130,55 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 # Stores the per-phase test reports so that fixtures and hooks can inspect the
 # outcome of each phase (setup / call / teardown) independently.
 PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
+
+# Set by the `manager` fixture so the log collector in pytest_runtest_makereport
+# can gather manager-owned logs: {"client": ManagerClient, "logs": {name: path}}.
+MANAGER_LOGS_KEY = pytest.StashKey[dict[str, object]]()
+
+FAILED_TEST_DIR = "failed_test"
+
+
+def make_failed_test_dir(config: pytest.Config, build_mode: str, test_name: str) -> pathlib.Path:
+    """Create and return `<mode>/failed_test/<test>` (uploaded on failure).
+
+    The test name is translated so `[]` don't confuse the artifact upload.
+    """
+    path = (pathlib.Path(config.getoption("--tmpdir")).absolute()
+            / build_mode / FAILED_TEST_DIR
+            / test_name.translate(str.maketrans('[]', '()')))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def record_failed_test_artifacts(config: pytest.Config,
+                                 properties: list[tuple[str, object]],
+                                 failed_test_dir_path: pathlib.Path,
+                                 longreprtext: str,
+                                 when: str) -> None:
+    """Common failed-test bookkeeping: append the phase traceback to
+    stacktrace.txt and record the clickable TEST_LOGS / PYTEST_LOG links.
+
+    Fires once per failed phase, so the traceback is always appended while the
+    links are recorded only once (idempotent).
+    """
+    with open(failed_test_dir_path / "stacktrace.txt", "a") as f:
+        f.write(f"----- {when} -----\n{longreprtext}\n")
+
+    artifacts_dir_url = config.getoption("artifacts_dir_url", None)
+    if artifacts_dir_url is None or any(name == "TEST_LOGS" for name, _ in properties):
+        return
+
+    def _artifact_link(path: pathlib.Path | str) -> str:
+        # URL-encoded so test names with ::/[]/() don't 404; the junit plugin
+        # linkifies http(s) values.
+        posix = pathlib.Path(path).as_posix()
+        return urllib.parse.urljoin(artifacts_dir_url + "/", urllib.parse.quote(posix[posix.find("testlog"):]))
+
+    # TEST_LOGS -> failed_test folder (server logs + traceback);
+    # PYTEST_LOG -> this worker's session log.
+    properties.append(("TEST_LOGS", _artifact_link(failed_test_dir_path) + "/"))
+    if PYTEST_LOG_FILE in config.stash:
+        properties.append(("PYTEST_LOG", _artifact_link(config.stash[PYTEST_LOG_FILE])))
 
 
 def _build_test_mock(item: pytest.Item) -> SimpleNamespace:
@@ -584,6 +634,42 @@ def pytest_runtest_makereport(item, call):
                     f.write(section[0] + "\n")
                     f.write(section[1] + "\n")
 
+        # Single source of truth for attaching failed-test logs. cqlpy/alternator
+        # expose a pooled `scylla_cluster`; topology suites publish MANAGER_LOGS_KEY.
+        if report.failed:
+            # C++ items (and early setup failures) lack `funcargs`; nothing to collect.
+            funcargs = getattr(item, "funcargs", {})
+            build_mode = funcargs.get("build_mode")
+            cluster = funcargs.get("scylla_cluster")
+            # Published by the manager fixture (even when pulled in indirectly),
+            # so we don't re-derive its log paths or re-resolve the fixture here.
+            manager_logs = item.stash.get(MANAGER_LOGS_KEY, None)
+            if build_mode is not None and (cluster is not None or manager_logs is not None):
+                try:
+                    failed_test_dir_path = make_failed_test_dir(item.config, build_mode, item.name)
+
+                    if cluster is not None:
+                        # Copy the pooled server log before the cluster is recycled (unlinks it).
+                        server_log = cluster.server_log_filename()
+                        if server_log is not None and pathlib.Path(server_log).is_file():
+                            shutil.copyfile(server_log, failed_test_dir_path / pathlib.Path(server_log).name)
+
+                    if manager_logs is not None:
+                        # Manager owns the servers; gather via ManagerClient (sync-callable
+                        # since ManagerClient is universalasync-wrapped).
+                        manager_logs["client"].gather_related_logs(failed_test_dir_path, manager_logs["logs"])
+
+                    record_failed_test_artifacts(
+                        config=item.config,
+                        properties=item.user_properties,
+                        failed_test_dir_path=failed_test_dir_path,
+                        longreprtext=report.longreprtext,
+                        when=report.when,
+                    )
+                except Exception:
+                    logger.warning("Failed to collect logs for failed test %s", item.name, exc_info=True)
+
+
 class TestSuiteConfig:
     def __init__(self, config_file: pathlib.Path):
         self.path = config_file.parent
@@ -709,7 +795,7 @@ def prepare_dirs(tempdir_base: pathlib.Path,
         prepare_dir(tempdir_base / mode, "*.log", save_log_on_success)
         prepare_dir(tempdir_base / mode, "*.reject", save_log_on_success)
         prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "failed_test", "*", save_log_on_success)
+        prepare_dir(tempdir_base / mode / FAILED_TEST_DIR, "*", save_log_on_success)
         prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
 
 
