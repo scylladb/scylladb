@@ -15,6 +15,7 @@ import random
 import shutil
 import sys
 import time
+import urllib.parse
 from argparse import BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count
@@ -129,6 +130,61 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 # Stores the per-phase test reports so that fixtures and hooks can inspect the
 # outcome of each phase (setup / call / teardown) independently.
 PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
+
+FAILED_TEST_DIR = "failed_test"
+
+
+def make_failed_test_dir(config: pytest.Config, build_mode: str, test_name: str) -> pathlib.Path:
+    """Create and return the per-test directory where a failed test's logs are collected.
+
+    The release pipeline uploads ``<mode>/failed_test/<test>`` on failure. The
+    test name is translated so that names with ``[]`` don't confuse the upload.
+    """
+    path = (pathlib.Path(config.getoption("--tmpdir")).absolute()
+            / build_mode / FAILED_TEST_DIR
+            / test_name.translate(str.maketrans('[]', '()')))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def record_failed_test_artifacts(config: pytest.Config,
+                                 properties: list[tuple[str, object]],
+                                 failed_test_dir_path: pathlib.Path,
+                                 longreprtext: str,
+                                 when: str) -> None:
+    """Single place responsible for the common failed-test bookkeeping.
+
+    Appends the phase traceback to ``stacktrace.txt`` and records the clickable
+    ``TEST_LOGS`` (the failed_test folder) and ``PYTEST_LOG`` (this worker's
+    session log) links into ``properties`` (the test's ``user_properties``, which
+    the junit report renders as links). Both the topology ``manager`` suites
+    (test/cluster/conftest.py) and the cqlpy/alternator suites (the
+    ``pytest_runtest_makereport`` hook) funnel through here so there is exactly
+    one implementation and zero duplication. Copying the server logs themselves
+    stays with each caller since the sources differ (pooled ``scylla_cluster``
+    vs. the manager-owned servers).
+
+    The hook fires once per failed phase (setup/call/teardown), so the traceback
+    is always appended while the links are recorded only once (idempotent).
+    """
+    with open(failed_test_dir_path / "stacktrace.txt", "a") as f:
+        f.write(f"----- {when} -----\n{longreprtext}\n")
+
+    artifacts_dir_url = config.getoption("artifacts_dir_url", None)
+    if artifacts_dir_url is None or any(name == "TEST_LOGS" for name, _ in properties):
+        return
+
+    def _artifact_link(path: pathlib.Path | str) -> str:
+        # URL-encoded so test names with ::/[]/() don't 404; the junit plugin
+        # linkifies http(s) values.
+        posix = pathlib.Path(path).as_posix()
+        return urllib.parse.urljoin(artifacts_dir_url + "/", urllib.parse.quote(posix[posix.find("testlog"):]))
+
+    # TEST_LOGS -> failed_test folder (server logs + traceback);
+    # PYTEST_LOG -> this worker's session log.
+    properties.append(("TEST_LOGS", _artifact_link(failed_test_dir_path) + "/"))
+    if PYTEST_LOG_FILE in config.stash:
+        properties.append(("PYTEST_LOG", _artifact_link(config.stash[PYTEST_LOG_FILE])))
 
 
 def _build_test_mock(item: pytest.Item) -> SimpleNamespace:
@@ -584,6 +640,28 @@ def pytest_runtest_makereport(item, call):
                     f.write(section[0] + "\n")
                     f.write(section[1] + "\n")
 
+        # For failed scylla_cluster (cqlpy/alternator) tests, gather logs into
+        # <mode>/failed_test/<test> and link them from the junit report, like the topology
+        # `manager` suites do in test/cluster/conftest.py.
+        if report.failed:
+            cluster = item.funcargs.get("scylla_cluster")
+            build_mode = item.funcargs.get("build_mode")
+            if cluster is not None and build_mode is not None:
+                failed_test_dir_path = make_failed_test_dir(item.config, build_mode, item.name)
+                # Copy the server log before the pooled cluster is recycled (which unlinks it).
+                server_log = cluster.server_log_filename()
+                if server_log is not None and pathlib.Path(server_log).is_file():
+                    shutil.copyfile(server_log, failed_test_dir_path / pathlib.Path(server_log).name)
+
+                record_failed_test_artifacts(
+                    config=item.config,
+                    properties=item.user_properties,
+                    failed_test_dir_path=failed_test_dir_path,
+                    longreprtext=report.longreprtext,
+                    when=report.when,
+                )
+
+
 class TestSuiteConfig:
     def __init__(self, config_file: pathlib.Path):
         self.path = config_file.parent
@@ -709,7 +787,7 @@ def prepare_dirs(tempdir_base: pathlib.Path,
         prepare_dir(tempdir_base / mode, "*.log", save_log_on_success)
         prepare_dir(tempdir_base / mode, "*.reject", save_log_on_success)
         prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "failed_test", "*", save_log_on_success)
+        prepare_dir(tempdir_base / mode / FAILED_TEST_DIR, "*", save_log_on_success)
         prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
 
 

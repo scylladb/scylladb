@@ -11,13 +11,12 @@ from __future__ import annotations
 import asyncio
 import ssl
 import tempfile
-import urllib.parse
 from concurrent.futures.thread import ThreadPoolExecutor
 from multiprocessing import Event
 from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
-from test.pylib.runner import PHASE_REPORT_KEY
+from test.pylib.runner import PHASE_REPORT_KEY, make_failed_test_dir, record_failed_test_artifacts
 from test.cluster.object_store.conftest import make_object_storage
 from test.pylib.random_tables import RandomTables
 from test.pylib.skip_types import skip_env
@@ -79,9 +78,6 @@ def pytest_addoption(parser):
     add_s3_options(parser)
     parser.addoption('--skip-internet-dependent-tests', action='store_true', default=False,
                      help='Skip tests which depend on artifacts from the internet')
-    parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
-                     help='Provide the URL to artifacts directory to generate the link to failed tests directory '
-                          'with logs')
 
 
 conn_logger = logging.getLogger("conn_messages")
@@ -218,7 +214,6 @@ async def manager_internal(request: pytest.FixtureRequest, manager_api_sock_path
 @pytest.fixture(scope="function")
 async def manager(request: pytest.FixtureRequest,
                   manager_internal: Callable[[], ManagerClient],
-                  record_property: Callable[[str, object], None],
                   suite_log_dir: Path,
                   testpy_uname: str,
                   build_mode: str) -> AsyncGenerator[ManagerClient]:
@@ -251,23 +246,23 @@ async def manager(request: pytest.FixtureRequest,
             # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
             # all related logs in one dir.
             # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
-            failed_test_dir_path = suite_log_dir / "failed_test" / test_case_name.translate(
-                str.maketrans('[]', '()'))
-            failed_test_dir_path.mkdir(parents=True, exist_ok=True)
+            failed_test_dir_path = make_failed_test_dir(request.config, build_mode, test_case_name)
 
         if failed:
+            # Copy the manager-owned server logs; the shared helper then writes the
+            # stacktrace and records the TEST_LOGS/PYTEST_LOG links (single place,
+            # no duplication with test/pylib/runner.py).
             await manager_client.gather_related_logs(
                 failed_test_dir_path,
                 {'pytest.log': test_log, 'test_py.log': test_py_log_test}
             )
-            with open(failed_test_dir_path / "stacktrace.txt", "w") as f:
-                f.write(call_report.longreprtext)
-            if request.config.getoption('artifacts_dir_url') is not None:
-                # get the relative path to the tmpdir for the failed directory
-                dir_path_relative = f"{failed_test_dir_path.as_posix()[failed_test_dir_path.as_posix().find('testlog'):]}"
-                full_url = urllib.parse.urljoin(request.config.getoption('artifacts_dir_url') + '/',
-                                                urllib.parse.quote(dir_path_relative))
-                record_property("TEST_LOGS", full_url)
+            record_failed_test_artifacts(
+                config=request.config,
+                properties=request.node.user_properties,
+                failed_test_dir_path=failed_test_dir_path,
+                longreprtext=call_report.longreprtext,
+                when=call_report.when,
+            )
 
         cluster_status = await manager_client.after_test(test_case_name, not failed)
     finally:
