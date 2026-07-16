@@ -2183,7 +2183,12 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
     # to seastar/ exists just so any possible DW_AT_name under build (e.g. if there are some generated
     # sources) is excluded from the first rule.
     seastar_build_dir = os.path.join(build_dir, mode, 'seastar')
-    extra_file_prefix_map = f' -ffile-prefix-map={seastar_build_dir}=. -ffile-prefix-map={seastar_build_dir}/=seastar/'
+    # DW_AT_comp_dir records the compiler's working directory as an absolute
+    # path, so the prefix-map must use the absolute build dir to match it.
+    # (build_dir is relative to curdir by default; os.path.join handles the
+    # case where the user passes an absolute --build-dir too.)
+    abs_seastar_build_dir = os.path.join(curdir, seastar_build_dir)
+    extra_file_prefix_map = f' -ffile-prefix-map={abs_seastar_build_dir}=. -ffile-prefix-map={abs_seastar_build_dir}/=seastar/'
     seastar_cmake_args = [
         '-DCMAKE_BUILD_TYPE={}'.format(mode_config['cmake_build_type']),
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
