@@ -236,9 +236,7 @@ after all nodes in the cluster support the ``LARGE_DATA_GUARDRAILS`` feature.
 The global thresholds are live-updateable configuration parameters. A value of
 ``0`` disables a hard-limit threshold. Soft-limit thresholds use the existing
 ``compaction_*_warning_threshold`` parameters and are also used to decide which
-large-data records are stored in SSTable metadata. The table below lists both
-the defaults generated in ``scylla.yaml`` for new clusters and the built-in
-defaults used when a parameter is absent, for example on upgraded clusters.
+large-data records are stored in SSTable metadata.
 
 Large data guardrails use two kinds of checks:
 
@@ -271,17 +269,15 @@ Be aware that CQL warnings are attached to write responses and can increase
 network traffic for workloads that frequently hit soft limits.
 
 .. list-table:: Large data guardrail configuration parameters
-   :widths: 28 11 13 13 35
+   :widths: 28 11 16 45
    :header-rows: 1
 
    * - Parameter
      - Type
-     - New-cluster default
-     - Built-in default
+     - Default
      - Description
    * - ``compaction_large_partition_warning_threshold_mb``
      - Soft limit
-     - ``1000`` MB
      - ``1000`` MB
      - If a partition's on-disk size exceeds this threshold, a write to that
        partition triggers a soft-limit violation. This is replica-side because
@@ -290,24 +286,20 @@ network traffic for workloads that frequently hit soft limits.
    * - ``large_partition_fail_threshold_mb``
      - Hard limit
      - ``2000`` MB
-     - ``0``
      - If a partition's on-disk size already exceeds this threshold, writes
        targeting that partition are rejected. Set to ``0`` to disable.
    * - ``compaction_rows_count_warning_threshold``
      - Soft limit
-     - ``100000`` rows
      - ``100000`` rows
      - If a partition's on-disk row count exceeds this threshold, a write to
        that partition triggers a soft-limit violation.
    * - ``rows_count_fail_threshold``
      - Hard limit
      - ``200000`` rows
-     - ``0``
      - If a partition's on-disk row count already exceeds this threshold,
        writes targeting that partition are rejected. Set to ``0`` to disable.
    * - ``compaction_large_row_warning_threshold_mb``
      - Soft limit
-     - ``10`` MB
      - ``10`` MB
      - If a row exceeds this threshold, a write to that row triggers a
        soft-limit violation. Coordinator-side checks can detect an oversized
@@ -316,12 +308,10 @@ network traffic for workloads that frequently hit soft limits.
    * - ``large_row_fail_threshold_mb``
      - Hard limit
      - ``20`` MB
-     - ``0``
      - If a row exceeds this threshold, writes targeting that row are rejected.
        Set to ``0`` to disable.
    * - ``compaction_large_cell_warning_threshold_mb``
      - Soft limit
-     - ``1`` MB
      - ``1`` MB
      - If a cell value exceeds this threshold, the write triggers a soft-limit
        violation. This check is coordinator-side and applies to individual
@@ -329,12 +319,10 @@ network traffic for workloads that frequently hit soft limits.
    * - ``large_cell_fail_threshold_mb``
      - Hard limit
      - ``2`` MB
-     - ``0``
      - If a cell value exceeds this threshold, the write is rejected. Set to
        ``0`` to disable.
    * - ``compaction_collection_elements_count_warning_threshold``
      - Soft limit
-     - ``10000`` elements
      - ``10000`` elements
      - If a collection contains more elements than this threshold, a write to
        that collection triggers a soft-limit violation. Coordinator-side checks
@@ -343,20 +331,17 @@ network traffic for workloads that frequently hit soft limits.
    * - ``large_collection_elements_fail_threshold``
      - Hard limit
      - ``20000`` elements
-     - ``0``
      - If a collection contains more elements than this threshold, writes
        targeting that collection are rejected. Set to ``0`` to disable.
    * - ``large_data_cql_warnings``
      - Warning output
      - ``true``
-     - ``false``
      - When set to ``true``, soft-limit violations are returned to CQL clients
        as protocol warnings in addition to being logged. When set to ``false``,
        soft-limit violations are logged only. This setting does not affect
        hard-limit enforcement.
    * - ``compaction_large_data_records_per_sstable``
      - Metadata
-     - ``10``
      - ``10``
      - Controls how many large-data metadata records of each type ScyllaDB
        stores in each SSTable. Replica-side checks use these records to detect

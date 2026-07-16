@@ -842,22 +842,22 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Log a warning when writing rows larger than this value.")
     , compaction_large_cell_warning_threshold_mb(this, "compaction_large_cell_warning_threshold_mb", liveness::LiveUpdate, value_status::Used, 1,
         "Log a warning when writing cells larger than this value.")
-    , large_cell_fail_threshold_mb(this, "large_cell_fail_threshold_mb", liveness::LiveUpdate, value_status::Used, 0,
+    , large_cell_fail_threshold_mb(this, "large_cell_fail_threshold_mb", liveness::LiveUpdate, value_status::Used, 2,
         "Reject writes with cell value size exceeding this threshold in MB. Set to 0 to disable.")
-    , large_data_cql_warnings(this, "large_data_cql_warnings", liveness::LiveUpdate, value_status::Used, false,
+    , large_data_cql_warnings(this, "large_data_cql_warnings", liveness::LiveUpdate, value_status::Used, true,
         "When true, soft limit violations detected by the coordinator-side large data guardrail check are reported to the "
         "client as CQL warnings in the response frame. When false, this behavior is suppressed (only server-side logging is "
         "performed).")
-    , large_partition_fail_threshold_mb(this, "large_partition_fail_threshold_mb", liveness::LiveUpdate, value_status::Used, 0,
+    , large_partition_fail_threshold_mb(this, "large_partition_fail_threshold_mb", liveness::LiveUpdate, value_status::Used, 2000,
         "Reject writes targeting a partition whose on-disk size already exceeds this threshold in MB, as recorded in any SSTable's large data records. "
         "Set to 0 to disable.")
-    , rows_count_fail_threshold(this, "rows_count_fail_threshold", liveness::LiveUpdate, value_status::Used, 0,
+    , rows_count_fail_threshold(this, "rows_count_fail_threshold", liveness::LiveUpdate, value_status::Used, 200000,
         "Reject writes targeting a partition whose on-disk row count already exceeds this threshold, as recorded in any SSTable's large data records. "
         "Set to 0 to disable.")
-    , large_row_fail_threshold_mb(this, "large_row_fail_threshold_mb", liveness::LiveUpdate, value_status::Used, 0,
+    , large_row_fail_threshold_mb(this, "large_row_fail_threshold_mb", liveness::LiveUpdate, value_status::Used, 20,
         "Reject writes targeting a partition that contains any row whose on-disk size already exceeds this threshold in MB, as recorded in any SSTable's large data records. "
         "Set to 0 to disable.")
-    , large_collection_elements_fail_threshold(this, "large_collection_elements_fail_threshold", liveness::LiveUpdate, value_status::Used, 0,
+    , large_collection_elements_fail_threshold(this, "large_collection_elements_fail_threshold", liveness::LiveUpdate, value_status::Used, 20000,
         "Reject writes targeting a partition that contains any collection whose element count already exceeds this threshold, as recorded in any SSTable's large data records. "
         "Set to 0 to disable.")
     , compaction_rows_count_warning_threshold(this, "compaction_rows_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 100000,
