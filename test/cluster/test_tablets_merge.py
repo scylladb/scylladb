@@ -9,7 +9,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for
-from test.cluster.util import new_test_keyspace, create_new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_keyspace, feature_configs, FeatureConfigurations, \
+    FeatureConfig, count_rows
 
 import pytest
 import asyncio
@@ -436,8 +437,11 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
 
     await check_logs("after merge completion")
 
+
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+    FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_missing_data(manager: ManagerClient):
+async def test_missing_data(manager: ManagerClient, feature_config: FeatureConfig):
 
     # This is a test and reproducer for issue:
     # https://github.com/scylladb/scylladb/issues/23313
@@ -446,6 +450,7 @@ async def test_missing_data(manager: ManagerClient):
     cfg = { 'enable_tablets': True,
             'tablet_load_stats_refresh_interval_in_seconds': 1
     }
+    cfg = feature_config.get_cluster_cfg(cfg)
     cmdline = [
         '--logger-log-level', 'load_balancer=debug',
         '--logger-log-level', 'debug_error_injection=debug',
@@ -459,9 +464,11 @@ async def test_missing_data(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     inital_tablets = 32
+    keyspace_opts = feature_config.get_keyspace_opts(
+        f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {inital_tablets}}}")
 
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {inital_tablets}}}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);'))
 
         await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
 
@@ -492,19 +499,16 @@ async def test_missing_data(manager: ManagerClient):
         logger.info(f'Merged test table; new number of tablets: {expected_tablet_count}')
 
         # assert that the number of records has not changed
-        qry = f'SELECT * FROM {ks}.test'
-        logger.info(f'Running: {qry}')
-        res = cql.execute(qry)
-        missing = set(pks)
-        rec_count = 0
-        for row in res:
-            rec_count += 1
-            missing.discard(row.pk)
+        rec_count = await count_rows(cql, feature_config,
+                                     query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=pks, partition_key='pk')
+        assert rec_count == len(
+            pks), f"received {rec_count} records instead of {len(pks)} while querying server {server.server_id}"
 
-        assert rec_count == len(pks), f"received {rec_count} records instead of {len(pks)} while querying server {server.server_id}; missing keys: {missing}"
 
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+    FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_merge_with_drop(manager: ManagerClient):
+async def test_merge_with_drop(manager: ManagerClient, feature_config: FeatureConfig):
 
     # This is a test and reproducer for issue:
     # https://github.com/scylladb/scylladb/issues/23313
@@ -513,11 +517,14 @@ async def test_merge_with_drop(manager: ManagerClient):
     cfg = { 'enable_tablets': True,
             'tablet_load_stats_refresh_interval_in_seconds': 1
             }
+    cfg = feature_config.get_cluster_cfg(cfg)
     cmdline = [
         '--logger-log-level', 'load_balancer=debug',
         '--logger-log-level', 'debug_error_injection=debug',
     ]
     server = await manager.server_add(cmdline=cmdline, config=cfg)
+    keyspace_opts = feature_config.get_keyspace_opts(
+        f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
 
     logger.info(f'server_id = {server.server_id}')
 
@@ -527,8 +534,9 @@ async def test_merge_with_drop(manager: ManagerClient):
 
     initial_tablets = 32
 
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': {initial_tablets}}};")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(
+            f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': {initial_tablets}}};"))
 
         await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
 
@@ -569,8 +577,10 @@ async def test_merge_with_drop(manager: ManagerClient):
         await drop_table_fut
 
 
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+    FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_background_merge_deadlock(manager: ManagerClient):
+async def test_background_merge_deadlock(manager: ManagerClient, feature_config: FeatureConfig):
     """
     Reproducer for https://scylladb.atlassian.net/browse/SCYLLADB-928
 
@@ -609,13 +619,15 @@ async def test_background_merge_deadlock(manager: ManagerClient):
         '--logger-log-level', 'raft_topology=debug',
     ]
 
-    servers = [await manager.server_add(cmdline=cmdline)]
+    servers = [await manager.server_add(cmdline=cmdline, config=feature_config.get_cluster_cfg({}))]
     cql, _ = await manager.get_ready_cql(servers)
 
-    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    ks = await create_new_test_keyspace(cql, feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"))
 
     # Create a table which will go through 3 merge cycles.
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) with tablets = {{'min_tablet_count': 8}};")
+    await cql.run_async(feature_config.get_table_opts(
+        f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) with tablets = {{'min_tablet_count': 8}};"))
 
     await manager.api.enable_injection(servers[0].ip_addr, "merge_completion_fiber", one_shot=True)
     log = await manager.server_open_log(servers[0].server_id)
