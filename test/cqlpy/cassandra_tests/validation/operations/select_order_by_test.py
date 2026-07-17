@@ -343,22 +343,19 @@ def testOrderByForInClauseWithNullValue(cql, test_keyspace):
         execute(cql, table, "UPDATE %s SET s = 3 WHERE a = 3")
 
         for _ in before_and_after_flush(cql, table):
-            # Commenting this test out - there are ties for b, so the correct
-            # order isn't completely specified, and happens to be different in
-            # Scylla and Cassandra.
-            #assert_rows(execute_without_paging(cql, table, "SELECT a, b, c, d, s FROM %s WHERE a IN (1, 2, 3) ORDER BY b DESC"),
-            #           [2, 2, 2, 1, 2],
-            #           [2, 2, 1, 1, 2],
-            #           [1, 1, 2, 1, 1],
-            #           [1, 1, 1, 1, 1],
-            #           [3, None, None, None, 3])
+            assert_rows(execute_without_paging(cql, table, "SELECT a, b, c, d, s FROM %s WHERE a IN (1, 2, 3) ORDER BY b DESC"),
+                       [2, 2, 2, 1, 2],
+                       [2, 2, 1, 1, 2],
+                       [1, 1, 2, 1, 1],
+                       [1, 1, 1, 1, 1],
+                       [3, None, None, None, 3])
 
-            #assert_rows(execute_without_paging(cql, table, "SELECT a, b, c, d, s FROM %s WHERE a IN (1, 2, 3) ORDER BY b ASC"),
-            #           [3, None, None, None, 3],
-            #           [1, 1, 1, 1, 1],
-            #           [1, 1, 2, 1, 1],
-            #           [2, 2, 1, 1, 2],
-            #           [2, 2, 2, 1, 2])
+            assert_rows(execute_without_paging(cql, table, "SELECT a, b, c, d, s FROM %s WHERE a IN (1, 2, 3) ORDER BY b ASC"),
+                       [3, None, None, None, 3],
+                       [1, 1, 1, 1, 1],
+                       [1, 1, 2, 1, 1],
+                       [2, 2, 1, 1, 2],
+                       [2, 2, 2, 1, 2])
 
             assert_rows(execute_without_paging(cql, table, "SELECT a, b, c, d, s FROM %s WHERE a IN (1, 2, 3) ORDER BY b DESC , c DESC"),
                        [2, 2, 2, 1, 2],
