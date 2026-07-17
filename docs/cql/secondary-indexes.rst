@@ -135,7 +135,7 @@ Vector Index :label-note:`ScyllaDB Cloud`
 .. note::
 
    Vector indexes are supported in ScyllaDB Cloud only in clusters that have the Vector Search feature enabled.
-   Vector indexes do not support all ScyllaDB features (e.g., tracing, TTL, paging, and grouping). More information
+   Vector indexes do not support all ScyllaDB features (e.g., tracing, paging, and grouping). More information
    about Vector Search is available in the
    `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/stable/vector-search/>`_.
 
