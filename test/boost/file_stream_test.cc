@@ -13,6 +13,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/sstable_utils.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/open_info.hh"
 #include "sstables/sstables.hh"
 #include "utils/overloaded_functor.hh"
 #include "schema/schema_builder.hh"
@@ -578,21 +579,18 @@ static future<> test_stream_sink_write(sstables::test_env_config cfg) {
             .with_column("v", utf8_type)
             .build();
 
-        auto version = get_highest_sstable_version();
-        auto format = sstable::format_types::big;
         auto generation = env.new_generation();
         auto& mgr = env.manager();
         auto s_opts = env.get_storage_options();
+        auto desc = sstables::entry_descriptor(generation, sstable_id(generation.as_uuid()),
+                get_highest_sstable_version(), sstable::format_types::big, component_type::TOC);
 
         std::visit(overloaded_functor {
             [&env] (data_dictionary::storage_options::local& o) { o.dir = env.tempdir().path().native(); },
-            [&s] (data_dictionary::storage_options::object_storage& o) { o.location = s->id(); },
+            [] (data_dictionary::storage_options::object_storage& o) { o.location = std::nullopt; },
         }, s_opts.value);
 
-        auto toc_basename = sstable::component_basename(
-                s->ks_name(), s->cf_name(), version, generation, format, component_type::TOC);
-
-        auto sink = create_stream_sink(s, mgr, s_opts, sstable_state::normal, toc_basename, {});
+        auto sink = create_stream_sink(s, mgr, s_opts, sstable_state::normal, desc, {});
 
         // output() would succeed before the fix (wrapping the read-only file into a stream),
         // but the write below would throw std::logic_error("unsupported operation on s3 readable file").

@@ -16,4 +16,8 @@ enum class sstable_state : uint8_t {
     upload,
 };
 
+class sstable_id final {
+    utils::UUID uuid();
+};
+
 }

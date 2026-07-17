@@ -432,19 +432,33 @@ bytes directly to disk and then loads the reconstructed SSTables into the table.
 
 For tables backed by object storage, the SSTable data already resides in the
 cloud — transferring the bytes over the network would be redundant and
-expensive. Instead, ScyllaDB uses a server-side copy (clone) approach:
+expensive. Instead, ScyllaDB shares object-storage SSTables by reference:
+
+Object-storage SSTable components are stored under a stable SSTable identifier,
+using a prefix of the form
+`sstables/{sstable_id}/{component}`. Each node
+or shard that owns the SSTable creates a zero-length reference object under that
+SSTable prefix: `.../{sstable_id}/refs/nodes/{host_id}/{generation}`. The
+`generation` identifies the local registry entry, while `sstable_id` identifies
+the shared component objects.
 
 1. The source node takes a storage snapshot of the tablet's SSTables, holding
    `shared_sstable` references that keep the original cloud objects alive even
    if concurrent compaction would otherwise delete them.
 
 2. For each SSTable, the source sends a `CLONE_SSTABLE` RPC to the destination
-   node. The request carries the SSTable identity (generation, version, format)
-   rather than raw bytes.
+   node. The request carries the SSTable metadata (SSTable ID, generation,
+   version, format, and state) rather than raw bytes.
 
-3. The destination node issues a server-side copy of every SSTable component
-   object (e.g. S3 `CopyObject`), writing the copies to a fresh generation
-   owned by the destination, and then loads the cloned SSTables.
+3. If the cluster supports SSTable reference sharing, the destination node
+   creates a new local registry entry and reference object that point at the
+   existing SSTable ID. No component objects are copied.
+
+4. During rolling upgrade, before all nodes support reference sharing, the
+   destination falls back to a server-side copy of each component object (e.g.
+   S3 `CopyObject`). In that path the destination uses a fresh SSTable ID
+   derived from the destination generation and rewrites `Scylla.db` metadata to
+   contain that ID.
 
 No SSTable bytes traverse the network between source and destination. Only the
 small `CLONE_SSTABLE` control messages are exchanged.

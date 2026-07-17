@@ -3370,6 +3370,41 @@
          ]
       },
       {
+         "path":"/storage_service/object_storage/sstables",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"List object-storage SSTables and references in a bucket",
+               "type":"array",
+               "items":{
+                  "type":"object_storage_sstable"
+               },
+               "nickname":"object_storage_sstables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"endpoint",
+                     "description":"ID of the configured object storage endpoint",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"bucket",
+                     "description":"Object storage bucket name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/sstable_info",
          "operations":[
             {
@@ -3621,6 +3656,27 @@
             "value":{
                "type":"double",
                "description":"The value"
+            }
+         }
+      },
+      "object_storage_sstable":{
+         "id":"object_storage_sstable",
+         "description":"Object-storage SSTable namespace entry",
+         "properties":{
+            "sstable_id":{
+               "type":"string",
+               "description":"The SSTable ID path component"
+            },
+            "num_references":{
+               "type":"long",
+               "description":"Number of reference objects under this SSTable ID"
+            },
+            "references":{
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "description":"Reference object paths relative to the refs prefix"
             }
          }
       },

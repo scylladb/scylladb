@@ -90,6 +90,14 @@ public:
 
 };
 
+struct stream_sstable_meta {
+    sstables::sstable_id id;
+    utils::UUID generation;
+    int32_t version; // serialized sstables::sstable_version_types
+    int32_t format; // serialized sstables::sstable_format_types
+    sstables::sstable_state state;
+};
+
 class stream_blob_meta {
 public:
     file_stream_id ops_id;
@@ -99,6 +107,7 @@ public:
     streaming::file_ops fops;
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<stream_sstable_meta> sstable_meta;
     // We can extend this verb to send arbitrary blob of data
 };
 
@@ -115,6 +124,7 @@ struct stream_blob_info {
     sstring filename;
     streaming::file_ops fops;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<stream_sstable_meta> sstable_meta;
     stream_blob_source_fn source;
 
     friend inline std::ostream& operator<<(std::ostream& os, const stream_blob_info& x) {
@@ -169,10 +179,7 @@ class clone_sstable_request {
 public:
     file_stream_id ops_id;
     table_id table;
-    utils::UUID generation;      // sstables::generation_type, encoded as its underlying UUID
-    int32_t version;             // serialized sstables::sstable_version_types
-    int32_t format;              // serialized sstables::sstable_format_types
-    int32_t sstable_state;       // serialized sstables::sstable_state
+    streaming::stream_sstable_meta sstable_meta;
     seastar::shard_id dst_shard_id;
     service::frozen_topology_guard topo_guard;
 };
@@ -190,7 +197,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
 
 // The handler for the CLONE_SSTABLE verb. The destination node performs a
 // server-side S3/GCS CopyObject for a single SSTable and loads the clone.
-future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, streaming::clone_sstable_request req);
+future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, const gms::feature_service& features, streaming::clone_sstable_request req);
 
 // Ask the src node to stream sstables to dst node for table in the given token range using TABLET_STREAM_FILES verb.
 future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id, replica::table& table, const dht::token_range& range, const locator::host_id& src, const locator::host_id& dst, seastar::shard_id dst_shard_id, netw::messaging_service& ms, abort_source& as, service::frozen_topology_guard topo_guard);

@@ -509,7 +509,7 @@ async def check_streaming_directions(logger, servers, topology, host_ids, scope,
     for s in servers:
         streamed_to = defaultdict(int)
         log, mark = log_marks[s.server_id]
-        direct_downloads = await log.grep('sstables_loader - Adding downloaded SSTables to the table', from_mark=mark)
+        direct_downloads = await log.grep('sstables_loader - Adding downloaded SSTable.*to the table', from_mark=mark)
         res = await log.grep(r'sstables_loader - load_and_stream:.*target_node=(?P<target_host_id>[0-9a-f-]+)', from_mark=mark)
         for r in res:
             target_host_id = r[1].group('target_host_id')

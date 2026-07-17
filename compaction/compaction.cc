@@ -2207,7 +2207,6 @@ future<compaction_result> rewrite_sstables_component(compaction_descriptor descr
         };
 
         const auto& options = descriptor.options.as<compaction_type_options::component_rewrite>();
-        bool update_id = static_cast<bool>(options.update_id);
         // When rewriting a component, we cannot use the standard descriptor creator
         // because we must preserve the sstable version.
         auto creator = [&table_s] (sstables::shared_sstable sst) {
@@ -2215,7 +2214,7 @@ future<compaction_result> rewrite_sstables_component(compaction_descriptor descr
         };
         result.new_sstables.reserve(descriptor.sstables.size());
         for (auto& sst : descriptor.sstables) {
-            auto rewritten = sst->link_with_rewritten_component(creator, options.component_to_rewrite, options.modifier, update_id).get();
+            auto rewritten = sst->link_with_rewritten_component(creator, options.component_to_rewrite, options.modifier, options.update_id).get();
             result.new_sstables.push_back(rewritten);
         }
 

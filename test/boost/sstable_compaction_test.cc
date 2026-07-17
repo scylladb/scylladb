@@ -482,12 +482,8 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
 
 static future<> check_compacted_sstables(test_env& env, compact_sstables_result res) {
     return seastar::async([&env, res = std::move(res)] {
-        auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
-                .with_column("p1", utf8_type, column_kind::partition_key)
-                .with_column("c1", utf8_type, column_kind::clustering_key)
-                .with_column("r1", utf8_type)
-                .build();
         BOOST_REQUIRE_EQUAL(res.output_sstables.size(), 1);
+        auto s = res.output_sstables[0]->get_schema();
         auto sst = env.reusable_sst(s, res.output_sstables[0]).get();
         auto reader = sstable_reader(sst, s, env.make_reader_permit()); // reader holds sst and s alive.
         auto close_reader = deferred_close(reader);
@@ -7361,6 +7357,7 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
     auto mut1 = mutation(s, pk);
     mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
     auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
+    sst->change_state(sstable_state::staging).get();
 
     auto table = env.make_table_for_tests(s);
     auto close_table = deferred_stop(table);
@@ -7369,16 +7366,18 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
 
     bool leave_unsealed = true;
     auto d = sst->clone(gen_generator(), leave_unsealed).get();
+    BOOST_REQUIRE(d.state == sst->state());
 
-    auto sst2 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst2 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version, d.format);
     sst2->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::TOC).get());
     BOOST_REQUIRE(sst2->get_storage().exists(*sst2, sstables::component_type::TemporaryTOC).get());
 
     leave_unsealed = false;
     d = sst->clone(gen_generator(), leave_unsealed).get();
+    BOOST_REQUIRE(d.state == sst->state());
 
-    auto sst3 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst3 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version, d.format);
     sst3->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(sst3->get_storage().exists(*sst3, sstables::component_type::TOC).get());
     BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::TemporaryTOC).get());
@@ -7539,7 +7538,7 @@ SEASTAR_FIXTURE_TEST_CASE(failure_when_adding_new_sstable_test_gcs, gcs_fixture,
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
-static future<> test_perform_component_rewrite_single_sstable(compaction::compaction_type_options::component_rewrite::update_sstable_id update_id) {
+static future<> test_perform_component_rewrite_single_sstable(sstables::update_sstable_id update_id) {
     return test_env::do_with_async([update_id] (test_env& env) {
         simple_schema ss;
         auto s = ss.schema();
@@ -7600,11 +7599,11 @@ static future<> test_perform_component_rewrite_single_sstable(compaction::compac
 }
 
 SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_with_backup) {
-    return test_perform_component_rewrite_single_sstable(compaction::compaction_type_options::component_rewrite::update_sstable_id::yes);
+    return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::yes);
 }
 
 SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_without_backup) {
-    return test_perform_component_rewrite_single_sstable(compaction::compaction_type_options::component_rewrite::update_sstable_id::no);
+    return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::no);
 }
 
 SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {

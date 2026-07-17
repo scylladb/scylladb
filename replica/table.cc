@@ -498,7 +498,12 @@ sstables::shared_sstable table::make_sstable(sstables::sstable_state state) {
 
 sstables::shared_sstable table::make_sstable(sstables::sstable_state state, sstables::sstable_version_types version) {
     auto& sstm = get_sstables_manager();
-    return sstm.make_sstable(_schema, *_storage_opts, calculate_generation_for_new_table(), state, version, sstables::sstable::format_types::big);
+    auto gen = calculate_generation_for_new_table();
+    optimized_optional<sstables::sstable_id> sid_opt;
+    if (_storage_opts->is_object_storage_type()) {
+        sid_opt = sstables::sstable_id(gen.as_uuid());
+    }
+    return sstm.make_sstable(_schema, *_storage_opts, gen, sid_opt, state, version, sstables::sstable::format_types::big);
 }
 
 sstables::shared_sstable table::make_sstable() {
@@ -1431,7 +1436,7 @@ table::perform_component_rewrite(
         std::function<bool(const sstables::shared_sstable&)> filter,
         sstables::component_type component,
         std::function<void(sstables::sstable&)> modifier,
-        compaction::compaction_type_options::component_rewrite::update_sstable_id update_id) {
+        sstables::update_sstable_id update_id) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten;
     auto cgs = sg.compaction_groups_immediate();
     auto& cm = get_compaction_manager();
@@ -1456,7 +1461,7 @@ table::perform_component_rewrite(
         std::function<bool(const sstables::shared_sstable&)> filter,
         sstables::component_type component,
         std::function<void(sstables::sstable&)> modifier,
-        compaction::compaction_type_options::component_rewrite::update_sstable_id update_id) {
+        sstables::update_sstable_id update_id) {
     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten;
     auto sgs = storage_groups_for_token_range(range);
     for (auto& sg : sgs) {

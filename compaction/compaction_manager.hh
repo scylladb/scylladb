@@ -388,7 +388,7 @@ public:
             std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
-            compaction_type_options::component_rewrite::update_sstable_id update_id = compaction_type_options::component_rewrite::update_sstable_id::yes);
+            sstables::update_sstable_id update_id = sstables::update_sstable_id::yes);
 
     // Submit a table for major compaction.
     future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false);

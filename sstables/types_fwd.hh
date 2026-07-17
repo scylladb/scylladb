@@ -16,5 +16,6 @@ namespace sstables {
 
 using run_id = utils::tagged_uuid<struct run_id_tag>;
 using integrity_check = bool_class<class integrity_check_tag>;
+using update_sstable_id = bool_class<struct update_sstable_id_tag>;
 
 } // namespace sstables

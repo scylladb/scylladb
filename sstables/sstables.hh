@@ -53,6 +53,7 @@
 
 class sstable_assertions;
 class cached_file;
+class memory_data_sink_buffers;
 
 namespace data_dictionary {
 class storage_options;
@@ -211,6 +212,7 @@ public:
     sstable(schema_ptr schema,
             const data_dictionary::storage_options& storage,
             generation_type generation,
+            optimized_optional<sstable_id> sstable_identifier,
             sstable_state state,
             version_types v,
             format_types f,
@@ -287,6 +289,8 @@ public:
     generation_type generation() const {
         return _generation;
     }
+
+    future<size_t> num_references() const;
 
     // Returns a mutation_reader for given range of partitions.
     //
@@ -708,6 +712,7 @@ private:
     void write_compression();
 
     future<> read_scylla_metadata() noexcept;
+    future<std::unique_ptr<memory_data_sink_buffers>> serialize_scylla_metadata(scylla_metadata metadata) const;
 
     void write_scylla_metadata(shard_id shard,
                                run_identifier identifier,
@@ -921,6 +926,7 @@ public:
     const scylla_metadata* get_scylla_metadata() const {
         return _components->scylla_metadata ? &*_components->scylla_metadata : nullptr;
     }
+    future<std::unique_ptr<scylla_metadata>> copy_scylla_metadata();
 
     run_id run_identifier() const {
         return _run_identifier;
@@ -1133,7 +1139,7 @@ public:
     // Clones this sstable with a new generation, under the same location as the original one.
     // If leave_unsealed is true, the destination sstable is left unsealed.
     // Implementation is underlying storage specific.
-    future<entry_descriptor> clone(generation_type new_generation, bool leave_unsealed = false) const;
+    future<entry_descriptor> clone(generation_type new_generation, bool leave_unsealed = false, bool may_use_reference_sharing = false);
 
     struct lesser_reclaimed_memory {
         // comparator class to be used by the _reclaimed set in sstables manager
@@ -1190,7 +1196,7 @@ public:
     future<shared_sstable> link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
             component_type component,
             std::function<void(sstable&)> modifier,
-            bool update_sstable_id);
+            update_sstable_id);
     // Must be called in a seastar thread
     void write_component_with_metadata(component_type type, scylla_metadata metadata);
 };
@@ -1333,7 +1339,7 @@ struct sstable_stream_sink_cfg {
 
 // Creates a sink object which can receive a component file sourced from above source object data.
 
-std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr, sstables_manager&, const data_dictionary::storage_options&, sstable_state, std::string_view component_filename, sstable_stream_sink_cfg cfg);
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr, sstables_manager&, const data_dictionary::storage_options&, sstable_state, const entry_descriptor& desc, sstable_stream_sink_cfg cfg);
 
 } // namespace sstables
 

@@ -218,7 +218,7 @@ private:
     using sst_classification_info = std::vector<std::vector<minimal_sst_info>>;
 
     future<> attach_sstable(shard_id from_shard, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) const {
-        llog.debug("Adding downloaded SSTables to the table {} on shard {}, submitted from shard {}", _table.schema()->cf_name(), this_shard_id(), from_shard);
+        llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}, submitted from shard {}", min_info.generation, _table.schema()->ks_name(), _table.schema()->cf_name(), this_shard_id(), from_shard);
         auto& db = _db.local();
         auto& table = db.find_column_family(ks, cf);
         auto& sst_manager = table.get_sstables_manager();
@@ -261,6 +261,9 @@ private:
     future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
         sst_classification_info downloaded_sstables(this_smp_shard_count());
         for (const auto& sstable : sstables) {
+            // For now, tablet-aware restore doesn't need to mutate sstable level to 0
+            // since we support only restoring to empty tables and so we can keep the sstable levels on backup.
+            // Once we support restoring onto live tables we may want to mutate the ingested sstables' level to 0.
             auto min_info = co_await download_sstable(_db.local(), _table, sstable, llog);
             downloaded_sstables[min_info.shard].emplace_back(min_info);
         }
@@ -931,7 +934,7 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
 future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, const minimal_sst_info& min_info) const {
     auto& db = _db.local();
     auto& table = db.find_column_family(tid);
-    llog.debug("Adding downloaded SSTables to the table {} on shard {}", table.schema()->cf_name(), this_shard_id());
+    llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
     auto& sst_manager = table.get_sstables_manager();
     auto sst = sst_manager.make_sstable(
         table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);

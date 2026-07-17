@@ -457,11 +457,31 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_foreign_sstable_should_not_load_local
 
         auto sstables_open_before_process = sstables_opened_for_reading();
         with_sstable_directory(env, [](sharded<sstables::sstable_directory>& sstdir) {
-            distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
+            distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true, .allow_numerical_generations = true }).get();
         });
 
         // verify that all the sstables were loaded only once
         BOOST_REQUIRE_EQUAL(sstables_opened_for_reading(), sstables_open_before_process + this_smp_shard_count());
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_directory_numerical_generation_can_be_rejected) {
+    sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
+        env.invoke_on(0, [] (sstables::test_env& env) -> future<> {
+            co_return co_await seastar::async([&env] {
+                make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), generation_type(1)));
+            });
+        }).get();
+
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+        with_sstable_directory(env, [](sharded<sstables::sstable_directory>& sstdir) {
+            BOOST_REQUIRE_NO_THROW(distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get());
+        });
+
+        with_sstable_directory(env, [](sharded<sstables::sstable_directory>& sstdir) {
+            auto expect_malformed_sstable = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true, .allow_numerical_generations = false });
+            BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
+        });
     }).get();
 }
 

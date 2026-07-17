@@ -95,6 +95,14 @@ class stream_blob_cmd_data {
     std::optional<streaming::stream_blob_data> data;
 };
 
+class stream_sstable_meta {
+    sstables::sstable_id id;
+    utils::UUID generation;
+    int32_t version;
+    int32_t format;
+    sstables::sstable_state state;
+};
+
 class stream_blob_meta {
     streaming::file_stream_id ops_id;
     table_id table;
@@ -103,6 +111,7 @@ class stream_blob_meta {
     streaming::file_ops fops;
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
+    std::optional<streaming::stream_sstable_meta> sstable_meta;
 };
 
 class node_and_shard {
@@ -123,10 +132,7 @@ class stream_files_request {
 class clone_sstable_request {
     streaming::file_stream_id ops_id;
     table_id table;
-    utils::UUID generation;      // sstables::generation_type, encoded as its underlying UUID
-    int32_t version;             // cast from sstables::sstable_version_types
-    int32_t format;              // cast from sstables::sstable_format_types
-    int32_t sstable_state;
+    streaming::stream_sstable_meta sstable_meta;
     seastar::shard_id dst_shard_id;
     service::frozen_topology_guard topo_guard;
 };

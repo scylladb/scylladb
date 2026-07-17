@@ -83,6 +83,7 @@ public:
         bool allow_loading_materialized_view = false;
         bool sort_sstables_according_to_owner = true;
         bool garbage_collect = false;
+        bool allow_numerical_generations = true;
         sstables::sstable_open_config sstable_open_config;
     };
 
@@ -319,7 +320,7 @@ public:
     // Returns the name of the pending_delete_log and an unordered_set of sstable prefixes.
     static future<sstring> create_pending_deletion_log(opened_directory& base_dir, const std::vector<shared_sstable>& ssts);
 
-    static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
+    static bool compare_sstable_storage_prefix(std::string_view a, std::string_view b) noexcept;
     sstable_state state() const noexcept { return _state; }
 };
 

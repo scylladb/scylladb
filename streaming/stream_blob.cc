@@ -24,6 +24,7 @@
 #include "sstables/types.hh"
 #include "idl/streaming.dist.hh"
 #include "service/topology_guard.hh"
+#include "gms/feature_service.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
@@ -45,6 +46,9 @@ constexpr size_t file_stream_write_behind = 10;
 constexpr size_t file_stream_read_ahead = 4;
 
 static sstables::sstable_state sstable_state(const streaming::stream_blob_meta& meta) {
+    if (meta.sstable_meta) {
+        return meta.sstable_meta->state;
+    }
     return meta.sstable_state.value_or(sstables::sstable_state::normal);
 }
 
@@ -54,7 +58,7 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         replica::table& t = db.find_column_family(id);
         auto erm = t.get_effective_replication_map();
         auto& sstm = t.get_sstables_manager();
-        auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, state, desc.version, desc.format);
+        auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, desc.sid, state, desc.version, desc.format);
         sstables::sstable_open_config cfg { .unsealed_sstable = true };
         // load() with unsealed_sstable=true opens the SSTable without requiring a "sealed"
         // registry entry — the registry entry is still in "creating" state at this point,
@@ -441,13 +445,18 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
         stream_options.write_behind = file_stream_write_behind;
 
         auto& table = db.find_column_family(meta.table);
+        auto schema = table.schema();
         if (meta.fops == file_ops::stream_sstables || meta.fops == file_ops::load_sstables) {
             auto& sstm = table.get_sstables_manager();
             // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
             // left sealed on the table directory.
             sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables,
                                                     .leave_unsealed = true };
-            auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, cfg);
+            auto desc_result = sstables::parse_path(std::filesystem::path(meta.filename), schema->ks_name(), schema->cf_name());
+            if (!desc_result) {
+                throw std::runtime_error(fmt::format("Cannot stream blob in {}.{}: file={}: {}", schema->ks_name(), schema->cf_name(), meta.filename, desc_result.error()));
+            }
+            auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), *desc_result, cfg);
             auto out = co_await sstable_sink->output(foptions, stream_options);
             co_return output_result{
                 [sstable_sink = std::move(sstable_sink), &meta, &db, &vbw](store_result res) -> future<> {
@@ -561,6 +570,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             meta.fops = info.fops;
             meta.filename = info.filename;
             meta.sstable_state = info.sstable_state;
+            meta.sstable_meta = info.sstable_meta;
             fstream = co_await info.source(stream_options);
         } catch (...) {
             blogger.warn("fstream[{}] Master failed sources={} targets={} error={}",
@@ -789,11 +799,16 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
             auto& sst = sst_snapshot.sst;
             // stable state (across files) is a must for load to work on destination
             auto sst_state = sst->state();
+            auto sst_id = sst->sstable_identifier();
+            if (!sst_id) {
+                on_internal_error(blogger, format("sstable {} has no identifier", sst->get_filename()));
+            }
 
             if (sst->get_storage().is_object_storage()) {
                 // Clone path for object-storage SSTables: send CLONE_SSTABLE RPC
-                // to each target.  The destination performs server-side S3/GCS
-                // CopyObject and loads the clone.
+                // to each target.  The destination may add a reference to the sstable
+                // when the SSTABLE_REFERENCE_SHARING feature is enabled, or
+                // perform server-side S3/GCS CopyObject, and finally it loads the clone.
                 //
                 // Rolling-upgrade safety: object-storage keyspaces can only be
                 // created when the KEYSPACE_STORAGE_OPTIONS cluster feature is
@@ -805,12 +820,17 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                     streaming::clone_sstable_request clone_req;
                     clone_req.ops_id = req.ops_id;
                     clone_req.table = req.table;
-                    clone_req.generation = sst->generation().as_uuid();
-                    clone_req.version = static_cast<int32_t>(sst->get_version());
-                    clone_req.format = static_cast<int32_t>(sst->get_format());
-                    clone_req.sstable_state = static_cast<int32_t>(sst_state);
+                    clone_req.sstable_meta.id = *sst->sstable_identifier();
+                    clone_req.sstable_meta.generation = sst->generation().as_uuid();
+                    clone_req.sstable_meta.version = static_cast<int32_t>(sst->get_version());
+                    clone_req.sstable_meta.format = static_cast<int32_t>(sst->get_format());
+                    clone_req.sstable_meta.state = sst_state;
                     clone_req.dst_shard_id = target.shard;
                     clone_req.topo_guard = req.topo_guard;
+
+                    // FIXME: to pin the sstable while being cloned, create a temporary reference on behalf
+                    // of the target node that would be removed by it once it creates its own reference,
+                    // or be removed by this node on rpc failure.
 
                     co_await ser::streaming_rpc_verbs::send_clone_sstable(&ms, target.node, clone_req);
                 }
@@ -827,7 +847,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
 
                     auto& info = files.emplace_back();
                     info.fops = file_ops::stream_sstables;
-                    info.sstable_state = sst_state;
+                    info.sstable_meta = stream_sstable_meta{*sst_id, sst->generation().as_uuid(), static_cast<int32_t>(sst->get_version()), static_cast<int32_t>(sst->get_format()), sst_state};
                     info.filename = std::move(newname);
                     info.source = [s = std::move(s)](const file_input_stream_options& options) {
                         return s->input(options);
@@ -870,7 +890,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     co_return resp;
 }
 
-future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, streaming::clone_sstable_request req) {
+future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, const gms::feature_service& features, streaming::clone_sstable_request req) {
     stream_files_response resp;
 
     // Reuse the "stream_mutation_fragments" injection point so all existing
@@ -895,34 +915,30 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
         blogger.info("stream_mutation_fragments: released (clone)");
     });
 
-    if (req.sstable_state < 0 || req.sstable_state > static_cast<int32_t>(sstables::sstable_state::upload)) {
-        throw std::runtime_error(fmt::format("clone_sstable_handler: invalid sstable_state {}", req.sstable_state));
-    }
-    auto state = static_cast<sstables::sstable_state>(req.sstable_state);
-    auto generation = sstables::generation_type(req.generation);
-    auto version = static_cast<sstables::sstable_version_types>(req.version);
-    auto format = static_cast<sstables::sstable_format_types>(req.format);
-    // The descriptor carries the ORIGINAL generation from the source node.
-    // Server-side copy the S3/GCS objects to a fresh generation owned
-    // by this (destination) node.  The source holds shared_sstable
-    // refs that keep the original objects alive until we confirm.
-    //
-    // We only need the component list (from the TOC) so that clone()
-    // knows which S3 objects to copy.  load_metadata() is the lightest
-    // public API that populates it — a full load() would also validate
-    // metadata, compute shards, and open data files, all of which we
-    // throw away immediately after cloning.
+    auto& meta = req.sstable_meta;
+    auto state = meta.state;
+    auto generation = sstables::generation_type(meta.generation);
+    auto version = static_cast<sstables::sstable_version_types>(meta.version);
+    auto format = static_cast<sstables::sstable_format_types>(meta.format);
     replica::table& t = db.find_column_family(req.table);
     auto& sstm = t.get_sstables_manager();
-    auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, state, version, format);
-    co_await orig_sst->load_metadata();
+    auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, meta.id, state, version, format);
+    bool use_reference_sharing = features.sstable_reference_sharing;
+    if (!use_reference_sharing) {
+        // The copy path only needs the component list (from the TOC) so that
+        // clone() knows which objects to copy.  load_metadata() is lighter than
+        // load(), which also validates metadata, computes shards, and opens data files.
+        co_await orig_sst->load_metadata();
+    }
     auto new_gen = t.get_sstable_generation_generator()();
-    // clone() server-side copies the S3/GCS objects to a fresh generation and
-    // creates the registry entry in "creating" state (leave_unsealed=true).
+    // With reference sharing, clone() creates a registry entry and a reference
+    // to the source sstable_id instead of copying component objects.
+    // clone() creates the registry entry in "creating" state (leave_unsealed=true).
     // The entry is transitioned to "sealed" later by load_sstable_for_tablet()
     // → add_new_sstable_and_update_cache() → on_add callback → seal_sstable().
-    auto desc = co_await orig_sst->clone(new_gen, /*leave_unsealed=*/true);
-    blogger.debug("stream_sstables[{}] Cloned {} -> {} on destination", req.ops_id, desc.generation, new_gen);
+    auto desc = co_await orig_sst->clone(new_gen, /*leave_unsealed=*/true, /*may_use_reference_sharing=*/use_reference_sharing);
+    blogger.debug("stream_sstables[{}] Cloned {} -> {} on destination using {}", req.ops_id, generation, new_gen,
+        use_reference_sharing ? "reference sharing" : "server-side copy");
     co_await load_sstable_for_tablet(req.ops_id, db, vbw, req.table, state, std::move(desc), req.dst_shard_id);
     co_return resp;
 }
