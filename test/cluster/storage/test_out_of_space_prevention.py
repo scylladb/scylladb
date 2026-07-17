@@ -518,7 +518,12 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
                 await manager.api.enable_injection(servers[0].ip_addr, "maybe_split_new_sstable_wait", one_shot=True)
 
                 token = 'all'
-                repair_task = asyncio.create_task(manager.api.tablet_repair(servers[0].ip_addr, ks, table, token))
+                # The repair REST call blocks until the whole repair completes (await_completion).
+                # Under the split/repair serialization (commit 02c639dd93, SCYLLADB-2531) repair can
+                # take well over the 300s default HTTP client timeout to reach the injection point,
+                # and the test itself waits up to 600s for that injection below. Give the call a
+                # timeout comfortably above that deadline so the client does not time out (SCYLLADB-3214).
+                repair_task = asyncio.create_task(manager.api.tablet_repair(servers[0].ip_addr, ks, table, token, timeout=900))
 
                 # Emit split decision during repair.
                 await run_split()
