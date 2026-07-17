@@ -461,11 +461,11 @@ std::optional<std::string_view> paxos_store::try_get_base_table(std::string_view
     return cf_name.substr(0, cf_name.size() - paxos_state_table_suffix.size());
 }
 
-static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
+future<cql3::untyped_result_set> paxos_store::do_execute_cql_with_timeout(sstring req,
         db::timeout_clock::time_point timeout,
-        std::vector<data_value_or_unset> values,
-        cql3::query_processor& qp)
+        std::vector<data_value_or_unset> values)
 {
+    auto& qp = _sys_ks.query_processor();
     const auto now = db::timeout_clock::now();
     const auto d = now < timeout
         ? timeout - now
@@ -502,8 +502,7 @@ future<cql3::untyped_result_set> paxos_store::execute_cql_with_timeout(sstring r
         Args&&... args) {
     return do_execute_cql_with_timeout(std::move(req),
         timeout,
-        { data_value(std::forward<Args>(args))... },
-        _sys_ks.query_processor()
+        { data_value(std::forward<Args>(args))... }
     );
 }
 

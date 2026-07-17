@@ -127,6 +127,8 @@ class paxos_store:
 
     template <typename... Args>
     future<cql3::untyped_result_set> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
+    future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout,
+            std::vector<data_value_or_unset> values);
     future<schema_ptr> get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const;
     future<> create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout);
     static schema_ptr create_paxos_state_schema(const schema& s);
