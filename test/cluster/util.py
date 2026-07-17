@@ -123,6 +123,44 @@ def feature_configs(*configs: FeatureConfigurations):
     return [pytest.param(config.value, id=config.name.lower()) for config in configs]
 
 
+async def count_rows(cql, feature_config: FeatureConfig, query_template: str, ks: str, table: str, keys, partition_key: str):
+    """Count rows in a table, honoring the feature config's consistency model.
+
+    ``query_template`` must be a ``SELECT COUNT(*)`` aggregate that references
+    the table as ``{ks}.{table}`` (this token is used as the insertion anchor).
+    Post-FROM clauses (e.g. ``BYPASS CACHE``, ``LIMIT``) are allowed.
+
+    Eventual-consistency keyspaces run ``query_template`` once at CL=ALL and
+    return the count.
+
+    Strongly-consistent keyspaces reject that query on two counts: CL=ALL is not
+    allowed ("must use QUORUM/LOCAL_QUORUM or ONE/LOCAL_ONE"), and scans are
+    rejected ("strongly consistent queries can only target a single partition").
+    For those we run the same template scoped to a single partition by inserting
+    ``WHERE {partition_key} = <key>`` after the table token (so clause order
+    stays valid) for each key at LOCAL_QUORUM, and sum the per-partition counts.
+    """
+
+    async def run_query_with_semaphore(sem, head, sep, tail, key):
+        async with sem:
+            return await cql.run_async(SimpleStatement(
+                    f"{head}{sep} WHERE {partition_key} = {key}{tail}",
+                    consistency_level=ConsistencyLevel.LOCAL_QUORUM))
+
+    query = query_template.format(ks=ks, table=table)
+    if feature_config.strongly_consistent:
+        semaphore = asyncio.Semaphore(100)
+        anchor = f"{ks}.{table}"
+        head, sep, tail = query.partition(anchor)
+        rows = await asyncio.gather(*[run_query_with_semaphore(semaphore, head, sep, tail, key) for key in keys])
+        return sum(r[0].count for r in rows)
+    else:
+        row = await cql.run_async(SimpleStatement(
+            query,
+            consistency_level=ConsistencyLevel.ALL))
+        return row[0].count
+
+
 async def reconnect_driver(manager: ManagerClient) -> Session:
     """Can be used as a workaround for scylladb/python-driver#295.
 
