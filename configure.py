@@ -2840,6 +2840,10 @@ def write_build_file(f,
         gen_headers += list(ragels.keys())
         gen_headers += list(rust_headers.keys())
         gen_headers.append('$builddir/{}/gen/rust/cxx.h'.format(mode))
+        # The AWS error definitions header is included (transitively) by
+        # anything that touches utils/s3/aws_error.hh, so it must exist on
+        # disk before any translation unit is compiled.
+        gen_headers.append(aws_errors_gen_hh)
         gen_headers_dep = ' '.join(gen_headers)
 
         for hh in rust_headers:
