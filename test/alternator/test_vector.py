@@ -878,6 +878,23 @@ def test_updatetable_vector_and_gsi_same_request(vs):
                     'Projection': {'ProjectionType': 'ALL'}
                 }}])
 
+# Similarly, it's not allowed to combine VectorIndexUpdates with
+# StreamSpecification in the same UpdateTable request. This mirrors
+# the same restriction on GlobalSecondaryIndexUpdates + StreamSpecification
+# ("You cannot create or delete index while changing stream status").
+def test_updatetable_vector_and_stream_same_request(vs):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        with pytest.raises(ClientError, match='ValidationException'):
+            table.meta.client.update_table(
+                TableName=table.name,
+                VectorIndexUpdates=[{'Create': {
+                    'IndexName': 'vec',
+                    'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}
+                }}],
+                StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'})
+
 # Test that PutItem still works as expected on a table with a vector index
 # created by CreateTable or UpdateTable. It might not work if we set up CDC
 # in a broken way that breaks writes.
