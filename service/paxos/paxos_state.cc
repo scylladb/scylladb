@@ -346,10 +346,12 @@ paxos_store::paxos_store(db::system_keyspace& sys_ks, gms::feature_service& feat
     , _features(features)
     , _db(db)
     , _mm(mm)
+    , _prepared_statements_prune_timer([this] { prune_invalid_prepared_statements(); })
 {
     if (this_shard_id() == 0) {
         _mm.get_notifier().register_listener(this);
     }
+    _prepared_statements_prune_timer.arm_periodic(prepared_statements_prune_period);
 }
 
 paxos_store::~paxos_store() {
@@ -357,10 +359,17 @@ paxos_store::~paxos_store() {
 }
 
 future<> paxos_store::stop() {
+    _prepared_statements_prune_timer.cancel();
     auto stopped = this_shard_id() == 0 
         ? _mm.get_notifier().unregister_listener(this) 
         : make_ready_future<>();
     return stopped.then([this] { _stopped = true; });
+}
+
+void paxos_store::prune_invalid_prepared_statements() {
+    std::erase_if(_prepared_statements, [] (const auto& entry) {
+        return !entry.second;
+    });
 }
 
 schema_ptr paxos_store::create_paxos_state_schema(const schema& s) {

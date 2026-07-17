@@ -7,7 +7,10 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 #pragma once
+#include <chrono>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include "service/paxos/proposal.hh"
 #include "utils/log.hh"
@@ -141,6 +144,8 @@ class paxos_store:
     using prepared_statement_cache = std::unordered_map<prepared_statement_cache_key, prepared_statement_ptr, utils::tuple_hash>;
 
     prepared_statement_cache _prepared_statements;
+    static constexpr auto prepared_statements_prune_period = std::chrono::minutes(1);
+    seastar::timer<seastar::lowres_clock> _prepared_statements_prune_timer;
 
     template <typename... Args>
     future<cql3::untyped_result_set> execute_cql_with_timeout(const schema& s, paxos_state_query query,
@@ -153,6 +158,7 @@ class paxos_store:
     future<> create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout);
     static schema_ptr create_paxos_state_schema(const schema& s);
     schema_ptr try_get_paxos_state_schema(const schema& s) const;
+    void prune_invalid_prepared_statements();
 public:
     explicit paxos_store(db::system_keyspace& sys_ks, gms::feature_service& features, replica::database& db, migration_manager& mm);
     ~paxos_store();
