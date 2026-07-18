@@ -274,6 +274,41 @@ def test_table_batch_write_item_histogram(test_table_s, metrics):
         test_table_s.meta.client.batch_write_item(RequestItems = {
             test_table_s.name: items2})
 
+def test_table_batch_write_item_count_not_updated_on_validation_error(test_table_s, metrics):
+    p = random_string()
+    with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count", [[0, {'op': 'BatchWriteItem', 'cf': test_table_s.name}]]):
+        with check_increases_metric_exact(
+                metrics, "scylla_alternator_table_batch_item_count_histogram_bucket",
+                [[0, {'op': 'BatchWriteItem', 'le': '2.000000', 'cf': test_table_s.name}]]):
+            with pytest.raises(ClientError):
+                test_table_s.meta.client.batch_write_item(RequestItems={
+                    test_table_s.name: [
+                        {'PutRequest': {'Item': {'p': p, 'a': 'hi'}}},
+                        {'PutRequest': {'Item': {'p': p, 'a': 'hi1'}}},
+                    ]})
+
+def test_table_batch_write_item_count_not_updated_on_authorization_error(dynamodb, cql, test_table_s, metrics):
+    p1 = random_string()
+    p2 = random_string()
+    with new_role(cql, superuser=True) as (super_role, super_key):
+        with new_dynamodb(dynamodb, super_role, super_key) as auth_dynamodb:
+            with scylla_config_auth_temporary(auth_dynamodb, True, False):
+                with new_role(cql) as (role, key):
+                    with new_dynamodb(dynamodb, role, key) as d:
+                        before = get_metric(metrics, 'scylla_alternator_table_operation', {'op': 'BatchWriteItem', 'cf': test_table_s.name})
+                        with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count", [[0, {'op': 'BatchWriteItem', 'cf': test_table_s.name}]]):
+                            with check_increases_metric_exact(
+                                    metrics, "scylla_alternator_table_batch_item_count_histogram_bucket",
+                                    [[0, {'op': 'BatchWriteItem', 'le': '2.000000', 'cf': test_table_s.name}]]):
+                                with pytest.raises(ClientError, match='AccessDeniedException'):
+                                    d.meta.client.batch_write_item(RequestItems={
+                                        test_table_s.name: [
+                                            {'PutRequest': {'Item': {'p': p1, 'a': 'hi'}}},
+                                            {'PutRequest': {'Item': {'p': p2, 'a': 'hi1'}}},
+                                        ]})
+                        after = get_metric(metrics, 'scylla_alternator_table_operation', {'op': 'BatchWriteItem', 'cf': test_table_s.name})
+                        assert after == before + 1
+
 def test_batch_get_item_histogram(test_table_s, metrics):
     with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '2.000000'}], [1, {'op': 'BatchGetItem', 'le': '3.000000'}]]):
         test_table_s.meta.client.batch_get_item(RequestItems = {

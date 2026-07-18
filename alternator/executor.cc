@@ -3476,8 +3476,13 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // WCU calculation is performed at the end of execution.
     // We need to keep track of changes per table, both for internal metrics
     // and to be able to return the values if should_add_wcu is true.
-    // For each table, we need its stats and schema.
-    std::vector<std::pair<lw_shared_ptr<stats>, schema_ptr>> per_table_wcu;
+    // For each table, we need its stats, schema and batch item count.
+    struct table_batch_write_stats {
+        lw_shared_ptr<stats> table_stats;
+        schema_ptr schema;
+        size_t item_count;
+    };
+    std::vector<table_batch_write_stats> per_table_wcu;
 
     audit::audit_table_set audited_table_names;
     bool only_audited_tables = true;
@@ -3488,8 +3493,6 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(schema));
         per_table_stats->api_operations.batch_write_item++;
-        per_table_stats->api_operations.batch_write_item_batch_total += it->value.Size();
-        per_table_stats->api_operations.batch_write_item_histogram.add(it->value.Size());
         tracing::add_alternator_table_name(trace_state, schema->cf_name());
         if (should_audit) {
             if (_audit.local().will_log(audit::statement_category::DML, schema->ks_name(), schema->cf_name())) {
@@ -3531,7 +3534,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 co_return api_error::validation(fmt::format("Unknown BatchWriteItem request type: {}", r_name));
             }
         }
-        per_table_wcu.emplace_back(std::make_pair(per_table_stats, schema));
+        per_table_wcu.emplace_back(std::move(per_table_stats), std::move(schema), it->value.Size());
     }
     for (const auto& b : mutation_builders) {
         co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, b.first, auth::permission::MODIFY, _stats);
@@ -3576,29 +3579,33 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     for (const auto& w : per_table_wcu) {
         total_wcu = 0;
         // The following loop goes over all items from the same table
-        while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
+        while(pos < mutation_builders.size() && w.schema->id() == mutation_builders[pos].first->id()) {
             uint64_t item_size = mutation_builders[pos].second.length_in_bytes();
             size_t wcu = wcu_consumed_capacity_counter::get_units(item_size ? item_size : 1);
             total_wcu += wcu;
             if (mutation_builders[pos].second.is_put_item()) {
-                w.first->wcu_total[stats::PUT_ITEM] += wcu;
+                w.table_stats->wcu_total[stats::PUT_ITEM] += wcu;
                 wcu_put_units += wcu;
             } else {
-                w.first->wcu_total[stats::DELETE_ITEM] += wcu;
+                w.table_stats->wcu_total[stats::DELETE_ITEM] += wcu;
                 wcu_delete_units += wcu;
             }
-            w.first->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kb_ceil(item_size));
+            w.table_stats->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kb_ceil(item_size));
             pos++;
         }
         if (should_add_wcu) {
             rjson::value entry = rjson::empty_object();
-            rjson::add(entry, "TableName", rjson::from_string(w.second->cf_name()));
+            rjson::add(entry, "TableName", rjson::from_string(w.schema->cf_name()));
             rjson::add(entry, "CapacityUnits", total_wcu);
             rjson::push_back(consumed_capacity, std::move(entry));
         }
     }
     _stats.wcu_total[stats::PUT_ITEM] += wcu_put_units;
     _stats.wcu_total[stats::DELETE_ITEM] += wcu_delete_units;
+    for (const auto& w : per_table_wcu) {
+        w.table_stats->api_operations.batch_write_item_batch_total += w.item_count;
+        w.table_stats->api_operations.batch_write_item_histogram.add(w.item_count);
+    }
     _stats.api_operations.batch_write_item_batch_total += total_items;
     _stats.api_operations.batch_write_item_histogram.add(total_items);
     co_await do_batch_write(std::move(mutation_builders), client_state, trace_state, std::move(permit));
@@ -3613,7 +3620,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     auto duration = std::chrono::steady_clock::now() - start_time;
     _stats.api_operations.batch_write_item_latency.mark(duration);
     for (const auto& w : per_table_wcu) {
-        w.first->api_operations.batch_write_item_latency.mark(duration);
+        w.table_stats->api_operations.batch_write_item_latency.mark(duration);
     }
     if (!audited_table_names.empty()) {
         if (!only_audited_tables) {
