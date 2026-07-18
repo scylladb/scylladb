@@ -480,6 +480,26 @@ def test_table_item_operations(test_table_s, metrics):
         test_table_s.delete_item(Key={'p': p})
         test_table_s.update_item(Key={'p': p})
 
+def test_table_write_item_operations_counted_on_authorization_error(dynamodb, cql, test_table_s, metrics):
+    p = random_string()
+    with new_role(cql, superuser=True) as (super_role, super_key):
+        with new_dynamodb(dynamodb, super_role, super_key) as auth_dynamodb:
+            with scylla_config_auth_temporary(auth_dynamodb, True, False):
+                with new_role(cql) as (role, key):
+                    with new_dynamodb(dynamodb, role, key) as d:
+                        table = d.Table(test_table_s.name)
+                        operations = [
+                            ('PutItem', lambda: table.put_item(Item={'p': p, 'a': 'hi'})),
+                            ('DeleteItem', lambda: table.delete_item(Key={'p': p})),
+                            ('UpdateItem', lambda: table.update_item(Key={'p': p}, UpdateExpression='SET a = :a', ExpressionAttributeValues={':a': 'hi'})),
+                        ]
+                        for op, operation in operations:
+                            before = get_metric(metrics, 'scylla_alternator_table_operation', {'op': op, 'cf': test_table_s.name})
+                            with pytest.raises(ClientError, match='AccessDeniedException'):
+                                operation()
+                            after = get_metric(metrics, 'scylla_alternator_table_operation', {'op': op, 'cf': test_table_s.name})
+                            assert after == before + 1
+
 # Test counters for Query and Scan:
 def test_scan_operations(test_table_s, metrics):
     with check_increases_operation(metrics, ['Query', 'Scan']):
