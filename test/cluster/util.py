@@ -149,6 +149,24 @@ async def wait_for_no_pending_topology_transition(manager: ManagerClient, deadli
     await wait_for(no_transition, deadline, period=.5)
 
 
+async def wait_for_no_running_compactions(manager: ManagerClient,
+                                          servers: List[ServerInfo],
+                                          deadline: float) -> None:
+    """Wait until there are no running compactions on any of the given nodes.
+    Assumes autocompaction has already been disabled so no new compactions
+    will be started while we wait for in-flight ones to finish.
+    """
+    async def no_compactions():
+        for srv in servers:
+            compactions = await manager.api.client.get_json(
+                "/compaction_manager/compactions", host=srv.ip_addr)
+            if compactions:
+                return None
+        return True
+
+    await wait_for(no_compactions, deadline)
+
+
 async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, deadline: float) -> None:
     """
     Weaker version of the above check.
