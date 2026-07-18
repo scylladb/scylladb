@@ -104,6 +104,7 @@ async def test_scaling(manager: ManagerClient, object_storage):
     async def verify_object_storage_namespace(server, live_servers, ks):
         """Verify object-storage namespace layout and reference counts through REST API."""
         await manager.disable_tablet_balancing()
+        await wait_for_no_pending_topology_transition(manager, time.time() + 120)
         try:
             for node in live_servers:
                 await manager.api.disable_autocompaction(node.ip_addr, ks, "test")
