@@ -62,6 +62,26 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 add_compile_definitions(SEASTAR_NO_EXCEPTION_HACK)
 # Hacks needed to expose internal APIs for xxhash dependencies
 add_compile_definitions(XXH_PRIVATE_API)
+
+# Build the bundled fmt submodule rather than relying on whatever version
+# happens to be installed on the host (matching configure.py). This must come
+# before Seastar is configured below: for the in-tree Seastar build, CMake
+# redirects Seastar's find_package(fmt) to this subdirectory's fmt::fmt target.
+# Build fmt shared in Debug/Dev and static otherwise, matching Seastar's own
+# linkage so fmt symbols don't end up in both libseastar and a static libfmt.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "Dev")
+    set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+else()
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+endif()
+set(FMT_INSTALL OFF CACHE BOOL "" FORCE)
+set(FMT_TEST OFF CACHE BOOL "" FORCE)
+set(FMT_DOC OFF CACHE BOOL "" FORCE)
+set(FMT_FUZZ OFF CACHE BOOL "" FORCE)
+# We don't consume fmt's C++20 module; building it drags in module dependency
+# scanning, which Scylla otherwise disables.
+set(FMT_MODULE OFF CACHE BOOL "" FORCE)
+add_subdirectory(fmt)
 # SEASTAR_TESTING_MAIN is added later (after add_subdirectory(seastar) and
 # add_subdirectory(abseil)) to avoid leaking into the seastar subdirectory.
 # If SEASTAR_TESTING_MAIN is defined globally before seastar, it causes a
@@ -217,7 +237,9 @@ target_link_libraries(Boost::regex
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)
-find_package(fmt 10.0.0 REQUIRED)
+# Resolves to the bundled submodule added via add_subdirectory(fmt) above
+# (CMake redirects find_package to it), not the host's fmt.
+find_package(fmt REQUIRED)
 find_package(libdeflate REQUIRED)
 find_package(libxcrypt REQUIRED)
 find_package(p11-kit REQUIRED)

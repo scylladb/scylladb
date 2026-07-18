@@ -15,3 +15,6 @@
 [submodule "tools/cqlsh"]
 	path = tools/cqlsh
 	url = ../scylla-cqlsh
+[submodule "fmt"]
+	path = fmt
+	url = ../fmt
