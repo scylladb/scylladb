@@ -21,6 +21,7 @@
 #include "version.hh"
 #include <set>
 #include <unordered_set>
+#include <fmt/ranges.h>
 
 namespace gms {
 
@@ -71,7 +72,7 @@ public:
 
 private:
     static sstring version_string(const std::initializer_list<sstring>& args) {
-        return fmt::to_string(fmt::join(args, versioned_value::DELIMITER));
+        return fmt::to_string(fmt::join(std::span(args), versioned_value::DELIMITER));
     }
 
     static sstring make_token_string(const std::unordered_set<dht::token>& tokens);
