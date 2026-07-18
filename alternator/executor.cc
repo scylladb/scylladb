@@ -3112,6 +3112,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         per_table_stats->api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
+        per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
                 (executor& e) mutable {
@@ -4407,6 +4408,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
         per_table_stats->api_operations.update_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
+        per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
                 (executor& e) mutable {
