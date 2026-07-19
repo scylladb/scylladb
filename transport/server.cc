@@ -336,6 +336,8 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
     , _stats_key(stats_key)
     , _used_by_maintenance_socket(used_by_maintenance_socket)
 {
+    build_supported_body();
+
     namespace sm = seastar::metrics;
 
     if (used_by_maintenance_socket) {
@@ -2091,7 +2093,10 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_auth_challeng
     return response;
 }
 
-std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const
+// Build and cache the serialized body for SUPPORTED responses.
+// All values are constant per-shard for the server's lifetime, so we
+// serialize once at startup and reuse the body on every OPTIONS request.
+void cql_server::build_supported_body()
 {
     std::multimap<sstring, sstring> opts;
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
@@ -2101,19 +2106,19 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     // e.g. CQL driver configuration.
     opts.insert({"CLIENT_OPTIONS", ""});
     // Let drivers identify the connected node without an extra system.local query.
-    opts.insert({"SCYLLA_HOST_ID", _server._gossiper.my_host_id().to_sstring()});
-    if (_server._config.allow_shard_aware_drivers) {
+    opts.insert({"SCYLLA_HOST_ID", _gossiper.my_host_id().to_sstring()});
+    if (_config.allow_shard_aware_drivers) {
         opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", this_smp_shard_count())});
         opts.insert({"SCYLLA_SHARDING_ALGORITHM", dht::cpu_sharding_algorithm_name()});
-        if (_server._config.shard_aware_transport_port) {
-            opts.insert({"SCYLLA_SHARD_AWARE_PORT", format("{:d}", *_server._config.shard_aware_transport_port)});
+        if (_config.shard_aware_transport_port) {
+            opts.insert({"SCYLLA_SHARD_AWARE_PORT", format("{:d}", *_config.shard_aware_transport_port)});
         }
-        if (_server._config.shard_aware_transport_port_ssl) {
-            opts.insert({"SCYLLA_SHARD_AWARE_PORT_SSL", format("{:d}", *_server._config.shard_aware_transport_port_ssl)});
+        if (_config.shard_aware_transport_port_ssl) {
+            opts.insert({"SCYLLA_SHARD_AWARE_PORT_SSL", format("{:d}", *_config.shard_aware_transport_port_ssl)});
         }
-        opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _server._config.sharding_ignore_msb)});
-        opts.insert({"SCYLLA_PARTITIONER", _server._config.partitioner_name});
+        opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _config.sharding_ignore_msb)});
+        opts.insert({"SCYLLA_PARTITIONER", _config.partitioner_name});
     }
     for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
         const sstring ext_key_name = protocol_extension_name(ext);
@@ -2126,8 +2131,51 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
             }
         }
     }
+    // Serialize into a temporary response and keep the body as bytes_ostream
+    cql_server::response tmp(0, cql_binary_opcode::SUPPORTED, tracing::trace_state_ptr());
+    tmp.write_string_multimap(std::move(opts));
+    _supported_body = std::move(tmp).extract_body();
+    _supported_body.linearize();
+
+    // Pre-compress with lz4 using the CQL lz4 frame format:
+    // 4-byte big-endian uncompressed length prefix + compressed data
+    auto in = _supported_body.view();
+    size_t max_compressed = LZ4_COMPRESSBOUND(in.size()) + 4;
+    bytes compressed(bytes::initialized_later(), max_compressed);
+    auto* out = reinterpret_cast<char*>(compressed.begin());
+    out[0] = (in.size() >> 24) & 0xFF;
+    out[1] = (in.size() >> 16) & 0xFF;
+    out[2] = (in.size() >> 8) & 0xFF;
+    out[3] = in.size() & 0xFF;
+    auto ret = LZ4_compress_default(reinterpret_cast<const char*>(in.data()), out + 4, in.size(), max_compressed - 4);
+    if (ret == 0) {
+        throw std::runtime_error("Failed to lz4-compress SUPPORTED response body");
+    }
+    compressed.resize(ret + 4);
+    _supported_body_lz4 = std::move(compressed);
+}
+
+std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const
+{
+    // Fast path: OPTIONS heartbeats almost never have tracing enabled.
+    // Use the pre-serialized (and optionally pre-compressed) body directly.
+    if (!tracing::should_return_id_in_response(tr_state)) [[likely]] {
+        const bool use_lz4 = _compression == cql_compression::lz4;
+        uint8_t flags = use_lz4 ? static_cast<uint8_t>(cql_frame_flags::compression) : uint8_t(0);
+        bytes_ostream body;
+        body.write(use_lz4 ? bytes_view(_server._supported_body_lz4) : _server._supported_body.view());
+        auto response = std::make_unique<cql_server::response>(
+            stream, cql_binary_opcode::SUPPORTED, flags,
+            std::move(body));
+        if (use_lz4) {
+            response->mark_as_pre_compressed();
+        }
+        return response;
+    }
+    // Slow path: tracing embeds the session ID in the frame header,
+    // so we can't use the pre-compressed body; normal compression applies.
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
-    response->write_string_multimap(std::move(opts));
+    response->append_body(_server._supported_body.view());
     return response;
 }
 
@@ -2272,7 +2320,7 @@ void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_serv
 }
 
 future<> cql_server::response::write_message(output_stream<char>& out, uint8_t version, cql_compression compression, seastar::deleter del) {
-    if (compression != cql_compression::none) {
+    if (compression != cql_compression::none && !_pre_compressed) {
         compress(compression);
     }
     utils::result_with_exception_ptr<temporary_buffer<char>> frame = make_frame(version, _body.size());
@@ -2495,6 +2543,11 @@ void cql_server::response::write_string_multimap(std::multimap<sstring, sstring>
         write_string(key);
         write_string_list(values);
     }
+}
+
+void cql_server::response::append_body(bytes_view body)
+{
+    _body.write(body);
 }
 
 void cql_server::response::write_string_bytes_map(const std::unordered_map<sstring, bytes>& map)
