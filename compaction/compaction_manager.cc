@@ -1936,6 +1936,13 @@ protected:
             }
         }, false);
         compaction_completion_desc desc { .old_sstables = {sst}, .new_sstables = {sst} };
+        // Must hold sstable_set_lock while calling on_compaction_completion, because it
+        // mutates the sstable set (moves sstables between compaction groups). Otherwise
+        // a concurrent regular compaction's snapshot+filter+registration (which IS
+        // protected by this lock) can capture sstables that are about to be moved out
+        // from under it — causing "Unable to remove input SSTable" on completion.
+        auto& cs = _cm.get_compaction_state(_compacting_table);
+        auto units = co_await get_units(cs.sstable_set_lock, 1);
         co_await _compacting_table->on_compaction_completion(std::move(desc), sstables::offstrategy::no);
         // It's fine to return empty results (zeroed stats) as compaction was bypassed.
         co_return compaction_result{};
