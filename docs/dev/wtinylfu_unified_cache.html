@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W-TinyLFU Unified Cache for ScyllaDB</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0a0e17; color: #e0e6f0; line-height: 1.6; }
+.slide { min-height: 100vh; padding: 60px 80px; display: flex; flex-direction: column; justify-content: center; border-bottom: 1px solid #1a2035; }
+h1 { font-size: 2.8em; color: #60a5fa; margin-bottom: 10px; }
+h2 { font-size: 2em; color: #60a5fa; margin-bottom: 20px; }
+h3 { font-size: 1.4em; color: #93c5fd; margin: 20px 0 10px; }
+.subtitle { font-size: 1.3em; color: #94a3b8; margin-bottom: 30px; }
+p { margin: 10px 0; font-size: 1.1em; }
+code { background: #1e293b; padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', 'Fira Code', monospace; color: #86efac; }
+pre { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 20px; margin: 15px 0; overflow-x: auto; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.95em; line-height: 1.5; color: #cbd5e1; }
+.highlight { color: #fbbf24; }
+.good { color: #4ade80; }
+.bad { color: #f87171; }
+.neutral { color: #94a3b8; }
+table { border-collapse: collapse; margin: 15px 0; width: auto; }
+th, td { padding: 10px 18px; text-align: left; border: 1px solid #1e293b; }
+th { background: #1e293b; color: #93c5fd; font-weight: 600; }
+td { background: #0f172a; }
+tr:hover td { background: #1a2744; }
+.columns { display: flex; gap: 40px; }
+.col { flex: 1; }
+.box { background: #1e293b; border-radius: 8px; padding: 20px; margin: 10px 0; }
+.box-good { border-left: 4px solid #4ade80; }
+.box-bad { border-left: 4px solid #f87171; }
+.box-info { border-left: 4px solid #60a5fa; }
+.diagram { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 20px; margin: 15px 0; font-family: monospace; white-space: pre; line-height: 1.4; }
+.metric { font-size: 2.5em; font-weight: 700; }
+.metric-label { font-size: 0.9em; color: #94a3b8; }
+.metric-row { display: flex; gap: 60px; margin: 20px 0; }
+.metric-card { text-align: center; }
+.nav { position: fixed; top: 20px; right: 20px; background: #1e293b; padding: 10px 15px; border-radius: 8px; z-index: 100; font-size: 0.85em; }
+.nav a { color: #60a5fa; text-decoration: none; margin: 0 8px; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+<a href="#overview">Overview</a>
+<a href="#problem">Problem</a>
+<a href="#algorithm">Algorithm</a>
+<a href="#schema">Schema-Aware</a>
+<a href="#unified">Unified Index</a>
+<a href="#results">Results</a>
+<a href="#hitrate">Hit Rates</a>
+<a href="#tradeoffs">Trade-offs</a>
+</div>
+
+<!-- Slide 1: Title -->
+<div class="slide" id="overview">
+<h1>W-TinyLFU Unified Cache</h1>
+<p class="subtitle">Scan-resistant cache replacement for ScyllaDB row cache and SSTable index cache</p>
+<div class="metric-row">
+<div class="metric-card">
+<div class="metric good">98.8%</div>
+<div class="metric-label">Hot set hit rate under scan</div>
+</div>
+<div class="metric-card">
+<div class="metric good">-29%</div>
+<div class="metric-label">p99 latency reduction</div>
+</div>
+<div class="metric-card">
+<div class="metric highlight">-8 bytes</div>
+<div class="metric-label">Per index entry saved</div>
+</div>
+</div>
+<p class="neutral" style="margin-top: 40px;">Three changes in one patch: W-TinyLFU eviction + schema-aware MVCC routing + unified index/data LRU</p>
+</div>
+
+<!-- Slide 2: The Problem -->
+<div class="slide" id="problem">
+<h2>The Problem: LRU Has No Scan Resistance</h2>
+<div class="columns">
+<div class="col">
+<h3>Pure LRU</h3>
+<div class="diagram">
+<span class="neutral">Before scan:</span>
+LRU: [cold] ... [hot1] [hot2] [hot3] <span class="good">← MRU</span>
+      <span class="bad">↑ evict</span>
+
+<span class="neutral">One scan read:</span>
+LRU: [cold] [hot1] [hot2] [hot3] [<span class="bad">scan</span>]
+      <span class="bad">↑ evict hot1</span>
+
+<span class="neutral">After scan flood:</span>
+LRU: [<span class="bad">scan</span>] [<span class="bad">scan</span>] [<span class="bad">scan</span>] [<span class="bad">scan</span>] [<span class="bad">scan</span>]
+     <span class="bad">all hot data evicted!</span>
+</div>
+<p>A single sequential scan evicts the entire hot working set. Every scan entry pushes one hot entry out.</p>
+</div>
+<div class="col">
+<h3>The Old 20% Index Cap</h3>
+<div class="diagram">
+Cache with index_cache_fraction = 0.2:
++------------------+--------+
+| row data (80%)   | idx    |
+|                   | (20%) |
++------------------+--------+
+                     <span class="bad">↑ hard cap</span>
+
+Problem 1: Cold index wastes 20%
+  even when no index is needed
+
+Problem 2: Hot index capped at 20%
+  even when CK lookups need more
+</div>
+<p>Static partitioning can't adapt to workload changes.</p>
+</div>
+</div>
+</div>
+
+<!-- Slide 3: W-TinyLFU Algorithm -->
+<div class="slide" id="algorithm">
+<h2>W-TinyLFU: How It Works</h2>
+<p>Three segments + a frequency sketch for admission control. Based on the <a href="https://arxiv.org/abs/1512.00727" style="color:#60a5fa">Caffeine</a> algorithm by Ben Manes.</p>
+<div class="diagram">
+                    <span class="highlight">Count-Min Sketch</span>
+                    (frequency estimator)
+                          │
+    ┌─────────┐     ┌─────┴─────┐     ┌──────────┐
+    │ <span class="good">WINDOW</span>  │────▶│ <span class="highlight">ADMISSION</span> │────▶│ <span class="good">PROBATION</span>│──── touch ──▶ <span class="good">PROTECTED</span>
+    │  (1%)   │     │   GATE    │     │          │              (80%)
+    └─────────┘     └───────────┘     └──────────┘
+     new entries     freq(window)        main cache           hot entries
+     enter here      vs freq(prob)       candidates           safe here
+                     higher wins
+</div>
+
+<h3>Key Properties</h3>
+<div class="columns">
+<div class="col">
+<div class="box box-good">
+<h3>Scan Resistant</h3>
+<p>Scan entries enter the tiny window (1%), compete at the admission gate, and lose to frequently-accessed probation entries. They never reach protected.</p>
+</div>
+</div>
+<div class="col">
+<div class="box box-good">
+<h3>Adaptive</h3>
+<p>No static partitioning. The sketch learns access patterns and the SLRU segments auto-size based on workload. Hot data naturally migrates to protected.</p>
+</div>
+</div>
+<div class="col">
+<div class="box box-info">
+<h3>Low Overhead</h3>
+<p>Count-Min Sketch uses 4-bit counters with periodic aging (halving). Protected touches skip sketch updates. ~160 fewer instructions per cache hit.</p>
+</div>
+</div>
+</div>
+</div>
+
+<!-- Slide 4: Count-Min Sketch -->
+<div class="slide">
+<h2>Count-Min Sketch: Frequency Estimation</h2>
+<div class="columns">
+<div class="col">
+<div class="diagram">
+  key ──hash₁──▶ [ 0 <span class="good">3</span> 0 1 0 2 0 0 ] row 0
+       ──hash₂──▶ [ 1 0 0 <span class="good">3</span> 0 0 1 0 ] row 1
+       ──hash₃──▶ [ 0 0 <span class="good">4</span> 0 1 0 0 0 ] row 2
+       ──hash₄──▶ [ 0 0 0 0 0 <span class="good">3</span> 0 1 ] row 3
+
+  estimate(key) = min(3, 3, 4, 3) = <span class="good">3</span>
+
+  4-bit counters: saturate at 15
+  Aging: halve all counters periodically
+  Width: ~1 entry per KB of cache
+</div>
+</div>
+<div class="col">
+<h3>Admission Gate Decision</h3>
+<pre>
+window_victim vs probation_victim:
+
+if freq(window) > freq(probation):
+    <span class="good">admit window → probation</span>
+    <span class="bad">evict probation victim</span>
+else:
+    <span class="bad">evict window victim</span>
+    probation survives
+
+// Hash-DoS protection:
+if freq(window) >= 6:
+    1/128 chance random admit
+</pre>
+<p>Aging resets every <code>10 × total_entries</code> accesses, matching Caffeine's design.</p>
+</div>
+</div>
+</div>
+
+<!-- Slide 5: Schema-Aware Routing -->
+<div class="slide" id="schema">
+<h2>Schema-Aware MVCC Routing</h2>
+<p>Multi-row partitions (tables with clustering keys) bypass the admission gate to avoid the false-rejection amplification problem.</p>
+
+<div class="columns">
+<div class="col">
+<h3>Single-Row Partitions (no CK)</h3>
+<div class="diagram">
+row ──▶ <span class="good">window</span> ──▶ gate ──▶ probation ──▶ protected
+
+Standard W-TinyLFU path.
+Each partition = 1 row = 1 sketch key.
+Frequency tracks the partition correctly.
+</div>
+</div>
+<div class="col">
+<h3>Multi-Row Partitions (has CK)</h3>
+<div class="diagram">
+row ──▶ <span class="highlight">PROTECTED (direct)</span>
+
+Bypasses window and admission gate.
+directly_inserted flag prevents
+rebalance demotion.
+Evicted by LRU from protected tail.
+</div>
+<div class="box box-info">
+<p><strong>Why?</strong> If any single row from a 100-row partition is rejected by the gate, the partition is "incomplete" in cache. A 1% per-row rejection rate becomes 63% per-partition miss rate.</p>
+</div>
+</div>
+</div>
+<div class="box box-good">
+<h3>MVCC Safety</h3>
+<p><code>cache_routing_guard</code> RAII ensures MVCC-triggered row insertions (version merges, memtable flushes) go to the correct SLRU segment. Older versions are evicted before newer versions.</p>
+</div>
+</div>
+
+<!-- Slide 6: Unified Index Cache -->
+<div class="slide" id="unified">
+<h2>Unified Index/Data Cache</h2>
+<p>SSTable index entries and row cache entries share a single LRU. The hard 20% <code>index_cache_fraction</code> cap is removed.</p>
+
+<div class="columns">
+<div class="col">
+<h3>Before (separate index list)</h3>
+<pre>
+class <span class="bad">index_evictable</span> : public evictable {
+    lru_link_type <span class="bad">_index_lru_link</span>;  // +8 bytes
+    bool <span class="bad">is_index()</span> override;      // virtual call
+};
+
+// Every add/remove/touch:
+if (e.<span class="bad">is_index()</span>) {
+    <span class="bad">_index_list</span>.erase(...);  // second list
+}
+
+// Reclaimer:
+if (index_bytes > total * <span class="bad">0.20</span>)
+    force_evict_index();       // hard cap
+</pre>
+</div>
+<div class="col">
+<h3>After (unified)</h3>
+<pre>
+using <span class="good">index_evictable</span> = evictable;
+// alias for backward compat
+
+// add/remove/touch: no index check
+// just the regular W-TinyLFU path
+
+// Reclaimer:
+return _lru.<span class="good">evict()</span>;
+// hot index survives via frequency
+// cold index evicted naturally
+</pre>
+<div class="box box-good">
+<p><strong>Savings:</strong> 8 bytes per index entry, no virtual dispatch on hot path, no hard cap tuning needed.</p>
+</div>
+</div>
+</div>
+</div>
+
+<!-- Slide 7: Benchmark Results -->
+<div class="slide" id="results">
+<h2>Benchmark: Hot + Scan Workload</h2>
+<p>ScyllaDB with 256MB cache. 10K hot rows (random access) + 80K scan rows (sequential). 5K ops/s each, 20 seconds.</p>
+
+<h3>Per-Table Cache Hit Rates</h3>
+<table>
+<tr><th>Table</th><th>W-TinyLFU (1% window)</th><th>LRU (99% window)</th><th>Winner</th></tr>
+<tr><td>HOT (10K rows, random)</td><td class="good">98.8%</td><td>97.3%</td><td class="good">+1.5pp</td></tr>
+<tr><td>SCAN (80K rows, sequential)</td><td>6.4%</td><td>0.4%</td><td class="good">+6.0pp</td></tr>
+</table>
+
+<h3>HOT Read Latency (ms)</h3>
+<table>
+<tr><th>Percentile</th><th>W-TinyLFU</th><th>LRU</th><th>Improvement</th></tr>
+<tr><td>p50</td><td>0.657</td><td>0.665</td><td>1%</td></tr>
+<tr><td>p99</td><td class="good">3.025</td><td class="bad">4.231</td><td class="good">29%</td></tr>
+<tr><td>p99.9</td><td class="good">5.267</td><td class="bad">—</td><td>—</td></tr>
+</table>
+
+<h3>SCAN Read Latency (ms)</h3>
+<table>
+<tr><th>Percentile</th><th>W-TinyLFU</th><th>LRU</th><th>Improvement</th></tr>
+<tr><td>p50</td><td>0.569</td><td>0.590</td><td>4%</td></tr>
+<tr><td>p99</td><td class="good">4.440</td><td class="bad">5.472</td><td class="good">19%</td></tr>
+</table>
+</div>
+
+<!-- Slide 8: 512MB Results -->
+<div class="slide">
+<h2>Benchmark: 512MB Cache, Tail Latency Focus</h2>
+<p>80K rows × 1KB, 512MB cache. Hot reads (random 10K) + scan reads (sequential 80K), 5K ops/s each, 30 seconds.</p>
+
+<h3>HOT Read Tail Latency (ms)</h3>
+<table>
+<tr><th>Percentile</th><th>W-TinyLFU</th><th>LRU</th><th>Improvement</th></tr>
+<tr><td>p50</td><td>0.708</td><td>0.736</td><td>4%</td></tr>
+<tr><td>p99</td><td>2.206</td><td>2.288</td><td>4%</td></tr>
+<tr><td>p99.9</td><td class="good">2.912</td><td class="bad">4.727</td><td class="good">38%</td></tr>
+<tr><td>p99.99</td><td class="good">5.100</td><td class="bad">7.590</td><td class="good">33%</td></tr>
+<tr><td>Max</td><td class="good">6.332</td><td class="bad">9.101</td><td class="good">30%</td></tr>
+</table>
+
+<div class="box box-good">
+<p><strong>Key insight:</strong> W-TinyLFU's advantage grows at higher percentiles. The scan workload cannot evict hot data from the protected segment, so hot reads never suffer cache miss spikes that cause tail latency.</p>
+</div>
+</div>
+
+<!-- Slide 9: Hit Rate Deep Dive -->
+<div class="slide" id="hitrate">
+<h2>Why Hit Rates Are Similar But Latency Differs</h2>
+
+<div class="diagram">
+<span class="highlight">W-TinyLFU protects entry POSITION, not just entry PRESENCE.</span>
+
+Both policies keep the same data cached (similar hit rate).
+But their internal ordering differs:
+
+<span class="good">W-TinyLFU:</span>
+  PROTECTED: [hot1] [hot2] [hot3] ... [hot10000]  ← safe, never disturbed
+  WINDOW:    [scan_page] ← enters here, evicted quickly
+
+<span class="bad">LRU:</span>
+  LRU list:  [hot_old] ... [scan] [scan] [hot_recent] [scan]
+             ← scan entries interleave with hot entries
+             ← hot entries pushed toward eviction front
+             ← occasional hot entry falls off → cache miss → disk I/O
+             ← disk I/O = tail latency spike
+</div>
+<p>Even when both caches hold the same rows, W-TinyLFU's segmented structure prevents scan entries from displacing hot entries' positions. LRU's single list allows any new entry to push the oldest hot entry one step closer to eviction.</p>
+</div>
+
+<!-- Slide 10: Index Cache Benchmark -->
+<div class="slide">
+<h2>Index Cache: Unit Test Results</h2>
+<p>Full CQL path tests (combined_tests, -m200M) comparing unified LRU behavior.</p>
+
+<table>
+<tr><th>Test</th><th>Result</th><th>What It Proves</th></tr>
+<tr><td>Cold index wastes cache space</td><td class="good">PASS (0 misses)</td><td>Without 20% cap, cold index pages evicted → more cache for hot rows</td></tr>
+<tr><td>Hot CK index needs &gt;20%</td><td class="good">PASS (0 misses)</td><td>Hot index pages stay cached beyond old 20% limit</td></tr>
+<tr><td>Realistic small partitions (ME)</td><td class="good">PASS (0 misses)</td><td>Trie format rows with data columns work perfectly</td></tr>
+<tr><td>Big partitions (ME)</td><td class="good">PASS (0 misses)</td><td>Index stays cached for CK lookups</td></tr>
+<tr><td>Legacy MD flooding</td><td class="neutral">WARN (1000 misses)</td><td>Known: MD format 2MB index pages flood (legacy limitation)</td></tr>
+</table>
+
+<div class="box box-info">
+<p><strong>Legacy MD format:</strong> Each <code>partition_index_page</code> holds ~2000 keys (~2MB). One cold read loads 2MB, evicting hundreds of hot rows. The old 20% cap contained this. With trie (ME) format (4KB pages), the index:data ratio is bounded and the unified LRU works well.</p>
+</div>
+</div>
+
+<!-- Slide 11: Trade-offs -->
+<div class="slide" id="tradeoffs">
+<h2>Trade-offs and Known Limitations</h2>
+
+<div class="columns">
+<div class="col">
+<div class="box box-good">
+<h3>Advantages</h3>
+<ul style="list-style: none; padding: 0;">
+<li>+ Scan resistance via frequency-based admission</li>
+<li>+ No static index/data partitioning</li>
+<li>+ Adaptive to workload changes</li>
+<li>+ 8 bytes saved per index entry</li>
+<li>+ No virtual dispatch on hot path</li>
+<li>+ MVCC-safe with schema-aware routing</li>
+<li>+ 29-38% tail latency improvement</li>
+</ul>
+</div>
+</div>
+<div class="col">
+<div class="box box-bad">
+<h3>Limitations</h3>
+<ul style="list-style: none; padding: 0;">
+<li>- Legacy MD format: 2MB index pages can flood cache</li>
+<li>- Count-Min Sketch memory (~128KB default)</li>
+<li>- Sketch aging cycle adds ~10 instructions per access</li>
+<li>- Multi-row partitions bypass admission gate (no scan protection within large partitions)</li>
+</ul>
+</div>
+<div class="box box-info">
+<h3>Configuration</h3>
+<pre>
+# scylla.yaml
+tinylfu_sketch_entries_per_mb: 1024
+tinylfu_initial_window_fraction: 0.01
+# index_cache_fraction: deprecated
+</pre>
+</div>
+</div>
+</div>
+</div>
+
+<!-- Slide 12: Architecture -->
+<div class="slide">
+<h2>Code Architecture</h2>
+<pre>
+utils/count_min_sketch.hh    4-bit saturating counters, 4-row layout
+utils/lru.hh                 W-TinyLFU: window/probation/protected SLRU
+                             + admission gate + sketch aging
+                             + add_to_protected() for CK schemas
+                             + directly_inserted protection
+db/cache_tracker.hh          cache_routing_guard RAII
+                             compute_sketch_key() (token-based)
+                             insert_to_protected() overloads
+db/row_cache.cc              Schema-aware routing (_single_row_partitions)
+                             W-TinyLFU metrics (24 Prometheus counters)
+                             Sketch resize on config change
+db/config.cc                 tinylfu_sketch_entries_per_mb
+                             tinylfu_initial_window_fraction
+                             index_cache_fraction → deprecated
+</pre>
+<h3>Commit History</h3>
+<pre>
+336d99d  cache: unify index and data entries in a single LRU
+f5321e8  utils: add Count-Min Sketch with chunked_vector storage
+991b9f6  cache: add W-TinyLFU eviction with schema-aware MVCC routing
+607731b  docs: add W-TinyLFU scan resistance benchmark results
+382b61b  docs: add hit rate comparison to benchmark results
+</pre>
+</div>
+
+<!-- Slide 13: Caffeine Comparison -->
+<div class="slide">
+<h2>Comparison with Caffeine (Java Reference)</h2>
+<p>Our implementation follows the Caffeine W-TinyLFU design with adaptations for ScyllaDB's MVCC row cache.</p>
+
+<table>
+<tr><th>Feature</th><th>Caffeine</th><th>ScyllaDB</th></tr>
+<tr><td>Segments</td><td>Window + Probation + Protected</td><td>Same</td></tr>
+<tr><td>Admission</td><td>TinyLFU frequency filter</td><td>Same + hash-DoS jitter</td></tr>
+<tr><td>Sketch</td><td>4-bit Count-Min, 4 rows</td><td>Same, chunked_vector storage</td></tr>
+<tr><td>Aging</td><td>10 × maxEntries</td><td>Same</td></tr>
+<tr><td>Protected demotion</td><td>Demote LRU tail to probation</td><td>Same (skip directly_inserted)</td></tr>
+<tr><td>Hill climbing</td><td>Dynamic window sizing</td><td>Not implemented (static 1%)</td></tr>
+<tr><td>Multi-key entries</td><td>N/A (1 entry = 1 key)</td><td>Schema-aware: CK rows → protected</td></tr>
+<tr><td>Index entries</td><td>N/A</td><td>Unified with data (no separate list)</td></tr>
+</table>
+</div>
+
+<!-- Slide 14: Summary -->
+<div class="slide">
+<h2>Summary</h2>
+<div class="metric-row">
+<div class="metric-card">
+<div class="metric good">98.8%</div>
+<div class="metric-label">Hot set hit rate<br>(vs 97.3% LRU)</div>
+</div>
+<div class="metric-card">
+<div class="metric good">38%</div>
+<div class="metric-label">p99.9 latency<br>improvement</div>
+</div>
+<div class="metric-card">
+<div class="metric highlight">0</div>
+<div class="metric-label">Configuration<br>knobs needed</div>
+</div>
+</div>
+
+<div style="margin-top: 40px;">
+<h3>What Changed</h3>
+<div class="columns">
+<div class="col">
+<div class="box box-good">
+<p><strong>LRU → W-TinyLFU:</strong> Scan-resistant cache replacement with frequency-based admission control.</p>
+</div>
+</div>
+<div class="col">
+<div class="box box-good">
+<p><strong>Separate index list → unified:</strong> Index entries share the regular cache. No hard 20% cap. 8 bytes saved per entry.</p>
+</div>
+</div>
+<div class="col">
+<div class="box box-good">
+<p><strong>Schema-aware routing:</strong> CK rows bypass admission gate for MVCC safety. Single-row tables get full scan protection.</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+</body>
+</html>
