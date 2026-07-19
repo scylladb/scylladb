@@ -763,11 +763,15 @@ class ManagerClient:
         self._driver_update()
 
     async def rebuild_node(self, server_id: ServerNum,
+                           source_dc: str | None = None,
+                           force: bool = False,
                            expected_error: str | None = None,
                            timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Tell a node to rebuild with Scylla REST API"""
-        logger.debug("ManagerClient rebuild %s", server_id)
-        data = {"expected_error": expected_error}
+        if expected_error is not None:
+            self.ignore_log_patterns.append(re.escape(expected_error))
+        logger.debug("ManagerClient rebuild %s source_dc=%s force=%s", server_id, source_dc, force)
+        data: dict[str, Any] = {"expected_error": expected_error, "source_dc": source_dc, "force": force}
         await self.client.put_json(f"/cluster/rebuild-node/{server_id}", data,
                                    timeout=timeout)
         self._driver_update()
@@ -870,6 +874,45 @@ class ManagerClient:
             raise Exception(f"Failed to get local host id address for server {server_id}") from exc
         return HostID(host_id)
 
+    async def _down_detection_deadline(self) -> float:
+        """Return a deadline derived from the cluster's failure detector settings."""
+        fd_timeouts = []
+        for server in await self.running_servers():
+            try:
+                cfg = await self.server_get_config(server.server_id)
+            except Exception as exc:
+                logger.debug("Failed to read config for %s while computing down detection deadline: %s", server, exc)
+                continue
+            fd_timeout_ms = cfg.get("failure_detector_timeout_in_ms")
+            if fd_timeout_ms is not None:
+                fd_timeouts.append(float(fd_timeout_ms) / 1000.0)
+
+        fd_timeout_s = max(fd_timeouts, default=10.0)
+        return time() + max(10.0, fd_timeout_s * 3 + 5.0)
+
+    async def wait_for_server_dead(self, server_id: ServerNum, deadline: float | None = None) -> None:
+        """Wait until all live observers stop seeing the server as alive."""
+        target_ip = await self.get_host_ip(server_id)
+        target_host_id = None
+        try:
+            target_host_id = await self.get_host_id(server_id)
+        except Exception as exc:
+            logger.debug("Could not resolve host id for %s before down wait: %s", server_id, exc)
+
+        if target_host_id is not None:
+            try:
+                await self.convict_on_all(target_host_id)
+            except Exception as exc:
+                logger.debug("Best-effort conviction of %s failed: %s", target_host_id, exc)
+
+        observer_ips = [srv.ip_addr for srv in await self.running_servers() if srv.server_id != server_id and srv.ip_addr != target_ip]
+        if not observer_ips:
+            return
+
+        deadline = deadline or await self._down_detection_deadline()
+        remaining = max(0.0, deadline - time())
+        await self.others_not_see_server(target_ip, interval=remaining)
+
     async def get_table_id(self, keyspace: str, table: str):
         rows = await self.cql.run_async(f"select id from system_schema.tables where keyspace_name = '{keyspace}' and table_name = '{table}'")
         return rows[0].id
@@ -911,15 +954,16 @@ class ManagerClient:
         await gather_safely(*others)
 
     async def server_not_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
-                                           interval: float = 45.):
+                                           interval: float | None = None):
         """Wait till a server sees another specific server IP as dead"""
         async def _not_sees_another_server():
             alive_nodes = await self.api.get_alive_endpoints(server_ip)
             if not other_ip in alive_nodes:
                 return True
-        await wait_for(_not_sees_another_server, time() + interval, period=.5)
+        deadline = time() + interval if interval is not None else await self._down_detection_deadline()
+        await wait_for(_not_sees_another_server, deadline, period=.5)
 
-    async def others_not_see_server(self, server_ip: IPAddress, interval: float = 45.):
+    async def others_not_see_server(self, server_ip: IPAddress, interval: float | None = None):
         """Wait till a server is seen as dead by all other running servers in the cluster"""
         others_ips = [srv.ip_addr for srv in await self.running_servers() if srv.ip_addr != server_ip]
         await gather_safely(*(self.server_not_sees_other_server(ip, server_ip, interval) for ip in others_ips))

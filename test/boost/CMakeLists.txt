@@ -289,6 +289,8 @@ add_scylla_test(token_metadata_test
   KIND SEASTAR)
 add_scylla_test(top_k_test
   KIND BOOST)
+add_scylla_test(topology_cmd_result_idl_test
+  KIND BOOST)
 add_scylla_test(transport_test
   KIND SEASTAR)
 add_scylla_test(bti_index_test
