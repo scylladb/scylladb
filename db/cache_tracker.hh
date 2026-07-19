@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "dht/token.hh"
 #include "utils/lru.hh"
 #include "utils/logalloc.hh"
 #include "utils/updateable_value.hh"
@@ -89,21 +90,39 @@ private:
     mutation_cleaner _memtable_cleaner;
     mutation_application_stats& _app_stats;
     utils::updateable_value<double> _index_cache_fraction;
+    utils::updateable_value<double> _tinylfu_sketch_entries_per_mb;
+    utils::updateable_value<double> _tinylfu_initial_window_fraction;
+    utils::observer<double> _sketch_ratio_observer;
+    utils::observer<double> _window_fraction_observer;
+    bool _routing_to_protected = false;
 private:
     void setup_metrics();
 public:
     using register_metrics = bool_class<class register_metrics_tag>;
     cache_tracker(utils::updateable_value<double> index_cache_fraction, mutation_application_stats&, register_metrics);
     cache_tracker(utils::updateable_value<double> index_cache_fraction, register_metrics);
+    cache_tracker(utils::updateable_value<double> index_cache_fraction,
+                  utils::updateable_value<double> tinylfu_sketch_entries_per_mb,
+                  utils::updateable_value<double> tinylfu_initial_window_fraction,
+                  mutation_application_stats&, register_metrics);
+    cache_tracker(utils::updateable_value<double> index_cache_fraction,
+                  utils::updateable_value<double> tinylfu_sketch_entries_per_mb,
+                  utils::updateable_value<double> tinylfu_initial_window_fraction,
+                  register_metrics);
     cache_tracker();
     ~cache_tracker();
     void clear();
     void touch(rows_entry&);
-    void insert(cache_entry&);
+    void insert(cache_entry&, bool single_row_partition = true);
     void insert(partition_entry&) noexcept;
     void insert(partition_version&) noexcept;
     void insert(mutation_partition_v2&) noexcept;
     void insert(rows_entry&) noexcept;
+    void insert_to_protected(rows_entry&) noexcept;
+    void insert_to_protected(rows_entry& more_recent, rows_entry& e) noexcept;
+    void insert_to_protected(mutation_partition_v2&) noexcept;
+    void insert_to_protected(partition_version&) noexcept;
+    void insert_to_protected(partition_entry&) noexcept;
     void remove(rows_entry&) noexcept;
     // Inserts e such that it will be evicted right before more_recent in the absence of later touches.
     void insert(rows_entry& more_recent, rows_entry& e) noexcept;
@@ -142,9 +161,65 @@ public:
     cached_file_stats& get_index_cached_file_stats() { return _index_cached_file_stats; }
     partition_index_cache_stats& get_partition_index_cache_stats() { return _partition_index_cache_stats; }
     seastar::memory::reclaiming_result evict_from_lru_shallow() noexcept;
+
+    /// Resize the W-TinyLFU Count-Min Sketch based on the current cache region
+    /// size and the configured tinylfu_sketch_entries_per_mb ratio.
+    /// Safe to call at any time; called automatically when the config changes.
+    void resize_sketch();
+
+    /// Fully reset the W-TinyLFU sketch (zero all counters).
+    /// Called by clear() to ensure a clean slate after full cache eviction.
+    void reset_sketch() noexcept;
+
+    /// Ensure the thread-local current_tracker pointer is set to this tracker.
+    /// Must be called before lru::add() since add-time window draining may
+    /// trigger on_evicted_shallow() which dereferences current_tracker.
+    void set_current_tracker() noexcept;
+
+    /// Controls whether insert(rows_entry&) routes to the SLRU protected
+    /// segment instead of the window. Used by MVCC paths for multi-row schemas.
+    void set_routing_to_protected(bool v) noexcept { _routing_to_protected = v; }
+    bool routing_to_protected() const noexcept { return _routing_to_protected; }
 };
 
 cache_tracker* get_current_cache_tracker() noexcept;
+
+/// RAII guard that sets cache_tracker::routing_to_protected for the duration
+/// of a scope. Used to ensure MVCC-triggered row insertions go to the correct
+/// SLRU segment for multi-row schemas.
+class cache_routing_guard {
+    cache_tracker& _tracker;
+    bool _old_value;
+public:
+    explicit cache_routing_guard(cache_tracker& tracker, bool to_protected) noexcept
+        : _tracker(tracker), _old_value(tracker.routing_to_protected()) {
+        _tracker.set_routing_to_protected(to_protected);
+    }
+    ~cache_routing_guard() noexcept {
+        _tracker.set_routing_to_protected(_old_value);
+    }
+    cache_routing_guard(const cache_routing_guard&) = delete;
+    cache_routing_guard& operator=(const cache_routing_guard&) = delete;
+};
+
+// Compute a stable sketch key from a partition token.
+// All rows in the same partition share this key — partition-level
+// frequency tracking is sufficient because the SLRU handles
+// intra-partition row-level eviction ordering.
+//
+// Design note: we use token-level (not row-level) frequency because
+// (a) it avoids the frequency sketch mis-rejecting individual rows from
+//     multi-row partitions (clustering key tables), and
+// (b) within a partition, the SLRU recency ordering handles eviction.
+// Trade-off: we don't get scan protection *within* large partitions.
+// Partition-level sketch key — used for dummy/sentinel entries and
+// tables without clustering keys.
+inline uint64_t compute_sketch_key(const dht::token& tok) noexcept {
+    // The token is already a hash (murmur3); use it directly.
+    // No sentinel guard needed — evictable::has_sketch_key() distinguishes
+    // "key set to 0" from "key not set" via a separate flag bit.
+    return static_cast<uint64_t>(tok.raw());
+}
 
 inline
 void cache_tracker::remove(rows_entry& entry) noexcept {
@@ -159,13 +234,19 @@ inline
 void cache_tracker::insert(rows_entry& entry) noexcept {
     ++_stats.row_insertions;
     ++_stats.rows;
-    _lru.add(entry);
+    set_current_tracker();
+    if (_routing_to_protected) {
+        _lru.add_to_protected(entry);
+    } else {
+        _lru.add(entry);
+    }
 }
 
 inline
 void cache_tracker::insert(rows_entry& more_recent, rows_entry& entry) noexcept {
     ++_stats.row_insertions;
     ++_stats.rows;
+    entry.set_sketch_key(more_recent.sketch_key());
     _lru.add_before(more_recent, entry);
 }
 
@@ -185,5 +266,40 @@ inline
 void cache_tracker::insert(partition_entry& pe) noexcept {
     for (partition_version& pv : pe.versions_from_oldest()) {
         insert(pv);
+    }
+}
+
+inline
+void cache_tracker::insert_to_protected(rows_entry& entry) noexcept {
+    ++_stats.row_insertions;
+    ++_stats.rows;
+    set_current_tracker();
+    _lru.add_to_protected(entry);
+}
+
+inline
+void cache_tracker::insert_to_protected(rows_entry& more_recent, rows_entry& entry) noexcept {
+    ++_stats.row_insertions;
+    ++_stats.rows;
+    entry.set_sketch_key(more_recent.sketch_key());
+    _lru.add_before(more_recent, entry);
+}
+
+inline
+void cache_tracker::insert_to_protected(mutation_partition_v2& p) noexcept {
+    for (rows_entry& row : p.clustered_rows()) {
+        insert_to_protected(row);
+    }
+}
+
+inline
+void cache_tracker::insert_to_protected(partition_version& pv) noexcept {
+    insert_to_protected(pv.partition());
+}
+
+inline
+void cache_tracker::insert_to_protected(partition_entry& pe) noexcept {
+    for (partition_version& pv : pe.versions_from_oldest()) {
+        insert_to_protected(pv);
     }
 }
