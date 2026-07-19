@@ -134,6 +134,8 @@ using single_column_predicate_vectors = std::map<const column_definition*, std::
 /**
  * The restrictions corresponding to the relations specified on the where-clause of CQL query.
  */
+// external_memory_usage() below charges sizeof(*this) directly; adding a heap-owning field here
+// requires a matching update there or the prepared-statement cache will undercount it.
 class statement_restrictions {
     struct private_tag {}; // Tag for private constructor
 private:
@@ -540,6 +542,9 @@ public:
     void validate_primary_key(const query_options& options) const;
 
     bool is_empty() const;
+
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    size_t external_memory_usage() const;
 };
 
 shared_ptr<const statement_restrictions> analyze_statement_restrictions(

@@ -28,6 +28,8 @@ class prepare_context;
  * Utility class for the Parser to gather attributes for modification
  * statements.
  */
+// external_memory_usage() below charges sizeof(*this) directly; adding a heap-owning field here
+// requires a matching update there or the prepared-statement cache will undercount it.
 class attributes final {
 private:
     expr::unset_bind_variable_guard _timestamp_unset_guard;
@@ -71,6 +73,9 @@ public:
     std::optional<int32_t> get_concurrency(const query_options& options) const;
 
     void fill_prepare_context(prepare_context& ctx);
+
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    size_t external_memory_usage() const;
 
     class raw final {
     public:
