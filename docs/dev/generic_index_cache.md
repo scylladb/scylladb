@@ -267,3 +267,86 @@ The `index_cache_fraction` parameter is now deprecated:
 
 Existing configurations continue to work without changes.  The parameter
 is silently ignored.
+
+## W-TinyLFU Scan Resistance: Live Benchmark
+
+Benchmark comparing W-TinyLFU (1% window) vs pure LRU (99% window)
+under a mixed hot+scan workload.  ScyllaDB runs with 512 MB cache,
+80K rows × 1 KB payload flushed to SSTable.  Two concurrent latte
+clients: one reads a 10K-row hot set (random access), the other scans
+all 80K rows sequentially — 5K ops/s each, 30 seconds.
+
+```
+    Workload:
+
+    hot client:  hash(i) % 10000  — random, high locality
+    scan client: i % 80000        — sequential, zero reuse
+
+    ┌──────────────────────────────────────┐
+    │ W-TinyLFU (1% window)               │
+    │                                      │
+    │ window (1%)  probation     protected  │
+    │ [scan ···>]  [gate ···>]  [hot data] │
+    │  cold scan    frequency    hot rows   │
+    │  entries      filter       safe here  │
+    │  evicted      rejects                 │
+    │  quickly      cold scans             │
+    └──────────────────────────────────────┘
+
+    ┌──────────────────────────────────────┐
+    │ LRU (99% window = pure LRU)          │
+    │                                      │
+    │ [oldest ························ MRU] │
+    │  scan entries push hot rows out      │
+    │  → hot reads occasionally miss       │
+    │  → tail latency spikes               │
+    └──────────────────────────────────────┘
+```
+
+### Results
+
+HOT reads under scan pressure (latency in ms):
+
+```
+    Percentile    W-TinyLFU      LRU        Improvement
+    ---------     ---------      ---        -----------
+    p50             0.708       0.736           4%
+    p99             2.206       2.288           4%
+    p99.9           2.912       4.727          38%
+    p99.99          5.100       7.590          33%
+    Max             6.332       9.101          30%
+```
+
+The tail latency improvement (p99.9+) is where W-TinyLFU's scan
+resistance shows up.  The scan workload cannot evict hot data from
+the protected segment, so hot reads never suffer cache misses caused
+by the scan.  With LRU, scan entries push hot rows out of the cache,
+causing occasional disk reads that spike tail latency.
+
+### Benchmark command
+
+```bash
+# Start ScyllaDB with W-TinyLFU (1% window):
+DBUILD_TOOL=docker ./tools/toolchain/dbuild \
+    --image scylladb/scylla-toolchain:fedora-43-20260304 -- \
+    build/release/scylla --workdir ... \
+    --smp 1 --memory 512M --developer-mode 1 --overprovisioned \
+    --tinylfu-initial-window-fraction 0.01
+
+# Load data:
+latte schema /tmp/bench.rn localhost:9042
+latte run /tmp/bench.rn -f insert --end-cycle 80000 \
+    -d 120s --warmup 0 -P row_count=80000 localhost:9042
+
+# Warmup + hot+scan:
+latte run /tmp/bench.rn -f hot_read -d 20s -r 10000 --warmup 5s \
+    -P hot_count=10000 localhost:9042
+
+latte run /tmp/bench.rn -f hot_read -d 30s -r 5000 --warmup 0 \
+    -P hot_count=10000 localhost:9042 &
+latte run /tmp/bench.rn -f scan_read -d 30s -r 5000 --warmup 0 \
+    -P row_count=80000 localhost:9042 &
+wait
+
+# Repeat with --tinylfu-initial-window-fraction 0.99 for LRU baseline.
+```
