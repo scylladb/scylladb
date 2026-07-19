@@ -2274,11 +2274,6 @@ sharding_metadata
 create_sharding_metadata(schema_ptr schema, const dht::static_sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
     auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get();
-    if (ranges.empty()) {
-        auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema, sharder);
-        sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} first_key={} last_key={} ranges_single_shard={} ranges_all_shards={}",
-                    prange, shard, first_key, last_key, ranges, split_ranges_all_shards);
-    }
     return create_sharding_metadata(std::move(ranges));
 }
 
@@ -2508,11 +2503,11 @@ future<> sstable::seal_sstable(bool backup)
 }
 
 sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions,
-        const sstable_writer_config& cfg, encoding_stats enc_stats, shard_id shard)
+        const sstable_writer_config& cfg, encoding_stats enc_stats)
 {
     // Mark sstable for implicit deletion if destructed before it is sealed.
     _marked_for_deletion = mark_for_deletion::implicit;
-    return sstable_writer(*this, s, estimated_partitions, cfg, enc_stats, shard);
+    return sstable_writer(*this, s, estimated_partitions, cfg, enc_stats);
 }
 
 future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,

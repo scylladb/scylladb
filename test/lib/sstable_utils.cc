@@ -43,48 +43,87 @@ std::vector<replica::memtable*> active_memtables(replica::table& t) {
     return active_memtables;
 }
 
+static shard_id shard_for_mutations(schema_ptr s, const utils::chunked_vector<mutation>& muts) {
+    if (muts.empty()) {
+        return this_shard_id();
+    }
+    return s->get_sharder().shard_of(muts.front().decorated_key().token());
+}
+
+static future<sstables::shared_sstable> do_make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt, shard_id shard) {
+    auto cfg = sst->manager().configure_writer("memtable");
+    cfg.shard = shard;
+
+    reader_concurrency_semaphore sem(
+        reader_concurrency_semaphore::no_limits{}, "make_sstable_containing", reader_concurrency_semaphore::register_metrics::no);
+
+    std::exception_ptr ex;
+    try {
+        auto permit = sem.make_tracking_only_permit(mt->schema(), "mt_to_sst", db::no_timeout, {});
+        auto reader = mt->make_flush_reader(mt->schema(), std::move(permit));
+        co_await sst->write_components(std::move(reader), mt->partition_count(), mt->schema(), cfg, mt->get_encoding_stats());
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await sem.stop();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+
+    sstable_open_config open_cfg { .load_first_and_last_position_metadata = true };
+    co_await sst->open_data(open_cfg);
+    co_return sst;
+}
+
 future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt) {
     return make_sstable_containing(sst_factory(), std::move(mt));
 }
 
 future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt) {
-    co_await write_memtable_to_sstable(*mt, sst);
-    sstable_open_config cfg { .load_first_and_last_position_metadata = true };
-    co_await sst->open_data(cfg);
-    co_return sst;
+    return do_make_sstable_containing(std::move(sst), std::move(mt), this_shard_id());
 }
 
 future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate) {
+    BOOST_REQUIRE(!muts.empty());
     schema_ptr s = muts[0].schema();
-    co_await make_sstable_containing(sst, co_await make_memtable(s, muts));
+    auto target = shard_for_mutations(s, muts);
+    auto mt = co_await make_memtable(s, muts);
+    sst = co_await do_make_sstable_containing(std::move(sst), std::move(mt), target);
 
     if (do_validate) {
         reader_concurrency_semaphore sem(
             reader_concurrency_semaphore::no_limits{}, "make_sstable_containing", reader_concurrency_semaphore::register_metrics::no);
 
-        std::set<mutation, mutation_decorated_key_less_comparator> merged;
-        for (auto&& m : muts) {
-            auto it = merged.find(m);
-            if (it == merged.end()) {
-                merged.insert(std::move(m));
-            } else {
-                auto old = merged.extract(it);
-                old.value().apply(std::move(m));
-                merged.insert(std::move(old));
+        std::exception_ptr ex;
+        try {
+            std::set<mutation, mutation_decorated_key_less_comparator> merged;
+            for (auto&& m : muts) {
+                auto it = merged.find(m);
+                if (it == merged.end()) {
+                    merged.insert(std::move(m));
+                } else {
+                    auto old = merged.extract(it);
+                    old.value().apply(std::move(m));
+                    merged.insert(std::move(old));
+                }
+                co_await coroutine::maybe_yield();
             }
-            co_await coroutine::maybe_yield();
-        }
 
-        // validate the sstable
-        auto rd = sst->as_mutation_source().make_mutation_reader(s, sem.make_tracking_only_permit(nullptr, "test", db::no_timeout, {}));
-        for (auto&& m : merged) {
-            auto mo = co_await read_mutation_from_mutation_reader(rd);
-            BOOST_REQUIRE(mo);
-            assert_that(*mo).is_equal_to_compacted(m);
-            co_await coroutine::maybe_yield();
+            auto rd = sst->as_mutation_source().make_mutation_reader(s, sem.make_tracking_only_permit(nullptr, "test", db::no_timeout, {}));
+            for (auto&& m : merged) {
+                auto mo = co_await read_mutation_from_mutation_reader(rd);
+                BOOST_REQUIRE(mo);
+                assert_that(*mo).is_equal_to_compacted(m);
+                co_await coroutine::maybe_yield();
+            }
+            co_await rd.close();
+        } catch (...) {
+            ex = std::current_exception();
         }
-        co_await rd.close();
         co_await sem.stop();
+        if (ex) {
+            std::rethrow_exception(std::move(ex));
+        }
     }
     co_return sst;
 }

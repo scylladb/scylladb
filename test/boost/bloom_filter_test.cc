@@ -279,6 +279,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
         BOOST_REQUIRE_EQUAL(fmt::to_string(reclaimed_set.begin()->get_filename()), fmt::to_string(sst->get_filename()));
 
         // hold a copy of shared sst object in async thread to test reload after unlink
+        utils::get_local_injector().disable("test_bloom_filter_reload_after_unlink");
         utils::get_local_injector().enable("test_bloom_filter_reload_after_unlink");
         auto async_sst_holder = seastar::async([sst] {
             // do nothing just hold a copy of sst and wait for message signalling test completion
@@ -300,6 +301,8 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
         // message async thread to complete waiting and thus release its copy of sst, triggering deactivation
         utils::get_local_injector().receive_message("test_bloom_filter_reload_after_unlink");
         async_sst_holder.get();
+
+        utils::get_local_injector().disable("test_bloom_filter_reload_after_unlink");
 
         REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_active_list().size(); }, 0);
     }, {
@@ -332,6 +335,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
 
         // hold a copy of shared sst object in async thread to test reclaim after unlink
+        utils::get_local_injector().disable("test_bloom_filter_reload_after_unlink");
         utils::get_local_injector().enable("test_bloom_filter_reload_after_unlink");
         auto async_sst_holder = seastar::async([sst1] {
             // do nothing just hold a copy of sst and wait for message signalling test completion
@@ -365,6 +369,8 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         // message async thread to complete waiting and thus release its copy of sst, triggering deactivation
         utils::get_local_injector().receive_message("test_bloom_filter_reload_after_unlink");
         async_sst_holder.get();
+
+        utils::get_local_injector().disable("test_bloom_filter_reload_after_unlink");
 
         REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return active_list.size(); }, 0);
     }, {
