@@ -1999,6 +1999,32 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             }));
 }
 
+namespace {
+// Named functor (not a lambda) so external_memory_usage() can recover the
+// captured sorters vector's capacity via std::function::target<>().
+struct ordering_comparator_fn {
+    std::vector<std::pair<uint32_t, data_type>> sorters;
+    bool operator()(const std::vector<managed_bytes_opt>& r1, const std::vector<managed_bytes_opt>& r2) const {
+        for (auto&& e : sorters) {
+            auto& c1 = r1[e.first];
+            auto& c2 = r2[e.first];
+            auto type = e.second;
+
+            if (bool(c1) != bool(c2)) {
+                return bool(c2);
+            }
+            if (c1) {
+                auto result = type->compare(*c1, *c2);
+                if (result != 0) {
+                    return result < 0;
+                }
+            }
+        }
+        return false;
+    }
+};
+}
+
 namespace raw {
 
 static void validate_attrs(const cql3::attributes::raw& attrs) {
@@ -2612,24 +2638,7 @@ select_statement::ordering_comparator_type select_statement::get_ordering_compar
         sorters.emplace_back(index, column_def->type);
     }
 
-    return [sorters = std::move(sorters)] (const result_row_type& r1, const result_row_type& r2) mutable {
-        for (auto&& e : sorters) {
-            auto& c1 = r1[e.first];
-            auto& c2 = r2[e.first];
-            auto type = e.second;
-
-            if (bool(c1) != bool(c2)) {
-                return bool(c2);
-            }
-            if (c1) {
-                auto result = type->compare(*c1, *c2);
-                if (result != 0) {
-                    return result < 0;
-                }
-            }
-        }
-        return false;
-    };
+    return ordering_comparator_fn{std::move(sorters)};
 }
 
 void select_statement::validate_distinct_selection(const schema& schema,
@@ -2814,6 +2823,50 @@ std::vector<size_t> select_statement::prepare_group_by(const schema& schema, sel
     return indices;
 }
 
+}
+
+size_t select_statement::external_memory_usage() const {
+    size_t s = cql_statement::external_memory_usage();
+
+    // _selection (polymorphic — virtual object_size + external_memory_usage)
+    if (_selection) {
+        s += _selection->object_size() + _selection->external_memory_usage();
+    }
+
+    // _restrictions
+    if (_restrictions) {
+        s += sizeof(restrictions::statement_restrictions) + _restrictions->external_memory_usage();
+    }
+
+    // _limit and _per_partition_limit (optional expressions)
+    if (_limit) {
+        s += _limit->external_memory_usage();
+    }
+    if (_per_partition_limit) {
+        s += _per_partition_limit->external_memory_usage();
+    }
+
+    // _group_by_cell_indices
+    if (_group_by_cell_indices) {
+        s += sizeof(std::vector<size_t>) + _group_by_cell_indices->capacity() * sizeof(size_t);
+    }
+
+    // _attrs
+    if (_attrs) {
+        s += sizeof(cql3::attributes) + _attrs->external_memory_usage();
+    }
+
+    // _ordering_comparator: the IN-ordering comparator captures a sorters vector,
+    // which exceeds std::function's SBO and heap-allocates. Recover it via target<>()
+    // since the underlying type is a named functor, not an unnamed lambda.
+    if (auto* fn = _ordering_comparator.target<ordering_comparator_fn>()) {
+        s += fn->sorters.capacity() * sizeof(std::pair<uint32_t, data_type>);
+    }
+
+    // Not counted (known approximation):
+    // - _parameters: typically shared with _default_parameters (globally shared, not owned)
+
+    return s;
 }
 
 }

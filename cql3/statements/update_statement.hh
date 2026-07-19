@@ -65,6 +65,10 @@ public:
         , _default_unset(default_unset) {
         _restrictions = cql3::restrictions::make_trivial_statement_restrictions(s, false);
     }
+    size_t object_size() const override { return sizeof(*this); }
+    size_t external_memory_usage() const override {
+        return modification_statement::external_memory_usage() + _value.external_memory_usage();
+    }
 private:
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const override;
 

@@ -202,6 +202,26 @@ rjson::value prepared_filter::to_json(const query_options& options) const {
     return restrictions_to_json(_restrictions, _allow_filtering, options);
 }
 
+size_t prepared_filter::external_memory_usage() const {
+    // Fixed per-value approximation: rjson::value's own allocator usage isn't
+    // introspectable, so charge a conservative flat overhead per JSON value.
+    constexpr size_t approx_json_value_overhead = 64;
+
+    size_t s = _restrictions.capacity() * sizeof(prepared_restriction);
+    for (const auto& r : _restrictions) {
+        s += approx_json_value_overhead * 2; // type_json + lhs_json
+        if (auto* rhs = std::get_if<prepared_rhs>(&r.rhs)) {
+            s += rhs->expr.external_memory_usage();
+        } else {
+            s += approx_json_value_overhead;
+        }
+    }
+    if (_cached_json) {
+        s += approx_json_value_overhead;
+    }
+    return s;
+}
+
 prepared_filter prepare_filter(const restrictions::statement_restrictions& restrictions, bool allow_filtering) {
     if (restrictions.is_empty()) {
         return prepared_filter({}, allow_filtering);

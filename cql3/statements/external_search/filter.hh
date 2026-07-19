@@ -52,6 +52,10 @@ public:
 
     /// Serializes the prepared filter to JSON compatible with the Vector Store service filtering API.
     rjson::value to_json(const query_options& options) const;
+
+    /// Heap memory owned by this filter beyond sizeof(*this). rjson::value doesn't
+    /// expose its own heap usage, so each value is charged a fixed approximation.
+    size_t external_memory_usage() const;
 };
 
 /// Prepares a filter from CQL statement restrictions for use in Vector Store service.

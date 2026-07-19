@@ -39,6 +39,7 @@ public:
         }
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
+        size_t object_size() const override { return sizeof(*this); }
     };
 
     class deleter_by_field : public operation_no_unset_support {
@@ -49,6 +50,7 @@ public:
         }
 
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
+        size_t object_size() const override { return sizeof(*this); }
     };
 };
 
