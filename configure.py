@@ -1658,6 +1658,14 @@ tests_not_using_seastar_test_framework = set([
 
 COVERAGE_INST_FLAGS = ['-fprofile-instr-generate', '-fcoverage-mapping', f'-fprofile-list=./{PROFILES_LIST_FILE_NAME}']
 if args.coverage:
+    # Coverage tracking uses the same branch-counting machinery as PGO, so they don't play nice with each other
+    assert not args.pgo
+    assert not args.cspgo
+    assert not args.use_profile
+    # If args.use_profile is None, a default profile might be used.
+    # With coverage enabled, we want no profile at all, so we explicitly disable any profile use
+    # by setting "".
+    args.use_profile = ""
     for _, mode in filter(lambda m: m[0] != "coverage", modes.items()):
         mode['cxx_ld_flags'] += ' ' + ' '.join(COVERAGE_INST_FLAGS)
         mode['cxx_ld_flags'] = mode['cxx_ld_flags'].strip()
