@@ -2706,6 +2706,12 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
                             sst->get_filename(), sst->get_origin(), *sst->unlinked_at()));
                 }
                 auto& cg = _t.compaction_group_for_sstable(sst);
+                if (&cg != &_cg) {
+                    tlogger.info("[sst-mutation] cross_group_routing table={}.{} source_cg@{}(id={}) target_cg@{}(id={}) sst={}",
+                            _t.schema()->ks_name(), _t.schema()->cf_name(),
+                            fmt::ptr(&_cg), _cg.group_id(), fmt::ptr(&cg), cg.group_id(),
+                            sst->get_filename());
+                }
                 _cg_desc[&cg].desc.new_sstables.push_back(sst);
             }
             // The group that triggered compaction is the only one to have sstables removed from it.
