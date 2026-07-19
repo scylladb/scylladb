@@ -323,6 +323,29 @@ the protected segment, so hot reads never suffer cache misses caused
 by the scan.  With LRU, scan entries push hot rows out of the cache,
 causing occasional disk reads that spike tail latency.
 
+### Hit Rate Comparison (256MB, 80K rows)
+
+With 80K×1KB rows in 256MB (data fits in cache), both policies achieve
+similar hit rates because the scan reads the same 80K rows that are
+already cached — it doesn't introduce truly cold data:
+
+```
+                     W-TinyLFU (1%)     LRU (99%)
+  Partition hits:       127097            126838
+  Partition misses:      72968            73232
+  Hit rate:              63.52%           63.39%
+  Evictions:            105977            105995
+```
+
+The advantage is in **latency**, not hit rate, at this data:memory ratio.
+W-TinyLFU's frequency-based admission protects hot entries' positions
+in the SLRU, preventing the scan from pushing them toward the eviction
+front — even when both policies ultimately keep the same data cached.
+
+For hit rate differences, the scan working set must exceed cache capacity
+so that keeping hot data requires evicting scan data, which W-TinyLFU
+does via the admission gate.
+
 ### Benchmark command
 
 ```bash
