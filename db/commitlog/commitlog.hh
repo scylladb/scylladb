@@ -239,10 +239,13 @@ public:
 
     /**
      * Add N raft log entries to the commit log as a single operation (in a single segment).
-     * Always uses force_sync::yes.
+     * Each entry writer carries its own cf_id, so a single batch can contain
+     * entries destined for different column families (e.g. raft log entries
+     * for the target table and a trailing commit_idx entry attached to
+     * system.raft_groups). Always uses force_sync::yes.
      */
     future<utils::chunked_vector<rp_handle>> add_raft_entries(
-            const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers);
+            utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
