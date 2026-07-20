@@ -22,10 +22,9 @@ class HostRegistry:
     all shared external resources within this class to make sure
     nothing is leaked by the harness. Lease addresses with lease_host(),
     release with release_host(). Each returned address is from a unique
-    class-C subnet created just for this test run, so each address
-    is quaranteed to have a unique 4th component. I.e. in X.Y.Z.W
-    X.Y.Z is unique for each test.py invocation, and W is unique
-    across all hosts in a single run.
+    class-B (/16) subnet created just for this test run. I.e. in X.Y.Z.W
+    X.Y is unique for each test.py invocation, while Z and W together form
+    a host counter that is unique across all hosts in a single run.
     """
     _instance = None
     _initialized = False
@@ -51,25 +50,21 @@ class HostRegistry:
         # pid? The pid changes between restarts, and harness does start and
         # stops Scyllas.
         #
-        # To create a subnet let's randomly generate a number and put
-        # a file with this name into a well-known directory. If the file
+        # A subnet is identified by a lock file placed into /tmp. If the file
         # doesn't exist, the subnet is free. If it already exists and is
-        # locked, there is another process running with this subnet and
-        # we should try again with another subnet. If the file isn't
-        # locked, it remains from some previous invocation and can be
-        # locked and reused.
-
+        # locked, there is another process running with this subnet and we
+        # should try again with another subnet. If the file isn't locked, it
+        # remains from some previous invocation and can be locked and reused.
         worker_id = os.getenv('PYTEST_XDIST_WORKER', 'gw0')
         second_octet = int(worker_id[2:]) + 1
-        # HostRegistry is a singleton, so there should be no possibility to mess and overlap in IP for one use
-        # however, when there are several users using the same machine for testing, they can overlap,
-        # so this simple retry should help to eliminate the overlap and just find another random IP
-        max_attempts = 20
-        for attempt in range(max_attempts):
-            # Avoid 127.0.*.* since CCM (a different test framework)
-            # assumes it will be available for it to run Scylla
-            # instances. 127.255.255.255 is also illegal.
-            subnet = f"127.{second_octet}.{random.randrange(0, 255)}"
+        # Try the worker-derived octet first, so xdist workers of the same run never clash, then
+        # every other octet once in random order, to find a subnet not used by another test.py
+        # invocation on the same machine. Avoid 127.0.*.* since CCM (a different test framework)
+        # assumes it will be available for it to run Scylla instances.
+        other_octets = [octet for octet in range(1, 255) if octet != second_octet]
+        random.shuffle(other_octets)
+        for octet in [second_octet, *other_octets]:
+            subnet = f"127.{octet}"
             self._lock_filename: Optional[Path] = Path("/tmp") / f"scylla-{subnet}"
             self._lock_file = self._lock_filename.open("w")
             try:
@@ -80,18 +75,22 @@ class HostRegistry:
                 if e.errno not in (errno.EACCES, errno.EAGAIN):
                     raise
         else:
-            raise RuntimeError(
-                f"Failed to acquire a subnet lock after {max_attempts} attempts"
-            )
+            raise RuntimeError("Failed to acquire a subnet lock: all 127.<1..254> subnets are in use")
 
-        # Never-yet-leased hosts, minted on demand: one for each of the 254 usable 4th-octet values.
-        self._new_hosts: Iterator[Host] = (Host(f"{subnet}.{host_id}") for host_id in range(1, 255))
+        # Never-yet-leased hosts, minted on demand as 127.<octet>.<hi>.<lo>, skipping the .0 and .255
+        # 4th octets. Older test.py branches lease class-C subnets 127.<octet>.<0..254> under other
+        # lock file names, so start with hi=255, which they never use: released hosts are reused
+        # first, so a run that holds at most 254 hosts at once never clashes with them.
+        # Hosts past #254 (scale tests only) can still clash with an older-branch run on the same machine.
+        self._new_hosts: Iterator[Host] = (Host(f"{subnet}.{hi}.{lo}")
+                                           for hi in (255, *range(255)) for lo in range(1, 255))
 
         # Hosts released by their previous user, available for reuse.
         self._released_hosts: list[Host] = []
 
-        # Limits the number of leased hosts to the number of usable 4th-octet values: lease #255 waits for a release.
-        self._semaphore = asyncio.Semaphore(254)
+        # Limits the number of leased hosts to the number of minted ones (256 3rd x 254 4th octets):
+        # lease #65025 waits for a release.
+        self._semaphore = asyncio.Semaphore(256 * 254)
 
     async def cleanup(self) -> None:
         if self._lock_filename:
