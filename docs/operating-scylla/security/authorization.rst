@@ -395,6 +395,7 @@ The full set of available permissions is:
 - ``AUTHORIZE``
 - ``DESCRIBE``
 - ``VECTOR_SEARCH_INDEXING``
+- ``TEXT_SEARCH_INDEXING``
 
 .. 
    - ``EXECUTE``
@@ -468,8 +469,23 @@ permissions can be granted on which types of resources, and which statements are
      - ``LIST ROLES`` on all roles or only roles granted to another specified role
    * - ``VECTOR_SEARCH_INDEXING``
      - ``ALL KEYSPACES``
-     - ``SELECT`` on all tables with vector search indexes
-  
+     - ``SELECT`` on all tables with vector search indexes, and on some :ref:`system tables <external-index-system-tables>`
+   * - ``TEXT_SEARCH_INDEXING``
+     - ``ALL KEYSPACES``
+     - ``SELECT`` on all tables with full-text search indexes, and on some :ref:`system tables <external-index-system-tables>`
+
+.. _external-index-system-tables:
+
+Both the ``VECTOR_SEARCH_INDEXING`` and ``TEXT_SEARCH_INDEXING`` permissions also grant ``SELECT`` on the following
+system tables, which the external Vector Store engine reads to track schema changes, tablet placement, and CDC
+streams for the tables it indexes:
+
+- ``system.group0_history``
+- ``system.versions``
+- ``system.cdc_streams``
+- ``system.cdc_timestamps``
+- ``system.tablets``
+
 .. _grant-permission-statement:
 
 GRANT PERMISSION
