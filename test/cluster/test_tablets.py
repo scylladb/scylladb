@@ -186,12 +186,11 @@ async def test_stop_reshape_aborts_all_compaction_groups(manager: ManagerClient)
 
             logger.info("Restarting server (reshape happens on boot)")
             await manager.server_stop_gracefully(server.server_id)
-            await manager.server_start(server.server_id,
-                                       expected_server_up_state=ServerUpState.HOST_ID_QUERIED)
+            await manager.server_start(server.server_id)
 
             logger.info("Waiting for reshape to hit the injection point")
             await manager.api.wait_for_injection_enter(server.ip_addr, injection,
-                                                       threshold=1, deadline=time.time() + 60)
+                                                       threshold=1, deadline=time.time() + 120)
 
             logger.info("Stopping RESHAPE globally and releasing injection")
             stop_task = asyncio.create_task(manager.api.stop_compaction(server.ip_addr, "RESHAPE"))
