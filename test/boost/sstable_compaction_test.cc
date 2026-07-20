@@ -2710,7 +2710,6 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
 // own sharded storage_manager, which would conflict on the same endpoints).
 static future<> run_sstable_cleanup_correctness_with_storage(data_dictionary::storage_options storage) {
     auto db_cfg = make_shared<db::config>();
-    db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
     db_cfg->object_storage_endpoints(make_storage_options_config(storage));
 
     cql_test_config cql_cfg;
