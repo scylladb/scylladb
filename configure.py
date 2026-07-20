@@ -2200,6 +2200,7 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DSeastar_SCHEDULING_GROUPS_COUNT=24',
         '-DSeastar_IO_URING=ON',
         '-DSeastar_OPENSSL=OFF',
+        '-DSeastar_LTTNG=OFF',
     ]
 
     if compiler_cache:
