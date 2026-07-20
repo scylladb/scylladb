@@ -33,6 +33,11 @@ class raft_commitlog {
 private:
     const raft::group_id _group_id;
     const db::cf_id_type _table_id;
+    // cf_id used for the trailing commit_idx entry written alongside raft log
+    // entries by store_log_entries(). The entry's rp_handle is handed to the
+    // matching column family's memtable, so its cf_id must match to keep
+    // per-cf dirty-count accounting consistent.
+    const db::cf_id_type _raft_groups_table_id;
     // Common commit log.
     db::commitlog& _commit_log;
     // Replay position handles for committed and uncommitted command entries
@@ -48,14 +53,18 @@ private:
     raft::log_entries _replayed_entries;
 
 public:
-    raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id, replayed_data_per_group replayed_data);
+    raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id,
+            db::cf_id_type raft_groups_table_id, replayed_data_per_group replayed_data);
 
     ~raft_commitlog();
 
-    // Persist the given log entries in the commit log. Each entry's rp_handle
-    // is placed into _command_positions or _noncommand_positions based on the
-    // entry data type.
-    future<> store_log_entries(const raft::log_entry_ptr_list& entries);
+    // Persist the given log entries in the commit log together with a small
+    // commit_idx entry for the current commit index (a raft_commit_idx_entry).
+    // Returns the rp_handle of that commit_idx entry so the caller
+    // (raft_groups_storage) can attach it to a fake system.raft_groups mutation
+    // applied in-memory. The N raft entries' rp_handles are placed into
+    // _command_positions or _noncommand_positions based on entry->data type.
+    future<db::rp_handle> store_log_entries(const raft::log_entry_ptr_list& entries, raft::index_t commit_idx);
 
     // Get the log items that were loaded from database commit log on startup.
     raft::log_entries load_log();

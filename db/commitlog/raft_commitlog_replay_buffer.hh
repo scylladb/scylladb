@@ -168,5 +168,24 @@ public:
     //   6. Non-command entries (configuration, dummy) are kept in the raft log but
     //      don't need mutation application or commitlog rewrite.
     future<> process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks);
+
+    // For every strongly-consistent raft group known to this shard, ensure that
+    // system.raft_groups_snapshots.idx >= system.raft_groups.commit_idx.
+    //
+    // The fake-mutation apply in raft_groups_storage::store_log_entries writes
+    // commit_idx into system.raft_groups via the raft_groups memtable → sstable
+    // path, without going through store_snapshot_descriptor. On a clean shutdown
+    // the SC tablet memtables flush and their commitlog segments are reclaimed,
+    // so on the next startup the commitlog can be empty (or contain only
+    // uncommitted entries) for a group even though its persisted commit_idx > 0.
+    //
+    // Without this bump, raft::server::start would observe
+    // commit_idx > log.stable_idx (== snapshot.idx for an empty log) and trip
+    // its "committed index cannot be larger then persisted one" assert.
+    //
+    // This is the sole place that advances the persisted snapshot index during
+    // startup; it must be called unconditionally on every startup (independent
+    // of whether there were any commitlog segments to replay).
+    future<> bump_snapshot_indices(replica::database& db, cql3::query_processor& qp);
 };
 } // namespace db

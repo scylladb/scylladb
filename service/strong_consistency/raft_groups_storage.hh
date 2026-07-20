@@ -53,8 +53,10 @@ class raft_groups_storage : public raft::persistence {
     // applier_fiber for apply(), so this value is always >= the raft index
     // of any entry that has been applied to a memtable.
     raft::index_t _last_known_commit_idx{0};
-    // Last commit index actually persisted to system.raft_groups by
-    // persist_commit_idx(). Used to skip redundant writes.
+    // Last commit index recorded to system.raft_groups, by either the flush-hook
+    // CQL write (persist_commit_idx()) or the per-batch fake mutation
+    // (store_log_entries()) — both target the raft_groups memtable. Both paths
+    // skip when commit_idx has not advanced past this watermark.
     raft::index_t _last_persisted_commit_idx{0};
 
 public:
@@ -83,6 +85,10 @@ public:
     // Static version that doesn't require constructing a full raft_groups_storage object.
     // Useful during commitlog replay when only read access to metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Load the current persisted snapshot's (idx, term) for this group.
+    // Returns (0, 0) if no snapshot has been recorded yet.
+    static future<std::pair<raft::index_t, raft::term_t>> load_snapshot_idx_and_term(
+            cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Store snapshot idx and term without updating the configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new
