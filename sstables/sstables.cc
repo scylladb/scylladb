@@ -3432,7 +3432,7 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     co_return std::move(checksum);
 }
 
-future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit) {
+future<validate_checksums_result> validate_checksums_and_digests(shared_sstable sst, reader_permit permit) {
     auto valid = true;
     std::exception_ptr ex;
 
