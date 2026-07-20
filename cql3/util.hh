@@ -20,6 +20,7 @@
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/dialect.hh"
 
+#include "utils/chunked_vector.hh"
 #include "utils/mutable_view.hh"
 
 namespace utils {
@@ -56,7 +57,7 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
         const std::string_view& cf_name,
         const std::string_view& where_clause,
         bool select_all_columns,
-        const std::vector<column_definition>& selected_columns);
+        const utils::chunked_vector<column_definition>& selected_columns);
 
 /// maybe_quote() takes an identifier - the name of a column, table or
 /// keyspace name - and transforms it to a string which can be used in CQL

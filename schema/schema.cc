@@ -271,7 +271,7 @@ schema::make_column_specification(const column_definition& def) const {
     return make_lw_shared<cql3::column_specification>(_raw._ks_name, _raw._cf_name, std::move(id), def.type);
 }
 
-v3_columns::v3_columns(std::vector<column_definition> cols, bool is_dense, bool is_compound)
+v3_columns::v3_columns(utils::chunked_vector<column_definition> cols, bool is_dense, bool is_compound)
     : _is_dense(is_dense)
     , _is_compound(is_compound)
     , _columns(std::move(cols))
@@ -283,7 +283,7 @@ v3_columns::v3_columns(std::vector<column_definition> cols, bool is_dense, bool 
 
 v3_columns v3_columns::from_v2_schema(const schema& s) {
     data_type static_column_name_type = utf8_type;
-    std::vector<column_definition> cols;
+    utils::chunked_vector<column_definition> cols;
 
     if (s.is_static_compact_table()) {
         if (s.has_static_columns()) {
@@ -358,7 +358,7 @@ const std::unordered_map<bytes, const column_definition*>& v3_columns::columns_b
     return _columns_by_name;
 }
 
-const std::vector<column_definition>& v3_columns::all_columns() const {
+const utils::chunked_vector<column_definition>& v3_columns::all_columns() const {
     return _columns;
 }
 
@@ -383,7 +383,7 @@ void schema::rebuild() {
     }
 
     {
-        std::vector<column_mapping_entry> cm_columns;
+        utils::chunked_vector<column_mapping_entry> cm_columns;
         for (const column_definition& def : std::views::join(std::array{static_columns(), regular_columns()})) {
             cm_columns.emplace_back(column_mapping_entry{def.name(), def.type});
         }
@@ -431,15 +431,17 @@ schema::schema(private_tag, const raw_schema& raw, const schema_static_props& pr
 
         auto& cols = _raw._columns;
         std::array<column_count_type, 4> count = { 0, 0, 0, 0 };
-        auto i = cols.begin();
-        auto e = cols.end();
+        columns_type grouped;
+        grouped.reserve(cols.size());
         for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column }) {
-            auto j = std::stable_partition(i, e, [k](const auto& c) {
-                return c.kind == k;
-            });
-            count[column_count_type(k)] = std::distance(i, j);
-            i = j;
+            for (auto& c : cols) {
+                if (c.kind == k) {
+                    grouped.push_back(std::move(c));
+                    ++count[column_count_type(k)];
+                }
+            }
         }
+        cols = std::move(grouped);
         return std::array<column_count_type, 3> {
                 count[0],
                 count[0] + count[1],

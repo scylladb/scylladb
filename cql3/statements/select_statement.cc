@@ -2733,7 +2733,7 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
             const std::string_view& cf_name,
             const std::string_view& where_clause,
             bool select_all_columns,
-            const std::vector<column_definition>& selected_columns) {
+            const utils::chunked_vector<column_definition>& selected_columns) {
     std::ostringstream out;
     out << "SELECT ";
     if (select_all_columns) {
