@@ -341,7 +341,7 @@ public:
     // (e.g. parse error), it will return with validation error count seen up to
     // the abort. In the latter case it will call the error-handler before doing so.
     future<uint64_t> validate(reader_permit permit, abort_source& abort,
-            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor(), bool validate_index = false);
+            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor());
 
     encoding_stats get_encoding_stats_for_compaction() const;
 
@@ -767,7 +767,6 @@ public:
     using skip_data_digest = bool_class<struct skip_data_digest_tag>;
     future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
 private:
-    future<> validate_index_digest() const;
     // Read the Scylla component self-digest from file.
     // Should only be called by sstables which have a Scylla file digest.
     future<uint32_t> read_scylla_file_digest() const;
