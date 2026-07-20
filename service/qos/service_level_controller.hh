@@ -108,6 +108,9 @@ class service_level_controller : public peering_sharded_service<service_level_co
 public:
     static inline const int32_t default_shares = 1000;
     static constexpr auto driver_service_level_name = "driver";
+    static constexpr int32_t driver_service_level_shares = 200;
+    static constexpr auto default_batch_service_level_name = "default_batch";
+    static constexpr int32_t default_batch_service_level_shares = 100;
 
     class service_level_distributed_data_accessor {
     public:
@@ -219,7 +222,16 @@ private:
     atomic_vector<qos_configuration_change_subscriber*> _subscribers;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
     seastar::lowres_clock::time_point _last_unsuccessful_driver_sl_creation_attemp = seastar::lowres_clock::time_point::min();
+    seastar::lowres_clock::time_point _last_unsuccessful_default_batch_sl_creation_attempt = seastar::lowres_clock::time_point::min();
     void do_abort() noexcept;
+
+    // Pointer to the `system_keyspace` member function producing the mutation that records
+    // (in `system.scylla_local`) whether a given internal service level has been created.
+    using sys_ks_created_mutation_maker = future<mutation> (db::system_keyspace::*)(bool, api::timestamp_type);
+    static future<utils::chunked_vector<mutation>> get_create_internal_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp,
+            std::string_view sl_name, const service_level_options& slo, sys_ks_created_mutation_maker make_created_mutation);
+    future<std::optional<service::group0_guard>> migrate_to_internal_service_level(service::group0_guard guard, db::system_keyspace& sys_ks,
+            std::string_view sl_name, const service_level_options& slo, sys_ks_created_mutation_maker make_created_mutation, seastar::lowres_clock::time_point& last_unsuccessful_attempt);
 public:
     service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config,
             scheduling_supergroup user_supergroup, scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain = false);
@@ -346,6 +358,18 @@ public:
        the information it was created in `system.scylla_local`.
      */
     future<std::optional<service::group0_guard>> migrate_to_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks);
+
+    /**
+     * Get mutations required to:
+     * 1. create `sl:default_batch`
+     * 2. store information that `sl:default_batch` was created in `system.scylla_local`
+     */
+    static future<utils::chunked_vector<mutation>> get_create_default_batch_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp);
+    /**
+     * Create `sl:default_batch` using _sl_data_accessor if possible. If `sl:default_batch` exists or it's created, store
+       the information it was created in `system.scylla_local`.
+     */
+    future<std::optional<service::group0_guard>> migrate_to_default_batch_service_level(service::group0_guard guard, db::system_keyspace& sys_ks);
 
     /**
      * Updates the service level cache from the distributed data store.
