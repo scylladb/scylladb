@@ -1565,6 +1565,35 @@ def test_scylla_sstable_shard_of_tablets(cql, test_keyspace_tablets, scylla_path
                         assert actual_shard == shard_id
 
 
+def test_scylla_sstable_shard_of_tablets_with_stale_directory(cql, test_keyspace_tablets, scylla_path, scylla_data_dir) -> None:
+    """Regression test for #27006: shard-of must use the table ID from the SSTable path."""
+    key = 0  # mapped to shard 0
+
+    def table_with_stale_directory(cql, keyspace):
+        table = util.unique_name()
+        schema = (f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v int) "
+                  "WITH compaction = {'class': 'NullCompactionStrategy'}")
+        stale_table_id = "00000000000000000000000000000000"
+        os.mkdir(os.path.join(scylla_data_dir, keyspace, f"{table}-{stale_table_id}"))
+        cql.execute(schema)
+        cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({key}, 0)")
+        nodetool.flush(cql, f"{keyspace}.{table}")
+        return table, schema
+
+    with scylla_sstable(table_with_stale_directory, cql, test_keyspace_tablets, scylla_data_dir) as (_, schema_file, sstables):
+        with nodetool.no_autocompaction_context(cql, "system.tablets"):
+            nodetool.flush_keyspace(cql, "system")
+            out = subprocess.check_output([scylla_path,
+                                           "sstable", "shard-of",
+                                           "--tablets",
+                                           "--schema-file", schema_file] +
+                                          sstables)
+            sstables_json = json.loads(out)['sstables']
+            for replica_sets in sstables_json.values():
+                for replica_set in replica_sets:
+                    assert replica_set['shard'] == 0
+
+
 def test_scylla_sstable_no_args(scylla_path):
     res = subprocess.run([scylla_path, "sstable"], capture_output=True, text=True)
 
