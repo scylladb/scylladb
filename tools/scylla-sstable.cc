@@ -44,6 +44,7 @@
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
 #include "release.hh"
+#include "replica/database.hh"
 #include "replica/schema_describe_helper.hh"
 #include "test/lib/cql_test_env.hh"
 #include "tools/json_writer.hh"
@@ -147,6 +148,7 @@ struct sstable_path_info {
     std::filesystem::path data_dir_path;
     sstring keyspace;
     sstring table;
+    table_id id;
 };
 
 sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config) {
@@ -168,13 +170,16 @@ sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config
     // Detect whether sstable is in root table directory, or in a sub-directory
     // The last component is "" due to the trailing "/" left by "remove_filename()" above.
     // So we need to go back 2 more, to find the supposed keyspace component.
-    if (keyspace == std::prev(sst_dir_path.end(), 3)->native()) {
+    const bool in_table_directory = keyspace == std::prev(sst_dir_path.end(), 3)->native();
+    if (in_table_directory) {
         data_dir_path = sst_dir_path / ".." / "..";
     } else {
         data_dir_path = sst_dir_path / ".." / ".." / "..";
     }
-
-    return sstable_path_info{std::move(sst_path), std::move(data_dir_path), std::move(keyspace), std::move(table)};
+    const auto table_directory = in_table_directory ? sst_dir_path.parent_path() : sst_dir_path.parent_path().parent_path();
+    auto [table_name_ignored, id] = replica::parse_table_directory_name(table_directory.filename().native());
+    return sstable_path_info{
+            std::move(sst_path), std::move(data_dir_path), std::move(keyspace), std::move(table), id};
 }
 
 std::pair<sstring, sstring> get_keyspace_and_table_options(const bpo::variables_map& app_config) {
@@ -1992,10 +1997,12 @@ void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
 void shard_of_with_tablets(schema_ptr schema,
                            const std::vector<sstables::shared_sstable>& sstables,
                            std::filesystem::path data_dir_path,
+                           table_id id,
                            const db::config& dbcfg,
                            reader_permit permit) {
     auto tablets = tools::load_system_tablets(dbcfg, data_dir_path,
                                               schema->ks_name(), schema->cf_name(),
+                                              id,
                                               permit).get();
     json_writer writer;
     writer.StartStream();
@@ -2053,7 +2060,7 @@ void shard_of_operation(schema_ptr schema, reader_permit permit,
         shard_of_with_vnodes(sstables, sstable_manager, vm);
     } else {
         auto info = extract_from_sstable_path(vm);
-        shard_of_with_tablets(schema, sstables, info.data_dir_path, dbcfg, permit);
+        shard_of_with_tablets(schema, sstables, info.data_dir_path, info.id, dbcfg, permit);
     }
 }
 

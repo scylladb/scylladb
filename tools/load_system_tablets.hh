@@ -15,6 +15,7 @@
 #include "reader_permit.hh"
 #include "dht/token.hh"
 #include "locator/tablets.hh"
+#include "schema/schema_fwd.hh"
 #include "seastarx.hh"
 
 namespace db {
@@ -32,12 +33,14 @@ using tablets_t = std::map<dht::token, locator::tablet_replica_set>;
 ///        /var/lib/scylla/data
 /// @param keyspace_name the keyspace name of the table
 /// @param table_name the table name of the table
+/// @param table the table ID
 /// @param permit the permit for performing read ops
 /// @returns a map from last token to the replica set
 future<tablets_t> load_system_tablets(const db::config& dbcfg,
                                       std::filesystem::path scylla_data_path,
                                       std::string_view keyspace_name,
                                       std::string_view tablet_name,
+                                      table_id table,
                                       reader_permit permit);
 
 }

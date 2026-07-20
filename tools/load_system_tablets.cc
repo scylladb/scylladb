@@ -27,27 +27,11 @@ namespace {
 
 logging::logger logger{"load_sys_tablets"};
 
-future<utils::UUID> get_table_id(std::filesystem::path scylla_data_path,
-                                 std::string_view keyspace_name,
-                                 std::string_view table_name) {
-    auto path = co_await get_table_directory(scylla_data_path,
-                                             keyspace_name,
-                                             table_name);
-    // the part after "-" is the string representation of the table_id
-    //   "$scylla_data_path/system/tablets-fd4f7a4696bd3e7391bf99eb77e82a5c"
-    auto fn = path.filename().native();
-    auto dash_pos = fn.find_last_of('-');
-    assert(dash_pos != fn.npos);
-    if (dash_pos == fn.size()) {
-        throw std::runtime_error(fmt::format("failed parse system.tablets path {}: bad path", path));
-    }
-    co_return utils::UUID{fn.substr(dash_pos + 1).c_str()};
-}
-
 tools::tablets_t do_load_system_tablets(const db::config& dbcfg,
                                         std::filesystem::path scylla_data_path,
                                         std::string_view keyspace_name,
                                         std::string_view table_name,
+                                        table_id table,
                                         reader_permit permit) {
     sharded<sstable_manager_service> sst_man;
     auto scf = make_sstable_compressor_factory_for_tests_in_thread();
@@ -58,13 +42,12 @@ tools::tablets_t do_load_system_tablets(const db::config& dbcfg,
     auto tablets_table_directory = get_table_directory(scylla_data_path,
                                                        db::system_keyspace::NAME,
                                                        schema->cf_name()).get();
-    auto table_id = get_table_id(scylla_data_path, keyspace_name, table_name).get();
     auto mut = read_mutation_from_table_offline(sst_man,
                                                 permit,
                                                 tablets_table_directory,
                                                 db::system_keyspace::NAME,
                                                 db::system_keyspace::tablets,
-                                                data_value(table_id),
+                                                data_value(table.uuid()),
                                                 {});
     if (!mut || mut->partition().row_count() == 0) {
         throw std::runtime_error(fmt::format("failed to find tablets for {}.{}", keyspace_name, table_name));
@@ -97,9 +80,10 @@ future<tablets_t> load_system_tablets(const db::config &dbcfg,
                                       std::filesystem::path scylla_data_path,
                                       std::string_view keyspace_name,
                                       std::string_view table_name,
+                                      table_id table,
                                       reader_permit permit) {
     return async([=, &dbcfg] {
-        return do_load_system_tablets(dbcfg, scylla_data_path, keyspace_name, table_name, permit);
+        return do_load_system_tablets(dbcfg, scylla_data_path, keyspace_name, table_name, table, permit);
     });
 }
 
