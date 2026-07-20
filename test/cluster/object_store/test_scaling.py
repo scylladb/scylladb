@@ -35,7 +35,6 @@ async def test_scaling(manager: ManagerClient, object_storage):
     cfg = {
         'enable_user_defined_functions': False,
         'object_storage_endpoints': objconf,
-        'experimental_features': ['keyspace-storage-options'],
     }
     cmdline = ['--logger-log-level', 'sstable=debug']
 

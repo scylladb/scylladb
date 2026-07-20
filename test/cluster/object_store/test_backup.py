@@ -58,7 +58,6 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
@@ -104,7 +103,6 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
@@ -135,7 +133,6 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
        after updating the config, it should succeed'''
 
     cfg = {'enable_user_defined_functions': False,
-           'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
     cmd = ['--logger-log-level', 'sstables_manager=debug']
@@ -179,7 +176,6 @@ async def do_test_backup_helper(manager: ManagerClient, object_storage,
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
@@ -252,7 +248,6 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
     if do_encrypt:
@@ -365,7 +360,6 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
     objconf = object_storage.create_endpoint_conf()
     config = {'enable_user_defined_functions': False,
               'object_storage_endpoints': objconf,
-              'experimental_features': ['keyspace-storage-options'],
               'task_ttl_in_seconds': 300,
               }
 
@@ -1191,7 +1185,6 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
@@ -1215,7 +1208,6 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
     config = {
         'enable_user_defined_functions': False,
         'object_storage_endpoints': objconf,
-        'experimental_features': ['keyspace-storage-options'],
         'task_ttl_in_seconds': 300,
     }
     cmd = ['--smp', '1', '--logger-log-level', 'sstables_loader=debug:sstable=debug']
@@ -1418,7 +1410,6 @@ async def test_aborted_decommision_reenables_snapshot(manager: ManagerClient, ob
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
