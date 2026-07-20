@@ -1,0 +1,20 @@
+version: '3'
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    network_mode: host
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command: --config.file=/etc/prometheus/prometheus.yml --web.listen-address=:9090
+
+  grafana:
+    image: grafana/grafana:latest
+    network_mode: host
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml
+      - ./grafana-dashboard-provider.yml:/etc/grafana/provisioning/dashboards/provider.yml
+      - ../wtinylfu_grafana_dashboard.json:/var/lib/grafana/dashboards/wtinylfu.json

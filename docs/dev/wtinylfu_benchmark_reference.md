@@ -19,6 +19,51 @@ The scan working set (500 MB) significantly exceeds the cache (314 MB),
 forcing continuous eviction.  The hot set (80 MB) fits in cache and
 should remain cached.
 
+## Important: Config and Measurement Notes
+
+**CLI flags don't work for tinylfu config.** The `--tinylfu-initial-window-fraction`
+flag is silently ignored. Use `--options-file scylla.yaml` with:
+
+```yaml
+tinylfu_initial_window_fraction: 0.01  # or 0.99 for LRU-like
+```
+
+**99% window is NOT pure LRU.** Even with 99% window, the W-TinyLFU
+admission gate still runs during `do_evict()` → `drain_window()`.
+In a 120s benchmark, the gate rejected 92% of entries (1.66M rejections
+vs 133K admissions). This means the only valid LRU comparison is against
+a binary without W-TinyLFU code (e.g., `feature/generic_index_cache`).
+
+**`cache_hit_rate` metric is a moving average** that includes warmup.
+For attack-period-only measurement, compute deltas from
+`scylla_cache_partition_hits` and `scylla_cache_partition_misses`
+Prometheus counters.
+
+**Verify config applied:** Check `scylla_cache_tinylfu_max_window_size`
+in Prometheus. With 1% window it should be small (~1400 for 140K entries).
+With 99% it should be ~138K.
+
+## Monitoring
+
+Start Prometheus + Grafana for live cache metrics:
+
+```bash
+cd tools/wtinylfu_monitoring
+docker compose up -d
+# Grafana: http://localhost:3000 (admin/admin)
+# Dashboard: "W-TinyLFU Cache Dashboard" auto-provisioned
+```
+
+Dashboard panels:
+- Per-table cache hit rate
+- Partition/row hits/misses per second
+- Computed hit rate (30s window) from counter deltas
+- W-TinyLFU segment sizes (window/probation/protected stacked)
+- Admission gate rates (admissions/rejections/jitter)
+- Eviction and segment flow rates
+- Sketch frequency per segment
+- Cache memory and partition count
+
 ## Results (2026-07-20)
 
 ### Per-Table Hit Rates

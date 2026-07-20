@@ -1,0 +1,246 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Per-Table Cache Hit Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "scylla_column_family_cache_hit_rate{ks=\"bench\"}",
+          "legendFormat": "{{cf}} hit rate"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "Partition Hits/Misses Rate (per second)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_partition_hits[30s])",
+          "legendFormat": "partition hits/s"
+        },
+        {
+          "expr": "rate(scylla_cache_partition_misses[30s])",
+          "legendFormat": "partition misses/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "Partition Hit Rate (computed, 30s window)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_partition_hits[30s]) / (rate(scylla_cache_partition_hits[30s]) + rate(scylla_cache_partition_misses[30s]))",
+          "legendFormat": "partition hit rate (30s)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "lineWidth": 2, "fillOpacity": 20 }
+        }
+      }
+    },
+    {
+      "title": "Row Hits/Misses Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_row_hits[30s])",
+          "legendFormat": "row hits/s"
+        },
+        {
+          "expr": "rate(scylla_cache_row_misses[30s])",
+          "legendFormat": "row misses/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "W-TinyLFU Segment Sizes",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "scylla_cache_tinylfu_window_size",
+          "legendFormat": "window"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_probation_size",
+          "legendFormat": "probation"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_protected_size",
+          "legendFormat": "protected"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 30, "stacking": { "mode": "normal" } }
+        }
+      }
+    },
+    {
+      "title": "W-TinyLFU Admission Gate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_tinylfu_admissions[30s])",
+          "legendFormat": "admissions/s"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_rejections[30s])",
+          "legendFormat": "rejections/s"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_jitter_admissions[30s])",
+          "legendFormat": "jitter admissions/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "Evictions & Segment Flow",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "rate(scylla_cache_partition_evictions[30s])",
+          "legendFormat": "partition evictions/s"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_window_to_probation[30s])",
+          "legendFormat": "window→probation/s"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_protected_promotions[30s])",
+          "legendFormat": "probation→protected/s"
+        },
+        {
+          "expr": "rate(scylla_cache_tinylfu_protected_demotions[30s])",
+          "legendFormat": "protected→probation/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "Sketch Frequency (sampled avg per segment)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "scylla_cache_tinylfu_avg_freq_window",
+          "legendFormat": "window avg freq"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_avg_freq_probation",
+          "legendFormat": "probation avg freq"
+        },
+        {
+          "expr": "scylla_cache_tinylfu_avg_freq_protected",
+          "legendFormat": "protected avg freq"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "Cache Memory Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "expr": "scylla_cache_bytes_used",
+          "legendFormat": "used"
+        },
+        {
+          "expr": "scylla_cache_bytes_total",
+          "legendFormat": "total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "Cached Partitions & Rows",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        {
+          "expr": "scylla_cache_partitions",
+          "legendFormat": "partitions"
+        },
+        {
+          "expr": "scylla_cache_rows",
+          "legendFormat": "rows"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["scylla", "cache", "wtinylfu"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "W-TinyLFU Cache Dashboard",
+  "uid": "wtinylfu-cache",
+  "version": 1
+}
