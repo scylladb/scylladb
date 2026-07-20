@@ -760,7 +760,17 @@ private:
     void validate_max_local_deletion_time();
     void validate_partitioner();
     void validate_component_digest(component_type type, uint32_t computed_digest) const;
+    // Read component data and validate the digest.
+    future<> validate_component_digest(component_type type);
+    future<> validate_scylla_digest_value();
+public:
+    using skip_data_digest = bool_class<struct skip_data_digest_tag>;
+    future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
+private:
     future<> validate_index_digest() const;
+    // Read the Scylla component self-digest from file.
+    // Should only be called by sstables which have a Scylla file digest.
+    future<uint32_t> read_scylla_file_digest() const;
     future<uint32_t> compute_component_file_digest(component_type type) const;
     future<uint32_t> compute_component_file_digest(file f, size_t size) const;
 
@@ -1205,6 +1215,8 @@ public:
 //
 // Sstables have two kind of checksums: per-chunk checksums and a
 // full-checksum (digest) calculated over the entire content of Data.db.
+// Other components have a digest, which is stored in the Scylla-metadata
+// component.
 //
 // The full-checksum (digest) is stored in Digest.crc (component_type::Digest).
 //
@@ -1220,12 +1232,19 @@ public:
 // data, on the compressed data.
 //
 // This method validates both the full checksum and the per-chunk checksum
-// for the entire Data.db.
+// for the entire Data.db, as well as the digests of other components.
 //
 // Returns `valid` if all checksums are valid.
-// Returns `invalid` if at least one checksum is invalid.
+// Returns `invalid` if at least one checksum or digest is invalid.
 // Returns `no_checksum` if the sstable is uncompressed and does not have
-// a CRC component (CRC.db is missing from TOC.txt).
+// a CRC component (CRC.db is missing from TOC.txt) and all validated
+// components have a valid digest.
+//
+// `has_digest` is `true` if the data digest is present in the dedicated
+// Digest component.
+// `has_checksum` is `true` if the sstable is compressed or has a CRC
+// component.
+//
 // Validation errors are logged individually.
 enum class validate_checksums_status {
     invalid = 0,
@@ -1235,6 +1254,7 @@ enum class validate_checksums_status {
 struct validate_checksums_result {
     validate_checksums_status status;
     bool has_digest;
+    bool has_checksum;
 };
 future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit);
 

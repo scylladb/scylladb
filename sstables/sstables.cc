@@ -1285,6 +1285,34 @@ void sstable::validate_partitioner() {
 
 }
 
+future<uint32_t> sstable::read_scylla_file_digest() const {
+    constexpr size_t digest_size = sizeof(uint32_t);
+    auto f = co_await new_sstable_component_file(_read_error_handler, component_type::Scylla, open_flags::ro);
+    auto size = co_await f.size();
+
+    if (size < digest_size) {
+        co_await f.close();
+        throw_malformed_sstable_exception(fmt::format("missing digest in {}", get_filename()));
+    }
+
+    auto reader = file_random_access_reader(std::move(f), size);
+
+    uint32_t digest;
+    std::exception_ptr ex;
+    try {
+        co_await reader.seek(size - digest_size);
+        auto buf = co_await reader.read_exactly(digest_size);
+        digest = seastar::read_be<uint32_t>(buf.get());
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await reader.close();
+
+    maybe_rethrow_exception(std::move(ex));
+
+    co_return digest;
+}
+
 future<uint32_t> sstable::compute_component_file_digest(component_type type) const {
     auto f = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
     auto size = co_await f.size();
@@ -1314,6 +1342,45 @@ void sstable::validate_component_digest(component_type type, uint32_t computed_d
             sstlog.warn("{}", msg);
         } else {
             throw_malformed_sstable_exception(msg);
+        }
+    }
+}
+
+future<> sstable::validate_component_digest(component_type type) {
+    auto stored_digest = get_component_digest(type);
+    if (!stored_digest.has_value()) {
+        co_return;
+    }
+
+    auto computed_digest = co_await compute_component_file_digest(type);
+    validate_component_digest(type, computed_digest);
+}
+
+future<> sstable::validate_scylla_digest_value() {
+    auto stored_digest = get_component_digest(component_type::Scylla);
+    
+    if (!stored_digest) {
+        co_return;
+    }
+
+    auto disk_digest = co_await read_scylla_file_digest();
+    if (stored_digest != disk_digest) {
+        auto msg = fmt::format("{} digest value does not match the on-disk value in {}: expected {}, read {}",
+            component_type::Scylla, get_filename(), stored_digest, disk_digest);
+        if (_ignore_component_digest_mismatch) {
+            sstlog.warn("{}", msg);
+        } else {
+            throw_malformed_sstable_exception(msg);
+        }
+    }
+}
+
+future<> sstable::validate_digests(sstable::skip_data_digest skip_data) {
+    co_await validate_scylla_digest_value();
+
+    for (const auto& type : _recognized_components) {
+        if (type != component_type::Data || !skip_data) {
+            co_await validate_component_digest(type);
         }
     }
 }
@@ -3366,12 +3433,35 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
 }
 
 future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit) {
-    const auto digest = co_await sst->read_digest();
+    auto valid = true;
+    std::exception_ptr ex;
+
+    auto has_checksums = sst->has_component(component_type::CRC) || sst->get_compression();
+    auto has_digest = sst->has_component(component_type::Digest);
+
     validate_checksums_result ret = {
         validate_checksums_status::valid,
-        digest.has_value()
+        has_digest,
+        has_checksums
     };
 
+    try {
+        co_await sst->validate_digests(sstable::skip_data_digest::yes);
+    } catch (malformed_sstable_exception& e) {
+        valid = false;
+        sstlog.error("{}", e.what());
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    maybe_rethrow_exception(ex);
+
+    if (!valid) {
+        ret.status = validate_checksums_status::invalid;
+        co_return ret;
+    }
+
+    const auto digest = co_await sst->read_digest();
     auto checksum = co_await sst->read_checksum();
     if (!checksum && !sst->get_compression()) {
         sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
@@ -3389,9 +3479,6 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
                     ret.status = validate_checksums_status::invalid;
                 })
         );
-
-    auto valid = true;
-    std::exception_ptr ex;
 
     try {
         if (sst->get_compression()) {
