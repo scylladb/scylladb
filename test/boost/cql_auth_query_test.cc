@@ -387,31 +387,42 @@ SEASTAR_TEST_CASE(select_from_vector_indexed_table) {
             enable_tablets(db_config_with_auth()));
 }
 
-SEASTAR_TEST_CASE(select_from_vector_search_system_table) {
+SEASTAR_TEST_CASE(select_from_external_index_system_tables) {
     return do_with_cql_env_thread(
             [](auto&& env) {
                 create_user_if_not_exists(env, bob);
 
-                // All tables in vector_search_system_resources from client_state.cc
-                const std::vector<sstring> vector_search_system_tables = {
+                // All tables in external_index_system_resources from client_state.cc.
+                const std::vector<sstring> external_index_system_tables = {
                     "system.group0_history",
                     "system.versions",
                     "system.cdc_streams",
                     "system.cdc_timestamps",
+                    "system.tablets",
                 };
 
-                // Without VECTOR_SEARCH_INDEXING permission, bob cannot select from these tables
-                for (const auto& table : vector_search_system_tables) {
+                // Without VECTOR_SEARCH_INDEXING or TEXT_SEARCH_INDEXING permission, bob cannot select from these tables
+                for (const auto& table : external_index_system_tables) {
                     with_user(env, bob, [&env, &table] {
                         BOOST_REQUIRE_EXCEPTION(env.execute_cql(format("SELECT * FROM {}", table)).get(), exceptions::unauthorized_exception,
-                                exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT) on"));
+                                exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT, TEXT_SEARCH_INDEXING) on"));
                     });
                 }
 
                 cquery_nofail(env, "GRANT VECTOR_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
 
                 // With VECTOR_SEARCH_INDEXING permission, bob can select from these tables
-                for (const auto& table : vector_search_system_tables) {
+                for (const auto& table : external_index_system_tables) {
+                    with_user(env, bob, [&env, &table] {
+                        cquery_nofail(env, format("SELECT * FROM {}", table));
+                    });
+                }
+
+                cquery_nofail(env, "REVOKE VECTOR_SEARCH_INDEXING ON ALL KEYSPACES FROM bob");
+                cquery_nofail(env, "GRANT TEXT_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+
+                // With TEXT_SEARCH_INDEXING permission, bob can also select from these tables
+                for (const auto& table : external_index_system_tables) {
                     with_user(env, bob, [&env, &table] {
                         cquery_nofail(env, format("SELECT * FROM {}", table));
                     });
@@ -445,6 +456,108 @@ SEASTAR_TEST_CASE(select_from_cdc_log_of_vector_indexed_table) {
                 // Now bob can select from the CDC log table
                 with_user(env, bob, [&env] {
                     cquery_nofail(env, "SELECT * FROM ks.t_scylla_cdc_log");
+                });
+            },
+            enable_tablets(db_config_with_auth()));
+}
+
+SEASTAR_TEST_CASE(grant_text_search_indexing) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                create_user_if_not_exists(env, bob);
+                cquery_nofail(env, "CREATE TABLE ks.t (id int PRIMARY KEY, v text)");
+                BOOST_REQUIRE_EXCEPTION(env.execute_cql("GRANT TEXT_SEARCH_INDEXING ON ks.t TO bob").get(), exceptions::syntax_exception,
+                        exception_predicate::message_contains("does not support any of the requested permissions"));
+                BOOST_REQUIRE_EXCEPTION(env.execute_cql("GRANT TEXT_SEARCH_INDEXING ON KEYSPACE ks TO bob").get(), exceptions::syntax_exception,
+                        exception_predicate::message_contains("does not support any of the requested permissions"));
+                cquery_nofail(env, "GRANT TEXT_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+            },
+            db_config_with_auth());
+}
+
+SEASTAR_TEST_CASE(select_from_fulltext_indexed_table) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                cquery_nofail(env, "CREATE TABLE ks.t (id int PRIMARY KEY, v text)");
+                cquery_nofail(env, "CREATE TABLE ks.t2 (id int PRIMARY KEY, v text)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.t(v) USING 'fulltext_index'");
+                create_user_if_not_exists(env, bob);
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.t").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (SELECT, TEXT_SEARCH_INDEXING) on"));
+                });
+                cquery_nofail(env, "GRANT TEXT_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.t");
+                });
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.t2").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has no SELECT permission"));
+                });
+            },
+            enable_tablets(db_config_with_auth()));
+}
+
+SEASTAR_TEST_CASE(select_from_cdc_log_of_fulltext_indexed_table) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                // Create a table with a text column and a fulltext index (which enables CDC)
+                cquery_nofail(env, "CREATE TABLE ks.t (id int PRIMARY KEY, v text)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.t(v) USING 'fulltext_index'");
+
+                create_user_if_not_exists(env, bob);
+
+                // Without permissions, bob cannot select from the CDC log table
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.t_scylla_cdc_log").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (SELECT, TEXT_SEARCH_INDEXING) on"));
+                });
+
+                // Grant TEXT_SEARCH_INDEXING permission
+                cquery_nofail(env, "GRANT TEXT_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+
+                // Now bob can select from the CDC log table
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.t_scylla_cdc_log");
+                });
+            },
+            enable_tablets(db_config_with_auth()));
+}
+
+// TEXT_SEARCH_INDEXING and VECTOR_SEARCH_INDEXING are independent permissions.
+// Neither grants SELECT on a table indexed only with the other index type.
+SEASTAR_TEST_CASE(vector_and_text_search_indexing_permissions_are_isolated) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                cquery_nofail(env, "CREATE TABLE ks.vec_t (id int PRIMARY KEY, v vector<float, 4>)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.vec_t(v) USING 'vector_index'");
+                cquery_nofail(env, "CREATE TABLE ks.fts_t (id int PRIMARY KEY, v text)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.fts_t(v) USING 'fulltext_index'");
+
+                create_user_if_not_exists(env, bob);
+                cquery_nofail(env, "GRANT TEXT_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+
+                // TEXT_SEARCH_INDEXING alone does not grant access to a vector-only-indexed table.
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.vec_t").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT) on"));
+                });
+                // It does grant access to the fulltext-indexed table.
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.fts_t");
+                });
+
+                cquery_nofail(env, "REVOKE TEXT_SEARCH_INDEXING ON ALL KEYSPACES FROM bob");
+                cquery_nofail(env, "GRANT VECTOR_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+
+                // VECTOR_SEARCH_INDEXING alone does not grant access to a fulltext-only-indexed table.
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.fts_t").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (SELECT, TEXT_SEARCH_INDEXING) on"));
+                });
+                // It does grant access to the vector-indexed table.
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.vec_t");
                 });
             },
             enable_tablets(db_config_with_auth()));
