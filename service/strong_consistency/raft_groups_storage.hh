@@ -48,6 +48,14 @@ class raft_groups_storage : public raft::persistence {
     // Used to linearize write operations to system.raft_groups table.
     // This is managed by `execute_with_linearization_point` helper function.
     future<> _pending_op_fut;
+    // Set once abort() is called. abort() does not persist commit_idx itself
+    // (shutdown may have closed the CQL / storage_proxy gates); durability is
+    // provided by the per-batch fake system.raft_groups mutation and the
+    // raft_groups memtable flush. After this point persist_commit_idx() becomes
+    // a quiet no-op so no new CQL write starts while the object is being torn
+    // down. abort() drains any in-flight operation via _pending_op_fut before
+    // this object is destroyed.
+    bool _aborted = false;
     // Last commit index reported by the raft io_fiber via store_commit_idx().
     // The io_fiber calls store_commit_idx() *before* pushing entries to the
     // applier_fiber for apply(), so this value is always >= the raft index
@@ -97,9 +105,8 @@ public:
 
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 
-    // Persist commit index to system.raft_groups. Called by store_commit_idx()
-    // and (in a later commit) from the memtable flush path. Skips the write if
-    // _last_known_commit_idx hasn't advanced since the last persist.
+    // Persist _last_known_commit_idx to system.raft_groups. Skips the write
+    // if it hasn't advanced since the last persist, or if abort() has begun.
     future<> persist_commit_idx();
 
 private:
