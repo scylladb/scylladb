@@ -413,7 +413,7 @@ SEASTAR_TEST_CASE(test_group0_hard_timeout_history_present_is_always_success) {
             // succeed regardless.
             auto gc_dur = rclient.get_history_gc_duration();
             forward_jump_clocks(gc_dur + std::chrono::seconds{1});
-            auto restore_clocks = defer([gc_dur] { forward_jump_clocks(-(gc_dur + std::chrono::seconds{1})); });
+            auto restore_clocks = defer([gc_dur] noexcept { forward_jump_clocks(-(gc_dur + std::chrono::seconds{1})); });
             // Row present => success, must not throw.
             co_await std::move(mc).commit(rclient, as, ::service::raft_timeout{});
         }
@@ -509,7 +509,7 @@ SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_gc_eligible_is_hard_ti
         // ambiguous => must throw group0_hard_timeout.
         auto gc_dur = rclient.get_history_gc_duration();
         forward_jump_clocks(gc_dur + std::chrono::seconds{1});
-        auto restore_clocks = defer([gc_dur] { forward_jump_clocks(-(gc_dur + std::chrono::seconds{1})); });
+        auto restore_clocks = defer([gc_dur] noexcept { forward_jump_clocks(-(gc_dur + std::chrono::seconds{1})); });
         BOOST_CHECK_EXCEPTION(co_await std::move(mc_a).commit(rclient, as, ::service::raft_timeout{}),
                 service::group0_hard_timeout, [] (const service::group0_hard_timeout&) { return true; });
     });
@@ -554,7 +554,7 @@ SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_after_real_gc_is_hard_
         // gc_clock::now() includes clocks_offset, so gc_grace_seconds=0 makes
         // tombstones immediately eligible once gc_clock advances.
         forward_jump_clocks(std::chrono::seconds{1});
-        auto restore_clocks = defer([] { forward_jump_clocks(-std::chrono::seconds{1}); });
+        auto restore_clocks = defer([] noexcept { forward_jump_clocks(-std::chrono::seconds{1}); });
         auto& history_cf = e.local_db().find_column_family("system", db::system_keyspace::GROUP0_HISTORY);
         co_await history_cf.flush();
         co_await history_cf.compact_all_sstables(tasks::task_info{});
