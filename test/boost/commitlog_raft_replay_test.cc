@@ -1814,4 +1814,144 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
     });
 }
 
+// Test: raft_commitlog::store_log_entries writes a trailing commit_idx entry
+// after the raft log entries and returns that entry's rp_handle. Ensures:
+//   * The batch produces exactly N raft entries + 1 commit_idx entry in the commitlog.
+//   * The commit_idx entry carries the expected group_id and commit_idx.
+//
+// Test for: SCYLLADB-2877
+SEASTAR_TEST_CASE(test_raft_commitlog_store_log_entries_writes_commit_idx_entry) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
+
+        raft::log_entry_ptr_list entries;
+        for (int i = 1; i <= 3; ++i) {
+            entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+        }
+
+        auto commit_idx = raft::index_t(2);
+        auto commit_idx_entry_handle = co_await persistence.store_log_entries(entries, commit_idx);
+        BOOST_REQUIRE(commit_idx_entry_handle);
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        size_t raft_entries = 0;
+        size_t commit_idx_entries = 0;
+        for (auto& seg : segments) {
+            co_await db::commitlog::read_log_file(
+                    seg, db::commitlog::descriptor::FILENAME_PREFIX,
+                    [&](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                        auto&& [buf, _] = buf_rp;
+                        commitlog_entry_reader reader(buf, detail::commitlog_entry_serialization_format::variant);
+                        auto& entry_var = reader.entry().item;
+
+                        if (std::holds_alternative<raft_commitlog_entry>(entry_var)) {
+                            const auto& rle = std::get<raft_commitlog_entry>(entry_var);
+                            BOOST_REQUIRE_EQUAL(rle.group_id, gid);
+                            ++raft_entries;
+                        } else {
+                            BOOST_REQUIRE(std::holds_alternative<raft_commit_idx_entry>(entry_var));
+                            const auto& commit_idx_entry = std::get<raft_commit_idx_entry>(entry_var);
+                            BOOST_REQUIRE_EQUAL(commit_idx_entry.group_id, gid);
+                            BOOST_REQUIRE_EQUAL(commit_idx_entry.commit_idx, commit_idx);
+                            ++commit_idx_entries;
+                        }
+                        co_return;
+                    });
+        }
+
+        BOOST_REQUIRE_EQUAL(raft_entries, entries.size());
+        BOOST_REQUIRE_EQUAL(commit_idx_entries, 1);
+
+        // Release the commit_idx entry handle so the segment can eventually be reclaimed.
+        commit_idx_entry_handle.release();
+    });
+}
+
+// Test: mixed command / non-command batches are routed into the correct
+// deques. acquire_replay_position_handles_for() must find command entries,
+// non-command entries are pinned by their separate deque until truncation.
+SEASTAR_TEST_CASE(test_raft_commitlog_splits_command_and_noncommand_positions) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
+
+        // 3 command entries interleaved with 10 non-command entries
+        // (commands at idx 1, 7, 13; configuration/dummy fill the rest).
+        auto is_command_idx = [](int i) { return i == 1 || i == 7 || i == 13; };
+        raft::log_entry_ptr_list entries;
+        for (int i = 1; i <= 13; ++i) {
+            if (is_command_idx(i)) {
+                entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
+            } else if (i % 2 == 0) {
+                entries.push_back(make_config_entry(raft::term_t(1), raft::index_t(i)));
+            } else {
+                entries.push_back(make_dummy_entry(raft::term_t(1), raft::index_t(i)));
+            }
+        }
+
+        auto commit_idx_entry_handle = co_await persistence.store_log_entries(entries, raft::index_t(2));
+        commit_idx_entry_handle.release();
+
+        // acquire_* only walks _command_positions; the 10 non-command entries
+        // live in a separate deque and must not appear there. Requesting the 3
+        // commands (the full contiguous command prefix) succeeds.
+        raft::log_entry_ptr_list commands = {entries[0], entries[6], entries[12]};
+        auto handles = persistence.acquire_replay_position_handles_for(commands);
+        BOOST_REQUIRE_EQUAL(handles.size(), 3);
+        BOOST_REQUIRE_EQUAL(handles[0].index, raft::index_t(1));
+        BOOST_REQUIRE_EQUAL(handles[1].index, raft::index_t(7));
+        BOOST_REQUIRE_EQUAL(handles[2].index, raft::index_t(13));
+
+        // Truncate the non-command tail (<= idx 10): non-command entries with
+        // idx <= 10 are released, while those above (11, 12) remain. The command
+        // deque was already drained by the acquire above, so it is unaffected.
+        // This must not crash and the class' destructor must succeed.
+        persistence.truncate_log_tail(raft::index_t(10));
+    });
+}
+
+// Test: release_noncommand_rp_handles drops non-command rp_handles up to and including
+// the given idx and leaves command handles untouched.
+SEASTAR_TEST_CASE(test_raft_commitlog_release_noncommand_rp_handles) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto tid = make_table_id();
+
+        service::strong_consistency::replayed_data_per_group replayed_data;
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
+
+        raft::log_entry_ptr_list entries;
+        entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(1)));
+        entries.push_back(make_config_entry (raft::term_t(1), raft::index_t(2)));
+        entries.push_back(make_dummy_entry  (raft::term_t(1), raft::index_t(3)));
+        entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(4)));
+        entries.push_back(make_dummy_entry  (raft::term_t(1), raft::index_t(5)));
+
+        (void)co_await persistence.store_log_entries(entries, raft::index_t(0));
+
+        // Release non-command handles up to idx 3: covers the config@2 and
+        // dummy@3. dummy@5 must remain (idx > 3). Commands must be untouched.
+        persistence.release_noncommand_rp_handles(raft::index_t(3));
+
+        // Commands can still be acquired at their original indices.
+        raft::log_entry_ptr_list commands = {entries[0], entries[3]};
+        auto handles = persistence.acquire_replay_position_handles_for(commands);
+        BOOST_REQUIRE_EQUAL(handles.size(), 2);
+        BOOST_REQUIRE_EQUAL(handles[0].index, raft::index_t(1));
+        BOOST_REQUIRE_EQUAL(handles[1].index, raft::index_t(4));
+    });
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()
