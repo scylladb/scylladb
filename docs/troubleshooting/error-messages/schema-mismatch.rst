@@ -44,7 +44,7 @@ Solution
 
 1. Wait for five minutes and run ``nodetool describecluster`` to verify that the schema is synced.
 
-2. If there is still a mismatch error message execute a `rolling restart`_.
+2. If there is still a mismatch error message execute a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart>`.
 
 3. Verify schema is synced
 
@@ -60,4 +60,3 @@ For example:
 	   Schema versions:
 		   1fd57629-6bae-3f23-97d1-ffa4208cc372: [172.17.0.1, 172.17.0.2, 172.17.0.3]
 
-..  _`rolling restart`: /operating-scylla/procedures/config-change/rolling_restart/

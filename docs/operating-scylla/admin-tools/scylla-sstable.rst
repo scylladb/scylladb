@@ -904,7 +904,7 @@ Similar to ``scylla sstable dump-data --partition|--partition-file``, with some 
 * Also supports negative filters (keep all partitions except the those specified).
 
 The partition list can be provided either via the ``--partition`` command line argument, or via a file path passed to the the ``--partitions-file`` argument. The file should contain one partition key per line.
-Partition keys should be provided in the hex format, as produced by `scylla types serialize </operating-scylla/admin-tools/scylla-types/>`_.
+Partition keys should be provided in the hex format, as produced by :doc:`scylla types serialize </operating-scylla/admin-tools/scylla-types>`.
 
 With ``--include``, only the specified partitions are kept from the input SSTable(s). With ``--exclude``, the specified partitions are discarded and won't be written to the output SSTable(s).
 It is possible that certain input SSTable(s) won't have any content left after the filtering. These input SSTable(s) will not have a matching output SSTable.
