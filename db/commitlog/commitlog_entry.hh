@@ -196,10 +196,15 @@ public:
 // (raft_commitlog_entry) and the per-batch commit-index entry
 // (raft_commit_idx_entry); both are produced by raft_commitlog::
 // store_log_entries as part of a single batched commit_log.add_raft_entries().
+//
+// Each writer carries its own cf_id_type so a single batch can contain
+// entries destined for different column families — used to associate the
+// commit_idx entry with system.raft_groups rather than the raft log's target table.
 class commitlog_raft_log_entry_writer {
 public:
     using item_variant = std::variant<raft_commitlog_entry, raft_commit_idx_entry>;
 protected:
+    db::cf_id_type _cf_id;
     item_variant _item;
     std::size_t _size = std::numeric_limits<std::size_t>::max();
 
@@ -208,10 +213,10 @@ protected:
     void compute_size();
 
 public:
-    explicit commitlog_raft_log_entry_writer(raft_commitlog_entry item)
-        : _item(std::move(item)) { compute_size(); }
-    explicit commitlog_raft_log_entry_writer(raft_commit_idx_entry item)
-        : _item(std::move(item)) { compute_size(); }
+    explicit commitlog_raft_log_entry_writer(db::cf_id_type cf_id, raft_commitlog_entry item)
+        : _cf_id(cf_id), _item(std::move(item)) { compute_size(); }
+    explicit commitlog_raft_log_entry_writer(db::cf_id_type cf_id, raft_commit_idx_entry item)
+        : _cf_id(cf_id), _item(std::move(item)) { compute_size(); }
 
     size_t size() const {
         SCYLLA_ASSERT(_size != std::numeric_limits<size_t>::max());
@@ -221,6 +226,9 @@ public:
     using ostream = typename seastar::memory_output_stream<detail::sector_split_iterator>;
     void write(ostream& out) const;
 
+    const db::cf_id_type& cf_id() const {
+        return _cf_id;
+    }
     raft::group_id group_id() const {
         return std::visit([] (const auto& item) { return item.group_id; }, _item);
     }

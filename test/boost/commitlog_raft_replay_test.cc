@@ -84,10 +84,10 @@ future<> cl_test(noncopyable_function<future<>(commitlog&)> f) {
 
 // Write a raft log entry to the commitlog and return the rp_handle.
 future<rp_handle> write_raft_entry_to_commitlog(commitlog& cl, table_id tid, raft::group_id gid, raft::log_entry_ptr entry) {
-    commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry});
+    commitlog_raft_log_entry_writer writer(tid, raft_commitlog_entry{.group_id = gid, .entry = entry});
     const auto target_size = writer.size();
-    co_return co_await cl.add(tid, target_size, db::no_timeout, db::commitlog_force_sync::yes, [entry, gid](auto& out) {
-        commitlog_raft_log_entry_writer w(raft_commitlog_entry{.group_id = gid, .entry = entry});
+    co_return co_await cl.add(tid, target_size, db::no_timeout, db::commitlog_force_sync::yes, [entry, gid, tid](auto& out) {
+        commitlog_raft_log_entry_writer w(tid, raft_commitlog_entry{.group_id = gid, .entry = entry});
         w.write(out);
     });
 }
@@ -111,7 +111,7 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
         // Verify size() and accessor for each entry type, then write to commitlog.
         std::vector<replay_position> rps;
         for (const auto& entry : entries) {
-            commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry});
+            commitlog_raft_log_entry_writer writer(tid, raft_commitlog_entry{.group_id = gid, .entry = entry});
             // size() must exceed the bare raft::log_entry serialization because
             // the writer wraps it in a commitlog_entry + raft_commitlog_entry envelope.
             BOOST_REQUIRE_GT(writer.size(), 0u);
@@ -1545,14 +1545,14 @@ SEASTAR_TEST_CASE(test_raft_commitlog_store_and_truncate_log) {
         auto tid = make_table_id();
 
         service::strong_consistency::replayed_data_per_group replayed_data;
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
 
         // Store 10 entries.
         raft::log_entry_ptr_list all_entries;
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        co_await persistence.store_log_entries(all_entries);
+        (void)co_await persistence.store_log_entries(all_entries, raft::index_t(0));
 
         // Truncate at idx 6 — entries 6-10 should be removed.
         persistence.truncate_log(raft::index_t(6));
@@ -1589,13 +1589,13 @@ SEASTAR_TEST_CASE(test_raft_commitlog_truncate_log_tail_releases_handles) {
         auto tid = make_table_id();
 
         service::strong_consistency::replayed_data_per_group replayed_data;
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
 
         raft::log_entry_ptr_list all_entries;
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        co_await persistence.store_log_entries(all_entries);
+        (void)co_await persistence.store_log_entries(all_entries, raft::index_t(0));
 
         // Truncate tail at idx 5 — entries 1-5 handles should be released.
         persistence.truncate_log_tail(raft::index_t(5));
@@ -1742,13 +1742,13 @@ SEASTAR_TEST_CASE(test_raft_commitlog_combined_truncation) {
         auto tid = make_table_id();
 
         service::strong_consistency::replayed_data_per_group replayed_data;
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
 
         raft::log_entry_ptr_list all_entries;
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        co_await persistence.store_log_entries(all_entries);
+        (void)co_await persistence.store_log_entries(all_entries, raft::index_t(0));
 
         // Truncate tail (entries <= 3) and head (entries >= 8).
         persistence.truncate_log_tail(raft::index_t(3));
@@ -1798,7 +1798,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
         replayed_data.replay_positions.push_back({.index = raft::index_t(2), .replay_position_handle = {}});
         replayed_data.replay_positions.push_back({.index = raft::index_t(3), .replay_position_handle = {}});
 
-        service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
+        service::strong_consistency::raft_commitlog persistence(gid, log, tid, make_table_id(), std::move(replayed_data));
 
         // First call should return the entries.
         auto entries = persistence.load_log();

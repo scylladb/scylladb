@@ -29,9 +29,11 @@ bool is_command_entry(const raft::log_entry& e) {
 }
 } // namespace
 
-raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog, table_id target_table_id, replayed_data_per_group replayed_data)
+raft_commitlog::raft_commitlog(raft::group_id group_id, db::commitlog& commitlog, table_id target_table_id,
+        db::cf_id_type raft_groups_table_id, replayed_data_per_group replayed_data)
     : _group_id(group_id)
     , _table_id(target_table_id)
+    , _raft_groups_table_id(raft_groups_table_id)
     , _commit_log(commitlog)
     , _replayed_entries(std::move(replayed_data.entries)) {
     // replay_positions and _replayed_entries are populated in lockstep by the
@@ -62,18 +64,31 @@ raft_commitlog::~raft_commitlog() {
             _command_positions.size(), _noncommand_positions.size(), _group_id);
 }
 
-seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries) {
-    logger.debug("store_log_entries: group_id={}, num_entries={}", _group_id, entries.size());
+seastar::future<db::rp_handle> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries, raft::index_t commit_idx) {
+    logger.debug("store_log_entries: group_id={}, num_entries={}, commit_idx={}",
+            _group_id, entries.size(), commit_idx);
 
     utils::chunked_vector<commitlog_raft_log_entry_writer> writers;
-    writers.reserve(entries.size());
+    writers.reserve(entries.size() + 1);
 
     for (const auto& log_entry_ptr : entries) {
         logger.debug("  storing log entry: idx={}, term={}", log_entry_ptr->idx, log_entry_ptr->term);
-        writers.emplace_back(raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr});
+        writers.emplace_back(_table_id, raft_commitlog_entry{.group_id = _group_id, .entry = log_entry_ptr});
     }
+    // Trailing commit_idx entry. Its rp_handle is returned to the caller so
+    // it can be attached to a fake system.raft_groups mutation applied
+    // in-memory. That lets the raft_groups memtable eventually flush commit_idx
+    // to an SSTable via a normal flush without a synchronous CQL write on the
+    // raft io_fiber. The entry's cf_id is _raft_groups_table_id
+    // (system.raft_groups) so segment dirty-count accounting stays consistent
+    // with the memtable that ends up holding the handle.
+    writers.emplace_back(
+            _raft_groups_table_id,
+            raft_commit_idx_entry{.group_id = _group_id, .commit_idx = commit_idx});
 
-    auto replay_handles = co_await _commit_log.add_raft_entries(_table_id, std::move(writers));
+    auto replay_handles = co_await _commit_log.add_raft_entries(std::move(writers));
+    // We passed N raft entries + 1 commit_idx entry; add_raft_entries preserves order.
+    SCYLLA_ASSERT(replay_handles.size() == entries.size() + 1);
 
     for (size_t i = 0; i < entries.size(); ++i) {
         const auto& log_entry_ptr = entries[i];
@@ -83,6 +98,7 @@ seastar::future<> raft_commitlog::store_log_entries(const raft::log_entry_ptr_li
     }
     logger.debug("store_log_entries completed: total_command={}, total_noncommand={}",
             _command_positions.size(), _noncommand_positions.size());
+    co_return std::move(replay_handles.back());
 }
 
 raft::log_entries raft_commitlog::load_log() {
