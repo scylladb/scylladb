@@ -716,6 +716,50 @@ SEASTAR_TEST_CASE(test_groups_acquire_handles_skips_non_command_entries) {
     });
 }
 
+// Test that acquire_replay_position_handles_for rejects a request whose
+// endpoints match the pending command prefix but which diverges in the
+// middle. Guards the full-range index validation: an endpoint-only check
+// would wrongly hand out the [1, 2, 6] handles for a [1, 5, 6] request.
+SEASTAR_TEST_CASE(test_groups_acquire_handles_rejects_prefix_gap) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        // Store commands at idx 1, 2, 6.
+        raft::command cmd1, cmd2, cmd6;
+        ser::serialize(cmd1, 1);
+        ser::serialize(cmd2, 2);
+        ser::serialize(cmd6, 6);
+        std::vector<raft::log_entry_ptr> entries = {
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(1), .data = std::move(cmd1)}),
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(2), .data = std::move(cmd2)}),
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(6), .data = std::move(cmd6)}),
+        };
+        co_await storage.store_log_entries(entries);
+
+        // Request [1, 5, 6]: same size, same first and last index as the
+        // pending [1, 2, 6] prefix, but a mismatch at offset 1.
+        raft::command cmd5;
+        ser::serialize(cmd5, 5);
+        raft::log_entry_ptr_list mismatched = {
+            entries[0],
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(5), .data = std::move(cmd5)}),
+            entries[2],
+        };
+        seastar::testing::scoped_no_abort_on_internal_error no_abort;
+        try {
+            storage.acquire_replay_position_handles_for(mismatched);
+            BOOST_FAIL("Expected on_internal_error for mid-prefix index mismatch");
+        } catch (...) {
+            // Expected — pending idx 2 != requested idx 5.
+        }
+    });
+}
+
 // Test truncate_log (head truncation) then verify remaining handles.
 // Store N>=3 entries, truncate at the second entry's idx (removes entries with idx >= second idx),
 // verify only the first entry can produce a valid handle, and later entries cannot.
