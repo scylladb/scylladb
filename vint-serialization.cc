@@ -10,6 +10,7 @@
 
 #include "vint-serialization.hh"
 
+#include <bit>
 #include <seastar/core/bitops.hh>
 
 #include <algorithm>
@@ -51,30 +52,36 @@ static vint_size_type count_extra_bytes(int8_t first_byte) {
     return std::countl_zero(static_cast<uint8_t>(~first_byte));
 }
 
-static void encode(uint64_t value, vint_size_type size, bytes::iterator out) {
-    std::array<int8_t, 9> buffer({});
-
-    // `size` is always in the range [1, 9].
-    const auto extra_bytes_size = size - 1;
-
-    for (vint_size_type i = 0; i <= extra_bytes_size; ++i) {
-        buffer[extra_bytes_size - i] = static_cast<int8_t>(value & 0xff);
-        value >>= 8;
-    }
-
-    buffer[0] |= ~first_byte_value_mask(extra_bytes_size);
-    std::copy_n(buffer.cbegin(), size, out);
-}
-
 vint_size_type unsigned_vint::serialize(uint64_t value, bytes::iterator out) {
     const auto size = serialized_size(value);
 
-    if (size == 1) {
-        *out = static_cast<int8_t>(value & 0xff);
-        return 1;
+    // `size` is always in the range [1, 9].
+    int extra_bytes_size = int(size - 1);
+    auto mask = first_byte_value_mask(extra_bytes_size);
+
+    auto shift = (unsigned(extra_bytes_size) * 8) % 64;
+    *out++ = static_cast<int8_t>(((value >> shift) & mask) | ~mask);
+
+    // Alternate destination for writes we don't want to reach the output buffer.  This is to
+    // avoid conditional branches in the code below. Must be thread-local to avoid
+    // the compiler using branches.
+    static thread_local int8_t garbage;
+
+    // Encode the remaining bytes in big-endian order, directing unneeded bytes into a garbage array.
+    // This avoids conditional branches.
+
+    value = std::rotl(value, (8 - extra_bytes_size) * 8);
+
+#pragma GCC unroll 8
+
+    for (int i = 0; i < 8; ++i) {
+        auto* dest = __builtin_unpredictable(extra_bytes_size > 0) ? out : &garbage;
+        value = std::rotl(value, 8);
+        *dest = uint8_t(value);
+        ++out;
+        --extra_bytes_size;
     }
 
-    encode(value, size, out);
     return size;
 }
 
@@ -89,13 +96,7 @@ vint_size_type unsigned_vint::serialized_size(uint64_t value) noexcept {
 
 uint64_t unsigned_vint::deserialize(bytes_view v) {
     auto src = v.data();
-    auto len = v.size();
     const int8_t first_byte = *src;
-
-    // No additional bytes, since the most significant bit is not set.
-    if (first_byte >= 0) {
-        return uint64_t(first_byte);
-    }
 
     const auto extra_bytes_size = count_extra_bytes(first_byte);
 
@@ -106,13 +107,22 @@ uint64_t unsigned_vint::deserialize(bytes_view v) {
     uint64_t value;
     // If we can overread do that. It is cheaper to have a single 64-bit read and
     // then mask out the unneeded part than to do 8x 1 byte reads.
-    if (len >= sizeof(uint64_t) + 1) [[likely]] {
+    bool can_overread = (reinterpret_cast<uintptr_t>(src+1) ^ reinterpret_cast<uintptr_t>(src+1+sizeof(uint64_t))) < 4096;
+#ifdef SEASTAR_ASAN_ENABLED
+    can_overread = false;
+#endif
+
+    if (can_overread) [[likely]] {
         std::copy_n(src + 1, sizeof(uint64_t), reinterpret_cast<int8_t*>(&value));
     } else {
         value = 0;
         std::copy_n(src + 1, extra_bytes_size, reinterpret_cast<int8_t*>(&value));
     }
-    value = be_to_cpu(value << (64 - (extra_bytes_size * 8)));
+    auto shift = 64 - (extra_bytes_size * 8);
+    // Can't shift by 64, so shift twice by half
+    value = be_to_cpu(value);
+    value >>= shift / 2;
+    value >>= shift / 2;
     result <<= (extra_bytes_size * 8) % 64;
     result |= value;
 #else
