@@ -3431,7 +3431,7 @@ void sstable_validate_fn(test_env& env) {
             // Corrupt the data to cause an invalid checksum.
             corrupt_sstable(sst);
 
-            auto res = sstables::validate_checksums(sst, permit).get();
+            auto res = sstables::validate_checksums_and_digests(sst, permit).get();
             BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
             BOOST_REQUIRE(res.has_digest);
 
