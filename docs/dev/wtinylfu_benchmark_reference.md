@@ -68,17 +68,13 @@ Dashboard panels:
 
 ### Per-Table Hit Rates
 
-```
-                      W-TinyLFU (1% window)    Plain LRU
-  HOT table:          81.8%                    81.8%
-  SCAN table:          0.0%                     0.0%
-  Total:              41.2%                    41.5%
-```
+The `cache_hit_rate` Prometheus metric is a **moving average** that
+includes the warmup period, so it does not reflect attack-period-only
+hit rates accurately.  Both W-TinyLFU and plain LRU show ~81% because
+the warmup dominates the average.
 
-Hit rates are identical because both policies must evict the same
-amount — the scan (500 MB) far exceeds cache (314 MB), so both evict
-at the same rate.  The difference is in WHAT gets evicted and the
-resulting latency.
+For accurate per-period measurement, use partition_hits/misses counter
+deltas or the Grafana dashboard's computed rate panels.
 
 ### HOT Read Latency (ms)
 
@@ -137,6 +133,31 @@ ScyllaDB Docker image (potentially with compaction/background tasks)
 against a dev build.  This benchmark compares two dev builds from
 the same codebase, giving a cleaner measurement of the algorithm
 difference alone.
+
+### Theoretical analysis (C=140K entries, verified from Prometheus)
+
+With cache capacity C, hot set N=80K, scan at 5K/s:
+
+  LRU steady-state hot hit rate:
+    80000h(2-h) = C(1-h) → h ≈ 55% for C=140K
+
+  W-TinyLFU hot hit rate:
+    Scan rejected at gate → 99% of cache for hot → h ≈ 100%
+
+  Expected gap: ~45 percentage points
+
+The measured gap is smaller because `cache_hit_rate` is a moving
+average diluted by warmup.  The latency difference (25-43%) is
+the reliable signal — it directly measures the impact of burst
+evictions vs steady evictions on real query performance.
+
+### Critical benchmarking note
+
+Setting `tinylfu_initial_window_fraction=0.99` via CLI or even
+scylla.yaml does NOT produce a true LRU baseline.  The W-TinyLFU
+admission gate still runs (92% rejection rate at 99% window).
+The only valid LRU comparison is against a binary without W-TinyLFU
+code (e.g., `feature/generic_index_cache` branch).
 
 ## How to Reproduce
 
