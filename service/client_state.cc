@@ -106,9 +106,9 @@ future<> service::client_state::has_function_access(const sstring& ks, const sst
 }
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
-                const sstring& cf, auth::permission p, auth::command_desc::type t, std::optional<bool> is_vector_indexed) const {
+                const sstring& cf, auth::permission p, auth::command_desc::type t, auth::permission_set relaxing_permissions) const {
     auto r = auth::make_data_resource(ks, cf);
-    co_return co_await has_access(ks, {p, r, t}, is_vector_indexed);
+    co_return co_await has_access(ks, {p, r, t}, relaxing_permissions);
 }
 
 future<> service::client_state::check_internal_table_permissions(std::string_view ks, std::string_view table_name, const auth::command_desc& cmd) const {
@@ -149,7 +149,7 @@ future<> service::client_state::check_internal_table_permissions(std::string_vie
     return make_ready_future<>();
 }
 
-future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd, std::optional<bool> is_vector_indexed) const {
+future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd, auth::permission_set relaxing_permissions) const {
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
     }
@@ -225,7 +225,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
                 ks + " can be granted only SELECT or DESCRIBE permissions to a non-superuser.");
     }
 
-    static const std::unordered_set<auth::resource> vector_search_system_resources = {
+    // System tables read by the external Vector Store engine.
+    static const std::unordered_set<auth::resource> external_index_system_resources = {
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::VERSIONS),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::CDC_STREAMS),
@@ -233,11 +234,16 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::TABLETS),
     };
 
-    if ((cmd.resource.kind() == auth::resource_kind::data && cmd.permission == auth::permission::SELECT && is_vector_indexed.has_value() && is_vector_indexed.value()) ||
-        (cmd.permission == auth::permission::SELECT && vector_search_system_resources.contains(cmd.resource))) {
+    if (cmd.permission == auth::permission::SELECT && external_index_system_resources.contains(cmd.resource)) {
+        auto allowed = auth::permission_set::of<auth::permission::SELECT>();
+        allowed.add(auth::permission_set::of<auth::permission::VECTOR_SEARCH_INDEXING, auth::permission::TEXT_SEARCH_INDEXING>());
+        co_return co_await ensure_has_permission<auth::command_desc_with_permission_set>({allowed, cmd.resource});
+    }
 
-        co_return co_await ensure_has_permission<auth::command_desc_with_permission_set>({auth::permission_set::of<auth::permission::SELECT, auth::permission::VECTOR_SEARCH_INDEXING>(), cmd.resource});
-
+    if (cmd.permission == auth::permission::SELECT && relaxing_permissions.mask() != 0) {
+        auto allowed = auth::permission_set::of<auth::permission::SELECT>();
+        allowed.add(relaxing_permissions);
+        co_return co_await ensure_has_permission<auth::command_desc_with_permission_set>({allowed, cmd.resource});
     }
 
     co_return co_await ensure_has_permission(cmd);

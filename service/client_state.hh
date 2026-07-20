@@ -448,14 +448,14 @@ public:
     future<> has_all_keyspaces_access(auth::permission) const;
     future<> has_keyspace_access(const sstring&, auth::permission) const;
     future<> has_column_family_access(const sstring&, const sstring&, auth::permission,
-                                      auth::command_desc::type = auth::command_desc::type::OTHER, std::optional<bool> is_vector_indexed = std::nullopt) const;
+                                      auth::command_desc::type = auth::command_desc::type::OTHER, auth::permission_set relaxing_permissions = {}) const;
 
     future<> has_functions_access(auth::permission p) const;
     future<> has_functions_access(const sstring& ks, auth::permission p) const;
     future<> has_function_access(const sstring& ks, const sstring& function_signature, auth::permission p) const;
 private:
     future<> check_internal_table_permissions(std::string_view ks, std::string_view table_name, const auth::command_desc& cmd) const;
-    future<> has_access(const sstring& keyspace, auth::command_desc, std::optional<bool> is_vector_indexed = std::nullopt) const;
+    future<> has_access(const sstring& keyspace, auth::command_desc, auth::permission_set relaxing_permissions = {}) const;
     sstring generate_authorization_error_msg(const auth::command_desc&) const;
     sstring generate_authorization_error_msg(const auth::command_desc_with_permission_set&) const;
 
