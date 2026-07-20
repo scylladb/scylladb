@@ -127,7 +127,7 @@ filter_entries_result filter_entries(utils::chunked_vector<raft::log_entry_ptr>&
 } // anonymous namespace
 
 future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks) {
-    if (remaining_groups() == 0) {
+    if (remaining_groups() == 0 && _replayed_commit_idx_by_group.empty()) {
         co_return;
     }
 
@@ -138,6 +138,30 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
     SCYLLA_ASSERT(new_commitlog_ptr);
 
     logger.info("processing {} raft groups with {} total entries from commitlog replay", remaining_groups(), total_entries());
+
+    // Restore commit_idx recovered from the commitlog. On a crash before the
+    // raft_groups memtable flushed, the per-batch commit_idx (applied in memory
+    // via a fake mutation) is lost, but the commitlog's commit_idx entries
+    // survived. Write the highest recovered value per group back to
+    // system.raft_groups so the apply loop below — and bump_snapshot_indices()
+    // afterwards — observe the correct commit_idx and re-apply / snapshot the
+    // committed entries rather than treating them as uncommitted. The per-group
+    // writes are independent, so run them concurrently (as bump_snapshot_indices
+    // does).
+    co_await seastar::coroutine::parallel_for_each(_replayed_commit_idx_by_group,
+            [&qp, &group_to_table] (const auto& entry) -> future<> {
+        const auto group_id = entry.first;
+        const auto recovered_commit_idx = entry.second;
+        if (!group_to_table.contains(group_id)) {
+            // Same rule as the entries loop below: the tablet was moved away or
+            // dropped, so don't resurrect a system.raft_groups row for it.
+            logger.debug("group {} not found in tablet metadata, discarding recovered commit_idx {}",
+                    group_id, recovered_commit_idx);
+            co_return;
+        }
+        co_await service::strong_consistency::raft_groups_storage::store_commit_idx_if_higher(
+                qp, group_id, this_shard_id(), recovered_commit_idx);
+    });
 
     for (auto& [group_id, entries_list] : _replayed_commitlog_entries_by_group) {
         if (entries_list.empty()) {
@@ -215,6 +239,7 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
     // The old items are not needed anymore.
     _replayed_commitlog_entries_by_group.clear();
+    _replayed_commit_idx_by_group.clear();
     logger.info("Raft groups commit log replayed data processing complete");
 }
 

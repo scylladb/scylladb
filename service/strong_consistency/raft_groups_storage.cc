@@ -73,8 +73,28 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
 }
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
+    // Update in-memory tracking only. Persistence happens via the fake
+    // mutation in store_log_entries (durable once the raft_groups memtable
+    // flushes) and via persist_commit_idx() from the SC tablet flush hook
+    // (groups_manager::save_commit_log_index). Keeping this path IO-free
+    // avoids a per-committed-batch CQL write on the raft io_fiber.
+    //
+    // The io_fiber calls this *before* pushing entries to the applier_fiber,
+    // so _last_known_commit_idx is always >= the raft index of any entry that
+    // has been applied to a memtable.
     _last_known_commit_idx = idx;
-    return persist_commit_idx();
+    return make_ready_future<>();
+}
+
+// Execute the CQL INSERT that persists commit_idx to system.raft_groups.
+// Shared by persist_commit_idx() and store_commit_idx_if_higher().
+static future<> store_commit_idx_cql(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t commit_idx) {
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
+    return qp.execute_internal(
+        store_cql,
+        {int16_t(shard), gid.id, int64_t(commit_idx.value())},
+        cql3::query_processor::cache_internal::yes).discard_result();
 }
 
 future<> raft_groups_storage::persist_commit_idx() {
@@ -82,14 +102,22 @@ future<> raft_groups_storage::persist_commit_idx() {
         // Nothing new to persist since the last write.
         return make_ready_future<>();
     }
+    if (_aborted) {
+        // The group is being torn down. abort() deliberately does not persist
+        // commit_idx (shutdown may have closed the CQL / storage_proxy gates);
+        // durability is instead provided by the fake system.raft_groups mutation
+        // applied per batch and the raft_groups memtable flush. A flush hook
+        // (groups_manager::save_commit_log_index) racing teardown can still reach
+        // here with unpersisted commit_idx — that is expected and harmless, so
+        // skip quietly rather than starting a CQL write.
+        rgslog.debug("persist_commit_idx skipped after abort for group {}"
+            " (unpersisted commit_idx {}, last persisted {})",
+            _group_id, _last_known_commit_idx, _last_persisted_commit_idx);
+        return make_ready_future<>();
+    }
     auto idx = _last_known_commit_idx;
     return execute_with_linearization_point([this, idx] {
-        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
-            db::system_keyspace::RAFT_GROUPS);
-        return _qp.execute_internal(
-            store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(idx.value())},
-            cql3::query_processor::cache_internal::yes).discard_result().then([this, idx] {
+        return store_commit_idx_cql(_qp, _group_id, _shard, idx).then([this, idx] {
                 // store_log_entries()'s fake mutation may have advanced the
                 // watermark past idx while our CQL write was in flight; keep it
                 // monotonic.
@@ -117,6 +145,16 @@ future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor
     }
     const auto& static_row = rs->one();
     co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
+}
+
+future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t commit_idx) {
+    // Only advance, never regress: a prior flush (or an earlier replay) may
+    // already have persisted a value at or beyond the recovered one.
+    const auto persisted = co_await load_commit_idx(qp, gid, shard);
+    if (commit_idx <= persisted) {
+        co_return;
+    }
+    co_await store_commit_idx_cql(qp, gid, shard, commit_idx);
 }
 
 future<raft::log_entries> raft_groups_storage::load_log() {
@@ -260,8 +298,10 @@ future<> raft_groups_storage::truncate_log(raft::index_t idx) {
 }
 
 future<> raft_groups_storage::abort() {
-    // wait for pending write requests to complete.
-    // TODO: should we wait for all kinds of requests?
+    // Mark aborted so a flush hook (save_commit_log_index -> persist_commit_idx)
+    // racing teardown becomes a no-op instead of running against a group that is
+    // being destroyed.
+    _aborted = true;
     return std::move(_pending_op_fut);
 }
 
