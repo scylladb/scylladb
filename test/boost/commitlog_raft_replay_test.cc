@@ -116,8 +116,8 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
             // the writer wraps it in a commitlog_entry + raft_commitlog_entry envelope.
             BOOST_REQUIRE_GT(writer.size(), 0u);
             BOOST_REQUIRE_GT(writer.size(), ser::get_sizeof(*entry));
-            BOOST_REQUIRE_EQUAL(writer.get_log_entry().group_id, gid);
-            BOOST_REQUIRE_EQUAL(writer.get_log_entry().entry->idx, entry->idx);
+            BOOST_REQUIRE_EQUAL(writer.get_raft_log_entry().group_id, gid);
+            BOOST_REQUIRE_EQUAL(writer.get_raft_log_entry().entry->idx, entry->idx);
 
             auto handle = co_await write_raft_entry_to_commitlog(log, tid, gid, entry);
             rps.push_back(handle.rp());
