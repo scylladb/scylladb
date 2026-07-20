@@ -18,9 +18,12 @@
 #include "cdc/generation_service.hh"
 #include "cdc/log.hh"
 #include "cdc/metadata.hh"
+#include "cql3/statements/index_target.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/virtual_table.hh"
+#include "index/secondary_index.hh"
+#include "index/vector_index.hh"
 #include "partition_slice_builder.hh"
 #include "db/virtual_tables.hh"
 #include "db/size_estimates_virtual_reader.hh"
@@ -40,12 +43,15 @@
 #include "sstables/sstables.hh"
 #include "locator/load_sketch.hh"
 #include "types/list.hh"
+#include "types/map.hh"
 #include "types/types.hh"
+#include "types/vector.hh"
 #include "utils/build_id.hh"
 #include "utils/log.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/paxos_state.hh"
 #include "idl/storage_proxy.dist.hh"
+#include "vector_search/vector_store_client.hh"
 
 using namespace locator;
 
@@ -135,6 +141,205 @@ public:
 
         for (auto& m : muts) {
             mutation_sink(m.unfreeze(schema()));
+        }
+    }
+};
+
+class vector_store_indexes_table : public memtable_filling_virtual_table {
+private:
+    replica::database& _db;
+    sharded<vector_search::vector_store_client>& _vsc;
+
+    // Description of a single vector index discovered in the local schema.
+    struct vector_index_desc {
+        sstring keyspace_name;
+        sstring index_name;
+        std::optional<int32_t> dimensions;
+        std::optional<sstring> similarity_function;
+        // Remaining (non key-distinguishing) index options, e.g. quantization
+        // and HNSW tuning parameters.
+        std::map<sstring, sstring> options;
+    };
+
+public:
+    vector_store_indexes_table(replica::database& db, sharded<vector_search::vector_store_client>& vsc)
+            : memtable_filling_virtual_table(build_schema())
+            , _db(db), _vsc(vsc) {
+        // The data is per vector-store-node (not per shard) and is produced on
+        // a single shard only (see the with_sharder(1, 0) below), so let the
+        // base class filter foreign-shard partitions.
+        _shard_aware = false;
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "vector_store_indexes");
+        return schema_builder(1, system_keyspace::NAME, "vector_store_indexes", std::make_optional(id))
+            .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+            .with_column("index_name", utf8_type, column_kind::clustering_key)
+            .with_column("vector_store_host", utf8_type, column_kind::clustering_key)
+            .with_column("vector_store_port", int32_type, column_kind::clustering_key)
+            .with_column("vector_store_role", utf8_type)
+            .with_column("node_status", utf8_type)
+            .with_column("index_state", utf8_type)
+            .with_column("build_progress", float_type)
+            .with_column("size", long_type)
+            .with_column("dimensions", int32_type)
+            .with_column("similarity_function", utf8_type)
+            .with_column("options", map_type_impl::get_instance(utf8_type, utf8_type, false))
+            .with_sharder(1, 0) // shard0-only: queries one vector store per node
+            .set_comment("Per-vector-store-node status of vector search indexes")
+            .with_hash_version()
+            .build();
+    }
+
+    // Collect all vector indexes known to the local schema.
+    std::vector<vector_index_desc> collect_vector_indexes() const {
+        std::vector<vector_index_desc> indexes;
+        _db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+            auto s = table->schema();
+            for (const index_metadata& im : s->indices()) {
+                const auto& opts = im.options();
+                auto class_it = opts.find(index::secondary_index::custom_class_option_name);
+                if (class_it == opts.end() || class_it->second != "vector_index") {
+                    continue;
+                }
+                vector_index_desc desc;
+                desc.keyspace_name = s->ks_name();
+                desc.index_name = im.name();
+                for (const auto& [key, value] : opts) {
+                    if (key == "dimensions") {
+                        // Present for Alternator-created indexes.
+                        try {
+                            desc.dimensions = std::stoi(value);
+                        } catch (const std::logic_error&) {
+                            // Validated on creation; ignore if somehow malformed.
+                        }
+                    } else if (key == "similarity_function") {
+                        desc.similarity_function = value;
+                    } else if (key == index::secondary_index::custom_class_option_name
+                            || key == cql3::statements::index_target::target_option_name) {
+                        // Internal bookkeeping options, not user-facing here.
+                    } else {
+                        desc.options.emplace(key, value);
+                    }
+                }
+                // For CQL-created vector indexes the dimensions are not stored
+                // as an option but derived from the indexed column's type.
+                if (!desc.dimensions) {
+                    auto target_it = opts.find(cql3::statements::index_target::target_option_name);
+                    if (target_it != opts.end()) {
+                        auto column = secondary_index::vector_index::get_target_column(target_it->second);
+                        if (const auto* cdef = s->get_column_definition(to_bytes(column))) {
+                            if (const auto* vtype = dynamic_cast<const vector_type_impl*>(cdef->type.get())) {
+                                desc.dimensions = int32_t(vtype->get_dimension());
+                            }
+                        }
+                    }
+                }
+                indexes.push_back(std::move(desc));
+            }
+        });
+        return indexes;
+    }
+
+    static std::string_view role_to_string(vector_search::vector_store_client::node_role role) {
+        using node_role = vector_search::vector_store_client::node_role;
+        switch (role) {
+        case node_role::primary:
+            return "primary";
+        case node_role::secondary:
+            return "secondary";
+        }
+        return "unknown";
+    }
+
+    static std::string_view connectivity_to_string(vector_search::vector_store_client::node_connectivity c) {
+        using node_connectivity = vector_search::vector_store_client::node_connectivity;
+        switch (c) {
+        case node_connectivity::up:
+            return "up";
+        case node_connectivity::down:
+            return "down";
+        case node_connectivity::unknown:
+            return "unknown";
+        }
+        return "unknown";
+    }
+
+    static std::optional<std::string_view> index_state_to_string(vector_search::vector_store_client::index_status status) {
+        using index_status = vector_search::vector_store_client::index_status;
+        switch (status) {
+        case index_status::initializing:
+            return "INITIALIZING";
+        case index_status::bootstrapping:
+            return "BOOTSTRAPPING";
+        case index_status::serving:
+            return "SERVING";
+        case index_status::unknown:
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
+        using node_connectivity = vector_search::vector_store_client::node_connectivity;
+
+        auto indexes = collect_vector_indexes();
+        if (indexes.empty()) {
+            co_return;
+        }
+
+        // Bound the time spent querying vector store nodes for a single read.
+        seastar::abort_on_expiry<lowres_clock> aoe(lowres_clock::now() + std::chrono::seconds(10));
+        auto& as = aoe.abort_source();
+
+        auto& vsc = _vsc.local();
+        auto nodes = co_await vsc.get_nodes(as);
+
+        for (const auto& index : indexes) {
+            for (const auto& node : nodes) {
+                auto pk = partition_key::from_single_value(*schema(), data_value(index.keyspace_name).serialize_nonnull());
+                auto ckey = clustering_key::from_exploded(*schema(), {
+                        data_value(index.index_name).serialize_nonnull(),
+                        data_value(node.host).serialize_nonnull(),
+                        data_value(int32_t(node.port)).serialize_nonnull()});
+                mutation m(schema(), std::move(pk));
+                row& cr = m.partition().clustered_row(*schema(), ckey).cells();
+
+                set_cell(cr, "vector_store_role", sstring(role_to_string(node.role)));
+                set_cell(cr, "node_status", sstring(connectivity_to_string(node.connectivity)));
+                if (index.dimensions) {
+                    set_cell(cr, "dimensions", *index.dimensions);
+                }
+                if (index.similarity_function) {
+                    set_cell(cr, "similarity_function", *index.similarity_function);
+                }
+                if (!index.options.empty()) {
+                    auto map_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+                    std::vector<std::pair<data_value, data_value>> entries;
+                    entries.reserve(index.options.size());
+                    for (const auto& [key, value] : index.options) {
+                        entries.emplace_back(data_value(key), data_value(value));
+                    }
+                    set_cell(cr, "options", make_map_value(map_type, map_type_impl::native_type(std::move(entries))));
+                }
+
+                // Only query reachable nodes for the per-index build state.
+                if (node.connectivity == node_connectivity::up) {
+                    auto status = co_await vsc.get_index_status_on(node.host, node.port, index.keyspace_name, index.index_name, as);
+                    if (auto state = index_state_to_string(status.status)) {
+                        set_cell(cr, "index_state", sstring(*state));
+                    }
+                    if (status.build_progress) {
+                        set_cell(cr, "build_progress", float(*status.build_progress));
+                    }
+                    if (status.count) {
+                        set_cell(cr, "size", int64_t(*status.count));
+                    }
+                }
+
+                mutation_sink(std::move(m));
+            }
         }
     }
 };
@@ -2061,6 +2266,7 @@ future<> initialize_virtual_tables(
         sharded<db::system_keyspace>& sys_ks,
         sharded<service::tablet_allocator>& tablet_allocator,
         sharded<netw::messaging_service>& ms,
+        sharded<vector_search::vector_store_client>& vsc,
         db::config& cfg,
         gms::feature_service& feat) {
     co_await smp::invoke_on_all([&] () -> future<> {
@@ -2084,6 +2290,7 @@ future<> initialize_virtual_tables(
         co_await add_table(std::make_unique<tablet_sizes>(tablet_allocator, dist_db, dist_raft_gr, ms));
         co_await add_table(std::make_unique<cdc_timestamps_table>(db, dist_ss.local()));
         co_await add_table(std::make_unique<cdc_streams_table>(db, dist_ss.local()));
+        co_await add_table(std::make_unique<vector_store_indexes_table>(db, vsc));
 
         db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks.local())));
         db.find_column_family(system_keyspace::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));

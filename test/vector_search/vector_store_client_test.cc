@@ -43,6 +43,8 @@
 #include <tuple>
 #include <variant>
 #include <vector>
+#include <algorithm>
+#include <ranges>
 #include <filesystem>
 
 namespace {
@@ -1248,4 +1250,109 @@ SEASTAR_TEST_CASE(vector_store_client_test_bm25_request) {
 
     co_await vs.stop();
     co_await server->stop();
+}
+
+// get_index_status_on() queries a specific node and parses its status, count
+// and build_progress; an unknown host yields an `unknown` status.
+SEASTAR_TEST_CASE(vector_store_client_get_index_status_on) {
+    using index_status = vector_store_client::index_status;
+    auto server = co_await make_vs_mock_server();
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+
+                server->next_index_status_response({status_type::ok, R"({"status":"BOOTSTRAPPING","count":7,"build_progress":42.5})"});
+
+                // Wait until the node has been resolved and answers the status query.
+                vector_store_client::index_node_status status;
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    status = co_await vs.get_index_status_on("server.node", server->port(), "ks", "idx", as.reset());
+                    co_return status.status == index_status::bootstrapping;
+                }));
+                BOOST_CHECK(status.count == 7);
+                BOOST_REQUIRE(status.build_progress.has_value());
+                BOOST_CHECK_CLOSE(*status.build_progress, 42.5, 0.001);
+                BOOST_REQUIRE(!server->index_status_requests().empty());
+                BOOST_CHECK_EQUAL(server->index_status_requests().back().path, "/api/v1/indexes/ks/idx/status");
+
+                // An unknown host cannot be reached and yields unknown.
+                auto unknown = co_await vs.get_index_status_on("nonexistent.node", 6080, "ks", "idx", as.reset());
+                BOOST_CHECK(unknown.status == index_status::unknown);
+                BOOST_CHECK(!unknown.count.has_value());
+                BOOST_CHECK(!unknown.build_progress.has_value());
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}
+
+// get_nodes() reports the primary and secondary nodes with their role and
+// connectivity. A resolvable, reachable node is `up`; a host that cannot be
+// resolved is reported once as `unknown`.
+SEASTAR_TEST_CASE(vector_store_client_get_nodes) {
+    using node_role = vector_store_client::node_role;
+    using node_connectivity = vector_store_client::node_connectivity;
+    auto primary = co_await make_vs_mock_server();
+    auto secondary = co_await make_vs_mock_server();
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://primary.node:{},http://unresolved.node:6080", primary->port()));
+    cfg.db_config->vector_store_secondary_uri.set(format("http://secondary.node:{}", secondary->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"primary.node", std::vector<std::string>{primary->host()}},
+                        {"unresolved.node", std::vector<std::string>{}},
+                        {"secondary.node", std::vector<std::string>{secondary->host()}}});
+                vs.start_background_tasks();
+
+                // Wait until the reachable nodes are resolved and reported up.
+                std::vector<vector_store_client::node_info> nodes;
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    nodes = co_await vs.get_nodes(as.reset());
+                    auto up = std::ranges::count_if(nodes, [](const auto& n) {
+                        return n.connectivity == node_connectivity::up;
+                    });
+                    co_return up == 2;
+                }));
+
+                auto find = [&](const sstring& host) -> std::optional<vector_store_client::node_info> {
+                    for (const auto& n : nodes) {
+                        if (n.host == host) {
+                            return n;
+                        }
+                    }
+                    return std::nullopt;
+                };
+
+                auto p = find("primary.node");
+                BOOST_REQUIRE(p.has_value());
+                BOOST_CHECK(p->role == node_role::primary);
+                BOOST_CHECK(p->connectivity == node_connectivity::up);
+                BOOST_CHECK_EQUAL(p->port, primary->port());
+
+                auto s = find("secondary.node");
+                BOOST_REQUIRE(s.has_value());
+                BOOST_CHECK(s->role == node_role::secondary);
+                BOOST_CHECK(s->connectivity == node_connectivity::up);
+
+                auto u = find("unresolved.node");
+                BOOST_REQUIRE(u.has_value());
+                BOOST_CHECK(u->role == node_role::primary);
+                BOOST_CHECK(u->connectivity == node_connectivity::unknown);
+                BOOST_CHECK(!u->ip.has_value());
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await primary->stop();
+                co_await secondary->stop();
+            }));
 }

@@ -50,6 +50,12 @@ public:
 
     seastar::future<get_clients_result> get_clients(seastar::abort_source& as);
 
+    /// Snapshot of the currently resolved per-endpoint clients. May be empty if
+    /// DNS has not resolved any address yet. Does not trigger a refresh.
+    const clients_vec& live_clients() const {
+        return _clients;
+    }
+
     void timeout(std::chrono::milliseconds timeout) {
         _timeout = timeout;
     }

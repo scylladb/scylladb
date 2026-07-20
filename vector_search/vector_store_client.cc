@@ -229,6 +229,47 @@ bool should_vector_store_service_be_disabled(std::vector<sstring> const& uris) {
     return uris.empty() || uris[0].empty();
 }
 
+using index_status = vector_search::vector_store_client::index_status;
+using index_node_status = vector_search::vector_store_client::index_node_status;
+
+auto index_status_from_string(std::string_view sv) -> index_status {
+    if (sv == "SERVING") {
+        return index_status::serving;
+    }
+    if (sv == "BOOTSTRAPPING") {
+        return index_status::bootstrapping;
+    }
+    if (sv == "INITIALIZING") {
+        return index_status::initializing;
+    }
+    return index_status::unknown;
+}
+
+/// Parse the body of a GET /api/v1/indexes/{ks}/{idx}/status reply into an
+/// index_node_status. Any parsing problem yields a status of `unknown`.
+auto parse_index_node_status(sstring content) -> index_node_status {
+    auto result = index_node_status{};
+    try {
+        auto json = rjson::parse(std::move(content));
+        const auto* status = rjson::find(json, "status");
+        if (status && status->IsString()) {
+            result.status = index_status_from_string(rjson::to_string_view(*status));
+        }
+        const auto* count = rjson::find(json, "count");
+        if (count && count->IsUint64()) {
+            result.count = count->GetUint64();
+        }
+        const auto* progress = rjson::find(json, "build_progress");
+        if (progress && progress->IsNumber()) {
+            result.build_progress = progress->GetDouble();
+        }
+    } catch (...) {
+        // Leave the status as unknown on any parse error.
+        return index_node_status{};
+    }
+    return result;
+}
+
 auto parse_uris(std::string_view uris_csv) -> std::vector<uri> {
     std::vector<uri> ret;
     auto uris = utils::split_comma_separated_list(uris_csv);
@@ -347,30 +388,37 @@ struct vector_store_client::impl {
             -> future<vector_store_client::index_status> {
         using index_status = vector_store_client::index_status;
         if (is_disabled()) {
-            co_return index_status::creating;
+            co_return index_status::unknown;
         }
         auto path = format("/api/v1/indexes/{}/{}/status", keyspace, name);
         auto resp = co_await request(operation_type::GET, std::move(path), std::nullopt, as);
         if (!resp || resp->status != status_type::ok) {
-            co_return index_status::creating;
+            co_return index_status::unknown;
         }
-        try {
-            auto json = rjson::parse(std::move(resp->content));
-            const auto* status = rjson::find(json, "status");
-            if (!status || !status->IsString()) {
-                co_return index_status::creating;
-            }
-            auto sv = rjson::to_string_view(*status);
-            if (sv == "SERVING") {
-                co_return index_status::serving;
-            }
-            if (sv == "BOOTSTRAPPING") {
-                co_return index_status::backfilling;
-            }
-            co_return index_status::creating;
-        } catch (...) {
-            co_return index_status::creating;
+        co_return parse_index_node_status(response_content_to_sstring(resp->content)).status;
+    }
+
+    auto get_nodes(abort_source& as) -> future<std::vector<node_info>> {
+        using node_role = vector_store_client::node_role;
+        std::vector<node_info> ret;
+        co_await collect_nodes(ret, node_role::primary, _primary_uris, _primary_clients, as);
+        co_await collect_nodes(ret, node_role::secondary, _secondary_uris, _secondary_clients, as);
+        co_return ret;
+    }
+
+    auto get_index_status_on(host_name host, port_number port, keyspace_name keyspace, index_name name, abort_source& as)
+            -> future<index_node_status> {
+        auto client = find_client(host, port);
+        if (!client) {
+            co_return index_node_status{};
         }
+        }
+        auto path = format("/api/v1/indexes/{}/{}/status", keyspace, name);
+        auto resp = co_await client->request(operation_type::GET, std::move(path), std::nullopt, as);
+        if (!resp || resp->status != status_type::ok) {
+            co_return index_node_status{};
+        }
+        co_return parse_index_node_status(response_content_to_sstring(resp->content));
     }
 
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
@@ -458,6 +506,63 @@ struct vector_store_client::impl {
 
         co_return std::unexpected{service_unavailable{}};
     }
+
+    /// Append one node_info per known node of the given role. Each configured
+    /// URI contributes one entry per resolved address (up/down depending on the
+    /// client's reachability), or a single `unknown` entry when no address has
+    /// been resolved for it yet.
+    auto collect_nodes(std::vector<node_info>& out, vector_store_client::node_role role, const std::vector<uri>& uris, clients& clients,
+            abort_source& as) -> future<> {
+        if (uris.empty()) {
+            co_return;
+        }
+        // Trigger a DNS resolution so recently configured hosts are reflected;
+        // ignore the result/errors and read the resolved snapshot afterwards.
+        auto resolved = co_await coroutine::as_future(clients.get_clients(as));
+        if (resolved.failed()) {
+            resolved.ignore_ready_future();
+        }
+        const auto& live = clients.live_clients();
+        for (const auto& uri : uris) {
+            bool found = false;
+            for (const auto& c : live) {
+                const auto& ep = c->endpoint();
+                if (ep.host == uri.host && ep.port == uri.port) {
+                    found = true;
+                    out.push_back(node_info{
+                            .role = role,
+                            .host = uri.host,
+                            .port = uri.port,
+                            .ip = ep.ip,
+                            .connectivity = c->is_up() ? node_connectivity::up : node_connectivity::down,
+                    });
+                }
+            }
+            if (!found) {
+                out.push_back(node_info{
+                        .role = role,
+                        .host = uri.host,
+                        .port = uri.port,
+                        .ip = std::nullopt,
+                        .connectivity = node_connectivity::unknown,
+                });
+            }
+        }
+    }
+
+    /// Find the resolved client for the given host and port across both the
+    /// primary and secondary client pools.
+    auto find_client(const host_name& host, port_number port) -> seastar::lw_shared_ptr<client> {
+        for (auto* clients : {&_primary_clients, &_secondary_clients}) {
+            for (const auto& c : clients->live_clients()) {
+                const auto& ep = c->endpoint();
+                if (ep.host == host && ep.port == port) {
+                    return c;
+                }
+            }
+        }
+        return {};
+    }
 };
 
 vector_store_client::vector_store_client(config const& cfg)
@@ -488,6 +593,15 @@ auto vector_store_client::is_disabled() const -> bool {
 
 auto vector_store_client::get_index_status(keyspace_name keyspace, index_name name, abort_source& as) -> future<index_status> {
     return _impl->get_index_status(std::move(keyspace), std::move(name), as);
+}
+
+auto vector_store_client::get_nodes(abort_source& as) -> future<std::vector<node_info>> {
+    return _impl->get_nodes(as);
+}
+
+auto vector_store_client::get_index_status_on(host_name host, port_number port, keyspace_name keyspace, index_name name, abort_source& as)
+        -> future<index_node_status> {
+    return _impl->get_index_status_on(std::move(host), port, std::move(keyspace), std::move(name), as);
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,

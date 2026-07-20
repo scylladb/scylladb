@@ -14,23 +14,23 @@
 #include "error.hh"
 #include "utils/rjson.hh"
 #include <chrono>
+#include <cstdint>
 #include <expected>
 #include <functional>
+#include <optional>
 #include <variant>
 #include <vector>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/http/reply.hh>
+#include <seastar/net/inet_address.hh>
 
 class schema;
 namespace db {
 class config;
-}
-
-namespace seastar::net {
-class inet_address;
 }
 
 namespace vector_search {
@@ -89,18 +89,72 @@ public:
 
     /// The operational status of a single vector index, as reported by the vector store.
     enum class index_status {
-        /// The index is not yet ready: initializing, not yet discovered, or the
-        /// vector store is unreachable.
-        creating,
+        /// The status could not be determined: the vector store is unreachable,
+        /// the index is not known to it yet, or the reply could not be parsed.
+        unknown,
+        /// The index has been discovered and is being initialized, but the
+        /// initial table scan has not started yet.
+        initializing,
         /// The index is performing the initial full scan of the base table
         /// (backfilling). Queries may be served but results are incomplete.
-        backfilling,
+        bootstrapping,
         /// The index has completed the initial scan and is fully operational.
         serving,
     };
 
     /// Query the vector store for the current status of a specific vector index.
     auto get_index_status(keyspace_name keyspace, index_name name, abort_source& as) -> future<index_status>;
+
+    /// The role of a vector store node, derived from which configuration list
+    /// (vector_store_primary_uri / vector_store_secondary_uri) it came from.
+    enum class node_role {
+        primary,
+        secondary,
+    };
+
+    /// Connectivity of a vector store node from the perspective of this Scylla
+    /// node, i.e. whether this node can reach and query it.
+    enum class node_connectivity {
+        /// The node is reachable and can be queried.
+        up,
+        /// The node has been resolved but is currently considered unreachable.
+        down,
+        /// The node's address has not been resolved yet, so its reachability is
+        /// not known.
+        unknown,
+    };
+
+    /// Description of a single known vector store node (one per resolved
+    /// address; configured-but-unresolved hosts are reported once as unknown).
+    struct node_info {
+        node_role role;
+        host_name host;
+        port_number port;
+        std::optional<seastar::net::inet_address> ip;
+        node_connectivity connectivity;
+    };
+
+    /// Enumerate the known vector store nodes (from the primary and secondary
+    /// URI configuration) together with their role and connectivity. Triggers a
+    /// DNS resolution so that recently configured hosts are reflected.
+    auto get_nodes(abort_source& as) -> future<std::vector<node_info>>;
+
+    /// The status of a single vector index on a single vector store node.
+    struct index_node_status {
+        /// Raw index state. `unknown` when the node is unreachable, does not
+        /// know the index, or returned an unparsable reply.
+        index_status status = index_status::unknown;
+        /// Number of vectors currently indexed. Empty when not available.
+        std::optional<uint64_t> count;
+        /// Backfill progress in the range [0, 100]. Empty when not available.
+        std::optional<double> build_progress;
+    };
+
+    /// Query a specific vector store node (identified by host and port) for the
+    /// status of a vector index. Returns a status of `unknown` if the node
+    /// cannot be reached or is not currently known.
+    auto get_index_status_on(host_name host, port_number port, keyspace_name keyspace, index_name name, abort_source& as)
+            -> future<index_node_status>;
 
     /// Request the vector store service for the primary keys of the nearest
     /// neighbors. Each returned primary_key has its similarity field set to
