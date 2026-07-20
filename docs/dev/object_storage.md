@@ -4,16 +4,10 @@ On of the ways to use object storage is to keep sstables directly on it as objec
 
 ## Enabling the feature
 
-Currently the object-storage backend works if `keyspace-storage-options` is listed
-in `experimental_features` in `scylla.yaml`. like:
-
-```yaml
-experimental_features:
-  - keyspace-storage-options
-```
-
-It can also be enabled with `--experimental-features=keyspace-storage-options`
-command line option when launchgin scylla.
+Object-storage backed keyspaces are supported out of the box; no experimental
+feature flag is required. Simply configure the object-storage endpoints in
+`scylla.yaml` (see below) and create a keyspace with the desired storage
+options (see `CREATE KEYSPACE` extensions below).
 
 ## Configuring AWS S3 access
 
