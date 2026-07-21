@@ -14,8 +14,8 @@ import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.object_storage import keyspace_options
-from test.cluster.util import new_test_keyspace, wait_for_no_pending_topology_transition
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.cluster.util import new_test_keyspace, wait_for_no_pending_topology_transition, wait_for_no_running_compactions
+from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
@@ -104,9 +104,13 @@ async def test_scaling(manager: ManagerClient, object_storage):
     async def verify_object_storage_namespace(server, live_servers, ks):
         """Verify object-storage namespace layout and reference counts through REST API."""
         await manager.disable_tablet_balancing()
+        await wait_for_no_pending_topology_transition(manager, time.time() + 120)
         try:
             for node in live_servers:
                 await manager.api.disable_autocompaction(node.ip_addr, ks, "test")
+
+            await wait_for_no_running_compactions(manager, live_servers, time.time() + 120)
+
             for node in live_servers:
                 await manager.api.flush_keyspace(node.ip_addr, ks)
 
