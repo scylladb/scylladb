@@ -1793,6 +1793,10 @@ SEASTAR_TEST_CASE(test_raft_commitlog_load_log_one_shot) {
         replayed_data.entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(1)));
         replayed_data.entries.push_back(make_dummy_entry(raft::term_t(1), raft::index_t(2)));
         replayed_data.entries.push_back(make_config_entry(raft::term_t(2), raft::index_t(3)));
+        // replay_positions must be 1:1 with entries (raft_commitlog ctor invariant).
+        replayed_data.replay_positions.push_back({.index = raft::index_t(1), .replay_position_handle = {}});
+        replayed_data.replay_positions.push_back({.index = raft::index_t(2), .replay_position_handle = {}});
+        replayed_data.replay_positions.push_back({.index = raft::index_t(3), .replay_position_handle = {}});
 
         service::strong_consistency::raft_commitlog persistence(gid, log, tid, std::move(replayed_data));
 
