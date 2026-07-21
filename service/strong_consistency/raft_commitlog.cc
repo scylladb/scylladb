@@ -132,29 +132,38 @@ std::vector<index_and_replay_position> raft_commitlog::acquire_replay_position_h
     logger.debug("acquire_replay_position_handles_for: group_id={}, entries_count={}, current_command_size={}",
             _group_id, entries.size(), _command_positions.size());
 
+    if (entries.empty()) {
+        return {};
+    }
+
+    // The raft applier fiber hands us a contiguous, index-ordered prefix of
+    // pending commands. _command_positions holds pending commands in index
+    // order, so the requested range must be _command_positions[0..entries.size()).
+    // Verify every index, not just the endpoints, so a mismatch fails here with
+    // a precise error rather than one frame up in state_machine::apply()'s
+    // per-index assert.
+    if (entries.size() > _command_positions.size()) {
+        on_internal_error(logger, fmt::format(
+                "acquire_replay_position_handles_for: expected contiguous command prefix for group_id={}: "
+                "requested [{}, {}] ({} entries), but only {} pending",
+                _group_id, entries.front()->idx, entries.back()->idx, entries.size(),
+                _command_positions.size()));
+    }
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (_command_positions[i].index != entries[i]->idx) {
+            on_internal_error(logger, fmt::format(
+                    "acquire_replay_position_handles_for: expected contiguous command prefix for group_id={}: "
+                    "requested idx {} at offset {}, pending idx {}",
+                    _group_id, entries[i]->idx, i, _command_positions[i].index));
+        }
+    }
+
+    // Bulk-move the prefix to the result and drop it from _command_positions.
     std::vector<index_and_replay_position> ret;
     ret.reserve(entries.size());
-
-    // Command entries are already contiguous in _command_positions: non-command
-    // entries have their own deque and are not passed to apply(). Scan forward.
-    auto it = _command_positions.begin();
-    for (const auto& entry : entries) {
-        // The raft applier fiber only hands command entries to apply(); a
-        // non-command entry here would indicate a raft bug.
-        if (!is_command_entry(*entry)) {
-            on_internal_error(logger, fmt::format(
-                    "acquire_replay_position_handles_for: unexpected non-command entry for group_id={}, idx={}",
-                    _group_id, entry->idx));
-        }
-        while (it != _command_positions.end() && it->index < entry->idx) {
-            ++it;
-        }
-        if (it == _command_positions.end() || it->index != entry->idx) {
-            on_internal_error(logger, fmt::format("missing replay position handle for group_id={}, idx={}", _group_id, entry->idx));
-        }
-        ret.emplace_back(index_and_replay_position{.index = it->index, .replay_position_handle = std::move(it->replay_position_handle)});
-        it = _command_positions.erase(it);
-    }
+    auto end = _command_positions.begin() + entries.size();
+    std::move(_command_positions.begin(), end, std::back_inserter(ret));
+    _command_positions.erase(_command_positions.begin(), end);
 
     logger.debug(
             "acquire_replay_position_handles_for completed: returned_count={}, remaining_command_size={}",
