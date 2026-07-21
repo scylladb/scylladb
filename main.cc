@@ -7,13 +7,19 @@
  */
 
 #include <algorithm>
+#include <exception>
 #include <functional>
+#include <string_view>
+#include <vector>
+#include <ranges>
 #include <fmt/ranges.h>
 
 #include <gnutls/pkcs11.h>
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/core/sstring.hh>
 #include "db/view/view_building_worker.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/inet_address.hh"
@@ -22,10 +28,12 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/signal.hh>
 #include <seastar/core/timer.hh>
+#include "locator/host_id.hh"
 #include "service/client_routes.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "db/view/view_building_state.hh"
 #include "tasks/task_manager.hh"
+#include "types/types.hh"
 #include "utils/assert.hh"
 #include "utils/build_id.hh"
 #include "utils/only_on_shard0.hh"
@@ -228,8 +236,28 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
 }
 
 static void
-self_heal_service_levels_version(db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as) {
+self_heal_service_levels_version(db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client,
+        gms::gossiper& gossiper, abort_source& as) {
     static constexpr unsigned max_attempts = 10;
+    static constexpr auto group0_retry_interval = 1s;
+    static constexpr auto replicas_alive_timeout = 15min;
+    // join_cluster() has completed, so normal token owners remain stable for the rest of startup.
+    auto nodes = qp.db().real_database().get_token_metadata().get_normal_token_owners() | std::ranges::to<std::vector<locator::host_id>>();
+
+    if (std::ranges::any_of(nodes, [&gossiper](locator::host_id& id){return !gossiper.is_alive(id); })) {
+        startlog.info("Cannot self-heal service levels version because not all replicas are alive, waiting for nodes to be alive {}", nodes);
+
+        try {
+            gossiper.wait_alive(nodes, replicas_alive_timeout).get();
+        } catch (std::runtime_error& e){
+            startlog.info("Timeout while waiting for all nodes to become alive {}", e.what());
+            std::throw_with_nested(std::runtime_error(fmt::format("Cannot self-heal service levels version because not all replicas are alive after {} minutes",
+                replicas_alive_timeout.count())));
+        }
+    }
+
+    startlog.info("All nodes are alive continuing with service level self healing");
+
     for (unsigned attempt = 1; attempt <= max_attempts; ++attempt) {
         try {
             auto guard = group0_client.start_operation(as).get();
@@ -240,16 +268,19 @@ self_heal_service_levels_version(db::system_keyspace& sys_ks, cql3::query_proces
                 return;
             }
 
-            auto nodes_count = qp.db().real_database().get_token_metadata().get_normal_token_owners().size();
-            qos::service_level_controller::migrate_to_v2(nodes_count, sys_ks, qp, group0_client, as).get();
+            qos::service_level_controller::migrate_to_v2(nodes.size(),sys_ks, qp, group0_client, as).get();
             group0_client.send_group0_read_barrier_to_live_members().get();
             startlog.info("Self-healed service levels version marker to v2.");
             return;
         } catch (...) {
             if (attempt == max_attempts) {
-                std::throw_with_nested(std::runtime_error(format("Failed to self-heal service levels version marker after {} attempts", max_attempts)));
+                std::throw_with_nested(std::runtime_error(fmt::format("Cannot self-heal service levels version after {} attempts", max_attempts)));
             }
-            startlog.info("Concurrent group0 operation while self-healing service levels version marker, retrying ({}/{}).", attempt, max_attempts);
+
+            startlog.info("Concurrent group0 operation while self-healing service levels version marker, retrying ({}/{}) in {} second(s).",
+                    attempt, max_attempts, group0_retry_interval.count());
+
+            sleep_abortable(group0_retry_interval, as).get();
         }
     }
 }
@@ -2490,7 +2521,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (should_self_heal_service_levels_version) {
                 checkpoint(stop_signal, "self-healing service levels version");
-                self_heal_service_levels_version(sys_ks.local(), qp.local(), group0_client, stop_signal.as_local_abort_source());
+                self_heal_service_levels_version(sys_ks.local(), qp.local(), group0_client, gossiper.local(), stop_signal.as_local_abort_source());
             }
 
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
