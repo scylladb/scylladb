@@ -214,6 +214,9 @@ enum class messaging_verb : int32_t {
     RAFT_READ_BARRIER = 85,
     FORWARD_CQL_EXECUTE = 86,
     FORWARD_CQL_PREPARE = 87,
+    RESTORE_TABLET = 88,
+    WAIT_FOR_RAFT_GROUPS_TO_START = 89,
+    CLONE_SSTABLE = 90,
     FETCH_COLUMN_MAPPINGS = 91,
     LAST = 92,
 };
