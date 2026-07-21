@@ -37,6 +37,8 @@ class paging_state {
     uint32_t get_rows_fetched_for_last_partition_high_bits() [[version 4.3]] = 0;
     bound_weight get_clustering_key_weight() [[version 5.1]] = bound_weight::equal;
     partition_region get_partition_region() [[version 5.1]] = partition_region::clustered;
+    // Null id when the base table was scanned, the index view's id otherwise.
+    std::optional<table_id> get_query_plan_id() [[version 2026.4]] = std::nullopt;
 };
 }
 }
