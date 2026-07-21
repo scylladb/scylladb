@@ -29,6 +29,7 @@ struct evaluation_inputs {
     std::span<const int32_t> static_and_regular_ttls;  // indexes match `selection` member
     std::span<const cql3::raw_value> temporaries; // indexes match temporary::index
     std::span<const collection_cell_metadata> collection_element_metadata; // indexes match `selection` member
+    std::span<const cql3::raw_value> external_values; // indexes match external_value::index
 };
 
 // Takes a prepared expression and calculates its value.
