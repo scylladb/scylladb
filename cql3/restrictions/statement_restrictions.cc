@@ -553,6 +553,9 @@ to_predicates(
                         [&] (const temporary&) -> std::vector<predicate> {
                             return cannot_solve(oper);
                         },
+                        [&] (const external_value&) -> std::vector<predicate> {
+                            return cannot_solve(oper);
+                        },
                     }, oper.lhs);
                 },
             [] (const unary_operator& uo) -> std::vector<predicate> {
@@ -596,6 +599,9 @@ to_predicates(
             },
             [] (const temporary& t) -> std::vector<predicate> {
                 return cannot_solve(t);
+            },
+            [] (const external_value& v) -> std::vector<predicate> {
+                return cannot_solve(v);
             },
         }, expr);
 }

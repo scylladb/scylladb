@@ -841,6 +841,19 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
             [&] (const temporary& t) {
                 out = fmt::format_to(out, "@temporary{}", t.index);
             },
+            [&] (const external_value& v) {
+                if (v.replaced_expr) {
+                    if (pr.for_metadata) {
+                        out = fmt::format_to(out, "{}", expression::printer{.expr_to_print = *v.replaced_expr, .debug_mode = false, .for_metadata = true});
+                    } else if (pr.debug_mode) {
+                        out = fmt::format_to(out, "@external_value({}, {})", v.index, expression::printer{.expr_to_print = *v.replaced_expr, .debug_mode = true});
+                    } else {
+                        out = fmt::format_to(out, "@external_value({})", expression::printer{.expr_to_print = *v.replaced_expr});
+                    }
+                } else {
+                    out = fmt::format_to(out, "@external_value{}", v.index);
+                }
+            },
             [&] (const unary_operator& uo) {
                 out = fmt::format_to(out, "({}{})", uo.op, to_printer(uo.operand));
             }
@@ -1466,6 +1479,12 @@ do_evaluate(const temporary& t, const evaluation_inputs& inputs) {
 
 static
 cql3::raw_value
+do_evaluate(const external_value& v, const evaluation_inputs& inputs) {
+    return inputs.external_values[v.index];
+}
+
+static
+cql3::raw_value
 do_evaluate(const unary_operator& uo, const evaluation_inputs& inputs) {
     // For now, this is do-nothing switch() supporting only the NEG operator.
     // It will ask the compiler to warn us if we ever add a new type of unary
@@ -2086,6 +2105,7 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
         [](untyped_constant&) {},
         [](constant&) {},
         [](temporary&) {},
+        [](external_value&) {},
         [&](unary_operator& uo) {
             fill_prepare_context(uo.operand, ctx);
         },
