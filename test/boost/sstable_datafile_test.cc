@@ -3497,7 +3497,7 @@ SEASTAR_TEST_CASE(test_stats_metadata_error_includes_filename) {
 SEASTAR_THREAD_TEST_CASE(test_small_sstable_has_reasonable_memory_usage) {
     auto scf = make_sstable_compressor_factory_for_tests_in_thread();
     test_env env({}, *scf);
-    auto stop_env = defer([&env] { env.stop().get(); });
+    auto stop_env = defer([&env] () noexcept { env.stop().get(); });
 
     // Big enough that a few leaked copies
     constexpr size_t dict_size = 110 * 1024;

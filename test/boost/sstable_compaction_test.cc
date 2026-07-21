@@ -2719,7 +2719,7 @@ static future<> run_sstable_cleanup_correctness_with_storage(data_dictionary::st
     return do_with_cql_env_thread([storage = std::move(storage)] (cql_test_env& e) {
         auto scf = make_sstable_compressor_factory_for_tests_in_thread();
         test_env env(test_env_config{.storage = storage}, *scf, &e.get_sstorage_manager().local());
-        auto close_env = defer([&] { env.stop().get(); });
+        auto close_env = defer([&] () noexcept { env.stop().get(); });
         env.plug_mock_sstables_registry();
         sstable_cleanup_correctness_fn(e, env);
     }, std::move(cql_cfg));
