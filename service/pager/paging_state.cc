@@ -28,7 +28,8 @@ service::pager::paging_state::paging_state(partition_key pk,
         uint32_t rem_high_bits,
         uint32_t rows_fetched_for_last_partition_high_bits,
         bound_weight ck_weight,
-        partition_region region)
+        partition_region region,
+        std::optional<query_plan> plan)
     : _partition_key(std::move(pk))
     , _clustering_key(std::move(ck))
     , _remaining_low_bits(rem_low_bits)
@@ -40,6 +41,7 @@ service::pager::paging_state::paging_state(partition_key pk,
     , _rows_fetched_for_last_partition_high_bits(rows_fetched_for_last_partition_high_bits)
     , _ck_weight(ck_weight)
     , _region(region)
+    , _query_plan(std::move(plan))
 { }
 
 service::pager::paging_state::paging_state(partition_key pk,
@@ -53,7 +55,8 @@ service::pager::paging_state::paging_state(partition_key pk,
             static_cast<uint32_t>(rows_fetched_for_last_partition), static_cast<uint32_t>(rem >> 32),
             static_cast<uint32_t>(rows_fetched_for_last_partition >> 32),
             pos.get_bound_weight(),
-            pos.region())
+            pos.region(),
+            std::nullopt)
 { }
 
 lw_shared_ptr<const service::pager::paging_state> service::pager::paging_state::deserialize(
