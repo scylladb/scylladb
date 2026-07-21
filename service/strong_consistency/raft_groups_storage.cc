@@ -83,6 +83,13 @@ future<> raft_groups_storage::persist_commit_idx() {
             {int16_t(_shard), _group_id.id, int64_t(idx.value())},
             cql3::query_processor::cache_internal::yes).discard_result().then([this, idx] {
                 _last_persisted_commit_idx = idx;
+                // Non-command entries (configuration, dummy) at or below commit_idx
+                // are committed and, now that commit_idx is persisted, are covered
+                // by it on restart — raft won't replay them — so release their
+                // rp_handles and let the commitlog segments be reclaimed. (Command
+                // entries are handled by apply(), which hands their rp_handles to
+                // the target memtable.)
+                _raft_commitlog.release_noncommand_rp_handles(idx);
             });
     });
 }
