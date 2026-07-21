@@ -27,6 +27,12 @@ time_window_compaction_strategy_state_ptr time_window_compaction_strategy::get_s
     return table_s.get_compaction_strategy_state().get<time_window_compaction_strategy_state_ptr>();
 }
 
+bool time_window_compaction_strategy::spans_multiple_windows(const sstables::sstable& sst) const {
+    auto min = sst.get_stats_metadata().min_timestamp;
+    auto max = sst.get_stats_metadata().max_timestamp;
+    return get_window_for(_options, min) != get_window_for(_options, max);
+}
+
 const std::unordered_map<sstring, std::chrono::seconds> time_window_compaction_strategy_options::valid_window_units = {
     { "MINUTES", 60s }, { "HOURS", 3600s }, { "DAYS", 86400s }
 };
@@ -415,6 +421,23 @@ time_window_compaction_strategy::get_next_non_expired_sstables(compaction_group_
 std::vector<sstables::shared_sstable>
 time_window_compaction_strategy::get_compaction_candidates(compaction_group_view& table_s, strategy_control& control,
     std::vector<sstables::shared_sstable> candidate_sstables, time_window_compaction_strategy_state& state) {
+    // Detect and prioritize SSTables spanning multiple time windows. These arise e.g. after
+    // switching from ICS to TWCS without running a major compaction. Compacting them causes
+    // make_interposer_consumer() to segregate their data into proper per-window SSTables.
+    std::vector<sstables::shared_sstable> multi_window;
+    std::erase_if(candidate_sstables, [&] (const sstables::shared_sstable& sst) {
+        if (spans_multiple_windows(*sst)) {
+            multi_window.push_back(sst);
+            return true;
+        }
+        return false;
+    });
+    if (!multi_window.empty()) {
+        clogger.debug("[{}] TWCS found {} multi-window sstable(s), scheduling for compaction to split into per-window sstables",
+                fmt::ptr(this), multi_window.size());
+        return trim_to_threshold(std::move(multi_window), table_s.schema()->max_compaction_threshold());
+    }
+
     auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
     // Update the highest window seen, if necessary
     state.highest_window_seen = std::max(state.highest_window_seen, max_timestamp);
@@ -524,9 +547,19 @@ future<int64_t> time_window_compaction_strategy::estimated_pending_compactions(c
     auto max_threshold = table_s.schema()->max_compaction_threshold();
     auto main_set = co_await table_s.main_sstable_set();
     auto candidate_sstables = *main_set->all() | std::ranges::to<std::vector>();
-    auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
 
     int64_t n = 0;
+    int64_t multi_window_count = 0;
+    std::erase_if(candidate_sstables, [&] (const sstables::shared_sstable& sst) {
+        if (spans_multiple_windows(*sst)) {
+            multi_window_count++;
+            return true;
+        }
+        return false;
+    });
+    n += (multi_window_count + max_threshold - 1) / max_threshold;
+
+    auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
     for (auto& [bucket_key, bucket] : buckets) {
         switch (compaction_mode(*state, bucket, bucket_key, max_timestamp, min_threshold)) {
         case bucket_compaction_mode::size_tiered:
