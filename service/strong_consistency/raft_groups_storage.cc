@@ -71,7 +71,16 @@ future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
         return _qp.execute_internal(
             store_cql,
             {int16_t(_shard), _group_id.id, int64_t(idx.value())},
-            cql3::query_processor::cache_internal::yes).discard_result();
+            cql3::query_processor::cache_internal::yes).discard_result().then([this, idx] {
+                // Dummy entries at or below commit_idx are committed and, now that
+                // commit_idx is persisted, are covered by it on restart — raft won't
+                // replay them, and a dummy carries no state — so release their
+                // rp_handles and let the commitlog segments be reclaimed. (Command
+                // entries are handled by apply(), which hands their rp_handles to
+                // the target memtable. Configuration entries are deliberately kept:
+                // see release_dummy_rp_handles() and SCYLLADB-3842.)
+                _raft_commitlog.release_dummy_rp_handles(idx);
+            });
     });
 }
 

@@ -35,13 +35,23 @@ private:
     const db::cf_id_type _table_id;
     // Common commit log.
     db::commitlog& _commit_log;
-    // Replay positions in the commit log for each raft log entry.
-    // Contains entries that have been added but not yet removed by either:
-    //  - truncate_log() (leader change discarding uncommitted tail)
-    //  - truncate_log_tail() (snapshot allowing old entries to be reclaimed)
-    // After a snapshot, some entries with index below the snapshot index may
-    // still be present, in accordance with raft trailing log settings.
-    replay_position_list _replay_positions;
+    // Replay position handles for committed and uncommitted command entries
+    // (raft::command). Consumed by
+    // acquire_replay_position_handles_for() when state_machine::apply() hands
+    // the entry to its target memtable, which takes over segment lifetime.
+    replay_position_list _command_positions;
+    // Replay position handles for dummy entries (raft::log_entry::dummy).
+    // Never consumed by apply(). A dummy carries no state, so once commit_idx
+    // covers it a restart has no need of it and its handle can be released;
+    // see release_dummy_rp_handles().
+    replay_position_list _dummy_positions;
+    // Replay position handles for configuration entries (raft::configuration).
+    // Never consumed by apply(). Unlike dummies these carry state that is only
+    // persisted by store_snapshot_descriptor(), and commitlog replay discards
+    // committed non-command entries — so their handles must stay held until a
+    // snapshot has written the configuration durably. Released only by
+    // truncate_log() / truncate_log_tail().
+    replay_position_list _config_positions;
     // The log entries that were loaded from database commit log on startup.
     raft::log_entries _replayed_entries;
 
@@ -50,7 +60,9 @@ public:
 
     ~raft_commitlog();
 
-    // Persist the given log entries in the commit log and get the replay position handles for them.
+    // Persist the given log entries in the commit log. Each entry's rp_handle
+    // is placed into _command_positions, _config_positions or _dummy_positions
+    // based on the entry data type.
     future<> store_log_entries(const raft::log_entry_ptr_list& entries);
 
     // Get the log items that were loaded from database commit log on startup.
@@ -65,10 +77,22 @@ public:
     // Called from store_snapshot_descriptor after the snapshot is persisted.
     void truncate_log_tail(raft::index_t index);
 
-    // Move replay position handles out of the map for the specified indices.
-    // The handles are handed to memtables in the raft state machine apply(),
-    // and removed from the map since the memtable now owns segment lifetime.
-    // Triggers on_internal_error if an entry is missing from the map.
+    // Release dummy-entry rp_handles with index <= idx. Safe only after
+    // system.raft_groups.commit_idx has been durably persisted at or above
+    // idx: below that watermark raft would need those entries on restart.
+    //
+    // Configuration entries are deliberately NOT released here. commit_idx
+    // covering a configuration entry means raft will not replay it, but the
+    // configuration it carries is durable only once store_snapshot_descriptor()
+    // has written it. Releasing on the commit_idx watermark would let the
+    // segment be recycled while the configuration exists nowhere durable, and
+    // the group would come back with a stale configuration. See SCYLLADB-3842.
+    void release_dummy_rp_handles(raft::index_t idx);
+
+    // Move replay position handles out of _command_positions for the specified
+    // entries. The handles are handed to memtables in the raft state machine
+    // apply(), transferring segment ownership. Triggers on_internal_error if a
+    // requested entry is missing.
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 };
 } // namespace service::strong_consistency
