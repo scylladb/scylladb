@@ -1520,6 +1520,22 @@ def _simple_table_with_keys(cql, keyspace: str, keys: Iterable[int]) -> tuple[st
     return table, schema
 
 
+def _table_with_stale_directory(cql, keyspace: str, keys: Iterable[int], data_dir: str) -> tuple[str, str]:
+    """Create a table alongside a stale same-named table directory (#27006)."""
+    table = util.unique_name()
+    schema = (f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v int) "
+              "WITH compaction = {'class': 'NullCompactionStrategy'}")
+    stale_table_id = "00000000000000000000000000000000"
+    os.mkdir(os.path.join(data_dir, keyspace, f"{table}-{stale_table_id}"))
+    cql.execute(schema)
+
+    for pk in keys:
+        cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({pk}, 0)")
+    nodetool.flush(cql, f"{keyspace}.{table}")
+
+    return table, schema
+
+
 def test_scylla_sstable_shard_of_vnodes(cql, test_keyspace_vnodes, scylla_path, scylla_data_dir) -> None:
     # cqlpy/run.py::run_scylla_cmd() passes "--smp 2" to scylla, so we
     # need to be consistent with it to get the correct sstable-shard mapping
@@ -1549,7 +1565,7 @@ def test_scylla_sstable_shard_of_tablets(cql, test_keyspace_tablets, scylla_path
     # the token for 0 is mapped to shard 0, 142 is mapped to shard 1
     shard_to_key = {0: 0, 1: 142}
     for shard_id, key in shard_to_key.items():
-        table_factory = functools.partial(_simple_table_with_keys, keys=[key])
+        table_factory = functools.partial(_table_with_stale_directory, keys=[key], data_dir=scylla_data_dir)
         with scylla_sstable(table_factory, cql, test_keyspace_tablets, scylla_data_dir) as (_, schema_file, sstables):
             with nodetool.no_autocompaction_context(cql, "system.tablets"):
                 nodetool.flush_keyspace(cql, "system")
