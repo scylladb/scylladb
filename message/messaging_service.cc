@@ -716,6 +716,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_PULL_SNAPSHOT:
     case messaging_verb::NOTIFY_BANNED:
     case messaging_verb::DIRECT_FD_PING:
+    case messaging_verb::RAFT_READ_BARRIER:
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
         // DO NOT put any 'hot' (e.g. data path) verbs in this group,
         // only verbs which are 'rare' and 'cheap'.
@@ -751,12 +752,16 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::NODE_OPS_CMD:
     case messaging_verb::HINT_MUTATION:
     case messaging_verb::TABLET_STREAM_FILES:
+    case messaging_verb::CLONE_SSTABLE:
     case messaging_verb::TABLET_STREAM_DATA:
     case messaging_verb::TABLET_CLEANUP:
     case messaging_verb::TABLET_REPAIR:
     case messaging_verb::TABLE_LOAD_STATS_V1:
     case messaging_verb::TABLE_LOAD_STATS:
     case messaging_verb::WORK_ON_VIEW_BUILDING_TASKS:
+    case messaging_verb::SNAPSHOT_WITH_TABLETS:
+    case messaging_verb::RESTORE_TABLET:
+    case messaging_verb::WAIT_FOR_RAFT_GROUPS_TO_START:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
@@ -777,6 +782,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::PAXOS_ACCEPT:
     case messaging_verb::PAXOS_LEARN:
     case messaging_verb::PAXOS_PRUNE:
+    case messaging_verb::FORWARD_CQL_EXECUTE:
+    case messaging_verb::FORWARD_CQL_PREPARE:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
