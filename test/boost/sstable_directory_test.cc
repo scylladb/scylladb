@@ -27,6 +27,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/exception_utils.hh"
 #include "utils/lister.hh"
 #include "db/config.hh"
 #include "sstables/exceptions.hh"
@@ -812,6 +813,33 @@ fs::path table_dirname(cql_test_env& e, const fs::path& root, sstring ks, sstrin
     sstring uuid_sstring = id.to_sstring();
     boost::erase_all(uuid_sstring, "-");
     return root / ks / (cf + "-" + uuid_sstring);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cql_startup_with_orphaned_sstable_component_missing_toc) {
+    tmpdir data_dir;
+    cql_test_config cfg;
+    cfg.db_config->data_file_directories({
+        data_dir.path().native(),
+    }, db::config::config_source::CommandLine);
+
+    fs::path tbl_dirname;
+    do_with_cql_env_thread([&] (cql_test_env& e) {
+        e.execute_cql("create table ks.cf (p text PRIMARY KEY, c int)").get();
+        e.execute_cql("insert into ks.cf (p, c) values ('one', 1)").get();
+        e.db().invoke_on_all([] (replica::database& db) {
+            return db.find_column_family("ks", "cf").flush();
+        }).get();
+        tbl_dirname = table_dirname(e, data_dir.path(), "ks", "cf");
+    }, cfg).get();
+
+    auto orphan_data = sstables::sstable::filename(tbl_dirname.native(), "ks", "cf", sstables::get_highest_sstable_version(),
+            generation_from_value(777777), sstables::sstable::format_types::big, component_type::Data);
+    tests::touch_file(orphan_data).get();
+
+    sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+    auto restart = do_with_cql_env_thread([] (cql_test_env&) {}, cfg);
+    BOOST_REQUIRE_EXCEPTION(restart.get(), std::runtime_error,
+            exception_predicate::message_matches("sstables::malformed_sstable_exception.*no TOC found for SSTable"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_user_datadir_layout) {
