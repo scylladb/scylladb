@@ -57,6 +57,9 @@ public:
     const sstable_set& all() const { return _all; }
     double estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
     run_id run_identifier() const;
+    // the sstable with oldest mtime represents the whole run, as it would be
+    // the mtime had the run be composed of a single sstable.
+    db_clock::time_point data_file_write_time() const;
 };
 
 using shared_sstable_run = lw_shared_ptr<sstable_run>;

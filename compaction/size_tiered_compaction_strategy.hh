@@ -50,9 +50,6 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     // Return a list of pair of shared_sstable and its respective size.
     static std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables);
 
-    // Group files of similar size into buckets.
-    static std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, size_tiered_compaction_strategy_options options);
-
     std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables) const;
 
     // Maybe return a bucket of sstables to compact
@@ -74,6 +71,9 @@ public:
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options);
     explicit size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options);
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
+
+    // Group files of similar size into buckets.
+    static std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, size_tiered_compaction_strategy_options options);
 
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 

@@ -176,6 +176,10 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
         return i.second < j.second;
     });
 
+    auto min_sstable_size_check = [&runs, &options] (uint64_t size) {
+        return !tiny_sstables_written_recently(options.min_sstable_size, runs) && size < options.min_sstable_size;
+    };
+
     using bucket_type = std::vector<sstables::frozen_sstable_run>;
     std::vector<bucket_type> bucket_list;
     std::vector<double> bucket_average_size_list;
@@ -190,7 +194,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
             auto& bucket_average_size = bucket_average_size_list.back();
 
             if ((size > (bucket_average_size * options.bucket_low) && size < (bucket_average_size * options.bucket_high)) ||
-                    (size < options.min_sstable_size && bucket_average_size < options.min_sstable_size)) {
+                    (min_sstable_size_check(size) && min_sstable_size_check(bucket_average_size))) {
                 auto& bucket = bucket_list.back();
                 auto total_size = bucket.size() * bucket_average_size;
                 auto new_average_size = (total_size + size) / (bucket.size() + 1);
@@ -200,7 +204,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
                 // average might drift upwards.
                 // Don't let it drift too high, to a point where the smallest
                 // SSTable might fall out of range.
-                if (size < options.min_sstable_size || smallest_run_in_bucket > new_average_size * options.bucket_low) {
+                if (min_sstable_size_check(size) || smallest_run_in_bucket > new_average_size * options.bucket_low) {
                     bucket.push_back(pair.first);
                     bucket_average_size = new_average_size;
                     continue;

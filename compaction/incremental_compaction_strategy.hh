@@ -55,8 +55,6 @@ private:
     std::optional<double> _space_amplification_goal;
     static std::vector<sstable_run_and_length> create_run_and_length_pairs(const std::vector<sstables::frozen_sstable_run>& runs);
 
-    static std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
-
     std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs) const {
         return get_buckets(runs, _options);
     }
@@ -82,6 +80,9 @@ public:
 
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
+    // Group runs of similar size into buckets.
+    static std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
+
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) override;
 
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& t, std::vector<sstables::shared_sstable> candidates) const override;
@@ -102,5 +103,14 @@ public:
 
     friend class compaction::incremental_backlog_tracker;
 };
+
+// Returns true whether any tiny sstable run, i.e. a run smaller than option.min_sstable_size, was written in the last hour.
+template <std::ranges::range Range>
+requires std::convertible_to<std::ranges::range_value_t<Range>, sstables::shared_sstable> || std::convertible_to<std::ranges::range_value_t<Range>, sstables::frozen_sstable_run>
+bool tiny_sstables_written_recently(uint64_t min_sstable_size, const Range& sstable_runs) {
+    return std::ranges::any_of(sstable_runs, [min_sstable_size, now = db_clock::now()] (const std::ranges::range_value_t<Range>& r) {
+        return r->data_size() < min_sstable_size && r->data_file_write_time() > (now - db_clock::duration(std::chrono::seconds(3600)));
+    });
+}
 
 }

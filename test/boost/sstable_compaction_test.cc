@@ -2211,6 +2211,10 @@ void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(ts))});
         auto mut = make_insert(std::move(key), ts);
         auto sst = make_sstable_containing(sst_gen, {std::move(mut)}).get();
+        // The size-tiered fallback, used for past windows, only squashes tiny sstables into the same
+        // tier if none of them were recently written. SStables composing a past window are expected
+        // to be old, as they were written before the window expired, so let's fake their write time.
+        sstables::test(sst).set_data_file_write_time(db_clock::now() - std::chrono::hours(2));
         auto bound = compaction::time_window_compaction_strategy::get_window_lower_bound(window_size, window_ts);
         buckets[bound].push_back(std::move(sst));
     };
@@ -2221,6 +2225,8 @@ void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
         auto bound = compaction::time_window_compaction_strategy::get_window_lower_bound(window_size, window_ts);
         auto ret = compact_sstables(env, compaction::compaction_descriptor(std::move(buckets[bound])), cf, sst_gen).get();
         BOOST_REQUIRE(ret.new_sstables.size() == 1);
+        // Same rationale as above: the compacted sstable represents old data of a past window.
+        sstables::test(ret.new_sstables.front()).set_data_file_write_time(db_clock::now() - std::chrono::hours(2));
         buckets[bound] = std::move(ret.new_sstables);
     };
 
@@ -6299,6 +6305,10 @@ void test_compaction_strategy_cleanup_method_fn(test_env& env, size_t all_files 
         parallel_for_each(std::views::iota(size_t(0), all_files), [&](size_t i) -> future<> {
             auto current_step = duration_cast<microseconds>(step_base) * i;
             auto sst = co_await make_sstable_containing(sst_gen, {make_mutation(i, next_timestamp(current_step))});
+            // Cleanup operates on existing data, so the sstables are not expected to have been
+            // recently written. This is required so that tiny sstables, i.e. those smaller than
+            // min_sstable_size, are placed into the same size tier by the strategy.
+            sstables::test(sst).set_data_file_write_time(db_clock::now() - std::chrono::hours(2));
             sst->set_sstable_level(sstable_level);
             candidates[i] = std::move(sst);
         }).get();
@@ -7897,6 +7907,55 @@ SEASTAR_TEST_CASE(test_last_gc_sstable_is_not_leaked_on_successful_compaction) {
         BOOST_REQUIRE_MESSAGE(extra.empty(),
                 fmt::format("compaction created sstable(s) it never attached nor deleted: [{}]",
                             fmt::join(extra, ", ")));
+    });
+}
+
+SEASTAR_TEST_CASE(test_size_tiering_for_tiny_sstables) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder(this_smp_shard_count(), "tests", "tiny_sstables")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type)
+                .build();
+
+        auto make_sstable = [&] (uint64_t data_size) {
+            auto sst = env.make_sstable(s, "/nowhere/in/particular", env.new_generation(), sstable_version_types::md, big);
+            auto keys = tests::generate_partition_keys(2, s, local_shard_only::yes);
+            sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, data_size);
+            return sst;
+        };
+
+        constexpr uint64_t min_sstable_size = 50 * 1024 * 1024;
+        constexpr uint64_t tiny_sstable_size = 1 * 1024 * 1024;
+        constexpr uint64_t medium_sstable_size = 40 * 1024 * 1024;
+        static_assert(tiny_sstable_size < min_sstable_size && medium_sstable_size < min_sstable_size);
+
+        auto tiny_sst = make_sstable(tiny_sstable_size);
+        auto medium_sst = make_sstable(medium_sstable_size);
+
+        auto expect_buckets = [&] (unsigned expected_bucket_count, db_clock::time_point write_time) {
+            sstables::test(tiny_sst).set_data_file_write_time(write_time);
+            sstables::test(medium_sst).set_data_file_write_time(write_time);
+
+            // SSTables of 1M and 40M, both smaller than min_sstable_size (50M), must end up
+            // in the same tier only if they were not written recently. Otherwise, they must
+            // stay in distinct tiers so that similarly sized sstables are compacted together.
+            compaction::size_tiered_compaction_strategy_options stcs_options;
+            auto stcs_buckets = compaction::size_tiered_compaction_strategy::get_buckets({ tiny_sst, medium_sst }, stcs_options);
+            BOOST_REQUIRE_EQUAL(stcs_buckets.size(), expected_bucket_count);
+
+            std::vector<sstables::frozen_sstable_run> runs = {
+                make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(tiny_sst)),
+                make_lw_shared<const sstables::sstable_run>(sstables::sstable_run(medium_sst)),
+            };
+            compaction::incremental_compaction_strategy_options ics_options;
+            auto ics_buckets = compaction::incremental_compaction_strategy::get_buckets(runs, ics_options);
+            BOOST_REQUIRE_EQUAL(ics_buckets.size(), expected_bucket_count);
+        };
+
+        // Tiny sstables written recently must stay in their own tiers.
+        expect_buckets(2, db_clock::now());
+        // Tiny sstables which are no longer actively written can be squashed into the same tier.
+        expect_buckets(1, db_clock::now() - std::chrono::hours(2));
     });
 }
 
