@@ -187,6 +187,14 @@ public:
 protected:
     virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const;
     future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, shared_ptr<stream_progress> progress, defer_unlinking defer);
+    // Re-fetches _erm between streaming batches so a topology version
+    // superseded mid-operation is released promptly, instead of being held
+    // for the whole (potentially hours-long) operation.
+    //
+    // Synchronous by design: must not suspend before dropping the old _erm,
+    // or a topology change waiting via barrier_and_drain for that erm to be
+    // released could deadlock against it.
+    virtual void refresh_erm();
 private:
     host_id_vector_replica_set get_all_endpoints(const dht::token& token) const;
 };
@@ -204,6 +212,14 @@ public:
 
     virtual future<> stream(shared_ptr<stream_progress> on_streamed) override;
     virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const override;
+
+protected:
+    // No-op for now: _tablet_map is a reference into the erm acquired at
+    // construction, so swapping _erm here would leave it dangling. A
+    // follow-up commit converts _tablet_map to a repointable pointer and
+    // implements this properly; until then tablets keep holding their erm
+    // for the whole operation, same as before this change.
+    void refresh_erm() override {}
 
 private:
     host_id_vector_replica_set to_replica_set(const locator::tablet_replica_set& replicas) const {
@@ -316,6 +332,23 @@ host_id_vector_replica_set sstable_streamer::get_all_endpoints(const dht::token&
     auto pending = _erm->get_pending_replicas(token);
     std::move(pending.begin(), pending.end(), std::back_inserter(current_targets));
     return current_targets;
+}
+
+void sstable_streamer::refresh_erm() {
+    auto erm = _table.get_effective_replication_map();
+    if (erm == _erm) {
+        return; // unchanged since the last refresh (the common case)
+    }
+    if (!erm) {
+        // Shouldn't happen for a live table; guard defensively rather than
+        // crash on the next dereference of a null erm.
+        llog.debug("sstable_streamer: table {}.{} has no effective_replication_map; "
+                   "deferring refresh", _table.schema()->ks_name(), _table.schema()->cf_name());
+        return;
+    }
+    _erm = std::move(erm);
+    llog.debug("sstable_streamer: refreshed effective_replication_map for table {}.{} to topology version {}",
+               _table.schema()->ks_name(), _table.schema()->cf_name(), _erm->get_token_metadata().get_version());
 }
 
 host_id_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const {
@@ -477,6 +510,9 @@ future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::
     while (!sstables.empty()) {
         co_await utils::get_local_injector().inject("load_and_stream_before_streaming_batch",
             utils::wait_for_message(60s));
+
+        // See refresh_erm()'s declaration for why this is needed.
+        refresh_erm();
 
         const size_t batch_sst_nr = std::min(16uz, sstables.size());
         auto sst_processed = sstables
@@ -642,8 +678,10 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, bool unlink, stream_scope scope,
         shared_ptr<stream_progress> progress) {
-    // streamer guarantees topology stability, for correctness, by holding effective_replication_map
-    // throughout its lifetime.
+    // For vnode-based tables, refresh_erm() (see its declaration) re-fetches
+    // this erm between streaming batches, so a superseded topology version
+    // is released promptly. tablet_sstable_streamer is still a no-op
+    // override for now and holds its erm for the whole operation.
     auto erm = co_await await_topology_quiesced_and_get_erm(table_id);
 
     // Obtain a phaser guard to prevent the table from being destroyed
