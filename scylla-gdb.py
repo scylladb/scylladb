@@ -4283,7 +4283,9 @@ class scylla_fiber(gdb.Command):
         parser.add_argument("--direction", action="store", choices=['forward', 'backward', 'both'], default='both',
                 help="Direction in which to walk the continuation chain. 'forward' walks futures waiting on the given task,"
                 " 'backward' walks futures the given task is waiting on, 'both' does both.")
-        parser.add_argument("task", action="store", help="An expression that evaluates to a valid `seastar::task*` value. Cannot contain white-space.")
+        parser.add_argument("task", nargs='?', default=None,
+                help="An expression that evaluates to a valid `seastar::task*` value. Cannot contain white-space."
+                " If omitted, the current task of the local engine is used.")
 
         try:
             args = parser.parse_args(arg.split())
@@ -4306,7 +4308,11 @@ class scylla_fiber(gdb.Command):
             if not using_seastar_allocator:
                 gdb.write("Not using the seastar allocator, falling back to scanning a fixed-size region of memory\n")
 
-            initial_task_ptr = int(gdb.parse_and_eval(args.task))
+            if args.task is None:
+                initial_task_ptr = int(gdb.parse_and_eval('seastar::local_engine')['_current_task'])
+            else:
+                initial_task_ptr = int(gdb.parse_and_eval(args.task))
+
             this_task = self._probe_pointer(initial_task_ptr, args.scanned_region_size, using_seastar_allocator, args.verbose)
             if this_task is None:
                 gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(initial_task_ptr))
