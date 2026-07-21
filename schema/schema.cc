@@ -2227,10 +2227,10 @@ column_computation_ptr column_computation::deserialize(bytes_view raw) {
     }
     const std::string_view type = rjson::to_string_view(*type_json);
     if (type == "token") {
-        return std::make_unique<legacy_token_column_computation>();
+        return seastar::make_shared<legacy_token_column_computation>();
     }
     if (type == "token_v2") {
-        return std::make_unique<token_column_computation>();
+        return seastar::make_shared<token_column_computation>();
     }
     if (type.starts_with("collection_")) {
         const rjson::value* collection_name = rjson::find(parsed, "collection_name");
@@ -2239,12 +2239,12 @@ column_computation_ptr column_computation::deserialize(bytes_view raw) {
             auto collection = rjson::to_string_view(*collection_name);
             auto collection_as_bytes = bytes(collection.begin(), collection.end());
             if (auto collection = collection_column_computation::for_target_type(type, collection_as_bytes)) {
-                return collection->clone();
+                return collection;
             }
         }
     }
     if (type == alternator::extract_from_attrs_column_computation::TYPE_NAME) {
-        return std::make_unique<alternator::extract_from_attrs_column_computation>(parsed);
+        return seastar::make_shared<alternator::extract_from_attrs_column_computation>(parsed);
     }
     throw std::runtime_error(format("Incorrect column computation type {} found when parsing {}", *type_json, parsed));
 }
@@ -2291,13 +2291,13 @@ bytes collection_column_computation::serialize() const {
 
 column_computation_ptr collection_column_computation::for_target_type(std::string_view type, const bytes& collection_name) {
     if (type == "collection_keys") {
-        return collection_column_computation::for_keys(collection_name).clone();
+        return seastar::make_shared<collection_column_computation>(for_keys(collection_name));
     }
     if (type == "collection_values") {
-        return collection_column_computation::for_values(collection_name).clone();
+        return seastar::make_shared<collection_column_computation>(for_values(collection_name));
     }
     if (type == "collection_entries") {
-        return collection_column_computation::for_entries(collection_name).clone();
+        return seastar::make_shared<collection_column_computation>(for_entries(collection_name));
     }
     return {};
 }

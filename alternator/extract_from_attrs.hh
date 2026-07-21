@@ -38,7 +38,6 @@ class extract_from_attrs_column_computation : public regular_column_transformati
     // therefore in desired_type.
     alternator_type _desired_type;
 public:
-    virtual column_computation_ptr clone() const override;
     // TYPE_NAME is a unique string that distinguishes this class from other
     // column_computation subclasses. column_computation::deserialize() will
     // construct an object of this subclass if it sees a "type" TYPE_NAME.

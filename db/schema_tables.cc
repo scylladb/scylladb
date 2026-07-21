@@ -2449,7 +2449,7 @@ static std::vector<column_definition> create_columns_from_column_rows(
         column_computation_ptr computation;
         auto computed_it = computed_columns.find(name_bytes);
         if (computed_it != computed_columns.end()) {
-            computation = computed_it->second->clone();
+            computation = computed_it->second;
         }
 
         columns.emplace_back(name_bytes, type, kind, position, is_view_virtual, std::move(computation));

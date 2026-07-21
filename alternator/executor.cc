@@ -783,7 +783,7 @@ static void add_column(schema_builder& builder, const std::string& name, const r
                 // but rather extracts a single value from the ":attrs" map)
                 alternator_type at = type_info_from_string(type).atype;
                 builder.with_computed_column(to_bytes(name), dt, kind,
-                    std::make_unique<extract_from_attrs_column_computation>(to_bytes(name), at));
+                    seastar::make_shared<extract_from_attrs_column_computation>(to_bytes(name), at));
             } else {
                 builder.with_column(to_bytes(name), dt, kind);
             }
@@ -1231,10 +1231,6 @@ static std::unordered_set<std::string> validate_attribute_definitions(std::strin
 // member from the ":attrs" map instead of a real column in the schema:
 
 const bytes extract_from_attrs_column_computation::MAP_NAME = executor::ATTRS_COLUMN_NAME;
-
-column_computation_ptr extract_from_attrs_column_computation::clone() const {
-    return std::make_unique<extract_from_attrs_column_computation>(*this);
-}
 
 // Serialize the *definition* of this column computation into a JSON
 // string with a unique "type" string - TYPE_NAME - which then causes
