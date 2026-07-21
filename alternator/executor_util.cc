@@ -20,6 +20,7 @@
 #include "serialization.hh"
 #include "service/storage_proxy.hh"
 #include "types/map.hh"
+#include "utils/overloaded_functor.hh"
 #include <fmt/format.h>
 
 namespace alternator {
@@ -571,4 +572,17 @@ void filter_batch_request_items_by_tbl_name(rjson::value& request, const audit::
     }
 }
 
+api_error create_api_error_from_exception(const exceptions::coordinator_exception_container& exc) {
+    return exc.accept(overloaded_functor {
+        [] (const exceptions::rate_limit_exception& ex) {
+            return api_error::request_limit_exceeded(ex.what());
+        },
+        [] (const exceptions::overloaded_exception& ex) {
+            return api_error::request_limit_exceeded(ex.what());
+        },
+        [] (const auto& ex) {
+            return api_error::internal(format("Internal server error: {}", ex.what()));
+        }
+    });
+}
 } // namespace alternator
