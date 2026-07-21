@@ -296,6 +296,8 @@ public:
                 | std::ranges::to<std::unordered_set<std::string>>()
             ;
 
+            std::exception_ptr p;
+
             co_await parallel_for_each(ranges, [bucket, &upload_one, &existing](const part& p) -> future<> {
                 if (!existing.count(p.name)) {
                     co_await upload_one(object_name(bucket, p.name), p.off, p.size);
@@ -305,11 +307,23 @@ public:
             co_await f.close();
 
             auto names = ranges | std::views::transform([](auto& p) { return p.name; }) | std::ranges::to<std::vector<std::string>>();
-            co_await _client->merge_objects(bucket, object, names, {}, as);
 
-            co_await parallel_for_each(names, [this, bucket, as](auto& name) -> future<> {
-                co_await _client->delete_object(bucket, name, as);
-            });
+            try {
+                co_await _client->merge_objects(bucket, object, names, {}, as);
+                co_await parallel_for_each(names, [this, bucket](auto& name) -> future<> {
+                    // don't do this abortable. It is cleanup
+                    co_await _client->delete_object(bucket, name);
+                });
+            } catch (...) {
+                p = std::current_exception();
+            }
+
+            if (p) {
+                // don't do this abortable. It is cleanup
+                // Should not exist, but if we fail, make sure.
+                co_await _client->delete_object(bucket, object);
+                co_await coroutine::return_exception_ptr(std::move(p));
+            }
         }
 
     }
