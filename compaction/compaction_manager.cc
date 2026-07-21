@@ -45,7 +45,9 @@ public:
     explicit compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs) noexcept
         : _cm(cm)
         , _cs(cs)
-    { }
+    {
+        cmlog.info("[lock-trace] compacting_sstable_registration constructed cs@{} lock={}", fmt::ptr(&_cs), fmt::ptr(&_cs.sstable_set_lock));
+    }
 
     compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs, const std::vector<sstables::shared_sstable>& compacting)
         : compacting_sstable_registration(cm, cs)
@@ -73,6 +75,9 @@ public:
     ~compacting_sstable_registration() {
         // _compacting might be empty, but this should be just fine
         // for deregister_compacting_sstables.
+        cmlog.info("[lock-trace] compacting_sstable_registration destructor cs@{} lock={} deregistering=[{}]",
+                fmt::ptr(&_cs), fmt::ptr(&_cs.sstable_set_lock),
+                fmt::join(_compacting | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
         _cm.deregister_compacting_sstables(_compacting);
     }
 
@@ -422,7 +427,12 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         // Off-strategy, for example, waits until the sstables move out of staging state.
         return t.make_sstable(sstables::sstable_state::normal);
     };
-    descriptor.replacer = [this, &t, &on_replace, offstrategy] (compaction_completion_desc desc) {
+    descriptor.replacer = [this, &t, &cdata, &on_replace, offstrategy] (compaction_completion_desc desc) {
+        cmlog.info("[split-trace] replacer called table={} compaction_uuid={} task={} old=[{}] new=[{}] offstrategy={}",
+                t, cdata.compaction_uuid, fmt::ptr(this),
+                fmt::join(desc.old_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                fmt::join(desc.new_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "),
+                bool(offstrategy));
         utils::get_local_injector().inject("split_pause_before_replacer",
                 [this, &t] (auto& handler) -> future<> {
             if (is_system_keyspace(t.schema()->ks_name()) || _type != compaction_type::Split) {
@@ -439,6 +449,8 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         // filter + registration, preventing the stale-snapshot race.
         auto& cs = _cm.get_compaction_state(_compacting_table);
         auto units = get_units(cs.sstable_set_lock, 1).get();
+        cmlog.info("[lock-trace] replacer acquired sstable_set_lock table={} compaction_uuid={} task={} view={} lock={} group={}",
+                t, cdata.compaction_uuid, fmt::ptr(this), fmt::ptr(&t), fmt::ptr(&cs.sstable_set_lock), t.get_group_id());
         // on_replace updates the compacting registration with the old and new
         // sstables. while on_compaction_completion() removes the old sstables
         // from the table's sstable set, and adds the new ones to the sstable
@@ -455,6 +467,9 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         auto old_sstables = desc.old_sstables;
         _cm.on_compaction_completion(t, std::move(desc), offstrategy).get();
         on_replace.on_removal(old_sstables);
+        cmlog.info("[lock-trace] replacer releasing sstable_set_lock table={} compaction_uuid={} task={} view={} lock={} group={} old=[{}]",
+                t, cdata.compaction_uuid, fmt::ptr(this), fmt::ptr(&t), fmt::ptr(&cs.sstable_set_lock), t.get_group_id(),
+                fmt::join(old_sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
     };
 
     // retrieve owned_ranges if_required
@@ -858,7 +873,11 @@ compaction_manager::run_with_compaction_disabled(compaction_group_view& t, std::
     // making the captured snapshot stale.
     auto& cs = get_compaction_state(&t);
     auto units = co_await get_units(cs.sstable_set_lock, 1);
+    cmlog.info("[lock-trace] run_with_compaction_disabled acquired sstable_set_lock view={} lock={} group={}",
+            fmt::ptr(&t), fmt::ptr(&cs.sstable_set_lock), t.get_group_id());
     co_await func();
+    cmlog.info("[lock-trace] run_with_compaction_disabled releasing sstable_set_lock view={} lock={} group={}",
+            fmt::ptr(&t), fmt::ptr(&cs.sstable_set_lock), t.get_group_id());
 }
 
 }
@@ -1009,6 +1028,18 @@ void compaction_task_executor::abort(abort_source& as) noexcept {
 }
 
 void compaction_task_executor::stop_compaction(sstring reason) noexcept {
+    // Emit a structured trace of the stop signal delivery so we can correlate
+    // "this task got a stop request at time T" with "this task's replacer fired
+    // at time T+X" during the split-vs-regular-compaction race investigation.
+    //
+    // NOTE: intentionally does NOT dereference _compacting_table. During
+    // shutdown/decommission the pointed-to compaction_group_view can be
+    // destroyed while stop_compaction() is called during task tear-down; a
+    // null-pointer check is not enough because the pointer may be dangling.
+    // Callers can join this log line with 'regular_compaction picked' /
+    // 'replacer called' by compaction_uuid to recover the table identity.
+    cmlog.info("[split-trace] stop_compaction task={} compaction_uuid={} compaction_type={} reason={}",
+            fmt::ptr(this), _compaction_data.compaction_uuid, _type, reason);
     _compaction_data.stop(std::move(reason));
 }
 
@@ -1462,6 +1493,9 @@ protected:
             // preventing split's replacer from mutating the sstable set and deregistering
             // sstables between our snapshot capture and eligibility filter.
             auto sstable_set_units = co_await get_units(_compaction_state.sstable_set_lock, 1);
+            cmlog.info("[lock-trace] regular_compaction acquired sstable_set_lock table={} compaction_uuid={} task={} view={} lock={} group={}",
+                    *_compacting_table, _compaction_data.compaction_uuid, fmt::ptr(this), fmt::ptr(_compacting_table), fmt::ptr(&_compaction_state.sstable_set_lock),
+                    _compacting_table->get_group_id());
             if (!can_proceed()) {
                 co_return std::nullopt;
             }
@@ -1473,6 +1507,11 @@ protected:
             cmlog.debug("Started minor compaction sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
                     descriptor.sstables, compacting_table()->get_sstables_repaired_at(),
                     compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
+            if (!descriptor.sstables.empty()) {
+                cmlog.info("[split-trace] regular_compaction picked table={} compaction_uuid={} sstables=[{}]",
+                        t, _compaction_data.compaction_uuid,
+                        fmt::join(descriptor.sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
+            }
 
             auto old_sstables = ::format("{}", descriptor.sstables);
 
@@ -1496,6 +1535,8 @@ protected:
             // Finished selecting and registering compacting sstables.
             // Release sstable_set_lock (snapshot+filter+registration is complete).
             // Keep read lock held during compaction execution.
+            cmlog.info("[lock-trace] regular_compaction releasing sstable_set_lock table={} compaction_uuid={} task={} view={} lock={} group={}",
+                    t, _compaction_data.compaction_uuid, fmt::ptr(this), fmt::ptr(&t), fmt::ptr(&_compaction_state.sstable_set_lock), t.get_group_id());
             sstable_set_units.return_all();
 
             setup_new_compaction(descriptor.run_identifier);
@@ -1530,8 +1571,17 @@ protected:
                 ex = std::current_exception();
             }
 
+            // Trace the failed compaction so we can distinguish "compaction was interrupted"
+            // (compaction_stopped_exception) from other failures, and see whether do_run's
+            // for(;;) loop retries — potentially picking a new set of sstables.
+            cmlog.info("[split-trace] regular_compaction failed table={} compaction_uuid={} task={} error={}",
+                    *_compacting_table, _compaction_data.compaction_uuid, fmt::ptr(this), ex);
             finish_compaction(state::failed);
-            if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
+            auto retry = co_await maybe_retry(std::move(ex));
+            cmlog.info("[split-trace] regular_compaction maybe_retry table={} task={} retry={}",
+                    *_compacting_table, fmt::ptr(this),
+                    retry == stop_iteration::yes ? "no" : "yes");
+            if (retry == stop_iteration::yes) {
                 co_return std::nullopt;
             }
         }
@@ -1996,6 +2046,8 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
             return a->data_size() > b->data_size();
         });
     }, std::move(reason));
+    cmlog.info("[split-trace] perform_task_on_all_files table={} sstables_captured=[{}]",
+            t, fmt::join(sstables | std::views::transform([] (auto& sst) { return sst->get_filename(); }), ", "));
     if (sstables.empty()) {
         co_return std::nullopt;
     }
