@@ -207,3 +207,86 @@ in the CreateTable operation. The value of this tag can be:
 The `system:initial_tablets` tag only has any effect while creating
 a new table with CreateTable - changing it later has no effect.
 
+## Custom write timestamps
+
+DynamoDB doesn't allow clients to set the write timestamp of updates. All
+updates use the current server time as their timestamp, and ScyllaDB uses
+these timestamps for last-write-wins conflict resolution when concurrent
+writes reach different replicas.
+
+ScyllaDB Alternator extends this with the `system:timestamp_attribute` tag,
+which allows specifying a custom write timestamp for each PutItem,
+UpdateItem, DeleteItem, or BatchWriteItem request. To use this feature:
+
+1. Tag the table (at CreateTable time or using TagResource) with
+   `system:timestamp_attribute` set to the name of an attribute that will
+   hold the custom write timestamp.
+
+2. When performing a PutItem, UpdateItem or BatchWriteItem PutRequest,
+   include the named attribute in the request with a positive numeric value.
+   The value represents the write timestamp in **microseconds since the
+   Unix epoch** (this is the same unit used internally by ScyllaDB for
+   timestamps); fractional microseconds are truncated.
+   For a DeleteItem or a BatchWriteItem DeleteRequest, include the named
+   attribute in the `Key` parameter.
+
+3. The named attribute is **not stored** in the item data - it only
+   controls the write timestamp. If you also want to record the timestamp
+   as data, use a separate attribute for that purpose.
+
+4. If the named attribute is absent, the write proceeds normally using the
+   current server time as the timestamp. If the named attribute is present
+   but has a non-numeric value, the write is rejected with a ValidationException.
+
+### Limitations
+
+- **Incompatible with LWT (lightweight transactions)**: Custom write
+  timestamps cannot be used for writes that execute as an LWT, because LWT
+  requires the write timestamp to be set by the Paxos protocol, not by the
+  client. Which writes use LWT depends on the table's write isolation policy:
+
+  - **`always`** (`always_use_lwt`): every write uses LWT, so the
+    `system:timestamp_attribute` feature is entirely unusable on such tables.
+    Consider using `system:write_isolation=only_rmw_uses_lwt` (or `forbid_rmw`)
+    instead.
+  - **`only_rmw_uses_lwt`**: read-modify-write operations — those that include
+    a `ConditionExpression` or the legacy `Expected`, or use an `UpdateExpression`
+    that reads existing attribute values — use LWT and are therefore rejected
+    with a `ValidationException`. Write-only requests in this mode work
+    normally with custom timestamps.
+  - **`forbid_rmw`** and **`unsafe_rmw`**: writes never use LWT, so custom
+    timestamps are always allowed. (`forbid_rmw` rejects read-modify-write
+    requests outright; `unsafe_rmw` performs them without isolation guarantees.)
+
+- **Timestamps far from the current time**: If you write an item with a
+  timestamp far in the future, subsequent writes that do _not_ specify an
+  explicit timestamp will use the current server time, which will be smaller
+  than that future timestamp and will therefore lose the last-write-wins
+  conflict — effectively making the item immutable until real time catches up.
+  Similarly, writing with a timestamp far in the past risks losing to any
+  concurrent or future write that uses the current server time. Keep explicit
+  timestamps reasonably close to the current wall-clock time to avoid these
+  surprises.
+
+### Example use case
+
+This feature is useful for ingesting data from multiple sources where each
+record has a known logical timestamp. By setting the `system:timestamp_attribute`
+tag, you can ensure that the record with the highest logical timestamp always
+wins, regardless of ingestion order:
+
+```python
+# Create table with timestamp attribute
+dynamodb.create_table(
+    TableName='my_table',
+    ...
+    Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'write_ts'}]
+)
+
+# Write a record with a specific timestamp (in microseconds since epoch)
+table.put_item(Item={
+    'pk': 'my_key',
+    'data': 'new_value',
+    'write_ts': Decimal('1700000000000000'),  # Nov 14, 2023 in microseconds
+})
+```
