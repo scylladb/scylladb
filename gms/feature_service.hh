@@ -185,6 +185,7 @@ public:
     gms::feature arbitrary_tablet_boundaries { *this, "ARBITRARY_TABLET_BOUNDARIES"sv };
     gms::feature large_data_virtual_tables { *this, "LARGE_DATA_VIRTUAL_TABLES"sv };
     gms::feature keyspace_multi_rf_change { *this, "KEYSPACE_MULTI_RF_CHANGE"sv };
+    gms::feature fetch_column_mappings_on_tablet_migration { *this, "FETCH_COLUMN_MAPPINGS_ON_TABLET_MIGRATION"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

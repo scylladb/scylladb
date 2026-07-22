@@ -35,57 +35,51 @@ namespace service::paxos {
 
 using clock_type = db::timeout_clock;
 
+template <typename Key>
+class key_lock_map {
+    using semaphore = basic_semaphore<semaphore_default_exception_factory, clock_type>;
+    struct lock {
+        semaphore sem{1};
+        unsigned refs{0};
+    };
+    using map = std::unordered_map<Key, lock>;
+    map _locks;
+public:
+    key_lock_map(bool preallocate);
+
+    class guard {
+        map& _map;
+        map::value_type* _entry;
+        bool _locked;
+    public:
+        guard(key_lock_map<Key>& map, const Key& key);
+        guard(guard&& o) noexcept;
+        guard(const guard&) = delete;
+        ~guard();
+        future<> lock(clock_type::time_point timeout);
+        const Key& key() const { return _entry->first; }
+        semaphore& sem() { return _entry->second.sem; }
+    };
+};
+using token_lock_map = key_lock_map<dht::token>;
+using token_guard = token_lock_map::guard;
+
 class paxos_store;
 
 // The state of a CAS update of a given primary key as persisted in the paxos table.
 class paxos_state {
 private:
-    class guard;
-
-    class key_lock_map {
-        using semaphore = basic_semaphore<semaphore_default_exception_factory, clock_type>;
-        using semaphore_units = semaphore_units<semaphore_default_exception_factory, clock_type>;
-        using map = std::unordered_map<dht::token, semaphore>;
-
-        semaphore& get_semaphore_for_key(const dht::token& key);
-        void release_semaphore_for_key(const dht::token& key);
-
-        map _locks;
-    public:
-
-        key_lock_map();
-        
-        friend class guard;
-    };
-
-    class guard {
-        key_lock_map& _map;
-        dht::token _key;
-        clock_type::time_point _timeout;
-        key_lock_map::semaphore_units _units;
-    public:
-        future<> lock () {
-            return get_units(_map.get_semaphore_for_key(_key), 1, _timeout).then([this] (auto&& u) { _units = std::move(u); });
-        }
-        guard(key_lock_map& map, const dht::token& key, clock_type::time_point timeout) : _map(map), _key(key), _timeout(timeout) {};
-        guard(guard&& o) = default;
-        ~guard() {
-            _units.return_all();
-            _map.release_semaphore_for_key(_key);
-        }
-    };
-
     // Locks are local to the shard which owns the corresponding token range.
     // Protects concurrent reads and writes of the same row in system.paxos table.
-    static thread_local key_lock_map _paxos_table_lock;
+    static thread_local token_lock_map _paxos_table_lock;
     // Taken by the coordinator code to allow only one instance of PAXOS to run for each key.
     // This prevents contantion between multiple clients trying to modify the
     // same key through the same coordinator and stealing the ballot from
     // each other.
-    static thread_local key_lock_map _coordinator_lock;
+    static thread_local token_lock_map _coordinator_lock;
 
-    using guard_foreign_ptr = foreign_ptr<lw_shared_ptr<guard>>;
-    using replica_guard = boost::container::static_vector<guard_foreign_ptr, 2>;
+    using token_guard_foreign_ptr = foreign_ptr<lw_shared_ptr<token_guard>>;
+    using replica_guard = boost::container::static_vector<token_guard_foreign_ptr, 2>;
     static future<replica_guard> get_replica_lock(const schema& s, const dht::token& token,
         clock_type::time_point timeout);
 
@@ -95,7 +89,7 @@ private:
 
 public:
 
-    static future<guard> get_cas_lock(const dht::token& key, clock_type::time_point timeout);
+    static future<token_guard> get_cas_lock(const dht::token& key, clock_type::time_point timeout);
 
     static logging::logger logger;
 
@@ -129,6 +123,7 @@ class paxos_store:
     replica::database& _db;
     migration_manager& _mm;
     bool _stopped = false;
+    key_lock_map<table_id> _table_lock_map{false};
 
     template <typename... Args>
     future<cql3::untyped_result_set> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
@@ -144,7 +139,7 @@ public:
     future<> ensure_initialized(const schema& s, db::timeout_clock::time_point timeout);
     static std::optional<std::string_view> try_get_base_table(std::string_view cf_name);
 
-    future<column_mapping> get_column_mapping(table_id, table_schema_version v);
+    future<column_mapping> get_column_mapping(const schema& query_schema, dht::token token, table_schema_version version, clock_type::time_point timeout);
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
         db::timeout_clock::time_point timeout);
     future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
