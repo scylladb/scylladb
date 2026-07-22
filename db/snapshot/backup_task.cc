@@ -36,7 +36,6 @@ backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
                                    sstring prefix,
                                    sstring ks,
                                    std::filesystem::path snapshot_dir,
-                                   table_id tid,
                                    bool move_files) noexcept
     : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
     , _snap_ctl(ctl)
@@ -45,7 +44,6 @@ backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
     , _bucket(std::move(bucket))
     , _prefix(std::move(prefix))
     , _snapshot_dir(std::move(snapshot_dir))
-    , _table_id(tid)
     , _remove_on_uploaded(move_files) {
     _status.progress_units = "bytes";
 }
@@ -122,7 +120,7 @@ future<> backup_task_impl::do_backup() {
     co_await process_snapshot_dir();
 
     _backup_shard = this_shard_id();
-    co_await _sharded_worker.start(std::ref(_snap_ctl.db()), _table_id, std::ref(*this));
+    co_await _sharded_worker.start(std::ref(_snap_ctl.db()), std::ref(*this));
 
     gate abort_gate;
     auto abort_sub = _as.subscribe([&] () noexcept {
@@ -290,8 +288,13 @@ void backup_task_impl::on_sstable_deletion(sstables::generation_type gen) {
     }
 }
 
-backup_task_impl::worker::worker(const replica::database& db, table_id t, backup_task_impl& task)
-    : _manager(db.get_sstables_manager(*db.find_schema(t)))
+backup_task_impl::worker::worker(const replica::database& db, backup_task_impl& task)
+    // Backup only reads snapshot files from disk and never touches the live
+    // table, so it's not mandatory to resolve it (it may have been dropped after the
+    // snapshot was taken). The sstables_manager is only used for its
+    // dir_semaphore() and deletion notifications, and selecting between the
+    // system and the user manager depends only on the keyspace name.
+    : _manager(db.get_sstables_manager(task._status.keyspace))
     , _task(task)
     , _client(task._sstm.local().get_endpoint_client(task._endpoint))
 {
