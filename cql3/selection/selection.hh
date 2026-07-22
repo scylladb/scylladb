@@ -18,6 +18,7 @@
 #include "selector.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/functions/function.hh"
+#include "cql3/values.hh"
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
@@ -36,6 +37,28 @@ namespace selection {
 
 class raw_selector;
 class result_set_builder;
+
+/// Temporaries are per-row scratch slots used during result processing.
+/// Aggregation uses them to hold inter-row state (e.g., running SUM). This
+/// provider interface extends them to also hold externally supplied per-row
+/// computed values (e.g., vector similarity scores), injected after filtering
+/// but before expression evaluation, where they become available to selectors
+/// via temporary{} expressions.
+/// The provider is called once per row and receives the full temporaries
+/// vector. It should fill its reserved slots but this is not enforced.
+/// Returning false from try_fill() causes the current row to be dropped
+/// (external filtering), e.g. to discard NaN/Inf scores.
+class temporaries_provider {
+public:
+    virtual ~temporaries_provider() = default;
+    virtual bool try_fill(
+        std::vector<cql3::raw_value>& temporaries,
+        std::span<const bytes> partition_key,
+        std::span<const bytes> clustering_key,
+        const query::result_row_view& static_row,
+        const query::result_row_view* row
+    ) const = 0;
+};
 
 class selectors {
 public:
@@ -61,6 +84,17 @@ public:
     virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) = 0;
 
     virtual void reset() = 0;
+
+    /// Populates the temporaries vector with provider-supplied values (e.g.
+    /// similarity scores) before expression evaluation. Called once per input
+    /// row, after filtering and before transform_input_row / add_input_row.
+    /// Returns false to drop the row (provider rejected it).
+    virtual bool inject_temporaries(
+        const temporaries_provider* provider,
+        std::span<const bytes> partition_key,
+        std::span<const bytes> clustering_key,
+        const query::result_row_view& static_row,
+        const query::result_row_view* row) = 0;
 };
 
 class selection {
@@ -286,9 +320,11 @@ public:
         std::vector<bytes>& _partition_key;
         std::vector<bytes>& _clustering_key;
         Filter _filter;
+        const temporaries_provider* _temporaries_provider;
     public:
         visitor(cql3::selection::result_set_builder& builder, const schema& s,
-                const selection& selection, Filter filter = Filter())
+                const selection& selection, Filter filter = Filter(),
+                const temporaries_provider* temporaries_provider = nullptr)
             : _builder(builder)
             , _schema(s)
             , _selection(selection)
@@ -296,6 +332,7 @@ public:
             , _partition_key(_builder.current_partition_key)
             , _clustering_key(_builder.current_clustering_key)
             , _filter(filter)
+            , _temporaries_provider(temporaries_provider)
         {}
         visitor(visitor&&) = default;
 
@@ -338,9 +375,24 @@ public:
         void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
             auto static_row_iterator = static_row.iterator();
             auto row_iterator = row.iterator();
+
+            // Filter first, before temporaries are filled
             if (!_filter(_selection, _partition_key, _clustering_key, static_row, &row)) {
                 return;
             }
+
+            // Externally filter and inject provider values into selectors' temporaries vector.
+            if (_temporaries_provider) {
+                if (!_builder._selectors->inject_temporaries(
+                        _temporaries_provider,
+                        _partition_key,
+                        _clustering_key,
+                        static_row,
+                        &row)) {
+                    return;
+                }
+            }
+
             _builder.start_new_row();
             for (auto&& def : _selection.get_columns()) {
                 switch (def->kind) {

@@ -965,35 +965,37 @@ future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
-                                  gc_clock::time_point now) const
+                                  gc_clock::time_point now,
+                                  const cql3::selection::temporaries_provider* temporaries_provider) const
 {
-    const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !needs_post_filtering();
+    const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !needs_post_filtering() && !temporaries_provider;
     if (fast_path) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(make_shared<cql_transport::messages::result_message::rows>(result(
             result_generator(_query_schema, std::move(results), std::move(cmd), _selection, _stats),
             _selection->get_result_metadata())
         ));
     }
-    return process_results_complex(std::move(results), std::move(cmd), options, now);
+    return process_results_complex(std::move(results), std::move(cmd), options, now, temporaries_provider);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
-                                  gc_clock::time_point now) const {
-    cql3::selection::result_set_builder builder(*_selection, now, &options);
+                                  gc_clock::time_point now,
+                                  const cql3::selection::temporaries_provider* temporaries_provider) const {
+    cql3::selection::result_set_builder builder(*_selection, now, &options, {});
     co_return co_await builder.with_thread_if_needed([&] {
         if (needs_post_filtering()) {
             results->ensure_counts();
             _stats.filtered_rows_read_total += *results->row_count();
             query::result_view::consume(*results, cmd->slice,
                     cql3::selection::result_set_builder::visitor(builder, *_query_schema,
-                            *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _query_schema, cmd->slice.partition_row_limit())));
+                            *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _query_schema, cmd->slice.partition_row_limit()), temporaries_provider));
         } else {
             query::result_view::consume(*results, cmd->slice,
                     cql3::selection::result_set_builder::visitor(builder, *_query_schema,
-                            *_selection));
+                            *_selection, cql3::selection::result_set_builder::nop_filter(), temporaries_provider));
         }
         auto rs = builder.build();
 
@@ -2073,7 +2075,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
         // empty, below we choose selection::wildcard() for SELECT *, and either:
         //  - forget to do the "levellize" trick needed for the GROUP BY. See #16531.
-        //  - forget to add the similarity function needed for ORDER BY ANN with rescoring. See below.
+        //  - forget to add the similarity temporary needed for ORDER BY ANN with rescoring. See below.
         // So we need to set prepared_selectors. 
         auto all_columns = selection::selection::wildcard_columns(schema);
         std::vector<::shared_ptr<selection::raw_selector>> select_all;
@@ -2099,7 +2101,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     select_statement::ordering_comparator_type ordering_comparator;
     bool hide_last_column = false;
     if (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled) {
-        uint32_t similarity_column_index = add_similarity_function_to_selectors(prepared_selectors, *ann_ordering_info_opt, db, schema);
+        uint32_t similarity_column_index = append_similarity_temporary_selector(prepared_selectors, vector_indexed_table_select_statement::similarity_temporary_index);
         hide_last_column = true;
         ordering_comparator = get_similarity_ordering_comparator(prepared_selectors, similarity_column_index);
     }
@@ -2124,6 +2126,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     if (is_ann_query && hide_last_column) {
         // Hide the similarity selector from the client by reducing column_count
         selection->get_result_metadata()->hide_last_column();
+        // Ensure the indexed column is fetched from the base table for rescoring.
+        selection->add_column_for_post_processing(*ann_ordering_info_opt->_prepared_ann_ordering.first);
     }
 
     // Cassandra 5.0.2 disallows PER PARTITION LIMIT with aggregate queries

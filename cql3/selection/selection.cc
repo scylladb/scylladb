@@ -154,6 +154,16 @@ protected:
         virtual bool is_aggregate() const override {
             return false;
         }
+
+        virtual bool inject_temporaries(
+                const temporaries_provider* provider,
+                std::span<const bytes> partition_key,
+                std::span<const bytes> clustering_key,
+                const query::result_row_view& static_row,
+                const query::result_row_view* row) override
+        {
+            return true;
+        }
     };
 
     std::unique_ptr<selectors> new_selectors() const override {
@@ -224,7 +234,10 @@ private:
     std::vector<expr::expression> _inner_loop;
     std::vector<expr::expression> _outer_loop;
     std::vector<raw_value> _initial_values_for_temporaries;
+    // Slots [0, _reserved_temporaries_end) are reserved for provider injection; aggregation starts here.
+    size_t _reserved_temporaries_end = 0;
 public:
+    size_t get_reserved_temporaries_end() const { return _reserved_temporaries_end; }
     selection_with_processing(schema_ptr schema, std::vector<const column_definition*> columns,
             std::vector<lw_shared_ptr<column_specification>> metadata,
             std::vector<expr::expression> selectors)
@@ -234,10 +247,30 @@ public:
             contains_collection_mutation_attribute(expr::tuple_constructor{selectors}))
         , _selectors(std::move(selectors))
     {
-        auto agg_split = expr::split_aggregation(_selectors);
+        // Find the maximum temporary index used in selectors (for non-aggregation temporaries)
+        size_t max_non_agg_temp_index = 0;
+        for (const auto& expr : _selectors) {
+            expr::for_each_expression<expr::temporary>(expr, [&] (const expr::temporary& t) {
+                max_non_agg_temp_index = std::max(max_non_agg_temp_index, t.index + 1);
+            });
+        }
+        _reserved_temporaries_end = max_non_agg_temp_index;
+
+        // Split aggregation, passing the starting index for aggregation temporaries
+        auto agg_split = expr::split_aggregation(_selectors, max_non_agg_temp_index);
         _outer_loop = std::move(agg_split.outer_loop);
         _inner_loop = std::move(agg_split.inner_loop);
-        _initial_values_for_temporaries = std::move(agg_split.initial_values_for_temporaries);
+
+        // Initialize temporaries: NULLs for non-aggregation temporaries, then aggregation initial values
+        _initial_values_for_temporaries.reserve(max_non_agg_temp_index + agg_split.initial_values_for_temporaries.size());
+        for (size_t i = 0; i < max_non_agg_temp_index; ++i) {
+            _initial_values_for_temporaries.push_back(cql3::raw_value::make_null());
+        }
+        _initial_values_for_temporaries.insert(
+            _initial_values_for_temporaries.end(),
+            std::make_move_iterator(agg_split.initial_values_for_temporaries.begin()),
+            std::make_move_iterator(agg_split.initial_values_for_temporaries.end())
+        );
     }
 
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
@@ -416,6 +449,19 @@ protected:
             return !_sel._inner_loop.empty();
         }
 
+        virtual bool inject_temporaries(
+                const temporaries_provider* provider,
+                std::span<const bytes> partition_key,
+                std::span<const bytes> clustering_key,
+                const query::result_row_view& static_row,
+                const query::result_row_view* row) override
+        {
+            if (!provider) {
+                return true;
+            }
+            return provider->try_fill(_temporaries, partition_key, clustering_key, static_row, row);
+        }
+
         virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
             std::vector<managed_bytes_opt> output_row;
             output_row.reserve(_sel._selectors.size());
@@ -427,7 +473,7 @@ protected:
                     .options = rs._options,
                     .static_and_regular_timestamps = rs._timestamps,
                     .static_and_regular_ttls = rs._ttls,
-                    .temporaries = {},
+                    .temporaries = _temporaries,
                     .collection_element_metadata = rs._collection_element_metadata,
             };
             for (auto&& e : _sel._selectors) {
@@ -469,8 +515,9 @@ protected:
                     .temporaries = _temporaries,
                     .collection_element_metadata = rs._collection_element_metadata,
             };
+            const auto agg_offset = _sel.get_reserved_temporaries_end();
             for (size_t i = 0; i != _sel._inner_loop.size(); ++i) {
-                _temporaries[i] = expr::evaluate(_sel._inner_loop[i], inputs);
+                _temporaries[agg_offset + i] = expr::evaluate(_sel._inner_loop[i], inputs);
             }
             ++_input_row_count;
         }

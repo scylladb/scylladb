@@ -296,6 +296,9 @@ struct aggregation_split_result {
 //
 // If the expressions don't contain aggregates, inner_loop and initial_values_for_temporaries
 // are empty, and outer_loop should be evaluated for each loop.
-aggregation_split_result split_aggregation(std::span<const expression> aggregation);
+//
+// `starting_temp_index` is the first temporary index that may be used for aggregation.
+// It allows to omit the temporary slots that have been reserved for other purposes.
+aggregation_split_result split_aggregation(std::span<const expression> aggregation, size_t starting_temp_index = 0);
 
 }
