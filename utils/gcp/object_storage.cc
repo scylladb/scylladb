@@ -126,7 +126,7 @@ public:
     }
 
     size_t buffer_size() const noexcept override {
-        return default_gcp_storage_chunk_size;
+        return min_gcp_storage_chunk_size;
     }
 
     future<> acquire_session();
@@ -707,7 +707,7 @@ static bool parse_response_range(const seastar::http::reply& r, uint64_t& first,
 future<> utils::gcp::storage::client::object_data_sink::adjust_memory_limit(size_t total) {
     auto held = _mem_held.count();
     if (held < total) {
-        auto want = align_up(total, default_gcp_storage_chunk_size) - held;
+        auto want = align_up(total, min_gcp_storage_chunk_size) - held;
 
         if (held == 0) {
             // first put into buffer queue. enforce.
@@ -716,7 +716,7 @@ future<> utils::gcp::storage::client::object_data_sink::adjust_memory_limit(size
             // try to get units to cover the bulk of buffers
             // but if we fail, we accept it and try to get by
             // with the lease we have. If we get here we should
-            // have at least 8M in our lease, and will in fact do
+            // have at least 256k in our lease, and will in fact do
             // a write, so data should get released.
             auto h = _impl->try_get_units(want);
             if (h) {
