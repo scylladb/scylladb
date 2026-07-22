@@ -209,6 +209,151 @@ SEASTAR_TEST_CASE(tests_reserve_partial) {
   return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_reserve_many_chunks) {
+    region region;
+    allocating_section as;
+    with_allocator(region.allocator(), [&] {
+        as(region, [&] {
+            lsa::chunked_managed_vector<uint8_t> v;
+            auto size = lsa::chunked_managed_vector<uint8_t>::max_chunk_capacity() * 1024;
+
+            v.reserve(size);
+            BOOST_REQUIRE_EQUAL(v.capacity(), size);
+
+            v.emplace_back(1);
+            BOOST_REQUIRE_EQUAL(v.front(), 1);
+            v.clear_and_release();
+        });
+    });
+    return make_ready_future<>();
+}
+
+// A value sized so that exactly one element fits in a chunk, i.e.
+// chunked_managed_vector<one_per_chunk_value>::max_chunk_capacity() == 1,
+// regardless of logalloc's max managed object size or managed_vector's metadata
+// size. This lets a handful of elements span many chunks (and therefore multiple
+// directory blocks), exercising the chunk directory -- a private implementation
+// detail of chunked_managed_vector -- through the public API.
+//
+// A chunk keeps its elements in a managed_vector<T> whose contiguous allocation
+// must stay within logalloc::max_managed_object_size, leaving
+// max_managed_object_size - metadata_size() bytes of payload. Sizing the element
+// to that payload (rounded down to its alignment) yields one element per chunk
+// and keeps the test stable if those limits change. metadata_size() is taken
+// from managed_vector<uint64_t> to avoid referring to the still-incomplete
+// one_per_chunk_value; the static_asserts below confirm the proxy is exact.
+constexpr size_t one_per_chunk_value_size =
+        (logalloc::max_managed_object_size - managed_vector<uint64_t>::metadata_size())
+        / alignof(uint64_t) * alignof(uint64_t);
+struct one_per_chunk_value {
+    uint64_t tag;
+    char padding[one_per_chunk_value_size - sizeof(uint64_t)];
+};
+static_assert(sizeof(one_per_chunk_value) == one_per_chunk_value_size);
+static_assert(managed_vector<one_per_chunk_value>::metadata_size() == managed_vector<uint64_t>::metadata_size());
+// This expression is chunked_managed_vector::max_chunk_capacity() evaluated at compile time.
+static_assert((logalloc::max_managed_object_size - managed_vector<one_per_chunk_value>::metadata_size()) / sizeof(one_per_chunk_value) == 1);
+
+// The chunk directory is stored as a two-level managed structure so that no
+// single allocation exceeds logalloc's contiguous allocation limit.
+// This exercises element access and shrinking across a directory block boundary,
+// i.e. when the directory holds more chunk pointers than fit in one directory block.
+SEASTAR_TEST_CASE(test_directory_block_boundary) {
+    region region;
+    allocating_section as;
+    with_allocator(region.allocator(), [&] {
+        as(region, [&] {
+            using vector_type = lsa::chunked_managed_vector<one_per_chunk_value>;
+
+            // More chunks than fit in a single directory block.
+            constexpr size_t count = 700;
+            vector_type v;
+            BOOST_REQUIRE_EQUAL(vector_type::max_chunk_capacity(), 1u);
+            for (size_t i = 0; i < count; ++i) {
+                v.emplace_back(one_per_chunk_value{.tag = i});
+            }
+            BOOST_REQUIRE_EQUAL(v.size(), count);
+
+            // Random access must be correct across directory block boundaries.
+            for (size_t i = 0; i < count; ++i) {
+                BOOST_REQUIRE_EQUAL(v[i].tag, i);
+            }
+
+            // Shrinking releases directory blocks; surviving elements stay intact.
+            constexpr size_t kept = 100;
+            v.resize(kept);
+            BOOST_REQUIRE_EQUAL(v.size(), kept);
+            BOOST_REQUIRE_EQUAL(v.capacity(), kept);
+            for (size_t i = 0; i < kept; ++i) {
+                BOOST_REQUIRE_EQUAL(v[i].tag, i);
+            }
+
+            v.clear_and_release();
+        });
+    });
+    return make_ready_future<>();
+}
+
+// After chunked_managed_vector::reserve(n), the following n emplace_back()s must
+// not allocate. external_memory_usage() accounts for reserved capacity, so if any
+// chunk, directory block, or the top-level block array reallocated to grow, it
+// would change. Spanning several directory blocks exercises the two-level
+// directory's reserve() path.
+SEASTAR_TEST_CASE(test_directory_reserve_avoids_push_back_allocation) {
+    region region;
+    allocating_section as;
+    with_allocator(region.allocator(), [&] {
+        as(region, [&] {
+            using vector_type = lsa::chunked_managed_vector<one_per_chunk_value>;
+            BOOST_REQUIRE_EQUAL(vector_type::max_chunk_capacity(), 1u);
+            // More chunks than fit in a single directory block.
+            constexpr size_t n = 700;
+            vector_type v;
+            v.reserve(n);
+            auto reserved_mem = v.external_memory_usage();
+            for (size_t i = 0; i < n; ++i) {
+                v.emplace_back(one_per_chunk_value{.tag = i});
+                // No reallocation: reserved capacity is unchanged.
+                BOOST_REQUIRE_EQUAL(v.external_memory_usage(), reserved_mem);
+            }
+            BOOST_REQUIRE_EQUAL(v.size(), n);
+            for (size_t i = 0; i < n; ++i) {
+                BOOST_REQUIRE_EQUAL(v[i].tag, i);
+            }
+            v.clear_and_release();
+        });
+    });
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_directory_pop_back_preserves_reserved_blocks) {
+    region region;
+    allocating_section as;
+    with_allocator(region.allocator(), [&] {
+        as(region, [&] {
+            using vector_type = lsa::chunked_managed_vector<one_per_chunk_value>;
+            constexpr size_t n = 700;
+            vector_type v;
+            v.reserve(n);
+            auto reserved_mem = v.external_memory_usage();
+
+            v.emplace_back(one_per_chunk_value{.tag = 1});
+            v.pop_back();
+
+            BOOST_REQUIRE_EQUAL(v.size(), 0u);
+            BOOST_REQUIRE_EQUAL(v.external_memory_usage(), reserved_mem);
+
+            for (size_t i = 0; i < n; ++i) {
+                v.emplace_back(one_per_chunk_value{.tag = i});
+                BOOST_REQUIRE_EQUAL(v.external_memory_usage(), reserved_mem);
+            }
+
+            v.clear_and_release();
+        });
+    });
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_clear_and_release) {
     region region;
     allocating_section as;
