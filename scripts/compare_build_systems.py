@@ -131,6 +131,7 @@ _KNOWN_LIB_ASYMMETRIES = {
     "protobuf": "conf",
     "jsoncpp": "conf",
     "fmt": "conf",
+    "lttng-ust": "conf",
     # CMake resolves these transitively through Boost imported targets
     "boost_atomic": "cmake",
     # CMake links ssl explicitly for encryption targets
