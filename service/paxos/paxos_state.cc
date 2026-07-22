@@ -372,6 +372,15 @@ void paxos_store::prune_invalid_prepared_statements() {
     });
 }
 
+const paxos_store::prepared_statement_cache& paxos_store::get_prepared_statements_cache() const {
+    return _prepared_statements;
+}
+
+void paxos_store::set_prepared_statements_prune_period(seastar::lowres_clock::duration period) {
+    SCYLLA_ASSERT(_prepared_statements_prune_timer.armed());
+    _prepared_statements_prune_timer.rearm_periodic(period);
+}
+
 schema_ptr paxos_store::create_paxos_state_schema(const schema& s) {
     schema_builder builder(this_smp_shard_count(), std::nullopt, s.ks_name(), paxos_state_table_name(s.cf_name()),
         // partition key

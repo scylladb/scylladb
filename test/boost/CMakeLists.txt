@@ -377,6 +377,7 @@ add_scylla_test(combined_tests
     mutation_reader_test.cc
     mutation_writer_test.cc
     network_topology_strategy_test.cc
+    paxos_state_test.cc
     per_partition_rate_limit_test.cc
     pluggable_test.cc
     querier_cache_test.cc

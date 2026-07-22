@@ -176,6 +176,10 @@ public:
     future<> delete_paxos_decision(const schema& s, const partition_key& key, utils::UUID ballot, db::timeout_clock::time_point timeout);
 
     void on_before_drop_column_family(const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override;
+
+    // For testing only
+    const prepared_statement_cache& get_prepared_statements_cache() const;
+    void set_prepared_statements_prune_period(seastar::lowres_clock::duration period);
 };
 
 } // end of namespace "service::paxos"
