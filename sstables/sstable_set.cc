@@ -857,13 +857,17 @@ public:
         _pr = &pr;
 
         auto pos = dht::ring_position_view::for_range_start(*_pr);
+        bool selector_pos_before_range = dht::ring_position_tri_compare(*_s, pos, _selector_position) >= 0;
+        bool selector_pos_within_range = !_selector_position.is_max() && dht::ring_position_tri_compare(*_s, _selector_position, pr_end()) <= 0;
 
-        if (dht::ring_position_tri_compare(*_s, pos, _selector_position) >= 0) {
-            return create_new_readers(pos);
-        }
-        // If selector position Y is contained in new range [X, Z], then we should try selecting new
-        // sstables since it might have sstables that overlap with that range.
-        if (!_selector_position.is_max() && dht::ring_position_tri_compare(*_s, _selector_position, pr_end()) <= 0) {
+        // If selection position Y is before the new range [X, Z], select sstables
+        // with no position restriction to return at least one reader to the
+        // caller, if readers are available within the range.
+        //
+        // If selector position Y is contained in the new range, then we should
+        // try selecting new sstables since it might have sstables that overlap
+        // with that range.
+        if (selector_pos_before_range || selector_pos_within_range) {
             return create_new_readers(std::nullopt);
         }
 
