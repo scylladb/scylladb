@@ -305,6 +305,19 @@ ScyllaDB uses experimental flags to expose non-production-ready features safely.
 In recent ScyllaDB versions, these features are controlled by the ``experimental_features`` list in scylla.yaml, allowing one to choose which experimental to enable.
 Use ``scylla --help`` to get the list of experimental features.
 
+.. _admin-keyspace-storage-options:
+
+Keyspace storage options
+------------------------
+
+By default, SStables of a keyspace are stored in a local directory.
+As an alternative, you can configure your keyspace to be stored
+on Amazon S3 or another S3-compatible object store.
+
+Before creating keyspaces with object storage, you need to
+:ref:`configure <object-storage-configuration>` the object storage
+credentials and endpoint.
+
 .. _admin-views-with-tablets:
 
 Views with Tablets
