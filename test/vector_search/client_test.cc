@@ -254,3 +254,29 @@ BOOST_AUTO_TEST_CASE(test_get_keepalive_parameters) {
     BOOST_CHECK_GE(params_0ms.interval.count(), 1);
     BOOST_CHECK_GE(static_cast<int>(params_0ms.count), 1);
 }
+
+SEASTAR_TEST_CASE(status_check_does_not_hang_when_server_accepts_tcp_but_does_not_respond_at_http) {
+    abort_source_timeout as;
+    auto server = co_await make_unavailable_server();
+
+    auto unreachable_node_detection_time = utils::updateable_value<uint32_t>{200};
+    client client{client_test_logger, make_endpoint(server), unreachable_node_detection_time, shared_ptr<seastar::tls::certificate_credentials>{}};
+
+    // The initial request should fail and trigger the status check loop.
+    auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
+    BOOST_CHECK(!res);
+    BOOST_CHECK(!client.is_up());
+
+    // Configure server to accept TCP connections but not respond to HTTP requests.
+    server->auto_shutdown_off();
+    auto initial_connections = server->connections().size();
+
+    // Wait for at least 2 retries to be attempted. Meaning that the client did not hang after the first attempt.
+    auto got_retries = co_await repeat_until([&server, initial_connections]() -> future<bool> {
+        co_return server->connections().size() - initial_connections >= 2;
+    });
+    BOOST_CHECK(got_retries);
+
+    co_await server->stop();
+    co_await client.close();
+}
