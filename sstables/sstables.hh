@@ -1346,6 +1346,10 @@ public:
     virtual ~sstable_stream_sink() = default;
     // Stream to the component file
     virtual future<output_stream<char>> output(const file_open_options&, const file_output_stream_options&) = 0;
+
+    // Validate the streamed sstable integrity, by verifying against stored digests, if available;
+    virtual future<> validate_integrity() = 0;
+
     // closes this component. If this is the last component in a set (see "last_component" in creating method below)
     // the table on disk will be sealed.
     // Returns sealed sstable if last, or nullptr otherwise.

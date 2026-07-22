@@ -10,6 +10,7 @@
 #include "db/config.hh"
 #include "message/messaging_service.hh"
 #include "streaming/stream_blob.hh"
+#include "sstables/exceptions.hh"
 #include "streaming/stream_plan.hh"
 #include "utils/pretty_printers.hh"
 #include "utils/error_injection.hh"
@@ -356,6 +357,9 @@ future<> stream_blob_handler(replica::database& db,
         status_sent = true;
         co_await sink.close();
         sink_closed = true;
+    } catch (sstables::malformed_sstable_exception& e) {
+        utils::get_local_injector().enter("stream_blob_handler_malformed_sstable_caught");
+        error = std::current_exception();
     } catch (...) {
         error = std::current_exception();
     }
@@ -464,6 +468,11 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
                         co_await sstable_sink->abort();
                         co_return;
                     }
+
+                    // Before closing, validate that the streamed sstable is not malformed,
+                    // by comparing digests if available.
+                    co_await sstable_sink->validate_integrity();
+
                     auto sst = co_await sstable_sink->close();
                     if (sst) {
                         blogger.debug("stream_sstables[{}] Loading sstable {} on shard {}", meta.ops_id, sst->toc_filename(), meta.dst_shard_id);
