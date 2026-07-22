@@ -75,7 +75,12 @@ Limitations
 
 The current migration procedure has the following limitations:
 
-* Only **single-DC clusters** are supported.
+* **Multi-DC clusters** are supported, but every datacenter in the migrating
+  keyspace's replication strategy must have a replication factor of at least one.
+  Datacenters with a replication factor of zero (RF=0) are not yet supported.
+* Clusters with :doc:`zero-token nodes </architecture/zero-token-nodes>` are
+  not yet supported.
+
 * **No schema changes** during the migration. Do not create, alter, or drop
   tables in the migrating keyspace until the migration is finished.
 * **No topology changes** during the migration. Do not add, remove, decommission,
