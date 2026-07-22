@@ -10,6 +10,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "streaming/stream_blob.hh"
 #include "message/messaging_service.hh"
+#include "test/lib/error_injection.hh"
 #include "test/lib/log.hh"
 #include "test/lib/sstable_utils.hh"
 #include "sstables/exceptions.hh"
@@ -842,4 +843,159 @@ SEASTAR_TEST_CASE(test_ranged_data_source_skip) {
     // i.e. ranged_source limited the available bytes correctly
     BOOST_REQUIRE_LT(buf.size(), len);
     BOOST_REQUIRE_EQUAL(buf.size(), len - off);
+}
+
+static future<>
+do_test_sstable_stream_receiver_corruption(cql_test_env& env, std::optional<component_type> corrupted_component, compress_sstable compress, bool expected_error) {
+    sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+    bool verb_register = false;
+    auto ops_id = file_stream_id::create_random_id();
+    auto& db = env.local_db();
+    auto& ms = env.get_messaging_service().local();
+    auto& vbw = env.view_building_worker();
+    auto& global_db = db.container();
+    auto& global_ms = ms.container();
+    int n_retries = 0;
+    bool sender_error = false;
+    do {
+        try {
+            if (!verb_register) {
+                co_await smp::invoke_on_all([&global_db, &vbw, &global_ms] {
+                    return global_ms.local().register_stream_blob([&global_db, &vbw, &global_ms](const rpc::client_info& cinfo, streaming::stream_blob_meta meta, rpc::source<streaming::stream_blob_cmd_data> source) {
+                        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+                        auto sink = global_ms.local().make_sink_for_stream_blob(source);
+                        (void)stream_blob_handler(global_db.local(), vbw.local(), global_ms.local(), from, meta, sink, source).handle_exception([sink, source, ms = global_ms.local().shared_from_this()] (std::exception_ptr eptr) {
+                                testlog.warn("Failed to run stream blob handler: {}", eptr);
+                        });
+                        return make_ready_future<rpc::sink<streaming::stream_blob_cmd_data>>(sink);
+                    });
+                });
+            }
+            verb_register = true;
+
+            sstring ks_stmt = "CREATE KEYSPACE ks_test WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}";
+
+            co_await env.execute_cql(ks_stmt + ";");
+            if (compress) {
+                co_await env.execute_cql("CREATE TABLE ks_test.cf (pk text PRIMARY KEY, v int);");
+            } else {
+                co_await env.execute_cql("CREATE TABLE ks_test.cf (pk text PRIMARY KEY, v int) WITH compression = { 'sstable_compression' : '' };");
+            }
+
+            for (int i = 0; i < 10; i++) {
+                co_await env.execute_cql(format("INSERT INTO ks_test.cf (pk, v) VALUES ('key_{}', {});", i, i * 10));
+            }
+
+            auto& table = db.find_column_family("ks_test", "cf");
+            co_await table.flush();
+            auto schema = table.schema();
+
+            auto range = dht::token_range::make_open_ended_both_sides();
+            auto sstables = co_await table.take_storage_snapshot(range);
+
+            BOOST_REQUIRE_GT(sstables.size(), 0);
+
+            auto table_id = schema->id();
+            auto files = std::list<stream_blob_info>();
+            auto hostid = db.get_token_metadata().get_my_id();
+            seastar::shard_id dst_shard_id = 0;
+
+            co_await mark_tablet_stream_start(ops_id);
+            auto targets = std::vector<node_and_shard>{node_and_shard{hostid, dst_shard_id}};
+            auto permit = co_await db.obtain_reader_permit(table, "test_stream", db::no_timeout, {});
+
+            auto sst_snapshot = sstables.front();
+            auto sources = co_await sstables::create_stream_sources(sst_snapshot, permit);
+
+            for (auto& source : sources) {
+                auto& info = files.emplace_back();
+                info.filename = source->component_basename();
+                info.fops = file_ops::stream_sstables;
+
+                auto type = source->type();
+                std::unique_ptr<sstable_stream_source> maybe_corrupted_source;
+                if (corrupted_component && type == *corrupted_component) {
+                    maybe_corrupted_source = make_corrupted_sstable_stream_source(std::move(source), sst_snapshot.sst, type);
+                } else {
+                    maybe_corrupted_source = std::move(source);
+                }
+                info.source = [source = std::move(maybe_corrupted_source)](const file_input_stream_options& foptions) mutable -> future<input_stream<char>> {
+                    co_return co_await source->input(foptions);
+                };
+            }
+
+            BOOST_REQUIRE(!files.empty());
+
+            files.back().fops = file_ops::load_sstables;
+
+            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table_id, ops_id, service::null_topology_guard, false);
+            co_await mark_tablet_stream_done(ops_id);
+            testlog.info("do_test_sstable_stream_receiver_corruption[{}] status=ok stream_bytes={}", ops_id, stream_bytes);
+        } catch (seastar::rpc::stream_closed&) {
+            testlog.warn("do_test_sstable_stream_receiver_corruption[{}] status=fail error={} retry={}", ops_id, std::current_exception(), n_retries++);
+            if (n_retries < 3) {
+                testlog.info("Retrying send");
+                continue;
+            }
+        } catch (const std::exception& e) {
+            testlog.info("Sender failed with {}", e);
+            sender_error = true;
+        }
+    } while (false);
+
+    BOOST_REQUIRE_EQUAL(sender_error, expected_error);
+
+    auto receiver_malformed_sstables_caucht = utils::get_local_injector().enter_count("stream_blob_handler_malformed_sstable_caught");
+    if (expected_error) {
+        BOOST_REQUIRE_GT(receiver_malformed_sstables_caucht, 0);
+    } else {
+        BOOST_REQUIRE_EQUAL(receiver_malformed_sstables_caucht, 0);
+    }
+
+    if (verb_register) {
+        co_await smp::invoke_on_all([&global_ms] {
+            return global_ms.local().unregister_stream_blob();
+        });
+    }
+}
+
+static void test_sstable_stream_receiver_corruption(std::optional<component_type> corrupted_type, compress_sstable compress = compress_sstable::yes, bool expected_error = true) {
+    cql_test_config cfg{};
+    cfg.ms_listen = true;
+    do_with_cql_env_thread([&](cql_test_env& env) {
+        scoped_error_injection receiver_caught_error_injection("stream_blob_handler_malformed_sstable_caught");
+        do_test_sstable_stream_receiver_corruption(env, corrupted_type, compress, expected_error).get();
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_corruption_scylla) {
+    test_sstable_stream_receiver_corruption(component_type::Scylla);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_corruption_toc) {
+    test_sstable_stream_receiver_corruption(component_type::TOC);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_corruption_statistics) {
+    test_sstable_stream_receiver_corruption(component_type::Statistics);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_corruption_index) {
+    test_sstable_stream_receiver_corruption(component_type::Index);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_corruption_compressed_data) {
+    test_sstable_stream_receiver_corruption(component_type::Data, compress_sstable::yes);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_corruption_uncompressed_data) {
+    test_sstable_stream_receiver_corruption(component_type::Data, compress_sstable::no);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_no_corruption_compressed) {
+    test_sstable_stream_receiver_corruption(std::nullopt, compress_sstable::yes, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_no_corruption_uncompressed) {
+    test_sstable_stream_receiver_corruption(std::nullopt, compress_sstable::no, false);
 }
