@@ -173,7 +173,7 @@ which help gain local access to the data in case there is a need for manual inte
 
 Most of the time it won't be necessary to touch the data on S3 directly, there are transparent REST APIs and Scylla Manager  
 commands for backup and restore and Scylla can operate normally with S3 storage configured in the  
-`CREATE KEYSPACE` cql documented at [ScyllaDB CQL Extensions | ScyllaDB Docs](https://opensource.docs.scylladb.com/stable/cql/cql-extensions.html#keyspace-storage-options).  
+`CREATE KEYSPACE` cql documented at [ScyllaDB CQL Extensions](../cql/cql-extensions.md#keyspace-storage-options).  
 
 However, if for some reason the SSTables become corrupted and need an offline scrub before re-uploading  
 or if a bug investigation leads to the need to analyze the backup data, follow the information below to access  
@@ -191,7 +191,7 @@ When performing a backup with `sctool`, a `backup` prefix is created within the 
 under that prefix, Scylla Manager stores all the backup data of all the backup tasks organized by cluster name,  
 datacenter, keyspace, etc.
 
-Follow [Specification | ScyllaDB Docs](https://manager.docs.scylladb.com/branch-3.3/backup/specification) in the Scylla Manager documentation for the exact layout  
+Follow [Specification | ScyllaDB Docs](https://manager.docs.scylladb.com/stable/backup/specification.html) in the Scylla Manager documentation for the exact layout  
 under the `backup` prefix.
 
 2. `/storage_service/backup` REST API
@@ -421,7 +421,7 @@ aws s3 cp /local/path/for/sstables s3://your-bucket/path-to-sstables/ --exclude 
 
 In case of Scylla Manager backups, if manual scrubbing is needed and SSTables will be re-uploaded,  
 multiple things would need to be changed, same thing if you need to drop some SSTables altogether.  
-As you might’ve seen in the Scylla Manager [Specification Docs](https://manager.docs.scylladb.com/branch-3.3/backup/specification), we keep a JSON manifest per node  
+As you might’ve seen in the Scylla Manager [Specification Docs](https://manager.docs.scylladb.com/stable/backup/specification.html), we keep a JSON manifest per node  
 and that manifest file contains lots of SSTable-dependent information:
 
 * list of SSTables per table owned by node
