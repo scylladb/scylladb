@@ -27,7 +27,6 @@
 #include "mutation/timestamp.hh"
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
-#include "service/broadcast_tables/experimental/query_result.hh"
 #include "vector_search/vector_store_client.hh"
 #include "utils/assert.hh"
 #include "utils/observable.hh"
@@ -54,9 +53,6 @@ namespace strong_consistency {
 class coordinator;
 }
 
-namespace broadcast_tables {
-struct query;
-}
 }
 
 namespace cql3 {
@@ -503,9 +499,6 @@ public:
             service::query_state& query_state,
             query_options& options,
             std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
-
-    future<service::broadcast_tables::query_result>
-    execute_broadcast_table_query(const service::broadcast_tables::query&);
 
     // Splits given `mapreduce_request` and distributes execution of resulting subrequests across a cluster.
     future<query::mapreduce_result>

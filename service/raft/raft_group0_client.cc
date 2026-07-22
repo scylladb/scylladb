@@ -18,9 +18,6 @@
 
 #include "schema/frozen_schema.hh"
 #include "schema/schema_mutations.hh"
-#include "service/broadcast_tables/experimental/lang.hh"
-#include "idl/experimental/broadcast_tables_lang.dist.hh"
-#include "idl/experimental/broadcast_tables_lang.dist.impl.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "service/raft/group0_state_machine.hh"
@@ -318,7 +315,7 @@ group0_command raft_group0_client::prepare_command(Command change, group0_guard&
 }
 
 template<typename Command>
-requires std::same_as<Command, broadcast_table_query> || std::same_as<Command, write_mutations>
+requires std::same_as<Command, write_mutations>
 group0_command raft_group0_client::prepare_command(Command change, std::string_view description) {
     validate_change(change);
     const auto new_group0_state_id = generate_group0_state_id(utils::UUID{});
@@ -359,53 +356,12 @@ future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex(abort_source
     return get_units(_read_apply_mutex, 1, as);
 }
 
-raft_group0_client::query_result_guard::query_result_guard(utils::UUID query_id, raft_group0_client& client)
-    : _query_id{query_id}, _client{&client} {
-    auto [_, emplaced] = _client->_results.emplace(_query_id, std::nullopt);
-    if (!emplaced) {
-        on_internal_error(logger, "query_result_guard::query_result_guard: there is another query_result_guard alive with the same query_id");
-    }
-}
-
-raft_group0_client::query_result_guard::query_result_guard(raft_group0_client::query_result_guard&& other)
-    : _query_id{other._query_id}, _client{other._client} {
-    other._client = nullptr;
-}
-
-raft_group0_client::query_result_guard::~query_result_guard() {
-    if (_client != nullptr) {
-        _client->_results.erase(_query_id);
-    }
-}
-
-service::broadcast_tables::query_result raft_group0_client::query_result_guard::get() {
-    auto it = _client->_results.find(_query_id);
-
-    if (it == _client->_results.end() || !it->second.has_value()) {
-        on_internal_error(logger, "query_result_guard::get: no result");
-    }
-
-    return std::move(*it->second);
-}
-
-raft_group0_client::query_result_guard raft_group0_client::create_result_guard(utils::UUID query_id) {
-    return query_result_guard{query_id, *this};
-}
-
-void raft_group0_client::set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr) {
-    auto it = _results.find(query_id);
-    if (it != _results.end()) {
-        it->second = std::move(qr);
-    }
-}
-
 template void raft_group0_client::validate_change(const topology_change& change);
 template void raft_group0_client::validate_change(const mixed_change& change);
 
 template group0_command raft_group0_client::prepare_command(schema_change change, group0_guard& guard, std::string_view description);
 template group0_command raft_group0_client::prepare_command(topology_change change, group0_guard& guard, std::string_view description);
 template group0_command raft_group0_client::prepare_command(write_mutations change, group0_guard& guard, std::string_view description);
-template group0_command raft_group0_client::prepare_command(broadcast_table_query change, std::string_view description);
 template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);
 template group0_command raft_group0_client::prepare_command(mixed_change change, group0_guard& guard, std::string_view description);
 

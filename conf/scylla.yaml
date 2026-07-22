@@ -278,7 +278,6 @@ batch_size_fail_threshold_in_kb: 1024
 # experimental_features:
 #     - udf
 #     - alternator-streams
-#     - broadcast-tables
 #     - keyspace-storage-options
 
 # The directory where hints files are stored if hinted handoff is enabled.
@@ -1009,4 +1008,3 @@ rf_rack_valid_keyspaces: false
 # 75% of disk bytes is: 0.75 * 1831 = 1373 megabytes/s
 # maintenance_io_throughput_mb_per_sec: 1373
 # 
-
