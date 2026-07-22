@@ -103,6 +103,7 @@ private:
     // captured in prepare_keyspace().
     bool _no_from = false;
     sstring _session_keyspace;
+    restrictions::forced_plan_id_opt _forced_plan_id;
 public:
     select_statement(std::optional<cf_name> cf_name,
             lw_shared_ptr<const parameters> parameters,
@@ -120,6 +121,10 @@ public:
         return prepare(db, stats, cfg, false);
     }
     std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg, bool for_view);
+
+    virtual void set_forced_plan_id(restrictions::forced_plan_id_opt forced_plan_id) override {
+        _forced_plan_id = std::move(forced_plan_id);
+    }
 private:
     std::vector<selection::prepared_selector> maybe_jsonize_select_clause(std::vector<selection::prepared_selector> select, data_dictionary::database db, schema_ptr schema);
     ::shared_ptr<const restrictions::statement_restrictions> prepare_restrictions(
@@ -129,7 +134,8 @@ private:
         ::shared_ptr<selection::selection> selection,
         bool for_view = false,
         bool allow_filtering = false,
-        restrictions::check_indexes do_check_indexes = restrictions::check_indexes::yes);
+        restrictions::check_indexes do_check_indexes = restrictions::check_indexes::yes,
+        restrictions::forced_plan_id_opt forced_plan_id = std::nullopt);
 
     /** Returns an expression for the limit or nullopt if no limit is set */
     std::optional<expr::expression> prepare_limit(data_dictionary::database db, prepare_context& ctx, const std::optional<expr::expression>& limit);

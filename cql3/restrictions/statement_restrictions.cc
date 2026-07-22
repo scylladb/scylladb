@@ -815,7 +815,8 @@ statement_restrictions::statement_restrictions(private_tag,
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering,
-        check_indexes do_check_indexes)
+        check_indexes do_check_indexes,
+        forced_plan_id_opt)
     : statement_restrictions(private_tag{}, schema, allow_filtering)
 {
     _check_indexes = do_check_indexes;
@@ -2764,8 +2765,11 @@ analyze_statement_restrictions(
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering,
-        check_indexes do_check_indexes) {
-    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes);
+        check_indexes do_check_indexes,
+        forced_plan_id_opt forced_plan_id) {
+    // seastar::make_shared has to be qualified: the std::optional argument drags
+    // namespace std into the overload set, making the unqualified call ambiguous.
+    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes, std::move(forced_plan_id));
 }
 
 shared_ptr<const statement_restrictions>
