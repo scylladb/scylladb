@@ -421,7 +421,7 @@ future<> cql_server::stop() {
 void cql_server::init_messaging_service() {
     ser::forward_cql_rpc_verbs::register_forward_cql_execute(&_ms,
         [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, unsigned shard, forward_cql_execute_request req) -> future<forward_cql_execute_response> {
-            auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+            auto src_host = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
             clogger.trace("Handling forwarded CQL request from {} on shard {}", src_host, shard);
 
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
@@ -469,7 +469,7 @@ void cql_server::init_messaging_service() {
 
     ser::forward_cql_rpc_verbs::register_forward_cql_prepare(&_ms,
         [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_prepare_request req) -> future<bytes> {
-            auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+            auto src_host = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
             clogger.trace("Handling forward prepare request from {}", src_host);
 
             service::client_state cs(_auth_service, &_sl_controller, std::move(req.client_state));

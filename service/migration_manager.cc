@@ -150,7 +150,7 @@ void migration_manager::init_messaging_service()
             }
 
             co_return rpc::tuple(utils::chunked_vector<frozen_mutation>{}, std::move(cm));
-        }, cinfo.retrieve_auxiliary<locator::host_id>("host_id"), std::move(options)));
+        }, netw::get_auxiliary<locator::host_id>(cinfo, "host_id"), std::move(options)));
     });
     ser::migration_manager_rpc_verbs::register_schema_check(&_messaging, [this] {
         return make_ready_future<table_schema_version>(_storage_proxy.get_db().local().get_version());

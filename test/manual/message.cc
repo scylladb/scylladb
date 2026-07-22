@@ -67,7 +67,7 @@ public:
         ser::gossip_rpc_verbs::register_gossip_digest_syn(&ms, [this] (const rpc::client_info& cinfo, gms::gossip_digest_syn msg) {
             test_logger.info("Server got syn msg = {}", msg);
 
-            auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+            auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
             auto ep1 = inet_address("1.1.1.1");
             auto ep2 = inet_address("2.2.2.2");
             gms::generation_type gen(800);
@@ -89,7 +89,7 @@ public:
 
         ser::gossip_rpc_verbs::register_gossip_digest_ack(&ms, [this] (const rpc::client_info& cinfo, gms::gossip_digest_ack msg) {
             test_logger.info("Server got ack msg = {}", msg);
-            auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+            auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
             // Prepare gossip_digest_ack2 message
             auto ep1 = inet_address("3.3.3.3");
             std::map<inet_address, endpoint_state> eps{

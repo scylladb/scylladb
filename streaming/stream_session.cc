@@ -95,8 +95,8 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
     auto& ms = _ms.local();
 
     ser::streaming_rpc_verbs::register_prepare_message(&ms, [this] (const rpc::client_info& cinfo, prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<stream_reason> reason_opt, rpc::optional<service::session_id> session) {
-        const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        const auto& src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
+        const auto& from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto dst_cpu_id = this_shard_id();
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
         auto topo_guard = service::frozen_topology_guard(session.value_or(service::default_session_id));
@@ -111,7 +111,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
         });
     });
     ser::streaming_rpc_verbs::register_prepare_done_message(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id) {
-        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        const auto& from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return container().invoke_on(dst_cpu_id, [plan_id, from] (auto& sm) mutable {
             auto session = sm.get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
             session->follower_start_sent();
@@ -122,10 +122,10 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             rpc::optional<stream_reason> reason_opt,
             rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source,
             rpc::optional<service::session_id> session) {
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        auto cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
+        auto cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
 
-        auto src = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto src = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
 
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         service::frozen_topology_guard topo_guard = session.value_or(service::default_session_id);
@@ -287,14 +287,14 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
       });
     });
     ser::streaming_rpc_verbs::register_stream_mutation_done(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id) {
-        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        const auto& from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return container().invoke_on(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] (auto& sm) mutable {
             auto session = sm.get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
             session->receive_task_completed(cf_id);
         });
     });
     ser::streaming_rpc_verbs::register_complete_message(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
-        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        const auto& from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         if (failed && *failed) {
             return container().invoke_on(dst_cpu_id, [plan_id, from, dst_cpu_id] (auto& sm) {
                 auto session = sm.get_session(plan_id, from, "COMPLETE_MESSAGE");
@@ -309,7 +309,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
         }
     });
     ms.register_stream_blob([this] (const rpc::client_info& cinfo, streaming::stream_blob_meta meta, rpc::source<streaming::stream_blob_cmd_data> source) {
-        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        const auto& from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto sink = _ms.local().make_sink_for_stream_blob(source);
         (void)stream_blob_handler(_db.local(), _view_building_worker.local(), _ms.local(), from, meta, sink, source).handle_exception([ms = _ms.local().shared_from_this()] (std::exception_ptr eptr) {
             sslog.warn("Failed to run stream blob handler: {}", eptr);

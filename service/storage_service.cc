@@ -6734,7 +6734,7 @@ void storage_service::check_raft_rpc(raft::server_id dst_id) {
 
 void storage_service::init_messaging_service() {
     ser::node_ops_rpc_verbs::register_node_ops_cmd(&_messaging.local(), [this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
-        auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        auto coordinator = netw::get_auxiliary<gms::inet_address>(cinfo, "baddr");
         std::optional<locator::host_id> coordinator_host_id;
         if (const auto* id = cinfo.retrieve_auxiliary_opt<locator::host_id>("host_id")) {
             coordinator_host_id = *id;
@@ -6927,7 +6927,7 @@ void storage_service::init_messaging_service() {
         });
     });
     ser::join_node_rpc_verbs::register_notify_banned(&_messaging.local(), [this] (const rpc::client_info& cinfo, raft::server_id dst_id) {
-        auto src_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto src_id = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return container().invoke_on(0, [src_id, dst_id] (auto& ss) -> future<rpc::no_wait_type> {
             if (ss.my_host_id() != locator::host_id{dst_id.uuid()}) {
                 rtlogger.warn("received notify_banned from {} for {}, but my id is {}, ignoring", src_id, dst_id, ss.my_host_id());

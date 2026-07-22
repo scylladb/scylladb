@@ -107,7 +107,7 @@ do_test_file_stream(replica::database& db, netw::messaging_service& ms, std::vec
             if (!verb_register) {
                 co_await smp::invoke_on_all([&] {
                     return global_ms.local().register_stream_blob([&](const rpc::client_info& cinfo, streaming::stream_blob_meta meta, rpc::source<streaming::stream_blob_cmd_data> source) {
-                        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+                        const auto& from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
                         auto sink = global_ms.local().make_sink_for_stream_blob(source);
                         (void)stream_blob_handler(global_db.local(), global_ms.local(), from, meta, sink, source, [&suffix](auto&, const streaming::stream_blob_meta& meta) -> future<output_result> {
                             auto path = meta.filename + suffix;
@@ -206,7 +206,7 @@ do_test_sstable_stream(cql_test_env& env, compress_sstable compress, std::functi
             if (!verb_register) {
                 co_await smp::invoke_on_all([&global_db, &global_ms] {
                     return global_ms.local().register_stream_blob([&global_db, &global_ms](const rpc::client_info& cinfo, streaming::stream_blob_meta meta, rpc::source<streaming::stream_blob_cmd_data> source) {
-                        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+                        const auto& from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
                         auto sink = global_ms.local().make_sink_for_stream_blob(source);
                         (void)stream_blob_handler(global_db.local(), global_ms.local(), from, meta, sink, source, [](auto&, const streaming::stream_blob_meta& meta) -> future<output_result> {
                             auto path = meta.filename;

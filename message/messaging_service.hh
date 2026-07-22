@@ -253,6 +253,31 @@ struct unknown_address : public std::runtime_error {
     unknown_address(locator::host_id id) : std::runtime_error(fmt::format("no ip address mapping for {}", id)) {}
 };
 
+// Thrown by get_auxiliary() when a connection is missing CLIENT_ID
+// auxiliary data (the peer's CLIENT_ID handler failed before
+// attach_auxiliary, e.g. under memory pressure). The connection is
+// aborted before this is thrown; the RPC fails and the sender
+// re-establishes the connection, which resends CLIENT_ID.
+struct missing_client_id_error : public std::runtime_error {
+    explicit missing_client_id_error(std::string_view key)
+        : std::runtime_error(fmt::format("connection missing CLIENT_ID auxiliary data \"{}\"", key)) {}
+};
+
+// Out-of-line: rate-limited warn + abort_connection + throw. Defined in messaging_service.cc.
+[[noreturn]] void handle_missing_client_id_aux(const rpc::client_info& cinfo, const seastar::sstring& key);
+
+// Replacement for rpc::client_info::retrieve_auxiliary(), which SEASTAR_ASSERTs
+// (aborts the node) when the key is absent. Missing aux data means the peer's
+// CLIENT_ID exchange failed on this connection; the connection is unusable,
+// so abort it and fail the RPC instead of crashing.
+template <typename T>
+const T& get_auxiliary(const rpc::client_info& cinfo, const seastar::sstring& key) {
+    if (const T* value = cinfo.retrieve_auxiliary_opt<T>(key)) {
+        return *value;
+    }
+    handle_missing_client_id_aux(cinfo, key);
+}
+
 class messaging_service : public seastar::async_sharded_service<messaging_service>, public peering_sharded_service<messaging_service> {
 public:
     struct rpc_protocol_wrapper;

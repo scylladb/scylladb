@@ -604,6 +604,16 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     init_feature_listeners();
 }
 
+[[noreturn]] void handle_missing_client_id_aux(const rpc::client_info& cinfo, const sstring& key) {
+    static thread_local logger::rate_limit rate_limit(std::chrono::seconds(10));
+    mlogger.log(log_level::warn, rate_limit,
+            "Connection from {} is missing CLIENT_ID auxiliary data \"{}\"; the peer's CLIENT_ID"
+            " message likely failed. Aborting the connection; the RPC will fail and the sender"
+            " will reconnect.", cinfo.addr, key);
+    cinfo.server.abort_connection(cinfo.conn_id);
+    throw missing_client_id_error(key);
+}
+
 messaging_service::~messaging_service() = default;
 
 static future<> do_with_servers(std::string_view what, std::array<std::unique_ptr<messaging_service::rpc_protocol_server_wrapper>, 2>& servers, auto method) {

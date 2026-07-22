@@ -2752,8 +2752,8 @@ future<> repair_service::init_ms_handlers() {
     auto& ms = this->_messaging;
 
     ms.register_repair_get_row_diff_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto sink = ms.make_sink_for_repair_get_row_diff_with_rpc_stream(source);
         // Start a new fiber.
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
@@ -2764,8 +2764,8 @@ future<> repair_service::init_ms_handlers() {
         return make_ready_future<rpc::sink<repair_row_on_wire_with_cmd>>(sink);
     });
     ms.register_repair_put_row_diff_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto sink = ms.make_sink_for_repair_put_row_diff_with_rpc_stream(source);
         // Start a new fiber.
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
@@ -2776,8 +2776,8 @@ future<> repair_service::init_ms_handlers() {
         return make_ready_future<rpc::sink<repair_stream_cmd>>(sink);
     });
     ms.register_repair_get_full_row_hashes_with_rpc_stream([this, &ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_stream_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto sink = ms.make_sink_for_repair_get_full_row_hashes_with_rpc_stream(source);
         // Start a new fiber.
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
@@ -2788,8 +2788,8 @@ future<> repair_service::init_ms_handlers() {
         return make_ready_future<rpc::sink<repair_hash_with_cmd>>(sink);
     });
     ser::repair_rpc_verbs::register_repair_get_full_row_hashes(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
         return container().invoke_on(shard, [from, repair_meta_id] (repair_service& local_repair) {
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
@@ -2803,9 +2803,9 @@ future<> repair_service::init_ms_handlers() {
     });
     ser::repair_rpc_verbs::register_repair_get_combined_row_hash(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             std::optional<repair_sync_boundary> common_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return container().invoke_on(shard, [from, repair_meta_id,
                 common_sync_boundary = std::move(common_sync_boundary)] (repair_service& local_repair) mutable {
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
@@ -2819,8 +2819,8 @@ future<> repair_service::init_ms_handlers() {
     });
     ser::repair_rpc_verbs::register_repair_get_sync_boundary(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             std::optional<repair_sync_boundary> skipped_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
         return container().invoke_on(shard, [from, repair_meta_id,
                 skipped_sync_boundary = std::move(skipped_sync_boundary)] (repair_service& local_repair) mutable {
@@ -2834,9 +2834,9 @@ future<> repair_service::init_ms_handlers() {
     });
     ser::repair_rpc_verbs::register_repair_get_row_diff(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             repair_hash_set set_diff, bool needs_all_rows, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         _metrics.rx_hashes_nr += set_diff.size();
         auto fp = make_foreign(std::make_unique<repair_hash_set>(std::move(set_diff)));
         return container().invoke_on(shard, [from, repair_meta_id, fp = std::move(fp), needs_all_rows] (repair_service& local_repair) mutable {
@@ -2857,9 +2857,9 @@ future<> repair_service::init_ms_handlers() {
     });
     ser::repair_rpc_verbs::register_repair_put_row_diff(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             repair_rows_on_wire row_diff, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(row_diff)));
         return container().invoke_on(shard, [from, repair_meta_id, fp = std::move(fp)] (repair_service& local_repair) mutable {
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
@@ -2881,9 +2881,9 @@ future<> repair_service::init_ms_handlers() {
             rpc::optional<streaming::stream_reason> reason, rpc::optional<gc_clock::time_point> compaction_time, rpc::optional<shard_id> dst_cpu_id_opt,
             rpc::optional<service::frozen_topology_guard> topo_guard, rpc::optional<std::optional<int64_t>> repaired_at,
             rpc::optional<locator::tablet_repair_incremental_mode> incremental_mode) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        auto from_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from_id = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return container().invoke_on(shard, [from_id, src_cpu_id, repair_meta_id, ks_name, cf_name,
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this,
                 topo_guard = topo_guard.value_or(service::default_session_id), repaired_at = repaired_at.value_or(std::nullopt), incremental_mode = incremental_mode.value_or(locator::tablet_repair_incremental_mode::disabled)] (repair_service& local_repair) mutable {
@@ -2897,9 +2897,9 @@ future<> repair_service::init_ms_handlers() {
     });
     ser::repair_rpc_verbs::register_repair_row_level_stop(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             sstring ks_name, sstring cf_name, dht::token_range range, rpc::optional<shard_id> dst_cpu_id_opt, rpc::optional<bool> mark_as_repaired_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         bool mark_as_repaired = mark_as_repaired_opt.value_or(false);
         return container().invoke_on(shard, [from, repair_meta_id, ks_name, cf_name, range, mark_as_repaired] (repair_service& local_repair) mutable {
             return repair_meta::repair_row_level_stop_handler(local_repair, from, repair_meta_id,
@@ -2907,18 +2907,18 @@ future<> repair_service::init_ms_handlers() {
         });
     });
     ser::repair_rpc_verbs::register_repair_get_estimated_partitions(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return container().invoke_on(shard, [from, repair_meta_id] (repair_service& local_repair) mutable {
             return repair_meta::repair_get_estimated_partitions_handler(local_repair, from, repair_meta_id);
         });
     });
     ser::repair_rpc_verbs::register_repair_set_estimated_partitions(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             uint64_t estimated_partitions, rpc::optional<shard_id> dst_cpu_id_opt) {
-        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_cpu_id = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return container().invoke_on(shard, [from, repair_meta_id, estimated_partitions] (repair_service& local_repair) mutable {
             return repair_meta::repair_set_estimated_partitions_handler(local_repair, from, repair_meta_id, estimated_partitions);
         });
@@ -2927,11 +2927,11 @@ future<> repair_service::init_ms_handlers() {
         return make_ready_future<std::vector<row_level_diff_detect_algorithm>>(suportted_diff_detect_algorithms());
     });
     ser::repair_rpc_verbs::register_repair_update_system_table(&ms, [this] (const rpc::client_info& cinfo, repair_update_system_table_request req) {
-        auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        auto from = netw::get_auxiliary<gms::inet_address>(cinfo, "baddr");
         return repair_update_system_table_handler(from, std::move(req));
     });
     ser::repair_rpc_verbs::register_repair_flush_hints_batchlog(&ms, [this] (const rpc::client_info& cinfo, repair_flush_hints_batchlog_request req) {
-        auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        auto from = netw::get_auxiliary<gms::inet_address>(cinfo, "baddr");
         return repair_flush_hints_batchlog_handler(from, std::move(req));
     });
 

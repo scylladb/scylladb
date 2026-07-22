@@ -538,8 +538,8 @@ private:
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             utils::chunked_vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info,
             rpc::optional<service::fencing_token> fence_opt) {
-        auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-         auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_addr = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
+         auto src_shard = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
 
         tracing::trace_state_ptr trace_state_ptr;
         if (trace_info) {
@@ -707,7 +707,7 @@ private:
             rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id,
             rpc::optional<bool> skip_large_data_guardrails_opt) {
         tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto src_addr = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
         auto skip_large_data_guardrails = skip_large_data_guardrails_opt.value_or(false);
 
@@ -748,7 +748,7 @@ private:
             rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id,
             rpc::optional<fencing_token> fence) {
         tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto src_addr = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
 
         auto schema_version = decision.update.schema_version();
         return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, std::move(forward_id),reply_to_id, shard,
@@ -771,12 +771,12 @@ private:
             const rpc::client_info& cinfo,
             unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog,
             rpc::optional<uint8_t> large_data_violations_opt) {
-        auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         auto violations = static_cast<db::large_data_violation_type>(large_data_violations_opt.value_or(0));
         _sp.get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
-                [from, response_id, backlog = std::move(backlog), violations] (storage_proxy& sp) mutable {
-            sp.got_response(response_id, from, std::move(backlog), violations);
+                [from_id = from, response_id, backlog = std::move(backlog), violations] (storage_proxy& sp) mutable {
+            sp.got_response(response_id, from_id, std::move(backlog), violations);
             return netw::messaging_service::no_wait();
         });
     }
@@ -785,10 +785,10 @@ private:
             const rpc::client_info& cinfo,
             unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed,
             rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception) {
-        auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         _sp.get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
-                [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
+                [from_id = from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
             error err = error::FAILURE;
             std::optional<sstring> msg;
             if (exception) {
@@ -812,7 +812,7 @@ private:
                     }
                 }, exception->reason);
             }
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::move(msg));
+            sp.got_failure_response(response_id, from_id, num_failed, std::move(backlog), err, std::move(msg));
             return netw::messaging_service::no_wait();
         });
     }
@@ -827,8 +827,8 @@ private:
         rpc::optional<service::fencing_token> fence_opt)
     {
         tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_addr = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
+        auto src_shard = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
 
         if (cmd1.trace_info) {
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd1.trace_info);
@@ -847,7 +847,7 @@ private:
                 auto& cfg = _sp.local_db().get_config();
                 cmd1.max_result_size.emplace(cfg.max_memory_for_unlimited_query_soft_limit(), cfg.max_memory_for_unlimited_query_hard_limit());
             } else {
-                cmd1.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+                cmd1.max_result_size.emplace(netw::get_auxiliary<uint64_t>(cinfo, "max_result_size"));
             }
         }
         shared_ptr<storage_proxy> p = _sp.shared_from_this();
@@ -1022,8 +1022,8 @@ private:
             query::read_command cmd, partition_key key, utils::UUID ballot,
             bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info> trace_info,
             rpc::optional<fencing_token> fence_opt) {
-        auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_addr = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
+        auto src_shard = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
 
         tracing::trace_state_ptr tr_state;
         if (trace_info) {
@@ -1035,7 +1035,7 @@ private:
         co_await _sp.apply_fence(fence_opt, src_addr);
 
         if (!cmd.max_result_size) {
-            cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
+            cmd.max_result_size.emplace(netw::get_auxiliary<uint64_t>(cinfo, "max_result_size"));
         }
 
         auto schema = co_await get_schema_for_read(cmd.schema_version, src_addr, src_shard, *timeout);
@@ -1067,8 +1067,8 @@ private:
             const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             paxos::proposal proposal, std::optional<tracing::trace_info> trace_info,
             rpc::optional<fencing_token> fence_opt) {
-        auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_addr = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
+        auto src_shard = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
 
         tracing::trace_state_ptr tr_state;
         if (trace_info) {
@@ -1111,8 +1111,8 @@ private:
             rpc::optional<fencing_token> fence_opt) {
         static thread_local uint16_t pruning = 0;
         static constexpr uint16_t pruning_limit = 1000; // since PRUNE verb is one way replica side has its own queue limit
-        auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto src_addr = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
+        auto src_shard = netw::get_auxiliary<uint32_t>(cinfo, "src_cpu_id");
 
         tracing::trace_state_ptr tr_state;
         if (trace_info) {

@@ -541,29 +541,29 @@ future<rpc::no_wait_type> gossiper::background_msg(sstring type, noncopyable_fun
 
 void gossiper::init_messaging_service_handler() {
     ser::gossip_rpc_verbs::register_gossip_digest_syn(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return background_msg("GOSSIP_DIGEST_SYN", [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_syn_msg(from, std::move(syn_msg));
         });
     });
      ser::gossip_rpc_verbs::register_gossip_digest_ack(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return background_msg("GOSSIP_DIGEST_ACK", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack_msg(from, std::move(msg));
         });
     });
     ser::gossip_rpc_verbs::register_gossip_digest_ack2(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_ack2 msg) {
-        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return background_msg("GOSSIP_DIGEST_ACK2", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack2_msg(from, std::move(msg));
         });
     });
     ser::gossip_rpc_verbs::register_gossip_echo(&_messaging, [this] (const rpc::client_info& cinfo, seastar::rpc::opt_time_point timeout, rpc::optional<int64_t> generation_number_opt, rpc::optional<bool> notify_up_opt) {
-        auto from_hid = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from_hid = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return handle_echo_msg(from_hid, timeout, generation_number_opt, notify_up_opt.value_or(false));
     });
     ser::gossip_rpc_verbs::register_gossip_shutdown(&_messaging, [this] (const rpc::client_info& cinfo, inet_address from, rpc::optional<int64_t> generation_number_opt) {
-        auto from_hid = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto from_hid = netw::get_auxiliary<locator::host_id>(cinfo, "host_id");
         return background_msg("GOSSIP_SHUTDOWN", [from_hid, generation_number_opt] (gms::gossiper& gossiper) {
             return gossiper.handle_shutdown_msg(from_hid, generation_number_opt);
         });
