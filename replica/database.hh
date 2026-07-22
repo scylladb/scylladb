@@ -2098,6 +2098,10 @@ public:
 
     sstables::sstables_manager& get_sstables_manager(const schema& s) const;
 
+    // Selects the sstables_manager by keyspace name alone, so it's possible to
+    // get an sstables manager even if the live table doesnt exist anymore (but its snapshots do).
+    sstables::sstables_manager& get_sstables_manager(std::string_view ks_name) const;
+
     // Returns the list of ranges held by this endpoint
     // The returned list is sorted, and its elements are non overlapping and non wrap-around.
     future<dht::token_range_vector> get_keyspace_local_ranges(locator::static_effective_replication_map_ptr erm);
