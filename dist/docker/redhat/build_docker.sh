@@ -67,7 +67,7 @@ if [ -f build/build.ninja ]; then
 fi
 
 bcp() { buildah copy "$container" "$@"; }
-run() { buildah run "$container" "$@"; }
+run() { buildah run "$container" -- "$@"; }
 bconfig() { buildah config "$@" "$container"; }
 
 container="$(buildah from --pull=always docker.io/redhat/ubi9-minimal:latest)"
@@ -96,7 +96,7 @@ bcp dist/docker/scylla_bashrc /scylla_bashrc
 bcp LICENSE-ScyllaDB-Source-Available.md /licenses/
 
 run microdnf clean all
-run microdnf --setopt=tsflags=nodocs -y update
+run microdnf --setopt=tsflags=nodocs -y --nobest update
 run microdnf --setopt=tsflags=nodocs -y install hostname kmod procps-ng python3 python3-pip systemd
 run curl -L --output /etc/yum.repos.d/scylla.repo ${repo_file_url}
 run pip3 install --no-cache-dir --prefix /usr supervisor
