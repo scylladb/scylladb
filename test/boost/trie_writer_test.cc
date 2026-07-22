@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/memory.hh>
+#include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/test_case.hh>
 #include <xxhash.h>
@@ -311,4 +312,30 @@ SEASTAR_THREAD_TEST_CASE(test_finite_memory_usage) {
         tests::require_greater_equal(seastar::memory::stats().allocated_memory(), memory_usage_before);
         tests::require_less_equal(seastar::memory::stats().allocated_memory(), max_allowed_memory_usage);
     }
+}
+
+// Regression test for an unchecked aligned_alloc() in the trie writer's bump_allocator.
+//
+// When memory runs out, aligned_alloc() returns nullptr. The bump_allocator used
+// to dereference the result without checking, which segfaulted instead of cleanly
+// propagating an allocation failure.
+//
+// with_allocation_failures() reruns the trie-writing code, failing a different
+// allocation on each pass, so it eventually fails the segment allocation. With the
+// bug present this test segfaults; with the fix it must complete, every failed
+// allocation surfacing as a bad_alloc rather than a crash.
+SEASTAR_THREAD_TEST_CASE(test_allocation_failure_safety) {
+    seastar::memory::with_allocation_failures([] {
+        auto out = null_trie_output_stream(4096);
+        auto wr = trie_writer(out);
+        auto dummy_payload = trie_payload(1, std::array<std::byte, 1>{});
+        std::vector<std::byte> prev_key;
+        for (uint32_t i = 0; i < 100; ++i) {
+            std::vector<std::byte> curr_key(std::from_range, object_representation(seastar::cpu_to_be(i)));
+            size_t depth = std::ranges::mismatch(curr_key, prev_key).in1 - curr_key.begin();
+            wr.add(depth, std::span(curr_key).subspan(depth), dummy_payload);
+            prev_key = curr_key;
+        }
+        wr.finish();
+    });
 }
