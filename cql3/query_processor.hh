@@ -37,6 +37,7 @@
 #include "db/config.hh"
 #include "utils/enum_option.hh"
 #include "service/storage_proxy_fwd.hh"
+#include "service/pager/query_plan.hh"
 
 namespace utils {
 class chunked_string;
@@ -48,6 +49,10 @@ class migration_manager;
 class query_state;
 class mapreduce_service;
 class raft_group0_client;
+
+namespace pager {
+class paging_state;
+}
 
 namespace strong_consistency {
 class coordinator;
@@ -518,7 +523,13 @@ public:
     std::unique_ptr<statements::prepared_statement> get_statement(
             utils::chunked_string_view query,
             const service::client_state& client_state,
-            dialect d);
+            dialect d,
+            std::optional<service::pager::query_plan> pinned_plan = std::nullopt);
+
+    // The plan to pin when continuing a paged query, read from the previous
+    // page's state. See restrictions::pinned_plan_opt.
+    static std::optional<service::pager::query_plan> pinned_plan_from_paging_state(
+            const lw_shared_ptr<const service::pager::paging_state>& paging_state);
 
     friend class migration_subscriber;
 

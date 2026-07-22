@@ -11,6 +11,7 @@
 #pragma once
 
 #include "cql3/cf_name.hh"
+#include "service/pager/query_plan.hh"
 
 #include <optional>
 
@@ -37,6 +38,9 @@ public:
 
     // Only for internal calls, use the version with ClientState for user queries
     void prepare_keyspace(std::string_view keyspace);
+
+    // Only SELECT is ever paged, so only SELECT overrides this. See #18992.
+    virtual void set_pinned_plan(std::optional<service::pager::query_plan>) {}
 
     virtual bool has_keyspace() const;
 

@@ -2152,7 +2152,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query || has_bm25_ordering,
-            restrictions::check_indexes(!_parameters->is_mutation_fragments()));
+            restrictions::check_indexes(!_parameters->is_mutation_fragments()), _pinned_plan);
 
     const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
 
@@ -2365,11 +2365,12 @@ select_statement::prepare_restrictions(data_dictionary::database db,
                                        ::shared_ptr<selection::selection> selection,
                                        bool for_view,
                                        bool allow_filtering,
-                                       restrictions::check_indexes do_check_indexes)
+                                       restrictions::check_indexes do_check_indexes,
+                                       restrictions::pinned_plan_opt pinned_plan)
 {
     try {
         return restrictions::analyze_statement_restrictions(db, schema, statement_type::SELECT, _where_clause, ctx,
-            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes);
+            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes, std::move(pinned_plan));
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the WHERE clause (name: '{}')", e.entity));
