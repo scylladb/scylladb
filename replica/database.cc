@@ -1054,14 +1054,21 @@ void database::drop_keyspace(const sstring& name) {
     _keyspaces.erase(name);
 }
 
+static bool is_system_table(std::string_view ks_name) {
+    return ks_name == db::system_keyspace::NAME ||
+        ks_name == db::system_distributed_keyspace::NAME;
+}
+
 static bool is_system_table(const schema& s) {
-    auto& k = s.ks_name();
-    return k == db::system_keyspace::NAME ||
-        k == db::system_distributed_keyspace::NAME;
+    return is_system_table(s.ks_name());
 }
 
 sstables::sstables_manager& database::get_sstables_manager(const schema& s) const {
-    return get_sstables_manager(system_keyspace(is_system_table(s)));
+    return get_sstables_manager(s.ks_name());
+}
+
+sstables::sstables_manager& database::get_sstables_manager(std::string_view ks_name) const {
+    return get_sstables_manager(system_keyspace(is_system_table(ks_name)));
 }
 
 void database::init_schema_commitlog() {
