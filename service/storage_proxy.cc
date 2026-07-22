@@ -33,6 +33,7 @@
 #include "mutation/async_utils.hh"
 #include "query/query_result_merger.hh"
 #include <seastar/core/do_with.hh>
+#include <seastar/rpc/rpc.hh>
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include <seastar/core/future-util.hh>
@@ -770,12 +771,17 @@ private:
             const rpc::client_info& cinfo,
             unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog,
             rpc::optional<uint8_t> large_data_violations_opt) {
-        auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto* from = cinfo.retrieve_auxiliary_opt<locator::host_id>("host_id");
+        if (!from) {
+            slogger.warn("handle_mutation_done: connection missing CLIENT_ID aux data (host_id absent); aborting connection");
+            cinfo.server.abort_connection(cinfo.conn_id);
+            return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
+        }
         auto violations = static_cast<db::large_data_violation_type>(large_data_violations_opt.value_or(0));
         _sp.get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
-                [from, response_id, backlog = std::move(backlog), violations] (storage_proxy& sp) mutable {
-            sp.got_response(response_id, from, std::move(backlog), violations);
+                [from_id = *from, response_id, backlog = std::move(backlog), violations] (storage_proxy& sp) mutable {
+            sp.got_response(response_id, from_id, std::move(backlog), violations);
             return netw::messaging_service::no_wait();
         });
     }
@@ -784,10 +790,15 @@ private:
             const rpc::client_info& cinfo,
             unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed,
             rpc::optional<db::view::update_backlog> backlog, rpc::optional<replica::exception_variant> exception) {
-        auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto* from = cinfo.retrieve_auxiliary_opt<locator::host_id>("host_id");
+        if (!from) {
+            slogger.warn("handle_mutation_failed: connection missing CLIENT_ID aux data (host_id absent); aborting connection");
+            cinfo.server.abort_connection(cinfo.conn_id);
+            return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
+        }
         _sp.get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _sp.container().invoke_on(shard, _sp._write_ack_smp_service_group,
-                [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
+                [from_id = *from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
             error err = error::FAILURE;
             std::optional<sstring> msg;
             if (exception) {
@@ -811,7 +822,7 @@ private:
                     }
                 }, exception->reason);
             }
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::move(msg));
+            sp.got_failure_response(response_id, from_id, num_failed, std::move(backlog), err, std::move(msg));
             return netw::messaging_service::no_wait();
         });
     }

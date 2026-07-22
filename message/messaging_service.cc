@@ -583,10 +583,14 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
 }
 
 msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
-    return msg_addr{
-        cinfo.retrieve_auxiliary<gms::inet_address>("baddr"),
-        cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id")
-    };
+    auto* baddr = cinfo.retrieve_auxiliary_opt<gms::inet_address>("baddr");
+    auto* cpu_id = cinfo.retrieve_auxiliary_opt<uint32_t>("src_cpu_id");
+    if (!baddr || !cpu_id) {
+        mlogger.warn("get_source: connection missing CLIENT_ID aux data; aborting connection");
+        cinfo.server.abort_connection(cinfo.conn_id);
+        return msg_addr{gms::inet_address{}, 0};
+    }
+    return msg_addr{*baddr, *cpu_id};
 }
 
 messaging_service::~messaging_service() = default;
