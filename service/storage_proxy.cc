@@ -289,6 +289,9 @@ public:
 
     // Must call before destroying the `remote` object.
     future<> stop() {
+        if (_stopped) {
+            co_return;
+        }
         _group0_as.request_abort();
         co_await _truncate_gate.close();
         co_await _snapshot_gate.close();
@@ -7308,6 +7311,10 @@ void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, 
 }
 
 future<> storage_proxy::stop_remote() {
+    if (!_remote) {
+        co_return;
+    }
+
     co_await cancel_nonlocal_write_response_handlers();
     co_await _hints_resource_manager.stop();
 
@@ -7316,11 +7323,15 @@ future<> storage_proxy::stop_remote() {
     // raft log persistence through internal CQL, need their local write
     // handler to complete normally during shutdown; canceling all write
     // handlers before unregistering RPC verbs can turn those local writes
-    // into spurious timeouts. After _remote->stop() finishes, no RPC
+    // into spurious timeouts. After stop_remote_verbs() finishes, no RPC
     // handler can start or continue storage-proxy work through _remote.
-    co_await _remote->stop();
+    co_await stop_remote_verbs();
     co_await cancel_all_write_response_handlers();
     _remote = nullptr;
+}
+
+future<> storage_proxy::stop_remote_verbs() {
+    return _remote ? _remote->stop() : make_ready_future<>();
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
