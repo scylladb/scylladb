@@ -1714,6 +1714,16 @@ db::config::config(std::shared_ptr<db::extensions> exts)
          "Maximum number of tablets which may be leaving a shard at the same time. Effecting only on topology coordinator. Set to the same value on all nodes.")
     , tablet_streaming_write_concurrency_per_shard(this, "tablet_streaming_write_concurrency_per_shard", liveness::LiveUpdate, value_status::Used, 2,
          "Maximum number of tablets which may be pending on a shard at the same time. Effecting only on topology coordinator. Set to the same value on all nodes.")
+    , tablets_activity_weighted_allocation_enabled(this, "tablets_activity_weighted_allocation_enabled", liveness::LiveUpdate, value_status::Used, true,
+         "Master switch for activity-aware Phase 3 tablet allocation. When enabled and the cluster feature flag is set, idle tables are compressed more aggressively to make room for active tables.")
+    , tablets_idle_table_rate_threshold(this, "tablets_idle_table_rate_threshold", liveness::LiveUpdate, value_status::Used, 0.1,
+         "Absolute floor for table activity classification: combined read+write rate (ops/sec) at or below which a table is always considered idle, regardless of percentile.")
+    , tablets_idle_percentile(this, "tablets_idle_percentile", liveness::LiveUpdate, value_status::Used, 75,
+         "Percentile of the activity distribution below which tables are classified as idle for tablet allocation purposes.")
+    , tablets_activity_ewma_window_seconds(this, "tablets_activity_ewma_window_seconds", liveness::LiveUpdate, value_status::Used, 900,
+         "EWMA smoothing window in seconds for per-table activity tracking. Longer windows provide more stability but slower reaction to workload changes.")
+    , tablets_activity_max_tablet_size_factor(this, "tablets_activity_max_tablet_size_factor", liveness::LiveUpdate, value_status::Used, 4,
+         "Maximum average tablet size multiplier allowed during activity-based compression. Limits how much idle tables can be compressed based on their data size.")
     , service_levels_interval(this, "service_levels_interval_ms", liveness::LiveUpdate, value_status::Used, 10000, "Controls how often service levels module polls configuration table")
 
     , audit(this, "audit", value_status::Used, "table",
