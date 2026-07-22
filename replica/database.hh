@@ -2056,6 +2056,8 @@ public:
     using snapshot_details = db::snapshot_ctl::db_snapshot_details;
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
+    future<std::optional<std::filesystem::path>> find_snapshot_dir(sstring ks_name, sstring table_name, sstring tag);
+
     friend std::ostream& operator<<(std::ostream& out, const database& db);
     const flat_hash_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
