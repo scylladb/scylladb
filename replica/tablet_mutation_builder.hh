@@ -54,6 +54,10 @@ public:
     tablet_mutation_builder& del_snapshot_name(dht::token last_token);
 
 
+    bool empty() const {
+        return _m.partition().empty();
+    }
+
     mutation build() {
         return std::move(_m);
     }

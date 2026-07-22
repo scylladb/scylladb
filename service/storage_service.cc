@@ -4313,7 +4313,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // To maintain atomicity against concurrent migration requests
         // (e.g., finalization) and prevent failures from group0 conflicts, we
         // should turn this into a topology request.
-        utils::chunked_vector<canonical_mutation> updates;
+        group0_update_collector updates;
 
         auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
             slogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
@@ -4347,7 +4347,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             }
         }
 
-        topology_change change{std::move(updates)};
+        topology_change change{co_await updates.collect()};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
             fmt::format("migrate keyspace {} to tablets", ks_name));
 
@@ -5612,8 +5612,9 @@ future<service::group0_guard> storage_service::get_guard_for_tablet_update() {
     co_return guard;
 }
 
-future<bool> storage_service::exec_tablet_update(service::group0_guard guard, utils::chunked_vector<canonical_mutation> updates, sstring reason) {
+future<bool> storage_service::exec_tablet_update(service::group0_guard guard, group0_update_collector uc, sstring reason) {
     rtlogger.info("{}", reason);
+    auto updates = co_await uc.collect();
     rtlogger.trace("do update {} reason {}", updates, reason);
     updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
             .set_version(_topology_state_machine._topology.version + 1)
@@ -5684,7 +5685,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        utils::chunked_vector<canonical_mutation> updates;
+        group0_update_collector updates;
 
         if (all_tokens) {
             tokens.clear();
@@ -5697,7 +5698,6 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
 
         auto ts = db_clock::now();
         auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
-        std::optional<mutation> repair_task_update;
         for (const auto& token : tokens) {
             auto tid = tmap.get_tablet_id(token);
             auto& tinfo = tmap.get_tablet_info(tid);
@@ -5718,22 +5718,10 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
             };
             if (_feature_service.tablet_repair_tasks_table) {
                 auto m = co_await _sys_ks.local().get_update_repair_task_mutation(entry, guard.write_timestamp());
-                if (repair_task_update) {
-                    if (!m.decorated_key().equal(*m.schema(), repair_task_update->decorated_key())) {
-                        on_internal_error(rtlogger, "add_repair_tablet_request(): repair task mutations have different partition keys");
-                    }
-                    repair_task_update->apply(std::move(m));
-                } else {
-                    repair_task_update = std::move(m);
-                }
+                updates.add_small(std::move(m));
             }
         }
-        if (repair_task_update) {
-            updates.emplace_back(std::move(*repair_task_update));
-        }
-        if (!tokens.empty()) {
-            updates.emplace_back(builder.build());
-        }
+        updates.add_large(builder.build());
 
         sstring reason = format("Repair tablet by API request tokens={} tablet_task_id={}", tokens, repair_task_info.tablet_task_id);
         if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
@@ -5796,8 +5784,9 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        utils::chunked_vector<canonical_mutation> updates;
+        group0_update_collector updates;
 
+        auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
             auto& tinfo = tmap.get_tablet_info(tid);
             if (!tinfo.repair_task_info || tinfo.repair_task_info->tablet_task_id != tablet_task_id) {
@@ -5805,13 +5794,12 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             }
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
-            auto update = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                            .del_repair_task_info(last_token, _feature_service);
+            builder.del_repair_task_info(last_token, _feature_service);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
-                update.del_session(last_token);
+                builder.del_session(last_token);
             }
-            updates.emplace_back(update.build());
         });
+        co_await updates.add(builder.build());
 
         sstring reason = format("Deleting tablet repair request by API request tablet_id={} tablet_task_id={}", table, tablet_task_id);
         if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
@@ -5831,8 +5819,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         });
     }
 
-    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
-        utils::chunked_vector<canonical_mutation> updates;
+    co_await transit_tablet(table, token, [=, this] (group0_update_collector& updates, const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
         auto last_token = tmap.get_last_token(tid);
@@ -5851,7 +5838,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
 
         if (src == dst) {
             sstring reason = format("No-op move of tablet {} to {}", gid, dst);
-            return std::make_tuple(std::move(updates), std::move(reason));
+            return reason;
         }
 
         if (src.host != dst.host && locator::contains(tinfo.replicas, dst.host)) {
@@ -5878,7 +5865,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             : locator::tablet_task_info::make_migration_request();
         migration_task_info.sched_nr++;
         migration_task_info.sched_time = db_clock::now();
-        updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
+        updates.add_small(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, src.host == dst.host ? locator::tablet_transition_kind::intranode_migration
@@ -5891,7 +5878,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
 
-        return std::make_tuple(std::move(updates), std::move(reason));
+        return reason;
     });
 }
 
@@ -5905,8 +5892,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         });
     }
 
-    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
-        utils::chunked_vector<canonical_mutation> updates;
+    co_await transit_tablet(table, token, [=, this] (group0_update_collector& updates, const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
         auto last_token = tmap.get_last_token(tid);
@@ -5927,7 +5913,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         locator::tablet_replica_set new_replicas(tinfo.replicas);
         new_replicas.push_back(dst);
 
-        updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
+        updates.add_small(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
@@ -5935,7 +5921,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
 
         sstring reason = format("Adding replica to tablet {}, node {}", gid, dst);
 
-        return std::make_tuple(std::move(updates), std::move(reason));
+        return reason;
     });
 }
 
@@ -5949,8 +5935,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         });
     }
 
-    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
-        utils::chunked_vector<canonical_mutation> updates;
+    co_await transit_tablet(table, token, [=, this] (group0_update_collector& updates, const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
         auto last_token = tmap.get_last_token(tid);
@@ -5972,7 +5957,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         new_replicas.reserve(tinfo.replicas.size() - 1);
         std::copy_if(tinfo.replicas.begin(), tinfo.replicas.end(), std::back_inserter(new_replicas), [&dst] (auto r) { return r != dst; });
 
-        updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
+        updates.add_small(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
@@ -5983,7 +5968,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
 
-        return std::make_tuple(std::move(updates), std::move(reason));
+        return reason;
     });
 }
 
@@ -6002,8 +5987,8 @@ future<> storage_service::abort_restore_tablets(table_id table) {
         auto guard = co_await get_guard_for_tablet_update();
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        utils::chunked_vector<canonical_mutation> updates;
-
+        group0_update_collector updates;
+        auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
             auto* trinfo = tmap.get_tablet_transition_info(tid);
             if (!trinfo || trinfo->transition != locator::tablet_transition_kind::restore || !trinfo->session_id) {
@@ -6012,10 +5997,10 @@ future<> storage_service::abort_restore_tablets(table_id table) {
             auto last_token = tmap.get_last_token(tid);
             // Deleting the session aborts the restore: see the restore handling in the
             // topology coordinator.
-            updates.emplace_back(tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                .del_session(last_token)
-                .build());
+            builder.del_session(last_token);
         });
+
+        co_await updates.add(builder.build());
 
         if (updates.empty()) {
             break;
@@ -6180,7 +6165,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     co_return std::move(load_stats);
 }
 
-future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
+future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<sstring(group0_update_collector&, const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
     auto success = co_await try_transit_tablet(table, token, std::move(prepare_mutations));
     if (!success) {
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
@@ -6195,7 +6180,7 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
     });
 }
 
-future<bool> storage_service::try_transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
+future<bool> storage_service::try_transit_tablet(table_id table, dht::token token, noncopyable_function<sstring(group0_update_collector&, const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         bool topology_busy;
@@ -6218,10 +6203,10 @@ future<bool> storage_service::try_transit_tablet(table_id table, dht::token toke
             co_return false;
         }
 
-        auto [ updates, reason ] = prepare_mutations(tmap, guard.write_timestamp());
+        group0_update_collector uc;
+        auto reason = prepare_mutations(uc, tmap, guard.write_timestamp());
 
         rtlogger.info("{}", reason);
-        rtlogger.trace("do update {} reason {}", updates, reason);
 
         {
             topology_mutation_builder builder(guard.write_timestamp());
@@ -6232,8 +6217,11 @@ future<bool> storage_service::try_transit_tablet(table_id table, dht::token toke
                 builder.set_transition_state(topology::transition_state::tablet_migration);
             }
             builder.set_version(_topology_state_machine._topology.version + 1);
-            updates.push_back(builder.build());
+            uc.emplace_back(builder.build());
         }
+
+        auto updates = co_await uc.collect();
+        rtlogger.trace("do update {} reason {}", updates, reason);
 
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
