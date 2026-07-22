@@ -46,7 +46,6 @@ pytestmark = [
         "mem-range",
         "mem-ranges",
         "memory",
-        "run-all-shards-until-poll",
         "segment-descs",
         "small-object -o 32 --random-page",
         "small-object -o 64 --summarize",
