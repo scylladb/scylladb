@@ -485,6 +485,82 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_fast_forward_across_tablet_ranges) {
     }, std::move(cfg));
 }
 
+// Reproduces a bug where fast forward returns no sstable readers although the
+// new range has sstables:
+// 1) the test creates a reader on the range of the 1st tablet, which is empty,
+//    so the reader selector returns no sstable readers to the merging reader
+//    and advances the selector position (`incremental_reader_selector::_selector_position`)
+//    to the 1st token of the 2nd tablet (see `tablet_incremental_selector::find_lowest_next_token`),
+//    which is empty too
+// 2) the test then fast forwards the reader to the range of the 3rd tablet,
+//    which has sstables
+// 3) as part of the fast-forward call, the reader selector scans for sstables
+//    from the current selector position, finds none in the 2nd tablet and
+//    advances the selector position to the 1st token of the 3rd tablet
+// `incremental_reader_selector::fast_forward_to` used to restrict `create_new_readers`
+// by the new range's start position. The scan stopped as soon as the selector
+// position moved past it and returned no readers to the merging reader (`mutation_reader_merger`).
+// The merging reader cannot recover from that, as it never creates new readers
+// if it has none in its cache, so it reported end of stream and missed the 3rd
+// tablet's data.
+SEASTAR_TEST_CASE(test_tablet_sstable_set_fast_forward_across_empty_tablet) {
+    // enable tablets, to get access to tablet_storage_group_manager
+    cql_test_config cfg;
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+
+    return do_with_cql_env_thread([&](cql_test_env& env) {
+        guarantee_all_tablet_replicas_on_shard0(env).get();
+
+        env.execute_cql("CREATE KEYSPACE test_tablet_sstable_set_empty_tablet"
+                        " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1} AND TABLETS = {'enabled': true, 'initial': 4};").get();
+        env.execute_cql("CREATE TABLE test_tablet_sstable_set_empty_tablet.test (pk int PRIMARY KEY)").get();
+
+        auto& table = env.local_db().find_column_family("test_tablet_sstable_set_empty_tablet", "test");
+        auto s = table.schema();
+        auto& sgm = column_family_test::get_storage_group_manager(table);
+        auto erm = table.get_effective_replication_map();
+        auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+
+        // Populate the third tablet only, leaving the first two empty.
+        const auto populated_tablet = locator::tablet_id(2);
+        std::optional<dht::decorated_key> key;
+        for (int val = 0; !key; val++) {
+            auto dk = dht::decorate_key(*s, partition_key::from_singular(*s, val));
+            if (tmap.get_tablet_id(dk.token()) != populated_tablet) {
+                continue;
+            }
+            env.execute_cql(fmt::format("INSERT INTO test_tablet_sstable_set_empty_tablet.test (pk) VALUES ({})", val)).get();
+            table.flush().get();
+            key = std::move(dk);
+        }
+
+        auto set = replica::make_tablet_sstable_set(s, *sgm.get(), tmap);
+
+        auto empty_tablet_range = dht::to_partition_range(tmap.get_token_range(locator::tablet_id(0)));
+        auto populated_tablet_range = dht::to_partition_range(tmap.get_token_range(populated_tablet));
+
+        auto reader = set->make_range_sstable_reader(s, make_reader_permit(env),
+                                                     empty_tablet_range,
+                                                     s->full_slice(),
+                                                     nullptr,
+                                                     ::streamed_mutation::forwarding::no,
+                                                     ::mutation_reader::forwarding::yes);
+        auto close_r = deferred_close(reader);
+
+        BOOST_REQUIRE_MESSAGE(!read_mutation_from_mutation_reader(reader).get(),
+                "the first tablet is expected to be empty");
+
+        reader.fast_forward_to(populated_tablet_range).get();
+
+        auto mopt = read_mutation_from_mutation_reader(reader).get();
+        BOOST_REQUIRE_MESSAGE(mopt, "no data was read from the fast forwarded tablet");
+        BOOST_REQUIRE_MESSAGE(mopt->decorated_key().equal(*s, *key),
+                format("expected key: {}, got: {}", *key, mopt->decorated_key()));
+        BOOST_REQUIRE_MESSAGE(!read_mutation_from_mutation_reader(reader).get(),
+                "unexpected data past the fast forwarded tablet");
+    }, std::move(cfg));
+}
+
 // Test that tablet_sstable_set respects arbitrary tablet boundaries when selecting sstables
 // overlapping with a given token range.
 SEASTAR_TEST_CASE(test_tablet_sstable_set_preserves_arbitrary_boundaries) {
