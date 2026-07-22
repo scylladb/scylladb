@@ -91,11 +91,7 @@ public:
                     std::unique_ptr<attributes> attrs,
                     cql_stats& stats);
 
-    const std::vector<single_statement>& statements() const { return _statements; }
-
-    audit::audit_info_ptr audit_info() const {
-        return audit::audit::create_audit_info(audit::statement_category::DML, sstring(), sstring(), true);
-    }
+    audit::audit_info_ptr audit_info() const;
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
@@ -137,6 +133,8 @@ public:
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message(
             query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
+
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 private:
     friend class batch_statement_executor;
     future<shared_ptr<cql_transport::messages::result_message>> do_execute(
@@ -158,7 +156,6 @@ private:
             const query_options& options,
             service::query_state& state) const;
 
-    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 public:
     // FIXME: no cql_statement::to_string() yet
 #if 0

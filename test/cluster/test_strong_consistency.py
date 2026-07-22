@@ -16,7 +16,7 @@ from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import InvalidRequest
-from cassandra.query import SimpleStatement, BoundStatement
+from cassandra.query import SimpleStatement, BoundStatement, BatchStatement, BatchType
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replicas
 from test.pylib.rest_client import read_barrier
 
@@ -918,12 +918,12 @@ async def test_timed_out_queries(manager: ManagerClient):
     s1 = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([s1])
 
-    async def try_query_with_timeout(exception_type, stmt: str, error_injection_name: str, timeout_sec: float):
+    async def try_query_with_timeout(exception_type, stmt: str, error_injection_name: str, timeout_sec: float, add_timeout: bool):
         await manager.api.enable_injection(s1.ip_addr, error_injection_name, one_shot=True)
 
         request_timeout_ms = 100
 
-        stmt_fut = cql.run_async(f"{stmt} USING TIMEOUT {request_timeout_ms}ms")
+        stmt_fut = cql.run_async(f"{stmt} USING TIMEOUT {request_timeout_ms}ms" if add_timeout else stmt)
         await manager.api.wait_for_injection_enter(s1.ip_addr, error_injection_name)
 
         sleep_length = timeout_sec + (request_timeout_ms / 1000)
@@ -940,7 +940,7 @@ async def test_timed_out_queries(manager: ManagerClient):
                 return True
             pytest.fail(f"Unexpected exception: {e}")
 
-    async def try_query(exception_type, stmt: str, error_injection_name: str):
+    async def try_query(exception_type, stmt: str, error_injection_name: str, add_timeout: bool = True):
         # We cannot predict if the relevant timer will be triggered in time.
         # Even in not-really-extreme situations, it can take more time
         # than we expect. To avoid flakiness, we're going to attempt to
@@ -950,7 +950,7 @@ async def test_timed_out_queries(manager: ManagerClient):
         # so it shouldn't have a relevant impact on the length of the test.
         timeout_sec = 0.1
         while True:
-            result = await try_query_with_timeout(exception_type, stmt, error_injection_name, timeout_sec)
+            result = await try_query_with_timeout(exception_type, stmt, error_injection_name, timeout_sec, add_timeout)
             if result:
                 break
             if timeout_sec > 60:
@@ -989,10 +989,20 @@ async def test_timed_out_queries(manager: ManagerClient):
             for error_injection_name in write_error_injections:
                 await try_write(error_injection_name)
 
+            # Case 3: Batch.
+            batch_stmt = f"""
+                BEGIN BATCH USING TIMEOUT 100ms
+                INSERT INTO {table} (pk, v) VALUES (19, 23);
+                INSERT INTO {table} (pk, v) VALUES (19, 24);
+                APPLY BATCH
+            """
+            for error_injection_name in write_error_injections:
+                await try_query(WriteTimeout, batch_stmt, error_injection_name, add_timeout=False)
+
             # Sanity check: Nothing broke and we can still write to the table.
             await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (17, 7)")
 
-    # Case 3: Waiting for the leader during a write.
+    # Case 4: Waiting for the leader during a write.
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
             # We can only emulate the leader not being chosen yet. Otherwise, we would
@@ -1608,3 +1618,148 @@ async def test_write_from_non_replica_after_leader_down(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 2", host=non_replica_host)
             assert len(rows) == 1
             assert rows[0].c == 2
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
+async def test_batch(manager: ManagerClient, batch_mode):
+    """
+    Verify strongly consistent BATCH behavior for both paths:
+    - textual CQL BATCH,
+    - native protocol BATCH (prepared BatchStatement).
+
+    Success cases:
+    - same-partition batch succeeds (default logged for text, explicit logged for prepared),
+    - mixed statement types in one partition succeed.
+
+    Rejection cases:
+    - batch touching multiple tables,
+    - batch touching multiple partitions,
+    - statement touching multiple partition keys,
+    - counter batch.
+    """
+
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+
+    def _prepared_batch_type(kind):
+        if kind == "logged":
+            return BatchType.LOGGED
+        if kind == "unlogged":
+            return BatchType.UNLOGGED
+        if kind == "counter":
+            return BatchType.COUNTER
+        raise ValueError(f"Unexpected batch kind: {kind}")
+
+    def _render_text_statement(table_name, op, args):
+        if op == "insert":
+            pk, ck, v = args
+            return f"INSERT INTO {table_name} (pk, ck, v) VALUES ({pk}, {ck}, {v})"
+        if op == "update":
+            v, pk, ck = args
+            return f"UPDATE {table_name} SET v = {v} WHERE pk = {pk} AND ck = {ck}"
+        if op == "delete":
+            pk, ck = args
+            return f"DELETE FROM {table_name} WHERE pk = {pk} AND ck = {ck}"
+        if op == "delete_in":
+            pk1, pk2, ck = args
+            return f"DELETE FROM {table_name} WHERE pk IN ({pk1}, {pk2}) AND ck = {ck}"
+        if op == "counter_add":
+            delta, pk = args
+            return f"UPDATE {table_name} SET c = c + {delta} WHERE pk = {pk}"
+        raise ValueError(f"Unexpected operation: {op}")
+
+    def _make_batch_runner(table_name, *, counter_table=False):
+        prepared_statements = {}
+        if batch_mode == "prepared":
+            if counter_table:
+                prepared_statements = {
+                    "counter_add": cql.prepare(f"UPDATE {table_name} SET c = c + ? WHERE pk = ?"),
+                }
+            else:
+                prepared_statements = {
+                    "insert": cql.prepare(f"INSERT INTO {table_name} (pk, ck, v) VALUES (?, ?, ?)"),
+                    "update": cql.prepare(f"UPDATE {table_name} SET v = ? WHERE pk = ? AND ck = ?"),
+                    "delete": cql.prepare(f"DELETE FROM {table_name} WHERE pk = ? AND ck = ?"),
+                    "delete_in": cql.prepare(f"DELETE FROM {table_name} WHERE pk IN (?, ?) AND ck = ?"),
+                }
+
+        async def _run(ops, *, kind):
+            if batch_mode == "prepared":
+                batch = BatchStatement(batch_type=_prepared_batch_type(kind))
+                for op, args in ops:
+                    batch.add(prepared_statements[op], args)
+                return await cql.run_async(batch)
+
+            if kind == "counter":
+                begin = "BEGIN COUNTER BATCH"
+            elif kind == "unlogged":
+                begin = "BEGIN UNLOGGED BATCH"
+            elif kind == "logged":
+                begin = "BEGIN BATCH"
+            else:
+                raise ValueError(f"Unexpected batch kind: {kind}")
+            lines = [begin]
+            lines.extend(f"{_render_text_statement(table_name, op, args)};" for op, args in ops)
+            lines.append("APPLY BATCH")
+            return await cql.run_async("\n".join(lines))
+
+        return _run
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+            run_batch = _make_batch_runner(table)
+
+            await run_batch([
+                ("insert", (1, 1, 10)),
+                ("insert", (1, 2, 20)),
+                ("insert", (1, 3, 30)),
+            ], kind="logged")
+
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1")
+            assert len(rows) == 3
+            rows_by_ck = {r.ck: r.v for r in rows}
+            assert rows_by_ck == {1: 10, 2: 20, 3: 30}
+
+            await run_batch([
+                ("update", (99, 1, 1)),
+                ("delete", (1, 3)),
+            ], kind="unlogged")
+
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1")
+            assert len(rows) == 2
+            rows_by_ck = {r.ck: r.v for r in rows}
+            assert rows_by_ck == {1: 99, 2: 20}
+
+            with pytest.raises(InvalidRequest, match="same partition"):
+                await run_batch([
+                    ("insert", (1, 1, 10)),
+                    ("insert", (2, 1, 20)),
+                ], kind="unlogged")
+
+            with pytest.raises(InvalidRequest, match="single partition"):
+                await run_batch([
+                    ("delete_in", (1, 2, 1)),
+                ], kind="unlogged")
+
+            async with new_test_table(manager, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as other_table:
+                with pytest.raises(InvalidRequest, match="same table"):
+                    if batch_mode == "prepared":
+                        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+                        batch.add(cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 10))
+                        batch.add(cql.prepare(f"INSERT INTO {other_table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 20))
+                        await cql.run_async(batch)
+                    else:
+                        await cql.run_async(f"""
+                            BEGIN UNLOGGED BATCH
+                            INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 10);
+                            INSERT INTO {other_table} (pk, ck, v) VALUES (1, 1, 20);
+                            APPLY BATCH
+                        """)
+
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c counter") as table:
+            run_counter_batch = _make_batch_runner(table, counter_table=True)
+
+            with pytest.raises(InvalidRequest, match="Counter batches are not supported"):
+                await run_counter_batch([
+                    ("counter_add", (1, 1)),
+                ], kind="counter")
