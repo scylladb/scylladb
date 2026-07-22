@@ -287,8 +287,7 @@ future<> range_streamer::stream_async() {
                     _nr_ranges_remaining -= ranges_streamed;
                     float percentage = _nr_total_ranges == 0 ? 1 : (_nr_total_ranges - _nr_ranges_remaining) / (float)_nr_total_ranges;
                     _stream_manager.local().update_finished_percentage(_reason, percentage);
-                    logger.info("Finished {} out of {} ranges for {}, finished percentage={}",
-                            _nr_total_ranges - _nr_ranges_remaining, _nr_total_ranges, _reason, percentage);
+                    logger.info("Finished {} out of {} ranges ({}%) for {}", _nr_total_ranges - _nr_ranges_remaining, _nr_total_ranges, percentage * 100, _reason);
                 };
                 dht::token_range_vector ranges_to_stream;
                 try {
