@@ -119,6 +119,13 @@ future<> backup_task_impl::do_backup() {
     co_await process_snapshot_dir();
 
     _backup_shard = this_shard_id();
+
+    // Pre-worker break point. Lets tests drop the keyspace/table after the
+    // snapshot already exists but before the per-shard worker is constructed,
+    // to reproduce SCYLLADB-3252 (the worker ctor used to call db.find_schema(),
+    // which threw no_such_column_family once the table was gone).
+    co_await utils::get_local_injector().inject("backup_task_before_worker", utils::wait_for_message(std::chrono::minutes(2)));
+
     co_await _sharded_worker.start(std::ref(_snap_ctl.db()), std::ref(*this));
 
     gate abort_gate;
