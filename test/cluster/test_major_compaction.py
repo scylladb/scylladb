@@ -181,7 +181,7 @@ async def test_shutdown_drain_during_compaction(manager: ManagerClient):
         logger.info("Shutdown server")
         stop_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
         # wait until the shutdown drain request is sent to compaction_manager
-        await log.wait_for("Asked to drain", from_mark=mark, timeout=30)
+        await log.wait_for("compaction_manager - Asked to drain", from_mark=mark, timeout=30)
         # now resume compaction and let shutdown complete
         await injection_handler.message()
         # wait server to shutdown
