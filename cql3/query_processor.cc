@@ -625,6 +625,14 @@ query_processor::execute_maybe_with_guard(service::query_state& query_state, ::s
     return execute_with_guard(std::bind_front(exec, std::ref(*this), std::forward<Args>(args)...), std::move(statement), query_state, options);
 }
 
+std::optional<service::pager::query_plan> query_processor::pinned_plan_from_paging_state(
+        const lw_shared_ptr<const service::pager::paging_state>& paging_state) {
+    if (!paging_state) {
+        return std::nullopt;
+    }
+    return paging_state->get_query_plan();
+}
+
 future<::shared_ptr<result_message>>
 query_processor::execute_direct_without_checking_exception_message(utils::chunked_string_view query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
@@ -788,7 +796,7 @@ prepared_cache_key_type query_processor::compute_id(
 }
 
 std::unique_ptr<prepared_statement>
-query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d) {
+query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan> pinned_plan) {
     // Measuring allocation cost requires that no yield points exist
     // between bytes_before and bytes_after. It needs fixing if this
     // function is ever futurized.
@@ -799,6 +807,9 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
     auto cf_stmt = dynamic_cast<raw::cf_statement*>(statement.get());
     if (cf_stmt) {
         cf_stmt->prepare_keyspace(client_state);
+        if (pinned_plan) {
+            cf_stmt->set_pinned_plan(std::move(pinned_plan));
+        }
     }
     ++_stats.prepare_invocations;
     auto p = statement->prepare(_db, _cql_stats, _cql_config);

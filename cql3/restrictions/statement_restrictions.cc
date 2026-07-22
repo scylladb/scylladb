@@ -815,7 +815,8 @@ statement_restrictions::statement_restrictions(private_tag,
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering,
-        check_indexes do_check_indexes)
+        check_indexes do_check_indexes,
+        pinned_plan_opt)
     : statement_restrictions(private_tag{}, schema, allow_filtering)
 {
     _check_indexes = do_check_indexes;
@@ -2764,8 +2765,9 @@ analyze_statement_restrictions(
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering,
-        check_indexes do_check_indexes) {
-    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes);
+        check_indexes do_check_indexes,
+        pinned_plan_opt pinned_plan) {
+    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes, std::move(pinned_plan));
 }
 
 shared_ptr<const statement_restrictions>
