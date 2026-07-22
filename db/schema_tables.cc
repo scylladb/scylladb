@@ -979,6 +979,22 @@ future<> store_column_mapping(sharded<service::storage_proxy>& proxy, schema_ptr
     co_await proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr());
 }
 
+future<column_mapping_version_list> get_column_mapping_versions(db::system_keyspace& sys_ks, table_id cf_id) {
+    static const auto query = format("SELECT schema_version FROM {}.{} WHERE cf_id = ? GROUP BY schema_version",
+            db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY);
+    const auto results = co_await sys_ks.query_processor().execute_internal(
+            query,
+            db::consistency_level::LOCAL_ONE,
+            {cf_id.uuid()},
+            cql3::query_processor::cache_internal::yes);
+    column_mapping_version_list versions;
+    versions.reserve(results->size());
+    for (const auto& row : *results) {
+        versions.push_back(table_schema_version(row.get_as<utils::UUID>("schema_version")));
+    }
+    co_return std::move(versions);
+}
+
 future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(sharded<service::storage_proxy>& proxy, const schema_result_value_type& partition) {
     lw_shared_ptr<query::result_set> scylla_specific_rs;
     if (proxy.local().local_db().has_schema(NAME, SCYLLA_KEYSPACES)) {
@@ -2842,20 +2858,15 @@ void check_no_legacy_secondary_index_mv_schema(replica::database& db, const view
 static auto GET_COLUMN_MAPPING_QUERY = format("SELECT column_name, clustering_order, column_name_bytes, kind, position, type FROM system.{} WHERE cf_id = ? AND schema_version = ?",
     db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
 
-future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_id table_id, table_schema_version version) {
-    shared_ptr<cql3::untyped_result_set> results = co_await sys_ks._qp.execute_internal(
+future<std::optional<column_mapping>> get_column_mapping_if_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version) {
+    shared_ptr<cql3::untyped_result_set> results = co_await sys_ks.query_processor().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
         {table_id.uuid(), version.uuid()},
         cql3::query_processor::cache_internal::no
     );
     if (results->empty()) {
-        // If we don't have a stored column_mapping for an obsolete schema version
-        // then it means it's way too old and been cleaned up already.
-        // Fail the whole learn stage in this case.
-        co_await coroutine::return_exception(std::runtime_error(
-            format("Failed to look up column mapping for schema version {}",
-                version)));
+        co_return std::nullopt;
     }
     std::vector<column_definition>  static_columns, regular_columns;
     for (const auto& row : *results) {
@@ -2881,6 +2892,18 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_i
     }
     column_mapping cm(std::move(cm_columns), static_columns.size());
     co_return std::move(cm);
+}
+
+future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_id table_id, table_schema_version version) {
+    auto cm_opt = co_await schema_tables::get_column_mapping_if_exists(sys_ks, table_id, version);
+    if (!cm_opt) {
+        // If we don't have a stored column_mapping for an obsolete schema version
+        // then it means it's way too old and been cleaned up already.
+        co_await coroutine::return_exception(std::runtime_error(
+            format("Failed to look up column mapping for schema version {}",
+                version)));
+    }
+    co_return std::move(*cm_opt);
 }
 
 future<bool> column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version) {

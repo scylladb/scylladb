@@ -7,6 +7,7 @@
  */
 
 #include "utils/chunked_vector.hh"
+#include "utils/small_vector.hh"
 
 #include "idl/frozen_mutation.idl.hh"
 #include "idl/frozen_schema.idl.hh"
@@ -16,3 +17,4 @@ verb [[with_client_info, cancellable]] migration_request (netw::schema_pull_opti
 verb get_schema_version (unsigned shard, table_schema_version version) -> frozen_schema
 verb [[cancellable]] schema_check () -> table_schema_version
 verb [[with_client_info, one_way]] definitions_update (utils::chunked_vector<frozen_mutation> fm, utils::chunked_vector<canonical_mutation> cm [[version 3.2.0]])
+verb [[cancellable]] fetch_column_mappings (table_id cf_id, utils::small_vector<table_schema_version, 1> versions_present [[ref]]) -> std::optional<frozen_mutation>
