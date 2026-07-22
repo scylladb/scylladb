@@ -4694,8 +4694,14 @@ class scylla_sstables(gdb.Command):
             local = sst['_components']['_cpu'] == cpu_id
             size += sc.dereference().type.sizeof
 
-            bf = std_unique_ptr(sc['filter']).get().cast(filter_type.pointer())
-            bf_size = bf.dereference().type.sizeof + chunked_vector(bf['_bitset']['_storage']).external_memory_footprint()
+            bf_ptr = std_unique_ptr(sc['filter']).get()
+            bf_size = 0
+            # An sstable might its bloom filter initialization delayed until the Data component is finished.
+            if int(bf_ptr) != 0:
+                bf = bf_ptr.dynamic_cast(filter_type.pointer())
+                # An sstable might have its bloom filter evicted, in which case its type is not filter_type.
+                if int(bf) != 0:
+                    bf_size = bf.dereference().type.sizeof + chunked_vector(bf['_bitset']['_storage']).external_memory_footprint()
             size += bf_size
 
             summary_size = std_vector(sc['summary']['_summary_data']).external_memory_footprint()
