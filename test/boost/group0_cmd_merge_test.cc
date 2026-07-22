@@ -18,8 +18,6 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/group0_state_machine_merger.hh"
-#include "idl/experimental/broadcast_tables_lang.dist.hh"
-#include "idl/experimental/broadcast_tables_lang.dist.impl.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "utils/error_injection.hh"

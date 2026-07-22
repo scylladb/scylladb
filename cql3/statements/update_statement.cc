@@ -13,8 +13,6 @@
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
-#include "cql3/statements/broadcast_modification_statement.hh"
-#include "service/broadcast_tables/experimental/lang.hh"
 #include "raw/update_statement.hh"
 
 #include "raw/insert_statement.hh"
@@ -272,99 +270,6 @@ void insert_prepared_json_statement::execute_operations_for_key(mutation& m, con
     }
 }
 
-
-static
-expr::expression get_key(const cql3::expr::expression& partition_key_restrictions) {
-    const auto* conjunction = cql3::expr::as_if<cql3::expr::conjunction>(&partition_key_restrictions);
-
-    if (!conjunction || conjunction->children.size() != 1) {
-        throw service::broadcast_tables::unsupported_operation_error(fmt::format(
-            "partition key restriction: {}", partition_key_restrictions));
-    }
-
-    const auto* key_restriction = cql3::expr::as_if<cql3::expr::binary_operator>(&conjunction->children[0]);
-
-    if (!key_restriction) {
-        throw service::broadcast_tables::unsupported_operation_error(fmt::format("partition key restriction: {}", *conjunction));
-    }
-
-    const auto* column = cql3::expr::as_if<cql3::expr::column_value>(&key_restriction->lhs);
-
-    if (!column || column->col->kind != column_kind::partition_key ||
-        key_restriction->op != cql3::expr::oper_t::EQ) {
-        throw service::broadcast_tables::unsupported_operation_error(fmt::format("key restriction: {}", *key_restriction));
-    }
-
-    return key_restriction->rhs;
-}
-
-static
-expr::expression
-prepare_new_value(const std::vector<std::unique_ptr<operation>>& operations) {
-    if (operations.size() != 1) {
-        throw service::broadcast_tables::unsupported_operation_error("only one operation is allowed and must be of the form \"value = X\"");
-    }
-
-    return operations[0]->prepare_new_value_for_broadcast_tables();
-}
-
-static
-std::optional<expr::expression> get_value_condition(const expr::expression& the_condition) {
-    auto conditions = expr::boolean_factors(the_condition);
-
-    if (conditions.size() == 0) {
-        return std::nullopt;
-    }
-
-    if (conditions.size() > 1) {
-        throw service::broadcast_tables::unsupported_operation_error(fmt::format("conditions: {}", fmt::join(
-            conditions, ", ")));
-    }
-
-    const auto& condition = conditions[0];
-
-    auto binop = expr::as_if<expr::binary_operator>(&condition);
-    auto lhs = binop ? expr::as_if<expr::column_value>(&binop->lhs) : nullptr;
-    if (!lhs || (binop->op != cql3::expr::oper_t::EQ)) {
-        throw service::broadcast_tables::unsupported_operation_error(fmt::format(
-            "condition: {}", condition));
-    }
-
-    return binop->rhs;
-}
-
-::shared_ptr<broadcast_modification_statement>
-update_statement::prepare_for_broadcast_tables() const {
-    if (attrs) {
-        if (attrs->is_time_to_live_set()) {
-            throw service::broadcast_tables::unsupported_operation_error{"USING TTL"};
-        }
-
-        if (attrs->is_timestamp_set()) {
-            throw service::broadcast_tables::unsupported_operation_error{"USING TIMESTAMP"};
-        }
-
-        if (attrs->is_timeout_set()) {
-            throw service::broadcast_tables::unsupported_operation_error{"USING TIMEOUT"};
-        }
-    }
-
-    if (has_static_column_conditions()) {
-        throw service::broadcast_tables::unsupported_operation_error{"static column conditions"};
-    }
-
-    broadcast_tables::prepared_update query = {
-        .key = get_key(restrictions().get_partition_key_restrictions()),
-        .new_value = prepare_new_value(_column_operations),
-        .value_condition = get_value_condition(_condition),
-    };
-
-    return ::make_shared<broadcast_modification_statement>(
-        get_bound_terms(),
-        s,
-        query
-    );
-}
 
 namespace raw {
 

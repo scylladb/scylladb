@@ -2058,7 +2058,7 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"alternator-streams", feature::UNUSED},
         {"alternator-ttl", feature::UNUSED },
         {"consistent-topology-changes", feature::UNUSED},
-        {"broadcast-tables", feature::BROADCAST_TABLES},
+        {"broadcast-tables", feature::UNUSED},
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
         {"tablets", feature::UNUSED},
         {"views-with-tablets", feature::UNUSED},

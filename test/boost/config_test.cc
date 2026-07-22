@@ -914,13 +914,15 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_alternator_streams) {
 }
 
 SEASTAR_TEST_CASE(test_parse_experimental_features_broadcast_tables) {
+    // broadcast-tables was an experimental feature that has been removed. Its
+    // name is kept recognized (mapped to UNUSED) so that clusters which enabled
+    // the experiment don't fail startup on the leftover config name.
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
     cfg.read_from_yaml("experimental_features:\n    - broadcast-tables\n", throw_on_error);
-    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::BROADCAST_TABLES});
-    BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
+    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UNUSED});
+    BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(cfg.check_experimental(ef::BROADCAST_TABLES));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }

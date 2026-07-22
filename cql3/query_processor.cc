@@ -1112,12 +1112,6 @@ query_processor::execute_batch_without_checking_exception_message(
     co_return co_await batch->execute(*this, query_state, options, std::nullopt);
 }
 
-future<service::broadcast_tables::query_result>
-query_processor::execute_broadcast_table_query(const service::broadcast_tables::query& query) {
-    auto [remote_, holder] = remote();
-    co_return co_await service::broadcast_tables::execute(remote_.get().group0_client, query);
-}
-
 future<query::mapreduce_result>
 query_processor::mapreduce(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
     auto [remote_, holder] = remote();

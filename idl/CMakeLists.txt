@@ -65,7 +65,6 @@ set(idl_headers
   per_partition_rate_limit_info.idl.hh
   position_in_partition.idl.hh
   full_position.idl.hh
-  experimental/broadcast_tables_lang.idl.hh
   join_node.idl.hh
   utils.idl.hh
   gossip.idl.hh

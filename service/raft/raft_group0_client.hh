@@ -17,7 +17,6 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/coroutine/generator.hh>
 
-#include "service/broadcast_tables/experimental/query_result.hh"
 #include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_timeout.hh"
 #include "utils/UUID.hh"
@@ -111,24 +110,7 @@ class raft_group0_client {
 
     gc_clock::duration _history_gc_duration = gc_clock::duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::hours{1})};
 
-    std::unordered_map<utils::UUID, std::optional<service::broadcast_tables::query_result>> _results;
-
     maintenance_mode_enabled _maintenance_mode;
-
-    // Guard manages the result of a single query. If it is created for a particular query,
-    // then `group0_state_machine` will save the result of that query and it can be returned by the guard.
-    // Guard manages the lifetime of the _results entry. It creates and destroys the entry, which state machine puts the result in.
-    class query_result_guard {
-        utils::UUID _query_id;
-        raft_group0_client* _client;
-    public:
-        query_result_guard(utils::UUID query_id, raft_group0_client& client);
-        query_result_guard(query_result_guard&&);
-        ~query_result_guard();
-
-        // Preconditon: set_query_result was called with query_id=this->_query_id.
-        service::broadcast_tables::query_result get();
-    };
 
     template <typename Command>
     void validate_change(const Command& change) {}
@@ -167,7 +149,7 @@ public:
     future<group0_guard> start_operation(seastar::abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
 
     template<typename Command>
-    requires std::same_as<Command, broadcast_table_query> || std::same_as<Command, write_mutations>
+    requires std::same_as<Command, write_mutations>
     group0_command prepare_command(Command change, std::string_view description);
     template<typename Command>
     requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations> || std::same_as<Command, mixed_change>
@@ -185,8 +167,6 @@ public:
 
     bool maintenance_mode() const;
 
-    query_result_guard create_result_guard(utils::UUID query_id);
-    void set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr);
     static utils::UUID generate_group0_state_id(utils::UUID prev_state_id);
     future<utils::UUID> get_last_group0_state_id();
 

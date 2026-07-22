@@ -75,10 +75,5 @@ void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefi
     }
 }
 
-expr::expression
-constants::setter::prepare_new_value_for_broadcast_tables() const {
-    return *_e;
-}
-
 
 }

@@ -110,8 +110,6 @@ public:
         return _unset_guard.is_unset(qo);
     }
 
-    virtual expr::expression prepare_new_value_for_broadcast_tables() const;
-
     /**
      * A parsed raw UPDATE operation.
      *

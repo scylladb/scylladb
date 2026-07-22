@@ -12,7 +12,6 @@
 
 #include "data_dictionary/data_dictionary.hh"
 #include "keys/keys.hh"
-#include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "service/raft/group0_state_id_handler.hh"
 #include "mutation/canonical_mutation.hh"
@@ -37,8 +36,10 @@ struct schema_change {
     utils::chunked_vector<canonical_mutation> mutations;
 };
 
-struct broadcast_table_query {
-    service::broadcast_tables::query query;
+// Keep this placeholder at its original variant position for wire compatibility
+// with group0 commands written before the experimental broadcast table support was removed.
+struct unused {
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 struct topology_change {
@@ -59,7 +60,7 @@ struct write_mutations {
 };
 
 struct group0_command {
-    std::variant<schema_change, broadcast_table_query, topology_change, write_mutations, mixed_change> change;
+    std::variant<schema_change, unused, topology_change, write_mutations, mixed_change> change;
 
     // Mutation of group0 history table, appending a new state ID and optionally a description.
     canonical_mutation history_append;
