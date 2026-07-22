@@ -6742,7 +6742,7 @@ SEASTAR_TEST_CASE(test_tablet_cleanup_retries_compacted_sstable_deletion) {
             }
 
             utils::get_local_injector().enable("delete_atomically_before_prepare", true);
-            auto disable_injection = seastar::defer([] {
+            auto disable_injection = seastar::defer([] noexcept {
                 utils::get_local_injector().disable("delete_atomically_before_prepare");
             });
             try {
