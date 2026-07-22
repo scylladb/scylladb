@@ -16,7 +16,6 @@
 #include "db/config.hh"
 #include "db/snapshot-ctl.hh"
 #include "db/snapshot/backup_task.hh"
-#include "schema/schema_fwd.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
