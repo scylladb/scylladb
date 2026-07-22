@@ -1136,7 +1136,14 @@ void compaction_manager::register_metrics() {
 }
 
 void compaction_manager::enable() {
-    SCYLLA_ASSERT(_state == state::none || _state == state::running);
+    if (_state == state::stopped) {
+        // The manager is being (or has been) stopped, e.g. shutdown started
+        // before enable() was ever called. A late caller (e.g. a
+        // disk_space_monitor callback that fires while the monitor is still
+        // alive during shutdown) must not resurrect the state machine.
+        return;
+    }
+
     cmlog.info("Asked to enable");
 
     if (_state == state::none) {
@@ -1353,6 +1360,11 @@ void compaction_manager::do_stop() noexcept {
         // Possible when the node shuts down before enable() is called,
         // e.g. due to an early startup failure. The task manager module
         // was registered in the constructor and must be unregistered.
+        // Move to state::stopped right away, so that a late enable()/drain()
+        // call (e.g. triggered by a disk_space_monitor callback that is still
+        // alive during shutdown) doesn't resurrect the state machine and
+        // leave it in a non-terminal state forever (see destructor assert).
+        _state = state::stopped;
         _stop_future = _task_manager_module->stop();
         return;
     }
