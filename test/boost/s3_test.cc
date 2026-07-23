@@ -7,6 +7,7 @@
  */
 
 
+#include <cmath>
 #include <unordered_set>
 #include <regex>
 #include <boost/test/unit_test.hpp>
@@ -17,10 +18,12 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/with_timeout.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
+#include <seastar/core/metrics_api.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
@@ -31,6 +34,8 @@
 #include "utils/s3/aws_error.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
+#include "utils/s3/aws_throttling_controller.hh"
+#include "utils/s3/noop_throttling_controller.hh"
 #include "utils/s3/utils/manip_s3.hh"
 #include "utils/exceptions.hh"
 #include "utils/s3/credentials_providers/aws_credentials_provider_chain.hh"
@@ -88,7 +93,22 @@ static shared_ptr<s3::client> make_proxy_client() {
         .use_https = false,
         .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
     };
-    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy());
+    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy(),
+                            [] { return std::make_unique<s3::noop_throttling_controller>(); });
+}
+
+// Like make_proxy_client, but wires the real adaptive AWS throttling
+// controller instead of the no-op one. Used by the throttling metrics
+// integration test, which relies on the proxy injecting throttling errors
+// to make the controller engage.
+static shared_ptr<s3::client> make_proxy_client_with_aws_throttling() {
+    s3::endpoint_config cfg = {
+        .port = std::stoul(tests::getenv_safe("PROXY_S3_SERVER_PORT")),
+        .use_https = false,
+        .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
+    };
+    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy(),
+                            [] { return std::make_unique<s3::aws_throttling_controller>(); });
 }
 
 static shared_ptr<s3::client> make_minio_client() {
@@ -1005,4 +1025,215 @@ BOOST_AUTO_TEST_CASE(part_size_calculation_test) {
         BOOST_REQUIRE_EQUAL(parts, 1);
         BOOST_REQUIRE_EQUAL(size, 200_MiB);
     }
+}
+
+// ---------------------------------------------------------------------------
+// throttling_controller (adaptive S3 send-rate limiter) unit tests.
+//
+// These tests exercise the AWS-CUBIC state machine deterministically. Because
+// the controller derives its measured send rate from the wall clock and a
+// short unit test issues its handful of feedback calls within a single
+// half-second bucket, the measured rate stays low; combined with the AWS
+// `new_rate = min(calculated, 2 * measured_tx_rate)` clamp this pins the fill
+// rate to the documented AWS floor. We therefore assert the invariant
+// transitions (enable-on-throttle, multiplicative decrease, floor clamping)
+// rather than exact rate values along the time-dependent cubic curve.
+// ---------------------------------------------------------------------------
+
+BOOST_AUTO_TEST_CASE(test_throttling_controller_starts_disabled) {
+    s3::aws_throttling_controller tc;
+    BOOST_REQUIRE(!tc.enabled());
+    BOOST_REQUIRE_EQUAL(tc.fill_rate(), 0.0);
+    BOOST_REQUIRE_EQUAL(tc.measured_tx_rate(), 0.0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_throttling_controller_acquire_noop_while_disabled) {
+    // While disabled, acquire() must return an already-resolved future: it
+    // never suspends (no refill/sleep loop) and never enables the limiter as
+    // a side effect. Asserting future::available() proves the call did not
+    // block, which .get() alone would not.
+    s3::aws_throttling_controller tc;
+    for (int i = 0; i < 1000; i++) {
+        auto f = tc.acquire();
+        BOOST_REQUIRE(f.available());
+        f.get();
+    }
+    BOOST_REQUIRE(!tc.enabled());
+    BOOST_REQUIRE_EQUAL(tc.fill_rate(), 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(test_throttling_controller_enables_on_throttle) {
+    // The first throttling response must enable the limiter and establish a
+    // positive, finite fill rate no smaller than the AWS minimum.
+    s3::aws_throttling_controller tc;
+    tc.update_client_sending_rate(true);
+    BOOST_REQUIRE(tc.enabled());
+    BOOST_REQUIRE_GE(tc.fill_rate(), 0.5); // min_fill_rate
+    BOOST_REQUIRE(std::isfinite(tc.fill_rate()));
+}
+
+BOOST_AUTO_TEST_CASE(test_throttling_controller_success_keeps_enabled) {
+    // Once enabled by a throttle, subsequent successes keep the limiter
+    // enabled (it never disables itself) and keep the fill rate valid.
+    s3::aws_throttling_controller tc;
+    tc.update_client_sending_rate(true);
+    BOOST_REQUIRE(tc.enabled());
+    for (int i = 0; i < 50; i++) {
+        tc.update_client_sending_rate(false);
+        BOOST_REQUIRE(tc.enabled());
+        BOOST_REQUIRE_GE(tc.fill_rate(), 0.5);
+        BOOST_REQUIRE(std::isfinite(tc.fill_rate()));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_throttling_controller_success_before_throttle_no_enable) {
+    // Success feedback before any throttle must never enable the limiter:
+    // there is zero overhead until S3 actually pushes back.
+    s3::aws_throttling_controller tc;
+    for (int i = 0; i < 100; i++) {
+        tc.update_client_sending_rate(false);
+    }
+    BOOST_REQUIRE(!tc.enabled());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_throttling_controller_acquire_progresses_when_enabled) {
+    // After enabling, acquire() must still make progress (tokens refill over
+    // real time) and complete rather than hang. A broken limiter (e.g. a
+    // non-positive fill rate) would loop forever in acquire(); guard each call
+    // with a timeout so that manifests as a clean assertion failure instead of
+    // hanging the whole test suite until its global wall-clock timeout.
+    s3::aws_throttling_controller tc;
+    tc.update_client_sending_rate(true);
+    BOOST_REQUIRE(tc.enabled());
+    auto acquire_guarded = [&] {
+        try {
+            seastar::with_timeout(seastar::lowres_clock::now() + 5s, tc.acquire()).get();
+        } catch (const seastar::timed_out_error&) {
+            BOOST_FAIL("acquire() did not complete within 5s while enabled: limiter is not making progress");
+        }
+    };
+    acquire_guarded();
+    acquire_guarded();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_throttling_controller_full_cycle_throttle_then_recover) {
+    // End-to-end behaviour of the adaptive limiter over a full cycle: it starts
+    // disabled, engages and cuts the send rate when S3 pushes back (503
+    // SlowDown), and then lets the rate grow again once the throttling stops.
+    // This mirrors a real bucket that briefly slows a shard down and reopens.
+    //
+    // The rate the controller allows is gated by its measured send rate, which
+    // is accumulated in half-second wall-clock buckets, so the feedback calls
+    // are spaced over real time to let those buckets advance.
+    s3::aws_throttling_controller tc;
+    BOOST_REQUIRE(!tc.enabled());
+
+    // Report a batch of outcomes spread over real time.
+    auto drive = [&](bool throttled, int n, std::chrono::milliseconds spacing) {
+        for (int i = 0; i < n; i++) {
+            tc.update_client_sending_rate(throttled);
+            seastar::sleep(spacing).get();
+        }
+    };
+
+    // Phase 1: healthy traffic. Build up a measured send rate without any
+    // throttling; the limiter must stay a disabled no-op throughout.
+    drive(false, 20, 50ms);
+    BOOST_REQUIRE(!tc.enabled());
+
+    // Phase 2: S3 starts throttling. The limiter engages and cuts the fill
+    // rate multiplicatively below the healthy level.
+    drive(true, 6, 50ms);
+    BOOST_REQUIRE(tc.enabled());
+    double r_throttled = tc.fill_rate();
+
+    // Phase 3: throttling stops. Continued successes walk the cubic curve back
+    // up, growing the rate past the throttled level.
+    drive(false, 30, 50ms);
+    double r_recovered = tc.fill_rate();
+
+    BOOST_TEST_MESSAGE("full cycle: r_throttled=" << r_throttled << " r_recovered=" << r_recovered);
+
+    // Directional assertions only: the exact rates depend on wall-clock bucket
+    // timing, but the shape of the cycle is deterministic -- the rate is never
+    // driven below the floor, and recovery must exceed the throttled rate.
+    BOOST_REQUIRE_GE(r_throttled, 0.5);
+    BOOST_REQUIRE_GT(r_recovered, r_throttled);
+}
+
+// Read a single S3 metric value out of the seastar metrics registry, matching
+// on the "operation" label only (e.g. "write"/"read"). The "endpoint" and
+// "class" labels depend on the test host and current scheduling group, so we
+// deliberately avoid hardcoding them and iterate the family instead.
+//
+// Returns std::nullopt if no matching series exists yet (metrics tagged
+// skip_when_empty are not registered until their counter/gauge is touched).
+static std::optional<double> read_s3_metric(const sstring& metric_name, const sstring& operation) {
+    const auto& value_map = seastar::metrics::impl::get_value_map();
+    auto fam_it = value_map.find(metric_name);
+    if (fam_it == value_map.end()) {
+        return std::nullopt;
+    }
+    for (const auto& [holder, reg] : fam_it->second) {
+        if (!reg || !reg->is_enabled()) {
+            continue;
+        }
+        const auto& labels = reg->get_id().labels();
+        auto op_it = labels.find("operation");
+        if (op_it != labels.end() && op_it->second.value() == operation) {
+            return (*reg)().d();
+        }
+    }
+    return std::nullopt;
+}
+
+// Integration test: drive a real upload through the fuzzing S3 proxy with the
+// actual adaptive AWS throttling controller wired in, and verify the
+// throttling machinery is exercised end-to-end by watching its metrics.
+//
+// The proxy injects retryable errors (including 503 SlowDown), which makes the
+// controller engage: it records throttles and cuts the target send rate. The
+// no-op controller used by other proxy tests would leave these metrics
+// untouched, so a change here proves the real controller is on the request
+// path and reacting to S3 pushback.
+SEASTAR_THREAD_TEST_CASE(test_throttling_controller_metrics_change_on_upload_proxy) {
+    tmpdir tmp;
+    const auto file_path = tmp.path() / "test";
+    const size_t total_size = 4 * 5_MiB;
+    create_file(file_path, total_size).get();
+
+    s3_test_fixture guard(make_proxy_client_with_aws_throttling);
+    auto client = guard.client();
+
+    // The proxy injects retryable errors probabilistically (random seed), so a
+    // single upload does not deterministically hit a throttling-class error. We
+    // upload repeatedly until the controller records at least one throttle, up
+    // to a generous bound. In practice this converges within the first few
+    // iterations; the bound only guards against an infinite loop if the proxy
+    // ever stops injecting errors.
+    std::optional<double> throttles;
+    constexpr int max_uploads = 50;
+    for (int i = 0; i < max_uploads; ++i) {
+        const auto object_name = guard.object_path(format("throttling-metrics-test-{}", i));
+        client->upload_file(file_path, object_name).get();
+        throttles = read_s3_metric("s3_throttles", "write");
+        if (throttles.has_value() && *throttles > 0.0) {
+            break;
+        }
+        client->delete_object(object_name).get();
+    }
+
+    // The proxy injects throttling errors, so the controller must have seen at
+    // least one and reacted by lowering the send rate below its initial value
+    // (the AWS CUBIC limiter starts at min_fill_rate=0.5 and only grows once
+    // acquisitions succeed without pushback; a throttle triggers a multiplicative
+    // cut). We assert on throttles > 0 as the primary signal that the real
+    // controller was engaged on the write path.
+    BOOST_REQUIRE_MESSAGE(throttles.has_value(), "s3_throttles{operation=write} metric not registered - controller was not exercised");
+    BOOST_REQUIRE_GT(*throttles, 0.0);
+
+    // The send fill rate gauge must also be exposed for the write operation,
+    // confirming the adaptive limiter is live rather than the no-op stub.
+    auto fill_rate = read_s3_metric("s3_send_fill_rate", "write");
+    BOOST_REQUIRE_MESSAGE(fill_rate.has_value(), "s3_send_fill_rate{operation=write} metric not registered");
 }

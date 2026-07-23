@@ -36,6 +36,7 @@
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
 #include "default_aws_retry_strategy.hh"
+#include "utils/s3/aws_throttling_controller.hh"
 #include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
@@ -79,12 +80,40 @@ namespace s3 {
 
 logging::logger s3l("s3");
 
+// Errors that indicate the S3 endpoint is throttling us (429/503-class).
+// These drive the adaptive send-rate limiter's back-off.
+static bool is_throttling_error(aws::aws_error_type type) {
+    using enum aws::aws_error_type;
+    switch (type) {
+    case SLOW_DOWN:
+    case THROTTLING:
+    case SERVICE_UNAVAILABLE:
+    case HTTP_TOO_MANY_REQUESTS:
+    case HTTP_SERVICE_UNAVAILABLE:
+    case HTTP_BANDWIDTH_LIMIT_EXCEEDED:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// S3 prefix request-rate limits differ by request class (writes vs reads),
+// so each class gets its own token bucket.
+enum class request_class { write, read };
+
+static request_class classify_request(const sstring& method) {
+    if (method == "GET" || method == "HEAD") {
+        return request_class::read;
+    }
+    return request_class::write;
+}
+
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     auto in = std::move(in_);
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<http::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<http::retry_strategy> rs, throttling_controller_factory tcf)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -108,7 +137,8 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
             }();
         })
         , _gf(std::move(gf))
-        , _retry_strategy(std::move(rs)) {
+        , _retry_strategy(std::move(rs))
+        , _throttling_controller_factory(std::move(tcf)) {
     _creds_provider_chain
         .add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
         .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>())
@@ -117,6 +147,9 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
     _creds_update_timer.arm(lowres_clock::now());
     if (!_retry_strategy) {
         _retry_strategy = std::make_unique<aws::default_aws_retry_strategy>();
+    }
+    if (!_throttling_controller_factory) {
+        _throttling_controller_factory = [] { return std::make_unique<aws_throttling_controller>(); };
     }
 }
 
@@ -169,6 +202,10 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, g
 
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<http::retry_strategy> rs, global_factory gf) {
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{}, std::move(rs));
+}
+
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, std::unique_ptr<http::retry_strategy> rs, throttling_controller_factory tcf, global_factory gf) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{}, std::move(rs), std::move(tcf));
 }
 
 shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, global_factory gf, unsigned connections_per_shard) {
@@ -245,7 +282,10 @@ static future<semaphore_units<>> claim_unit(semaphore& sem, seastar::abort_sourc
     return as ? get_units(sem, 1, *as) : get_units(sem, 1);
 }
 
-client::group_client::group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
+client::group_client::group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn, const throttling_controller_factory& tcf)
+    : http(std::move(f), max_conn)
+    , write_limiter(tcf())
+    , read_limiter(tcf()) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -309,6 +349,29 @@ void client::group_client::register_metrics(std::string class_name, std::string 
                 (sm::skip_when_empty::yes));
     }
 
+    // Adaptive S3 send-rate limiter (per shard, per request class)
+    auto op_label = sm::label("operation");
+    auto write_op = op_label("write");
+    auto read_op = op_label("read");
+    defs.emplace_back(sm::make_counter("throttles", [this] { return write_throttles; },
+            sm::description("Total number of throttling responses (503 SlowDown etc.) from S3"), {ep_label, sg_label, write_op})
+            (sm::skip_when_empty::yes));
+    defs.emplace_back(sm::make_counter("throttles", [this] { return read_throttles; },
+            sm::description("Total number of throttling responses (503 SlowDown etc.) from S3"), {ep_label, sg_label, read_op})
+            (sm::skip_when_empty::yes));
+    defs.emplace_back(sm::make_gauge("send_fill_rate", [this] { return write_limiter->fill_rate(); },
+            sm::description("Adaptive limiter target send rate (requests/s)"), {ep_label, sg_label, write_op})
+            (sm::skip_when_empty::yes));
+    defs.emplace_back(sm::make_gauge("send_fill_rate", [this] { return read_limiter->fill_rate(); },
+            sm::description("Adaptive limiter target send rate (requests/s)"), {ep_label, sg_label, read_op})
+            (sm::skip_when_empty::yes));
+    defs.emplace_back(sm::make_gauge("measured_tx_rate", [this] { return write_limiter->measured_tx_rate(); },
+            sm::description("Adaptive limiter measured send rate (requests/s)"), {ep_label, sg_label, write_op})
+            (sm::skip_when_empty::yes));
+    defs.emplace_back(sm::make_gauge("measured_tx_rate", [this] { return read_limiter->measured_tx_rate(); },
+            sm::description("Adaptive limiter measured send rate (requests/s)"), {ep_label, sg_label, read_op})
+            (sm::skip_when_empty::yes));
+
     metrics.add_group("s3", defs);
 }
 
@@ -334,7 +397,7 @@ future<client::group_client&> client::find_or_create_client_slow() {
     unsigned max_connections = _cfg->max_connections.value_or(1);
     it = _https.emplace(std::piecewise_construct,
         std::forward_as_tuple(sg),
-        std::forward_as_tuple(std::move(factory), max_connections)
+        std::forward_as_tuple(std::move(factory), max_connections, _throttling_controller_factory)
     ).first;
     it->second.register_metrics(sg.name(), _host);
     if (!_cfg->max_connections) {
@@ -417,9 +480,12 @@ future<> client::rebalance_connections() {
 }
 
 http::client::reply_handler client::wrap_handler(http::request& request,
+                                                               group_client& gc,
                                                                http::client::reply_handler handler,
                                                                std::optional<http::reply::status_type> expected) {
-    return [this, &request, expected, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) -> future<> {
+    auto rc = classify_request(request._method);
+    return [this, &request, &gc, rc, expected, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) -> future<> {
+        auto& limiter = rc == request_class::read ? gc.read_limiter : gc.write_limiter;
         auto _in = std::move(in);
         auto status_class = seastar::http::reply::classify_status(rep._status);
         std::optional<aws_error> possible_error;
@@ -431,7 +497,14 @@ http::client::reply_handler client::wrap_handler(http::request& request,
         }
 
         if (possible_error) {
-            auto should_retry = possible_error->is_retryable();
+            bool is_throttling = is_throttling_error(possible_error->get_error_type());
+            if (is_throttling) {
+                (rc == request_class::read ? gc.read_throttles : gc.write_throttles)++;
+                limiter->update_client_sending_rate(true);
+            } else {
+                limiter->update_client_sending_rate(false);
+            }
+            auto should_retry = possible_error->is_retryable() || utils::http::retryable(is_throttling);
             if (possible_error->get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
                 s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
                          utils::aws::format_time_point(lowres_system_clock::now()),
@@ -448,6 +521,8 @@ http::client::reply_handler client::wrap_handler(http::request& request,
             co_await coroutine::return_exception_ptr(std::make_exception_ptr(
                 aws::aws_exception(aws_error(possible_error->get_error_type(), possible_error->get_error_message().c_str(), should_retry))));
         }
+
+        limiter->update_client_sending_rate(false);
 
         if (expected && rep._status != *expected) {
             throw seastar::httpd::unexpected_status_error(rep._status);
@@ -486,9 +561,12 @@ future<> client::make_request(http::request req,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
     auto request = std::move(req);
-    auto handler = wrap_handler(request, std::move(handle), expected);
     co_await authorize(request);
     auto& gc = co_await find_or_create_client();
+    auto handler = wrap_handler(request, gc, std::move(handle), expected);
+
+    auto rc = classify_request(request._method);
+    co_await (rc == request_class::read ? gc.read_limiter : gc.write_limiter)->acquire(as);
 
     co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
