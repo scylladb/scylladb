@@ -272,6 +272,33 @@ async def test_misconfigured_storage(manager: ManagerClient, object_storage):
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
+async def test_storage_type_endpoint_mismatch(manager: ManagerClient, s3_storage, gs_storage):
+    '''creating a keyspace whose STORAGE type doesn't match the configured type of the
+    given endpoint (S3 endpoint used with type GS, or vice versa) must not be allowed,
+    even though the endpoint name itself is known.'''
+    objconf = s3_storage.create_endpoint_conf() + gs_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'experimental_features': ['keyspace-storage-options']}
+    await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                      'replication_factor': '1'})
+
+    print('S3 storage type must not be able to pick a GS-configured endpoint')
+    storage_opts = format_tuples(type='S3', endpoint=gs_storage.address, bucket=s3_storage.bucket_name)
+    with pytest.raises(ConfigurationException):
+        cql.execute((f"CREATE KEYSPACE test_ks_s3_on_gs WITH"
+                      f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
+
+    print('GS storage type must not be able to pick an S3-configured endpoint')
+    storage_opts = format_tuples(type='GS', endpoint=s3_storage.address, bucket=gs_storage.bucket_name)
+    with pytest.raises(ConfigurationException):
+        cql.execute((f"CREATE KEYSPACE test_ks_gs_on_s3 WITH"
+                      f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
+
+
 async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_storage):
     '''verify that memtable flush doesn't crash in case storage access keys are incorrect'''
 
