@@ -82,7 +82,6 @@ using namespace streaming;
 static cql_test_config make_object_storage_test_config(const data_dictionary::storage_options& so) {
     cql_test_config cfg;
     cfg.db_config = make_shared<db::config>();
-    cfg.db_config->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
     cfg.db_config->object_storage_endpoints(sstables::make_storage_options_config(so));
     return cfg;
 }

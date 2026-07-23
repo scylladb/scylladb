@@ -2062,7 +2062,7 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"alternator-ttl", feature::UNUSED },
         {"consistent-topology-changes", feature::UNUSED},
         {"broadcast-tables", feature::BROADCAST_TABLES},
-        {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
+        {"keyspace-storage-options", feature::UNUSED},
         {"tablets", feature::UNUSED},
         {"views-with-tablets", feature::UNUSED},
         {"strongly-consistent-tables", feature::STRONGLY_CONSISTENT_TABLES},

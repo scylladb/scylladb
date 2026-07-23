@@ -315,7 +315,6 @@ def run_scylla_cmd(pid, dir):
         # Note that Alternator-specific experimental features are listed in
         # test/alternator/run.
         '--experimental-features=udf',
-        '--experimental-features=keyspace-storage-options',
         '--experimental-features=views-with-tablets',
         '--enable-tablets=true',
         '--enable-user-defined-functions', '1',
@@ -393,8 +392,6 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/')
     if major <= [5,1] or (enterprise and major <= [2022,2]):
         cmd.remove('--query-tombstone-page-limit=1000')
-    if major <= [5,0] or (enterprise and major <= [2022,1]):
-        cmd.remove('--experimental-features=keyspace-storage-options')
     if major <= [4,5] or (enterprise and major <= [2021,1]):
         cmd.remove('--kernel-page-cache=1')
         cmd.remove('--flush-schema-tables-after-modification=false')
