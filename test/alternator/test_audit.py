@@ -611,11 +611,12 @@ def test_audit_keyspace_filtering(dynamodb, cql, alternator_audit_enabled):
                 _assert_no_audit_entries_for(new_rows, ks_name=ks_a)  # sanity check
 
 
-# Test that a failed operation (one that throws after audit_info is set) generates
-# an audit entry with error=True.
-# GetItem with an extra bogus key attribute passes table lookup (audit_info is set)
-# but then check_key() throws ValidationException. A normal GetItem follows as the
-# positive canary (error=False). Both entries should be present.
+# Test that failed operations generate audit entries with error=True.
+# Alternator reports errors in two ways: by throwing an exception, and by
+# returning api_error in request_return_type. GetItem with an extra bogus key
+# attribute covers the throwing path after audit_info is set. PutItem with an
+# unmet condition covers the returned api_error path. A normal GetItem follows
+# as the positive canary (error=False). All entries should be present.
 def test_audit_error_entry(dynamodb, cql, alternator_audit_enabled):
     with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
         ks_name = f"alternator_{table.name}"
@@ -628,13 +629,18 @@ def test_audit_error_entry(dynamodb, cql, alternator_audit_enabled):
         # which throws api_error::validation after audit_info is already set.
         with pytest.raises(ClientError, match='ValidationException'):
             table.get_item(Key={"p": "pk_0", "bogus": "junk"})
+        # Negative operation: PutItem with an unmet condition. Conditional check
+        # failures are returned as api_error in the normal request_return_type path.
+        with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+            table.put_item(Item={"p": "pk_0", "v": "new"}, ConditionExpression="attribute_not_exists(p)")
         # Positive operation: normal GetItem — should succeed and produce error=False entry.
         table.get_item(Key={"p": "pk_0"})
         expected = [
             ("QUERY", "LOCAL_ONE", True, ks_name, table.name, ["GetItem", "pk_0", "bogus"]),
+            ("DML", "LOCAL_QUORUM", True, ks_name, table.name, ["PutItem", "pk_0", "attribute_not_exists"]),
             ("QUERY", "LOCAL_ONE", False, ks_name, table.name, ["GetItem", "pk_0"]),
         ]
-        new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=2)
+        new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=3)
         _assert_audit_entries(new_rows, expected, ks_name, table.name)
 
 
