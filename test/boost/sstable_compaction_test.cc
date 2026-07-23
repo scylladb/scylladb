@@ -6332,6 +6332,12 @@ SEASTAR_TEST_CASE(sstable_clone_leaving_unsealed_dest_sstable) {
         mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
         auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
 
+        // Sanity: a freshly written sstable has its Scylla features set (e.g.
+        // ShadowableTombstones). The rewrite must preserve them.
+        auto original_features = original_sst->features().enabled_features;
+        BOOST_REQUIRE(original_features != 0);
+        BOOST_REQUIRE(original_sst->has_shadowable_tombstones());
+
         auto table = env.make_table_for_tests(s);
         auto close_table = deferred_stop(table);
 
