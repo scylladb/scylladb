@@ -2200,6 +2200,9 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DSeastar_SCHEDULING_GROUPS_COUNT=24',
         '-DSeastar_IO_URING=ON',
         '-DSeastar_OPENSSL=OFF',
+        # Disabled pending a fix to seastar.pc.in, which omits lttng-ust
+        # from Libs.private and so under-links static Seastar builds.
+        '-DSeastar_LTTNG=OFF',
     ]
 
     if compiler_cache:
