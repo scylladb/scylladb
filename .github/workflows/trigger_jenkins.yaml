@@ -38,6 +38,13 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
         run: |
+          echo "Checking Existence of Jenkins Job: $JOB_NAME"
+          JOB_URL="$JENKINS_URL/job/$JOB_NAME/api/json"
+          if ! curl --silent --fail --user "$JENKINS_USER:$JENKINS_API_TOKEN" "$JOB_URL" > /dev/null; then
+            echo "Jenkins job $JOB_NAME does not exist yet. Skipping trigger."
+            exit 0
+          fi
+
           echo "Triggering Jenkins Job: $JOB_NAME"
           if ! curl -X POST "$JENKINS_URL/job/$JOB_NAME/buildWithParameters" --fail --user "$JENKINS_USER:$JENKINS_API_TOKEN" -i -v; then
             echo "Error: Jenkins job trigger failed"
