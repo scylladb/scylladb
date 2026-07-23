@@ -1721,9 +1721,7 @@ protected:
     shared_ptr<storage_proxy> _proxy;
     locator::effective_replication_map_ptr _effective_replication_map_ptr;
     tracing::trace_state_ptr _trace_state;
-    db::consistency_level _cl;
     size_t _total_block_for = 0;
-    db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
     host_id_vector_replica_set _targets; // who we sent this mutation to and still pending response
     // added dead_endpoints as a member here as well. This to be able to carry the info across
@@ -1731,9 +1729,11 @@ protected:
     // it should not be a huge burden. (flw)
     host_id_vector_topology_change _dead_endpoints;
     size_t _cl_acks = 0;
+    db::consistency_level _cl;
+    db::write_type _type;
+    error _error = error::NONE;
     bool _cl_achieved = false;
     bool _throttled = false;
-    error _error = error::NONE;
     std::optional<sstring> _message;
     size_t _failed = 0; // only failures that may impact consistency
     size_t _all_failures = 0; // total amount of failures
@@ -1768,8 +1768,8 @@ public:
             host_id_vector_topology_change dead_endpoints = {}, is_cancellable cancellable = is_cancellable::no)
             : _id(p->get_next_response_id()), _proxy(std::move(p))
             , _effective_replication_map_ptr(std::move(erm))
-            , _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
-              _dead_endpoints(std::move(dead_endpoints)), _stats(stats), _expire_timer([this] { timeout_cb(); }), _permit(std::move(permit)),
+            , _trace_state(trace_state), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
+              _dead_endpoints(std::move(dead_endpoints)), _cl(cl), _type(type), _stats(stats), _expire_timer([this] { timeout_cb(); }), _permit(std::move(permit)),
               _rate_limit_info(rate_limit_info), _view_backlog(max_backlog()) {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
