@@ -1580,7 +1580,7 @@ int64_t sstable::update_repaired_at(int64_t repaired_at) {
 }
 
 future<> sstable::copy_components(const sstable& src) {
-    _components = co_await src._components.copy();
+    set_components(co_await src._components.copy());
     _recognized_components = src._recognized_components;
 }
 
@@ -1675,6 +1675,10 @@ void sstable::write_component_with_metadata(component_type type, scylla_metadata
     write_simple<component_type::Scylla>(metadata);
 
     _components->scylla_metadata = std::move(metadata);
+    // Keep the cached _features in sync with the metadata we just wrote,
+    // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
+    // report zeroed features (e.g. losing ShadowableTombstones).
+    _features = _components->scylla_metadata->get_features();
 }
 
 future<> sstable::read_summary() noexcept {
@@ -2108,7 +2112,7 @@ future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noe
 future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
     static_assert(std::is_nothrow_move_constructible_v<sstables::foreign_sstable_open_info>);
     co_await read_toc();
-    _components = std::move(info.components);
+    set_components(std::move(info.components));
     _data_file = make_checked_file(_read_error_handler, info.data.to_file());
   if (info.index) {
     _index_file = make_checked_file(_read_error_handler, info.index->to_file());

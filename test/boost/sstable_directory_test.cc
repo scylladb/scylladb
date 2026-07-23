@@ -562,6 +562,39 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
     });
 }
 
+// Regression test for the sstable::_features desync that resharding hits on
+// shared sstables.
+//
+// During resharding, process_sstable_dir() snapshots each shared sstable as a
+// foreign_sstable_open_info (via sstable::get_open_info()), and
+// run_resharding_jobs() later rebuilds an sstable object from that snapshot via
+// sstable_directory::load_foreign_sstable() -> sstable::load(open_info).
+//
+// sstable::_features is a cached copy of the Scylla metadata's Features tag that
+// lives outside _components; get_open_info()/load(open_info) neither carry nor
+// set it. If it is left zeroed, the rebuilt sstable reports no features (e.g.
+// losing ShadowableTombstones, which causes readers of materialized views to error out).
+SEASTAR_TEST_CASE(sstable_open_info_preserves_features) {
+    return sstables::test_env::do_with_async([] (test_env& env) {
+        auto s = test_table_schema();
+
+        auto src = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), generation_type(1)));
+        BOOST_REQUIRE(src->features().enabled_features != 0);
+
+        // Rebuild the sstable object from an open-info snapshot, exactly like
+        // sstable_directory::load_foreign_sstable() does for a shared sstable
+        // during resharding. The new object reuses the source's on-disk files, so
+        // it must be created with the source's generation.
+        auto info = src->get_open_info().get();
+        auto dst = env.make_sstable(s, src->generation());
+        dst->load(std::move(info)).get();
+
+        // The rebuilt sstable must keep the source's features. Without the fix
+        // _features is zeroed here.
+        BOOST_REQUIRE_EQUAL(dst->features().enabled_features, src->features().enabled_features);
+    });
+}
+
 SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
     if (this_smp_shard_count() == 1) {
         fmt::print("Skipping sstable_directory_shared_sstables_reshard_correctly, smp == 1\n");
