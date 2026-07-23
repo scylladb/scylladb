@@ -24,6 +24,9 @@
 #include "readers/mutation_reader.hh"
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/rpc/rpc_types.hh>
+
+class frozen_mutation_fragment;
 
 namespace db {
 class config;
@@ -50,6 +53,8 @@ class database;
 }
 
 namespace streaming {
+
+enum class stream_mutation_fragments_cmd : uint8_t;
 
 struct stream_bytes {
     int64_t bytes_sent = 0;
@@ -186,6 +191,10 @@ private:
     void init_messaging_service_handler(abort_source& as);
     future<> uninit_messaging_service_handler();
     future<> update_io_throughput(uint32_t value_mbs);
+
+    future<rpc::sink<int>> handle_stream_mutation_fragments(streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions,
+            locator::host_id from, uint32_t cpu_id, locator::host_id src, stream_reason reason, service::frozen_topology_guard topo_guard,
+            rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source, abort_source& as);
 
 public:
     void update_finished_percentage(streaming::stream_reason reason, float percentage);
