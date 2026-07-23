@@ -371,6 +371,12 @@ class ScyllaRESTAPIClient:
     async def message_injection(self, node_ip: str, injection: str) -> None:
         await self.client.post(f"/v2/error_injection/injection/{quote(injection, safe='')}/message", host=node_ip)
 
+    async def get_injection_enter_count(self, node_ip: str, injection: str) -> int:
+        """Return the current enter count for the given injection."""
+        return await self.client.get_json(
+            f"/v2/error_injection/injection/{quote(injection, safe='')}/enters",
+            host=node_ip)
+
     async def wait_for_injection_enter(self, node_ip: str, injection: str, threshold: int = 1, deadline: float | None = None) -> None:
         """Poll until the injection's enter count reaches the threshold.
            Default threshold=1 waits for at least one enter.
@@ -380,9 +386,7 @@ class ScyllaRESTAPIClient:
             deadline = time.time() + 60.0
 
         async def _check():
-            count = await self.client.get_json(
-                f"/v2/error_injection/injection/{quote(injection, safe='')}/enters",
-                host=node_ip)
+            count = await self.get_injection_enter_count(node_ip, injection)
             return count if count >= threshold else None
 
         await wait_for(_check, deadline, label=f"injection_enter({injection})")
