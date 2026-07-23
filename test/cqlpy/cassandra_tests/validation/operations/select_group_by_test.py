@@ -1570,7 +1570,6 @@ def testGroupByWithRangeNamesQueryWithPaging(cql, test_keyspace):
                           row(1, 1, 2, 2, 2),
                           row(2, 1, 3, 2, 3))
 
-@pytest.mark.xfail(reason="Issue #21267")
 def testGroupByWithStaticColumnsWithPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, s int static, d int, primary key (a, b, c))") as table:
         # ------------------------------------
