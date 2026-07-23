@@ -449,7 +449,8 @@ void paxos_store::on_before_drop_column_family(const schema& schema, utils::chun
             state_schema->ks_name(),
             state_schema->cf_name(),
             timestamp,
-            drop_views::yes).get();
+            drop_views::yes,
+            true).get();
         mutations.insert(mutations.end(), std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()));
     }
 }
