@@ -9,8 +9,13 @@
 #include "repair/decorated_key_with_hash.hh"
 #include "readers/upgrading_consumer.hh"
 #include "./sstables/shared_sstable.hh"
+#include "db/view/view_update_checks.hh"
 
 using namespace seastar;
+
+namespace replica {
+    class table;
+}
 
 namespace db {
     class system_distributed_keyspace;
@@ -77,6 +82,18 @@ public:
 };
 
 class repair_writer : public enable_lw_shared_from_this<repair_writer> {
+public:
+    // A staging sstable produced by the repair writer whose registration with
+    // the view building machinery (view_building_worker / view_update_generator)
+    // is deferred until after the repair round has finished trying to mark it
+    // as repaired.
+    struct pending_view_update_sstable {
+        sstables::shared_sstable sst;
+        db::view::sstable_destination_decision decision;
+        lw_shared_ptr<replica::table> table;
+    };
+
+private:
     schema_ptr _schema;
     reader_permit _permit;
     // Current partition written to disk
@@ -90,6 +107,7 @@ class repair_writer : public enable_lw_shared_from_this<repair_writer> {
     uint64_t _estimated_partitions = 0;
     // Holds the sstables produced by repair
     sstables::sstable_list _sstables;
+    std::vector<pending_view_update_sstable> _pending_view_update_sstables;
 public:
     class impl {
     public:
@@ -144,6 +162,10 @@ public:
 
     sstables::sstable_list& get_sstable_list_to_mark_as_repaired() {
         return _sstables;
+    }
+
+    std::vector<pending_view_update_sstable>& get_pending_view_update_sstables() {
+        return _pending_view_update_sstables;
     }
 
 private:
