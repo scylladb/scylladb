@@ -1308,6 +1308,7 @@ future<> cql_server::connection::process_request() {
                     clogger.error("{}: request processing failed: {}",
                                   _client_state.get_remote_address(), std::current_exception());
                 }
+                maybe_update_scheduling_group_after_reclassification();
             });
 
             if (should_paralelize) {
@@ -1473,7 +1474,7 @@ void cql_server::connection::update_user_scheduling_group(const std::optional<au
 }
 
 void cql_server::connection::update_control_connection_scheduling_group() {
-    auto shg_grp = _server._sl_controller.get_scheduling_group(qos::service_level_controller::driver_service_level_name);
+    auto shg_grp = _server._sl_controller.get_driver_scheduling_group().value_or(_server._sl_controller.get_default_scheduling_group());
     _current_scheduling_group = shg_grp;
     switch_tenant([this] (this auto self, noncopyable_function<future<> ()> process_loop) -> future<> {
         co_return co_await _server._sl_controller.with_service_level(qos::service_level_controller::driver_service_level_name, std::move(process_loop));
@@ -1481,10 +1482,17 @@ void cql_server::connection::update_control_connection_scheduling_group() {
 }
 
 void cql_server::connection::update_scheduling_group() {
-    if (_client_state.is_control_connection()) {
+    if (!_client_state.is_user_connection() && _server._sl_controller.get_driver_scheduling_group()) {
         update_control_connection_scheduling_group();
     } else {
         update_user_scheduling_group(_client_state.user());
+    }
+}
+
+void cql_server::connection::maybe_update_scheduling_group_after_reclassification() {
+    if (_client_state.needs_scheduling_group_reclassification()) {
+        _client_state.mark_reclassification_applied();
+        update_scheduling_group();
     }
 }
 
@@ -1530,6 +1538,24 @@ static inline cql_server::result_with_foreign_response_ptr convert_error_message
     return std::move(*dynamic_cast<messages::result_message::exception*>(msg)).get_exception();
 }
 
+// Runs user statements under the user service level. The connection's scheduling
+// group is only re-evaluated after the request finishes, and the connection loop
+// may already be waiting for the next frame under the old tenant. Keep wrapping
+// requests after reclassification so a stale sl:driver tenant cannot leak into a
+// reclassified connection's paged requests.
+static bool reclassifying_control_connection_needs_user_service_level(
+        const cql3::cql_statement& statement, service::query_state& query_state) {
+    auto& client_state = query_state.get_client_state();
+    if (!client_state.is_user_connection()) {
+        if (client_state.is_internal() || !statement.should_reclassify_control_connection()) {
+            return false;
+        }
+        client_state.reclassify_as_user_connection();
+    }
+
+    const auto driver_sg = query_state.get_service_level_controller().get_driver_scheduling_group();
+    return driver_sg && driver_sg->active();
+}
 static future<cql_server::process_fn_return_type>
 process_query_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
@@ -1561,7 +1587,16 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
 
-    return qp.local().execute_direct_without_checking_exception_message(query.assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+    tracing::trace(trace_state, "Parsing a statement");
+    auto prepared = qp.local().get_statement(query.assume_value(), client_state, dialect);
+    auto& statement = *prepared->statement;
+    auto execute_fut = reclassifying_control_connection_needs_user_service_level(statement, query_state)
+            ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
+                    [&qp, &query_state, &options, prepared = std::move(prepared)] () mutable {
+                return qp.local().execute_direct_statement_without_checking_exception_message(std::move(prepared), query_state, options);
+            })
+            : qp.local().execute_direct_statement_without_checking_exception_message(std::move(prepared), query_state, options);
+    return std::move(execute_fut).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->as_bounce()) {
             return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
@@ -1678,8 +1713,14 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     }
 
     tracing::trace(trace_state, "Processing a statement");
-    return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
-            .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
+    auto& statement = *stmt;
+    auto execute_fut = reclassifying_control_connection_needs_user_service_level(statement, query_state)
+            ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
+                    [&qp, &query_state, &options, stmt = std::move(stmt), prepared = std::move(prepared), cache_key = std::move(cache_key), needs_authorization] () mutable {
+                return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization);
+            })
+            : qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization);
+    return std::move(execute_fut).then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
         if (msg->as_bounce()) {
             return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
@@ -1818,8 +1859,13 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
     batch->set_audit_info(batch->audit_info());
-    return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
-            .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
+    auto execute_fut = reclassifying_control_connection_needs_user_service_level(*batch, query_state)
+            ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
+                    [&qp, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
+                return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries));
+            })
+            : qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries));
+    return std::move(execute_fut).then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
         if (msg->as_bounce()) {
             return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
@@ -1932,13 +1978,6 @@ future<std::unique_ptr<cql_server::response>>
 cql_server::connection::process_register(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
     using ret_type = std::unique_ptr<cql_server::response>;
-
-    if (!_client_state.is_control_connection()) {
-        if (_server._sl_controller.has_service_level(qos::service_level_controller::driver_service_level_name)) {
-            _client_state.set_control_connection();
-            update_scheduling_group();
-        }
-    }
 
     std::vector<sstring> event_types;
     auto sl = in.read_string_list(event_types);
