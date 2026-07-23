@@ -1470,8 +1470,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_node_aggregated_table_metrics(this, "enable_node_aggregated_table_metrics", value_status::Used, true, "Enable aggregated per node, per keyspace and per table metrics reporting, applicable if enable_keyspace_column_family_metrics is false.")
     , enable_sstable_data_integrity_check(this, "enable_sstable_data_integrity_check", value_status::Used, false, "Enable interposer which checks for integrity of every sstable write."
         " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.")
-    , enable_sstable_key_validation(this, "enable_sstable_key_validation", value_status::Used, ENABLE_SSTABLE_KEY_VALIDATION, "Enable validation of partition and clustering keys monotonicity"
-        " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.")
+    , enable_sstable_key_validation(this, "enable_sstable_key_validation", value_status::Used, ENABLE_SSTABLE_KEY_VALIDATION, "Enable validation of clustering key monotonicity during sstable writes."
+        " When disabled, only partition key monotonicity is validated. Performance is affected to some extent as a result."
+        " Useful to help debugging problems that may arise at another layers.")
     , ignore_component_digest_mismatch(this, "ignore_component_digest_mismatch", value_status::Used, false,
         "When set, log a warning instead of refusing to load sstables with component digest mismatches."
         " Useful for recovering from corrupted non-vital components or working around bugs in digest calculation.")
