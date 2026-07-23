@@ -166,11 +166,17 @@ public:
                 return std::move(pw).skip_key();
             }
         }();
+        auto pw = partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
+                                _partition_count, _last_modified);
+
+        // Feed the key to the digest only after the partition_writer constructor
+        // above snapshots the digest state in the pre-partition state, so
+        // partition_writer::retract() can completely erase this partition from the digest.
         if (_request != result_request::only_result) {
             _digest.feed_hash(key, s);
         }
-        return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
-                                _partition_count, _last_modified);
+
+        return pw;
     }
 
     result build(std::optional<full_position> last_pos = {}) {
