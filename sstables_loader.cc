@@ -501,7 +501,7 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
     const auto token_range = pr.transform(std::mem_fn(&dht::ring_position::token));
     auto s = _table.schema();
     const auto cf_id = s->id();
-    const auto reason = streaming::stream_reason::repair;
+    const auto reason = streaming::stream_reason::restore;
 
     auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, std::move(token_range)));
     size_t estimated_partitions = 0;
@@ -828,6 +828,8 @@ public:
 };
 
 future<> sstables_loader::download_task_impl::run() {
+    co_await coroutine::switch_to(_loader.local()._sched_group);
+
     // Load-and-stream reads the entire content from SSTables, therefore it can afford to discard the bloom filter
     // that might otherwise consume a significant amount of memory.
     sstables::sstable_open_config cfg {
@@ -957,6 +959,8 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
 }
 
 future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid, locator::tablet_metadata_guard& guard) {
+    co_await coroutine::switch_to(_sched_group);
+
     auto& tmap = guard.get_tablet_map();
 
     auto* trinfo = tmap.get_tablet_transition_info(tid.tablet);
@@ -1330,6 +1334,8 @@ public:
 
 protected:
     virtual future<> run() override {
+        co_await coroutine::switch_to(_loader.local()._sched_group);
+
         auto& loader = _loader.local();
 
         auto current_schema = loader.local_db().find_schema(_tid);

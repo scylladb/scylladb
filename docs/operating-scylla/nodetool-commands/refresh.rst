@@ -10,6 +10,11 @@ Add the files to the upload directory, by default it is located under ``/var/lib
 
 .. note:: ScyllaDB node will ignore the partitions in the sstables which are not assigned to this node. For example, if sstable are copied from a different node.
 
+.. note:: ``nodetool refresh`` (with or without ``--load-and-stream``) runs in the same I/O scheduling
+   group as backup and restore, and is therefore throttled by the
+   :ref:`backup_io_throughput_mb_per_sec <confprop_backup_io_throughput_mb_per_sec>` setting rather than
+   :ref:`stream_io_throughput_mb_per_sec <confprop_stream_io_throughput_mb_per_sec>`.
+
 
 Execute the ``nodetool refresh`` command 
 

@@ -12,6 +12,7 @@
 #include "utils/log.hh"
 #include "message/messaging_service.hh"
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include "streaming/stream_session.hh"
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_result_future.hh"
@@ -263,13 +264,16 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
         auto topo_guard = service::frozen_topology_guard(session.value_or(service::default_session_id));
         return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, reason, topo_guard] (auto& sm) mutable {
-            auto sr = stream_result_future::init_receiving_side(sm, plan_id, description, from);
-            auto session = sm.get_session(plan_id, from, "PREPARE_MESSAGE");
-            session->init(sr);
-            session->dst_cpu_id = src_cpu_id;
-            session->set_reason(reason);
-            session->set_topo_guard(topo_guard);
-            return session->prepare(std::move(msg.requests), std::move(msg.summaries));
+            auto sg = reason == stream_reason::restore ? sm.get_backup_scheduling_group() : current_scheduling_group();
+            return with_scheduling_group(sg, [&sm, msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, reason, topo_guard] () mutable {
+                auto sr = stream_result_future::init_receiving_side(sm, plan_id, description, from);
+                auto session = sm.get_session(plan_id, from, "PREPARE_MESSAGE");
+                session->init(sr);
+                session->dst_cpu_id = src_cpu_id;
+                session->set_reason(reason);
+                session->set_topo_guard(topo_guard);
+                return session->prepare(std::move(msg.requests), std::move(msg.summaries));
+            });
         });
     });
     ser::streaming_rpc_verbs::register_prepare_done_message(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id) {
@@ -292,7 +296,10 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         service::frozen_topology_guard topo_guard = session.value_or(service::default_session_id);
         sslog.trace("Got stream_mutation_fragments from {} reason {}, session {}", from, int(reason), session);
-        return handle_stream_mutation_fragments(plan_id, schema_id, cf_id, estimated_partitions, from, cpu_id, src, reason, topo_guard, source, as);
+        auto sg = reason == stream_reason::restore ? get_backup_scheduling_group() : current_scheduling_group();
+        return with_scheduling_group(sg, [this, plan_id, schema_id, cf_id, estimated_partitions, from, cpu_id, src, reason, topo_guard, source, &as] () mutable {
+            return handle_stream_mutation_fragments(plan_id, schema_id, cf_id, estimated_partitions, from, cpu_id, src, reason, topo_guard, source, as);
+        });
     });
     ser::streaming_rpc_verbs::register_stream_mutation_done(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
