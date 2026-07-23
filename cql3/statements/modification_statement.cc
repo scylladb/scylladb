@@ -62,8 +62,6 @@ modification_statement::modification_statement(statement_type type_, uint32_t bo
     : cql_statement_opt_metadata(modification_statement_timeout(*schema_))
     , type{type_}
     , _bound_terms{bound_terms}
-    , _columns_to_read(schema_->all_columns_count())
-    , _columns_of_cas_result_set(schema_->all_columns_count())
     , s{schema_}
     , attrs{std::move(attrs_)}
     , _column_operations{}
@@ -486,7 +484,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout, true, {},
             attrs->is_bypass_large_data_guardrails()).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (service::storage_proxy::cas_result cas_result) mutable {
-        auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, cas_result.is_applied);
+        auto result = request->build_cas_result_set(_metadata, *_columns_of_cas_result_set, cas_result.is_applied);
         if (tablet_info) {
             result->add_tablet_info(std::move(*tablet_info));
         }
@@ -500,6 +498,8 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
 }
 
 void modification_statement::build_cas_result_set_metadata() {
+
+    _columns_of_cas_result_set = std::make_unique<column_set>(s->all_columns_count());
 
     std::vector<lw_shared_ptr<column_specification>> columns;
     // Add the mandatory [applied] column to result set metadata
@@ -518,11 +518,11 @@ void modification_statement::build_cas_result_set_metadata() {
         // columns, then the existence condition applies only to the static columns themselves, and
         // so we don't want to include regular columns in that case.
         for (const auto& def : all_columns) {
-            _columns_of_cas_result_set.set(def.ordinal_id);
+            _columns_of_cas_result_set->set(def.ordinal_id);
         }
     } else {
         expr::for_each_expression<expr::column_value>(_condition, [&] (const expr::column_value& col) {
-            _columns_of_cas_result_set.set(col.col->ordinal_id);
+            _columns_of_cas_result_set->set(col.col->ordinal_id);
         });
     }
     columns.reserve(columns.size() + all_columns.size());
@@ -530,13 +530,16 @@ void modification_statement::build_cas_result_set_metadata() {
     // the same column can be used twice in the condition list:
     // if a > 0 and a < 3.
     for (const auto& def : all_columns) {
-        if (_columns_of_cas_result_set.test(def.ordinal_id)) {
+        if (_columns_of_cas_result_set->test(def.ordinal_id)) {
             columns.emplace_back(def.column_specification);
         }
     }
     // Ensure we prefetch all of the columns of the result set. This is also
     // necessary to check conditions.
-    _columns_to_read.union_with(_columns_of_cas_result_set);
+    if (!_columns_to_read) {
+        _columns_to_read = std::make_unique<column_set>(s->all_columns_count());
+    }
+    _columns_to_read->union_with(*_columns_of_cas_result_set);
     _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
 }
 
@@ -790,7 +793,10 @@ void modification_statement::add_operation(std::unique_ptr<operation> op) {
     }
     if (op->requires_read()) {
         _requires_read = true;
-        _columns_to_read.set(op->column.ordinal_id);
+        if (!_columns_to_read) {
+            _columns_to_read = std::make_unique<column_set>(s->all_columns_count());
+        }
+        _columns_to_read->set(op->column.ordinal_id);
         if (op->column.type->is_collection() ) {
             auto ctype = static_pointer_cast<const collection_type_impl>(op->column.type);
             if (!ctype->is_multi_cell()) {
