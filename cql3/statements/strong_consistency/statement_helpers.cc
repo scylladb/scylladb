@@ -27,7 +27,14 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
     const auto my_host_id = qp.db().real_database().get_token_metadata().get_topology().my_host_id();
     if (target.host != my_host_id) {
         ++(is_write ? stats.write_node_bounces : stats.read_node_bounces);
-        co_return qp.bounce_to_node(target, std::move(func_values_cache), timeout, is_write, std::move(on_forwarding_finished));
+        // SC operations report the client's CL and (for writes) SIMPLE write_type,
+        // matching the local SC path's timeout exception.
+        co_return qp.bounce_to_node(target, std::move(func_values_cache), timeout,
+                timeout_context{
+                        .cl = options.get_consistency(),
+                        .is_write = is_write,
+                        .wt = db::write_type::SIMPLE},
+                std::move(on_forwarding_finished));
     }
     ++(is_write ? stats.write_shard_bounces : stats.read_shard_bounces);
     co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache));

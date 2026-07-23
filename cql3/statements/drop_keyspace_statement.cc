@@ -24,7 +24,7 @@ namespace cql3 {
 namespace statements {
 
 drop_keyspace_statement::drop_keyspace_statement(const sstring& keyspace, bool if_exists)
-    : schema_altering_statement(&timeout_config::truncate_timeout)
+    : schema_altering_statement(truncate_timeout_info)
     , _keyspace{keyspace}
     , _if_exists{if_exists}
 {
