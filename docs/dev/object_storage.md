@@ -1,6 +1,6 @@
 # Keeping sstables on S3/GS
 
-On of the ways to use object storage is to keep sstables directly on it as objects.
+One of the ways to use object storage is to keep sstables directly on it as objects.
 
 ## Enabling the feature
 
@@ -80,6 +80,34 @@ object_storage_endpoints:
     aws_region: us-east-1
     iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
 ```
+
+## Configuring network-attached POSIX storage access
+
+A `posix` endpoint points at a network-attached, locally-mounted POSIX 
+directory (for example an NFS client mount). It is configured in 
+`scylla.yaml` similarly to a remote S3/GS service:
+
+```yaml
+object_storage_endpoints:
+  - name: /mnt/backup
+    type: posix
+```
+
+The path in `name`:
+
+- must be absolute; relative paths are rejected;
+- must exist; a missing or not-yet-mounted directory is reported when the
+  object storage client for the endpoint is created rather than on first use;
+- is normalized, i.e. trailing slashes, redundant separators and `.`/`..`
+  components are collapsed (symlinks are not resolved). As a result different
+  spellings of the same location (e.g. `/mnt/backup` and `/mnt/backup/`) refer
+  to the same endpoint.
+
+Objects are stored as plain files at `<path>/<bucket>/<object>`, with parent
+directories created on demand and pruned again when objects are deleted. Object
+names that would escape the `<path>/<bucket>` directory (for example via `..`)
+are rejected. A copy is a hardlink, and a subsequent overwrite of either side
+unlinks first, so copies stay independent like they would in an object store.
 
 ## Creating keyspace with S3
 

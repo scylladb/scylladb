@@ -21,6 +21,7 @@
 #include "db/object_storage_endpoint_param.hh"
 
 #include "object_storage_client.hh"
+#include "posix_object_storage_client.hh"
 #include "generation_type.hh"
 #include "utils/gcp/gcp_credentials.hh"
 #include "utils/gcp/object_storage.hh"
@@ -349,6 +350,9 @@ shared_ptr<object_storage_client> sstables::make_object_storage_client(const db:
     }
     if (ep.is_gs_storage()) {
         return seastar::make_shared<gs_client_wrapper>(ep, memory, std::move(cf));
+    }
+    if (ep.is_posix_storage()) {
+        return make_posix_object_storage_client(ep);
     }
     throw std::invalid_argument(fmt::format("Not implemented: {}", ep));
 }
