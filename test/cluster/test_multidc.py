@@ -31,7 +31,7 @@ CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch"}
 # Checks a cluster boot/operations in multi-dc environment with 5 nodes each in a separate DC
 async def test_multidc(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     logger.info("Creating a new cluster")
-    for i in range(5):
+    for i in range(6):
         s_info = await manager.server_add(
             config=CONFIG,
             property_file={'dc': f'dc{i}', 'rack': 'myrack1'}
