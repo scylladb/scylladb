@@ -13,7 +13,7 @@
 #include <seastar/core/scheduling.hh>
 #include "db/cache_tracker.hh"
 #include "readers/mutation_reader.hh"
-#include "replica/compaction_group.hh"
+#include "replica/logstor/compaction.hh"
 #include "types.hh"
 #include "index.hh"
 #include "segment_manager.hh"
@@ -24,7 +24,6 @@
 
 namespace replica {
 
-class compaction_group;
 class database;
 
 namespace logstor {
@@ -50,6 +49,7 @@ public:
     logstor& operator=(const logstor&) = delete;
 
     future<> do_recovery(replica::database&);
+    future<> do_recovery_for_test();
 
     future<> start();
     future<> stop();
@@ -69,7 +69,7 @@ public:
         return _cache_tracker;
     }
 
-    future<> write(const mutation&, compaction_group&, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout);
+    future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout);
 
     future<std::optional<mutation>> read(const schema&, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
 
@@ -81,8 +81,8 @@ public:
                                        const query::partition_slice& slice,
                                        tracing::trace_state_ptr trace_state = nullptr);
 
-    void set_trigger_compaction_hook(std::function<void()> fn);
-    void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn);
+    future<> flush_to_separator();
+
 };
 
 } // namespace logstor

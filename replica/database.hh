@@ -510,6 +510,8 @@ private:
 
     compaction::compaction_manager& _compaction_manager;
     compaction::compaction_strategy _compaction_strategy;
+    logstor::logstor* _logstor = nullptr;
+    std::unique_ptr<logstor::primary_index> _logstor_index;
     // The storage_group_manager manages either a single storage_group for vnodes or per-tablet storage_group for tablets.
     // It contains and manages both the compaction_groups list and the storage_groups vector.
     std::unique_ptr<storage_group_manager> _sg_manager;
@@ -548,9 +550,6 @@ private:
     bool _tombstone_gc_enabled = true;
     utils::phased_barrier _flush_barrier;
     std::vector<view_ptr> _views;
-
-    logstor::logstor* _logstor = nullptr;
-    std::unique_ptr<logstor::primary_index> _logstor_index;
 
     std::unique_ptr<cell_locker> _counter_cell_locks; // Memory-intensive; allocate only when needed.
 
@@ -621,9 +620,8 @@ public:
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
 
-    bool add_logstor_segment(logstor::log_segment_id, logstor::segment_descriptor&, dht::token first_token, dht::token last_token);
-
-    logstor::separator_buffer& get_logstor_separator_buffer(dht::token token, size_t write_size);
+    logstor::logstor_group& get_logstor_group(dht::token token);
+    logstor::logstor_group& get_logstor_group(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token);
 
     // Restricted to new sstables produced by external processes such as repair.
     // The sstable might undergo split if table is in split mode.
@@ -887,8 +885,6 @@ public:
     // to issue disk operations safely.
     void mark_ready_for_writes(db::commitlog* cl);
 
-    void init_logstor(logstor::logstor* ls);
-
     bool uses_logstor() const {
         return _logstor != nullptr;
     }
@@ -1024,7 +1020,7 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 public:
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& cm, logstor::logstor* logstor, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
 
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();

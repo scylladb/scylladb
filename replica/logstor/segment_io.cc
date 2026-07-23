@@ -92,7 +92,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
         size_t segment_size,
         segment_header_consumer on_segment_header,
         record_header_consumer on_record_header,
-        record_consumer on_record) {
+        record_bytes_consumer on_record) {
     size_t current_position = 0;
     std::optional<segment_sequence> segment_seq;
 
@@ -183,8 +183,11 @@ future<> scan_segment(seastar::input_stream<char>& in,
                 if (mut_buf.size() < rh.data_size) {
                     break;
                 }
-                auto mut = ser::deserialize_from_buffer(mut_buf, std::type_identity<canonical_mutation>{});
-                co_await on_record(loc, log_record{std::move(record_header), std::move(mut)});
+                log_record_bytes_view record_bytes{
+                    .header = bytes_view(reinterpret_cast<const int8_t*>(header_buf.get()), header_buf.size()),
+                    .data = bytes_view(reinterpret_cast<const int8_t*>(mut_buf.get()), mut_buf.size()),
+                };
+                co_await on_record(loc, record_header, record_bytes);
             } else {
                 // Skip the canonical_mutation bytes without reading them
                 co_await in.skip(rh.data_size);
@@ -211,6 +214,21 @@ future<> scan_segment(seastar::input_stream<char>& in,
             current_position += bytes_to_skip;
         }
     }
+}
+
+future<> scan_segment(seastar::input_stream<char>& in,
+        log_segment_id segment_id,
+        size_t segment_size,
+        segment_header_consumer on_segment_header,
+        record_header_consumer on_record_header,
+        record_consumer on_record) {
+    co_await scan_segment(in, segment_id, segment_size,
+            std::move(on_segment_header), std::move(on_record_header),
+            [on_record = std::move(on_record)] (log_location loc, const log_record_header& record_header, log_record_bytes_view record_bytes) mutable -> future<> {
+                auto data_stream = simple_memory_input_stream(reinterpret_cast<const char*>(record_bytes.data.data()), record_bytes.data.size());
+                auto mut = ser::deserialize(data_stream, std::type_identity<canonical_mutation>{});
+                co_await on_record(loc, log_record{record_header, std::move(mut)});
+            });
 }
 
 streamed_segment_rewriter::streamed_segment_rewriter(log_segment_id target_segment, segment_sequence target_seq, streamed_buffer_consumer on_buffer)

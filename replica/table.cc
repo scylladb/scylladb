@@ -26,6 +26,7 @@
 #include "replica/data_dictionary_impl.hh"
 #include "replica/compaction_group.hh"
 #include "replica/logstor/compaction.hh"
+#include "replica/logstor/types.hh"
 #include "replica/query_state.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
@@ -675,6 +676,7 @@ future<> storage_group_manager::stop_storage_groups() noexcept {
 void storage_group_manager::clear_storage_groups() {
     for (auto& [id, sg]: _storage_groups) {
         sg->clear_sstables();
+        sg->clear_logstor_segments();
     }
 }
 
@@ -1133,45 +1135,55 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
     }
 
     if (_t.uses_logstor()) {
-        co_await get_logstor_compaction_manager().split_compaction(_t, *this, opt.classifier);
+        co_await get_logstor_compaction_manager().submit_split_compaction(_t, as_logstor_group(), opt.classifier);
     }
 }
 
 future<> compaction_group::discard_logstor_segments() {
     auto& sm = get_logstor_segment_manager();
-    co_await sm.discard_segments(*_logstor_segments);
+    co_await sm.discard_segments(logstor_segments());
+}
+
+logstor::logstor_group& compaction_group::as_logstor_group() noexcept {
+    return *_logstor_state;
+}
+
+const logstor::logstor_group& compaction_group::as_logstor_group() const noexcept {
+    return *_logstor_state;
+}
+
+compaction_group_logstor_state::compaction_group_logstor_state(compaction_group& cg) noexcept
+    : logstor_group(cg.get_logstor_segment_manager().get_segment_size())
+    , _cg(&cg) {
+}
+
+::table_id compaction_group_logstor_state::table_id() const noexcept {
+    return _cg->schema()->id();
+}
+
+logstor::primary_index& compaction_group_logstor_state::logstor_index() noexcept {
+    return _cg->get_logstor_index();
+}
+
+const logstor::primary_index& compaction_group_logstor_state::logstor_index() const noexcept {
+    return _cg->get_logstor_index();
+}
+
+logstor::compaction_manager& compaction_group_logstor_state::logstor_compaction_manager() noexcept {
+    return _cg->get_logstor_compaction_manager();
 }
 
 future<> compaction_group::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
-    auto units = co_await get_units(_separator_flush_sem, 1);
-    auto pending = std::exchange(_separator_flushes, {});
-    if (_logstor_separator && (!seq_num || _logstor_separator->min_seq_num < *seq_num)) {
-        auto& cm = get_logstor_compaction_manager();
-        auto b = std::move(*_logstor_separator);
-        _logstor_separator.reset();
-        pending.push_back(cm.flush_separator_buffer(std::move(b), *this));
+    if (!_logstor_state) {
+        co_return;
     }
-    co_await when_all(pending.begin(), pending.end());
-}
 
-logstor::separator_buffer& compaction_group::get_separator_buffer(size_t write_size) {
-    if (!_logstor_separator || !_logstor_separator->can_fit(write_size)) {
-        auto& cm = get_logstor_compaction_manager();
-        if (_logstor_separator) {
-            auto b = std::move(*_logstor_separator);
-            _logstor_separator.reset();
-
-            std::erase_if(_separator_flushes, [](future<>& f) { return f.available(); });
-            _separator_flushes.push_back(cm.flush_separator_buffer(std::move(b), *this));
-        }
-        _logstor_separator.emplace(cm.allocate_separator_buffer());
-    }
-    return *_logstor_separator;
+    co_await _logstor_state->flush_separator(seq_num);
 }
 
 future<utils::chunked_vector<logstor::segment_snapshot>> compaction_group::take_logstor_snapshot() {
-    auto compaction_disable_guard = co_await get_logstor_compaction_manager().disable_compaction(*this);
-    auto snp = co_await get_logstor_segment_manager().make_snapshot(*this);
+    auto& logstor_cg = as_logstor_group();
+    auto snp = co_await get_logstor_segment_manager().make_snapshot(logstor_cg);
     co_return std::move(snp);
 }
 
@@ -1838,20 +1850,12 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
     }
 }
 
-bool table::add_logstor_segment(logstor::log_segment_id seg_id, logstor::segment_descriptor& seg_desc, dht::token first_token, dht::token last_token) {
-    dht::token_range tr(first_token, last_token);
-    if (storage_groups_for_token_range(tr).size() == 1) {
-        auto& cg = compaction_group_for_logstor_segment(seg_id, first_token, last_token);
-        cg.add_logstor_segment(seg_desc);
-        return true;
-    } else {
-        // the segment doesn't fit in a single storage group. need to write to separator.
-        return false;
-    }
+logstor::logstor_group& table::get_logstor_group(dht::token token) {
+    return compaction_group_for_token(token).as_logstor_group();
 }
 
-logstor::separator_buffer& table::get_logstor_separator_buffer(dht::token token, size_t write_size) {
-    return compaction_group_for_token(token).get_separator_buffer(write_size);
+logstor::logstor_group& table::get_logstor_group(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) {
+    return compaction_group_for_logstor_segment(seg_id, first_token, last_token).as_logstor_group();
 }
 
 // Handles permit management only, used for situations where we don't want to inform
@@ -2325,10 +2329,10 @@ size_t compaction_group::live_sstable_count() const noexcept {
 }
 
 size_t compaction_group::logstor_disk_space_used() const noexcept {
-    if (!_logstor_segments || !_t.uses_logstor()) {
+    if (!_t.uses_logstor()) {
         return 0;
     }
-    return _logstor_segments->segment_count() * _t.get_logstor_segment_manager().get_segment_size();
+    return logstor_segments().segment_count() * _t.get_logstor_segment_manager().get_segment_size();
 }
 
 uint64_t compaction_group::live_disk_space_used() const noexcept {
@@ -2513,7 +2517,7 @@ compaction_group::merge_logstor_segments_from(compaction_group& group) {
         co_return;
     }
     auto permit = co_await _t.get_sstable_list_permit();
-    co_await _logstor_segments->merge(*group._logstor_segments);
+    co_await logstor_segments().merge(group.logstor_segments());
 }
 
 future<>
@@ -2702,7 +2706,7 @@ future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num
     }
 
     // wait for all previous writes to be written to a separator buffer
-    co_await get_logstor_segment_manager().await_pending_writes();
+    co_await _logstor->flush_to_separator();
 
     // flush separator buffers
     co_await parallel_foreach_compaction_group([seq_num] (compaction_group& cg) {
@@ -2752,10 +2756,8 @@ void compaction_group::trigger_compaction() {
 }
 
 void compaction_group::trigger_logstor_compaction() {
-    if (!_async_gate.is_closed() && !_t.is_auto_compaction_disabled_by_user()) {
-        if (_logstor_segments) {
-            get_logstor_compaction_manager().submit(*this);
-        }
+    if (!_async_gate.is_closed() && !_t.is_auto_compaction_disabled_by_user() && _t.uses_logstor()) {
+        get_logstor_compaction_manager().submit(as_logstor_group());
     }
 }
 
@@ -3253,9 +3255,12 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
     , _backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
     , _repair_sstable_classifier(std::move(repair_classifier))
-    , _logstor_segments(make_lw_shared<logstor::segment_set>())
+    , _logstor_state(t.schema()->logstor_enabled() ? std::make_unique<compaction_group_logstor_state>(*this) : nullptr)
     , _lowest_rp(db::replay_position::max)
 {
+    if (_logstor_state) {
+        get_logstor_compaction_manager().add(as_logstor_group());
+    }
 }
 
 compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
@@ -3284,39 +3289,38 @@ future<> compaction_group::stop(sstring reason) noexcept {
     if (_async_gate.is_closed()) {
         co_return;
     }
-  // FIXME: indentation
-  for (auto view : all_views()) {
-    co_await _t._compaction_manager.stop_ongoing_compactions(reason, view);
-  }
-    if (_t.uses_logstor()) {
-        co_await get_logstor_compaction_manager().stop_ongoing_compactions(*this);
+    for (auto view : all_views()) {
+        co_await _t._compaction_manager.stop_ongoing_compactions(reason, view);
     }
     co_await _async_gate.close();
     auto flush_future = co_await seastar::coroutine::as_future(flush());
 
-    co_await flush_separator();
+    auto separator_flush_future = co_await coroutine::as_future(flush_separator());
+
+    if (_t.uses_logstor()) {
+        co_await get_logstor_compaction_manager().remove(as_logstor_group());
+    }
+
     co_await _flush_gate.close();
     co_await _sstable_add_gate.close();
-  // FIXME: indentation
-  _compaction_disabler_for_views.clear();
-  co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
-  for (auto view : all_views()) {
-    co_await _t._compaction_manager.remove(*view, reason);
-  }
-    if (_t.uses_logstor()) {
-        co_await get_logstor_compaction_manager().remove(*this);
+    _compaction_disabler_for_views.clear();
+    co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
+    for (auto view : all_views()) {
+        co_await _t._compaction_manager.remove(*view, reason);
     }
 
     if (flush_future.failed()) {
         co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
     }
+
+    if (separator_flush_future.failed()) {
+        co_await seastar::coroutine::return_exception_ptr(separator_flush_future.get_exception());
+    }
 }
 
 bool compaction_group::empty() const noexcept {
     return _memtables->empty() && live_sstable_count() == 0 && _sstable_add_gate.get_count() == 0
-        && (_logstor_segments ? _logstor_segments->empty() : true)
-        && (_logstor_separator ? _logstor_separator->empty() : true)
-        && _separator_flushes.empty();
+        && (!_logstor_state || _logstor_state->empty());
 }
 
 const schema_ptr& compaction_group::schema() const {
@@ -3328,14 +3332,26 @@ void compaction_group::clear_sstables() {
     _maintenance_sstables = make_maintenance_sstable_set();
 }
 
+void compaction_group::clear_logstor_segments() {
+    if (_logstor_state) {
+        _logstor_state->clear_segments();
+    }
+}
+
 void storage_group::clear_sstables() {
     for_each_compaction_group([] (const compaction_group_ptr& cg) {
         cg->clear_sstables();
     });
 }
 
+void storage_group::clear_logstor_segments() {
+    for_each_compaction_group([] (const compaction_group_ptr& cg) {
+        cg->clear_logstor_segments();
+    });
+}
+
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& compaction_manager,
-        sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
+        logstor::logstor* logstor, sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
         locator::effective_replication_map_ptr erm)
     : _schema(std::move(schema))
     , _config(std::move(config))
@@ -3347,6 +3363,8 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
                         )
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
+    , _logstor(logstor)
+    , _logstor_index(_schema->logstor_enabled() ? std::make_unique<logstor::primary_index>(_schema) : nullptr)
     , _sg_manager(make_storage_group_manager())
     , _sstables(make_compound_sstable_set())
     , _sstable_deletion_gate(format("[table {}.{}] sstable_deletion_gate", _schema->ks_name(), _schema->cf_name()))
@@ -3368,6 +3386,13 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _flush_timer([this]{ on_flush_timer(); })
     , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
 {
+    if (_schema->logstor_enabled()) {
+        SCYLLA_ASSERT(_logstor);
+        if (cache_enabled()) {
+            _logstor_index->set_cache_tracker(&_logstor->get_cache_tracker());
+        }
+    }
+
     if (!_config.enable_disk_writes) {
         tlogger.warn("Writes disabled, column family no durable.");
     }
@@ -3650,7 +3675,7 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(locator::effec
         }
         if (_t.uses_logstor()) {
             _compaction_reenablers_for_logstor_merging.push_back(
-                    _t.get_logstor_compaction_manager().disable_compaction_no_wait(*new_sg->main_compaction_group()));
+                    _t.get_logstor_compaction_manager().disable_compaction_no_wait(new_sg->main_compaction_group()->as_logstor_group()));
         }
     };
 
@@ -4857,15 +4882,6 @@ void table::mark_ready_for_writes(db::commitlog* cl) {
     _readonly = false;
 }
 
-void table::init_logstor(logstor::logstor* ls) {
-    _logstor = ls;
-    _logstor_index = std::make_unique<logstor::primary_index>(_schema);
-
-    if (cache_enabled()) {
-        _logstor_index->set_cache_tracker(&ls->get_cache_tracker());
-    }
-}
-
 size_t table::get_logstor_memory_usage() const {
     size_t m = 0;
     if (_logstor_index) {
@@ -5159,7 +5175,7 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
 
     if (_logstor) [[unlikely]] {
         auto ss_holder = cg.sstable_add_gate().hold();
-        return _logstor->write(m, cg, std::move(ss_holder), timeout);
+        return _logstor->write(m, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder)), timeout);
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h), &cg, holder = std::move(holder)] () mutable {
@@ -5180,7 +5196,7 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
 
     if (_logstor) [[unlikely]] {
         auto ss_holder = cg.sstable_add_gate().hold();
-        return _logstor->write(m.unfreeze(m_schema), cg, std::move(ss_holder), timeout);
+        return _logstor->write(m.unfreeze(m_schema), logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder)), timeout);
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), guardrails = std::move(guardrails), violations_out]() mutable {
@@ -5428,7 +5444,7 @@ table::disable_auto_compaction() {
 
     if (uses_logstor()) {
         co_await parallel_foreach_compaction_group([this] (compaction_group& cg) {
-            return get_logstor_compaction_manager().stop_ongoing_compactions(cg);
+            return get_logstor_compaction_manager().stop_ongoing_compactions(cg.as_logstor_group());
         });
     }
 }

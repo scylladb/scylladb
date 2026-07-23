@@ -977,10 +977,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , logstor_format_on_startup(this, "logstor_format_on_startup", value_status::Used, true,
         "Controls when logstor data files are formatted. When enabled, all logstor files are formatted during node startup, which increases startup time but ensures optimal write performance immediately after startup. "
         "When disabled, logstor files are formatted lazily on first write, which reduces startup time but may cause slightly degraded write performance on first access to each file.")
-    , logstor_separator_delay_limit_ms(this, "logstor_separator_delay_limit_ms", value_status::Used, 100,
-        "Maximum delay in milliseconds for logstor separator debt control.")
-    , logstor_separator_max_memory_in_mb(this, "logstor_separator_max_memory_in_mb", value_status::Used, 256,
-        "Maximum memory in megabytes for logstor separator memory buffers.")
+    , logstor_compaction_trigger_threshold_percent(this, "logstor_compaction_trigger_threshold_percent", value_status::Used, 20,
+        "Trigger automatic logstor compaction when the number of available segments drops below this percentage of the total number of logstor segments. A value of 0 disables the trigger threshold.")
+    , logstor_compaction_soft_pressure_threshold_percent(this, "logstor_compaction_soft_pressure_threshold_percent", value_status::Used, 15,
+        "Start increasing logstor compaction CPU shares when the number of available segments drops below this percentage of the total number of logstor segments. At or above this threshold, compaction uses the base shares. As available segments decrease below it, shares increase linearly until reaching the maximum when no segments are available.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
         "Total memory to use for SSTable-reading buffers.")
     , memtable_flush_queue_size(this, "memtable_flush_queue_size", value_status::Unused, 4,
