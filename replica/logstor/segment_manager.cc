@@ -1669,7 +1669,7 @@ future<> compaction_manager_impl::split_compaction(replica::table& t, compaction
                 return want_data::yes;
             },
             [&index, &bufs, &classifier] (log_location read_location, log_record record) -> future<> {
-                auto& cb = bufs[classifier(record.header.key.dk.token())];
+                auto& cb = bufs[classifier(record.header.key.token())];
                 co_await cb.rewrite_record(index, read_location, std::move(record));
             }
         );
@@ -1744,7 +1744,7 @@ void segment_manager_impl::write_to_separator(table& t, log_location prev_loc, l
     auto* index_ptr = &t.logstor_index();
     log_record_writer writer(std::move(record));
 
-    auto& buf = t.get_logstor_separator_buffer(key.dk.token(), writer.size());
+    auto& buf = t.get_logstor_separator_buffer(key.token(), writer.size());
 
     if (buf.held_segments.empty() || buf.held_segments.back().id() != seg_ref.id()) {
         buf.held_segments.push_back(seg_ref);
@@ -1886,8 +1886,11 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
             co_return;
         }
         logstor_logger.info("Table {}.{} has {} entries in logstor index", tp->schema()->ks_name(), tp->schema()->cf_name(), tp->logstor_index().get_key_count());
-        for (const auto& entry : tp->logstor_index()) {
-            used_segments.set(entry.entry().location.segment.value);
+        auto scan = tp->logstor_index().scan();
+        while (auto batch = scan.next_batch(1024)) {
+            for (const auto& entry : batch->entries) {
+                used_segments.set(entry.get().entry().location.segment.value);
+            }
             co_await coroutine::maybe_yield();
         }
     });

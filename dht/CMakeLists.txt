@@ -6,6 +6,7 @@ target_sources(scylla_dht
     boot_strapper.cc
     fixed_shard.cc
     i_partitioner.cc
+    logstor_partitioner.cc
     murmur3_partitioner.cc
     range_streamer.cc
     token.cc)

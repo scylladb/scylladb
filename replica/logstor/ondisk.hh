@@ -23,6 +23,9 @@ static constexpr size_t record_alignment = 8;
 static constexpr uint8_t current_version = 1;
 static constexpr uint32_t buffer_header_magic = 0x4c475342;
 
+static constexpr size_t serialized_primary_index_key_size = key_hash_size;
+static constexpr size_t serialized_log_record_header_size = serialized_primary_index_key_size + sizeof(api::timestamp_type) + utils::UUID::serialized_size();
+
 struct buffer_header {
     uint32_t magic;
     segment_kind kind;
@@ -57,11 +60,10 @@ static constexpr size_t segment_header_size =
 static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
 
 struct record_header {
-    uint32_t header_size; // size of the serialized log_record_header
-    uint32_t data_size;   // size of the serialized canonical_mutation
+    uint32_t data_size; // size of the serialized canonical_mutation
 };
 
-static constexpr size_t record_header_size = 2 * sizeof(uint32_t);
+static constexpr size_t record_header_size = sizeof(uint32_t);
 
 bool validate_header(const buffer_header& bh);
 bool validate_record_header(const record_header& rh);
@@ -70,6 +72,53 @@ bool validate_record_header(const record_header& rh);
 } // namespace replica::logstor
 
 namespace ser {
+
+template <>
+struct serializer<replica::logstor::primary_index_key> {
+    template <typename Output>
+    static void write(Output& out, const replica::logstor::primary_index_key& key) {
+        auto h = key.hash();
+        out.write(reinterpret_cast<const char*>(h.data()), h.size());
+    }
+    template <typename Input>
+    static replica::logstor::primary_index_key read(Input& in) {
+        replica::logstor::key_hash hash;
+        in.read(reinterpret_cast<char*>(hash.data()), hash.size());
+        return replica::logstor::primary_index_key(hash);
+    }
+    template <typename Input>
+    static void skip(Input& in) {
+        in.skip(replica::logstor::key_hash_size);
+    }
+};
+
+template <>
+struct serializer<replica::logstor::log_record_header> {
+    template <typename Output>
+    static void write(Output& out, const replica::logstor::log_record_header& h) {
+        serializer<replica::logstor::primary_index_key>::write(out, h.key);
+        serializer<api::timestamp_type>::write(out, h.timestamp);
+        serializer<int64_t>::write(out, h.table.uuid().get_most_significant_bits());
+        serializer<int64_t>::write(out, h.table.uuid().get_least_significant_bits());
+    }
+    template <typename Input>
+    static replica::logstor::log_record_header read(Input& in) {
+        replica::logstor::log_record_header h;
+        h.key = serializer<replica::logstor::primary_index_key>::read(in);
+        h.timestamp = serializer<api::timestamp_type>::read(in);
+        auto msb = serializer<int64_t>::read(in);
+        auto lsb = serializer<int64_t>::read(in);
+        h.table = table_id(utils::UUID(msb, lsb));
+        return h;
+    }
+    template <typename Input>
+    static void skip(Input& in) {
+        serializer<replica::logstor::primary_index_key>::skip(in);
+        serializer<api::timestamp_type>::skip(in);
+        serializer<int64_t>::skip(in);
+        serializer<int64_t>::skip(in);
+    }
+};
 
 template <>
 struct serializer<replica::logstor::ondisk::buffer_header> {
@@ -139,21 +188,18 @@ template <>
 struct serializer<replica::logstor::ondisk::record_header> {
     template <typename Output>
     static void write(Output& out, const replica::logstor::ondisk::record_header& h) {
-        serializer<uint32_t>::write(out, h.header_size);
         serializer<uint32_t>::write(out, h.data_size);
     }
 
     template <typename Input>
     static replica::logstor::ondisk::record_header read(Input& in) {
         replica::logstor::ondisk::record_header h;
-        h.header_size = serializer<uint32_t>::read(in);
         h.data_size = serializer<uint32_t>::read(in);
         return h;
     }
 
     template <typename Input>
     static void skip(Input& in) {
-        serializer<uint32_t>::skip(in);
         serializer<uint32_t>::skip(in);
     }
 };

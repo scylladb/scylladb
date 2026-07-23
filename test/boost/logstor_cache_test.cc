@@ -6,16 +6,15 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #include <boost/test/unit_test.hpp>
-#include <optional>
 
-#include "test/lib/scylla_test_case.hh"
+#include "replica/logstor/types.hh"
+#include "dht/logstor_partitioner.hh"
 #include <seastar/testing/thread_test_case.hh>
 
 #include "replica/logstor/index.hh"
 #include "db/cache_tracker.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "test/lib/simple_schema.hh"
 
 using namespace replica::logstor;
 
@@ -31,6 +30,26 @@ struct shared_logstor_cache {
     }
 };
 
+schema_ptr make_logstor_schema() {
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_partitioner(dht::logstor_partitioner::classname)
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v", utf8_type)
+            .build();
+}
+
+primary_index_key make_primary_index_key(const schema& schema, sstring pk) {
+    auto pkey = partition_key::from_single_value(schema, serialized(pk));
+    auto dk = dht::decorate_key(schema, pkey);
+    return primary_index_key{schema, dk};
+}
+
+primary_index_key make_fixed_token_key(const schema& schema, int64_t token, sstring pk) {
+    auto pkey = partition_key::from_single_value(schema, serialized(pk));
+    auto dk = dht::decorated_key(dht::token::from_int64(token), std::move(pkey));
+    return primary_index_key::with_forced_token(schema, dk);
+}
+
 index_entry make_index_entry(uint32_t segment, uint32_t offset, uint32_t size, api::timestamp_type timestamp) {
     return index_entry{
         .location = log_location{
@@ -42,65 +61,47 @@ index_entry make_index_entry(uint32_t segment, uint32_t offset, uint32_t size, a
     };
 }
 
-mutation make_mutation(simple_schema& schema, sstring pk, sstring value) {
-    auto m = schema.new_mutation(std::move(pk));
-    auto ts = schema.new_timestamp();
-    auto ck = schema.make_ckey(0);
-    m.partition().clustered_row(*schema.schema(), ck).apply(row_marker(ts));
-    schema.add_row(m, ck, std::move(value), ts);
+mutation make_mutation(schema_ptr schema, sstring pk, sstring value) {
+    auto key = partition_key::from_single_value(*schema, serialized(std::move(pk)));
+    auto dk = dht::decorate_key(*schema, key);
+    mutation m(schema, dk);
+    auto ts = api::timestamp_type(1);
+    auto& row = m.partition().clustered_row(*schema, clustering_key::make_empty());
+    row.apply(row_marker(ts));
+    const auto& v_def = *schema->get_column_definition("v");
+    row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, ts, serialized(std::move(value))));
     return m;
 }
 
-mutation make_mutation(simple_schema& schema, const dht::decorated_key& dk, sstring value) {
-    auto m = mutation(schema.schema(), dk);
-    auto ts = schema.new_timestamp();
-    auto ck = schema.make_ckey(0);
-    m.partition().clustered_row(*schema.schema(), ck).apply(row_marker(ts));
-    schema.add_row(m, ck, std::move(value), ts);
-    return m;
+void populate(primary_index& index, const primary_index_key& key, const mutation& m) {
+    BOOST_REQUIRE(index.populate_cache(key, m));
 }
 
-void populate(primary_index& index, const dht::decorated_key& dk, const mutation& m) {
-    auto it = index.find(dk);
-    BOOST_REQUIRE(it != index.end());
-    auto* ct = index.cache_tracker();
-    BOOST_REQUIRE(ct);
-    ct->populate(*it, m);
-}
-
-mutation lookup(primary_index& index, replica::logstor::cache_tracker& tracker, const dht::decorated_key& dk, schema_ptr schema) {
-    auto it = index.find(dk);
-    BOOST_REQUIRE(it != index.end());
-
-    auto result = tracker.lookup(*it, std::move(schema));
+mutation_partition lookup(primary_index& index, const primary_index_key& key, schema_ptr schema) {
+    auto result = index.lookup_for_read(key, schema, true);
     BOOST_REQUIRE(result);
-    return std::move(*result);
+    BOOST_REQUIRE(result->cached_mutation);
+    return std::move(*result->cached_mutation);
 }
 
-bool lookup_exists(primary_index& index, replica::logstor::cache_tracker& tracker, const dht::decorated_key& dk, schema_ptr schema) {
-    auto it = index.find(dk);
-    BOOST_REQUIRE(it != index.end());
-
-    return bool(tracker.lookup(*it, std::move(schema)));
+bool lookup_exists(primary_index& index, const primary_index_key& key, schema_ptr schema) {
+    auto result = index.lookup_for_read(key, std::move(schema), true);
+    BOOST_REQUIRE(result);
+    return bool(result->cached_mutation);
 }
 
 bool evict_one(replica::logstor::cache_tracker& tracker) {
     return tracker.region().evict_some() == seastar::memory::reclaiming_result::reclaimed_something;
 }
 
-dht::decorated_key make_fixed_token_key(simple_schema& schema, int64_t token, sstring pk) {
-    auto pkey = partition_key::from_single_value(*schema.schema(), serialized(pk));
-    return dht::decorated_key(dht::token::from_int64(token), std::move(pkey));
-}
-
-std::vector<dht::decorated_key> insert_same_token_keys(primary_index& index, simple_schema& schema, int64_t token, int start, int count) {
-    std::vector<dht::decorated_key> keys;
+std::vector<primary_index_key> insert_same_token_keys(primary_index& index, const schema& schema, int64_t token, int start, int count) {
+    std::vector<primary_index_key> keys;
     keys.reserve(count);
     for (int i = 0; i < count; ++i) {
-        auto dk = make_fixed_token_key(schema, token, format("fixed-pk-{:06d}", start + i));
-        auto [ok, prev] = index.insert(primary_index_key{dk}, make_index_entry(500 + i, i * 8, 8, 1));
+        auto key = make_fixed_token_key(schema, token, format("fixed-pk-{:06d}", start + i));
+        auto [ok, prev] = index.insert(key, make_index_entry(500 + i, i * 8, 8, 1));
         BOOST_REQUIRE(ok && !prev);
-        keys.push_back(std::move(dk));
+        keys.push_back(std::move(key));
     }
     return keys;
 }
@@ -108,132 +109,129 @@ std::vector<dht::decorated_key> insert_same_token_keys(primary_index& index, sim
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_eviction) {
-    simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    index.set_cache_tracker(&cache.logstor_tracker);
+    primary_index index(schema, &cache.logstor_tracker);
 
-    auto dk0 = schema.make_pkey("pk0");
-    auto dk1 = schema.make_pkey("pk1");
-    auto dk2 = schema.make_pkey("pk2");
-    auto dk3 = schema.make_pkey("pk3");
+    auto key0 = make_primary_index_key(*schema, "pk0");
+    auto key1 = make_primary_index_key(*schema, "pk1");
+    auto key2 = make_primary_index_key(*schema, "pk2");
+    auto key3 = make_primary_index_key(*schema, "pk3");
 
-    BOOST_REQUIRE(!index.insert(primary_index_key{dk0}, make_index_entry(1, 0, 10, 1)).second);
-    BOOST_REQUIRE(!index.insert(primary_index_key{dk1}, make_index_entry(1, 10, 10, 1)).second);
-    BOOST_REQUIRE(!index.insert(primary_index_key{dk2}, make_index_entry(1, 20, 10, 1)).second);
-    BOOST_REQUIRE(!index.insert(primary_index_key{dk3}, make_index_entry(1, 30, 10, 1)).second);
+    BOOST_REQUIRE(!index.insert(key0, make_index_entry(1, 0, 10, 1)).second);
+    BOOST_REQUIRE(!index.insert(key1, make_index_entry(1, 10, 10, 1)).second);
+    BOOST_REQUIRE(!index.insert(key2, make_index_entry(1, 20, 10, 1)).second);
+    BOOST_REQUIRE(!index.insert(key3, make_index_entry(1, 30, 10, 1)).second);
 
     auto mut0 = make_mutation(schema, "pk0", "v0");
     auto mut1 = make_mutation(schema, "pk1", "v1");
     auto mut2 = make_mutation(schema, "pk2", "v2");
     auto mut3 = make_mutation(schema, "pk3", "v3");
 
-    populate(index, dk0, mut0);
-    populate(index, dk1, mut1);
-    populate(index, dk2, mut2);
+    populate(index, key0, mut0);
+    populate(index, key1, mut1);
+    populate(index, key2, mut2);
 
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, 3);
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_evictions, 0);
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk0, schema.schema()));
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk1, schema.schema()));
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk2, schema.schema()));
+    BOOST_REQUIRE(lookup_exists(index, key0, schema));
+    BOOST_REQUIRE(lookup_exists(index, key1, schema));
+    BOOST_REQUIRE(lookup_exists(index, key2, schema));
 
-    assert_that(lookup(index, cache.logstor_tracker, dk0, schema.schema())).is_equal_to(mut0);
+    assert_that(schema, lookup(index, key0, schema)).is_equal_to(mut0.partition());
 
-    auto [inserted1, old_entry1] = index.insert(primary_index_key{dk1}, make_index_entry(2, 10, 12, 2));
+    auto [inserted1, old_entry1] = index.insert(key1, make_index_entry(2, 10, 12, 2));
     BOOST_REQUIRE(inserted1);
     BOOST_REQUIRE(old_entry1);
-    BOOST_REQUIRE(!lookup_exists(index, cache.logstor_tracker, dk1, schema.schema()));
+    BOOST_REQUIRE(!lookup_exists(index, key1, schema));
 
-    auto [inserted2, old_entry2] = index.insert(primary_index_key{dk2}, make_index_entry(2, 20, 12, 2));
+    auto [inserted2, old_entry2] = index.insert(key2, make_index_entry(2, 20, 12, 2));
     BOOST_REQUIRE(inserted2);
     BOOST_REQUIRE(old_entry2);
-    BOOST_REQUIRE(!lookup_exists(index, cache.logstor_tracker, dk2, schema.schema()));
+    BOOST_REQUIRE(!lookup_exists(index, key2, schema));
 
-    auto [inserted0, old_entry0] = index.insert(primary_index_key{dk0}, make_index_entry(3, 0, 14, 0));
+    auto [inserted0, old_entry0] = index.insert(key0, make_index_entry(3, 0, 14, 0));
     BOOST_REQUIRE(!inserted0);
     BOOST_REQUIRE(old_entry0);
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk0, schema.schema()));
+    BOOST_REQUIRE(lookup_exists(index, key0, schema));
 
-    BOOST_REQUIRE(index.erase(primary_index_key{dk1}, make_index_entry(1, 10, 10, 1).location) == false);
-    BOOST_REQUIRE(index.erase(primary_index_key{dk1}, make_index_entry(2, 10, 12, 2).location));
-    BOOST_REQUIRE(index.find(dk1) == index.end());
+    BOOST_REQUIRE(index.erase(key1, make_index_entry(1, 10, 10, 1).location) == false);
+    BOOST_REQUIRE(index.erase(key1, make_index_entry(2, 10, 12, 2).location));
+    BOOST_REQUIRE(!index.get(key1));
 
-    populate(index, dk2, mut2);
-    populate(index, dk3, mut3);
+    populate(index, key2, mut2);
+    populate(index, key3, mut3);
 
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, 5);
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk0, schema.schema()));
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk2, schema.schema()));
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk3, schema.schema()));
+    BOOST_REQUIRE(lookup_exists(index, key0, schema));
+    BOOST_REQUIRE(lookup_exists(index, key2, schema));
+    BOOST_REQUIRE(lookup_exists(index, key3, schema));
 
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk2, schema.schema()));
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk3, schema.schema()));
+    BOOST_REQUIRE(lookup_exists(index, key2, schema));
+    BOOST_REQUIRE(lookup_exists(index, key3, schema));
 
     auto evictions_before = cache.shared_tracker.get_stats().partition_evictions;
     BOOST_REQUIRE(evict_one(cache.logstor_tracker));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_evictions, evictions_before + 1);
 
-    auto cached_after_eviction = int(lookup_exists(index, cache.logstor_tracker, dk0, schema.schema()))
-            + int(index.find(dk2) != index.end() && lookup_exists(index, cache.logstor_tracker, dk2, schema.schema()))
-            + int(lookup_exists(index, cache.logstor_tracker, dk3, schema.schema()));
+    auto cached_after_eviction = int(lookup_exists(index, key0, schema))
+        + int(index.get(key2) && lookup_exists(index, key2, schema))
+        + int(lookup_exists(index, key3, schema));
     BOOST_REQUIRE_EQUAL(cached_after_eviction, 2);
 
-    populate(index, dk0, mut0);
+    populate(index, key0, mut0);
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, 6);
-    assert_that(lookup(index, cache.logstor_tracker, dk0, schema.schema())).is_equal_to(mut0);
+    assert_that(schema, lookup(index, key0, schema)).is_equal_to(mut0.partition());
 
-    index.erase(dht::partition_range::make_singular(dk2)).get();
-    BOOST_REQUIRE(index.find(dk2) == index.end());
+    BOOST_REQUIRE(index.erase(key2, make_index_entry(2, 20, 12, 2).location));
+    BOOST_REQUIRE(!index.get(key2));
 
-    BOOST_REQUIRE(index.find(dk0) != index.end());
-    BOOST_REQUIRE(index.find(dk3) != index.end());
+    BOOST_REQUIRE(index.get(key0));
+    BOOST_REQUIRE(index.get(key3));
 
     index.clear().get();
     BOOST_REQUIRE(index.empty());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_drain_cache_preserves_index_entries) {
-    simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    index.set_cache_tracker(&cache.logstor_tracker);
+    primary_index index(schema, &cache.logstor_tracker);
 
-    auto dk0 = schema.make_pkey("pk0");
-    auto dk1 = schema.make_pkey("pk1");
+    auto key0 = make_primary_index_key(*schema, "pk0");
+    auto key1 = make_primary_index_key(*schema, "pk1");
 
-    BOOST_REQUIRE(!index.insert(primary_index_key{dk0}, make_index_entry(1, 0, 10, 1)).second);
-    BOOST_REQUIRE(!index.insert(primary_index_key{dk1}, make_index_entry(1, 10, 10, 1)).second);
+    BOOST_REQUIRE(!index.insert(key0, make_index_entry(1, 0, 10, 1)).second);
+    BOOST_REQUIRE(!index.insert(key1, make_index_entry(1, 10, 10, 1)).second);
 
     auto mut0 = make_mutation(schema, "pk0", "v0");
     auto mut1 = make_mutation(schema, "pk1", "v1");
-    populate(index, dk0, mut0);
-    populate(index, dk1, mut1);
+    populate(index, key0, mut0);
+    populate(index, key1, mut1);
 
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk0, schema.schema()));
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk1, schema.schema()));
+    BOOST_REQUIRE(lookup_exists(index, key0, schema));
+    BOOST_REQUIRE(lookup_exists(index, key1, schema));
 
     index.drain_cache().get();
 
-    BOOST_REQUIRE(index.find(dk0) != index.end());
-    BOOST_REQUIRE(index.find(dk1) != index.end());
-    BOOST_REQUIRE(!lookup_exists(index, cache.logstor_tracker, dk0, schema.schema()));
-    BOOST_REQUIRE(!lookup_exists(index, cache.logstor_tracker, dk1, schema.schema()));
+    BOOST_REQUIRE(index.get(key0));
+    BOOST_REQUIRE(index.get(key1));
+    BOOST_REQUIRE(!lookup_exists(index, key0, schema));
+    BOOST_REQUIRE(!lookup_exists(index, key1, schema));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalancing) {
-    simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    index.set_cache_tracker(&cache.logstor_tracker);
+    primary_index index(schema, &cache.logstor_tracker);
 
     constexpr int64_t fixed_token = 7;
-    auto hot_keys = insert_same_token_keys(index, schema, fixed_token, 0, 24);
+    auto hot_keys = insert_same_token_keys(index, *schema, fixed_token, 0, 24);
 
     std::vector<mutation> hot_mutations;
     hot_mutations.reserve(hot_keys.size());
     for (size_t i = 0; i < hot_keys.size(); ++i) {
-        auto m = make_mutation(schema, hot_keys[i], format("v{}", i));
+        auto m = make_mutation(schema, format("fixed-pk-{:06d}", i), format("v{}", i));
         populate(index, hot_keys[i], m);
         hot_mutations.push_back(std::move(m));
     }
@@ -244,21 +242,21 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
     // in-bucket compaction. Without cache-pointer rebinding on moves, these
     // operations can leave cached entries with stale _owner_cached_ptr values.
     for (size_t i = 0; i < hot_keys.size(); ++i) {
-        assert_that(lookup(index, cache.logstor_tracker, hot_keys[i], schema.schema())).is_equal_to(hot_mutations[i]);
+        assert_that(schema, lookup(index, hot_keys[i], schema)).is_equal_to(hot_mutations[i].partition());
     }
 
-    auto grown_keys = insert_same_token_keys(index, schema, fixed_token, 10'000, 96);
+    auto grown_keys = insert_same_token_keys(index, *schema, fixed_token, 10'000, 96);
     BOOST_REQUIRE_EQUAL(index.get_key_count(), hot_keys.size() + grown_keys.size());
 
     for (int i = 0; i < 48; ++i) {
-        BOOST_REQUIRE(index.erase(primary_index_key{grown_keys[i]}, make_index_entry(500 + i, i * 8, 8, 1).location));
+        BOOST_REQUIRE(index.erase(grown_keys[i], make_index_entry(500 + i, i * 8, 8, 1).location));
     }
 
     BOOST_REQUIRE_EQUAL(index.get_key_count(), hot_keys.size() + grown_keys.size() - 48);
 
     for (size_t i = 0; i < hot_keys.size(); ++i) {
-        BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, hot_keys[i], schema.schema()));
-        assert_that(lookup(index, cache.logstor_tracker, hot_keys[i], schema.schema())).is_equal_to(hot_mutations[i]);
+        BOOST_REQUIRE(lookup_exists(index, hot_keys[i], schema));
+        assert_that(schema, lookup(index, hot_keys[i], schema)).is_equal_to(hot_mutations[i].partition());
     }
 
     auto evictions_before = cache.shared_tracker.get_stats().partition_evictions;
@@ -274,34 +272,92 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, insertions_before_repopulate + hot_keys.size());
 
     for (size_t i = 0; i < hot_keys.size(); ++i) {
-        auto it = index.find(hot_keys[i]);
-        BOOST_REQUIRE(it != index.end());
-        assert_that(lookup(index, cache.logstor_tracker, hot_keys[i], schema.schema())).is_equal_to(hot_mutations[i]);
+        auto entry = index.get(hot_keys[i]);
+        BOOST_REQUIRE(entry);
+        assert_that(schema, lookup(index, hot_keys[i], schema)).is_equal_to(hot_mutations[i].partition());
     }
 
-    BOOST_REQUIRE(index.find(grown_keys.back()) != index.end());
+    BOOST_REQUIRE(index.get(grown_keys.back()));
+    index.drain_cache().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_resumes_across_batches_by_token) {
+    auto schema = make_logstor_schema();
+    primary_index index(schema, nullptr);
+
+    insert_same_token_keys(index, *schema, 7, 0, 2);
+    insert_same_token_keys(index, *schema, 11, 100, 3);
+    insert_same_token_keys(index, *schema, 19, 200, 2);
+
+    auto scan = index.scan();
+
+    auto batch0 = scan.next_batch(3);
+    BOOST_REQUIRE(batch0);
+    BOOST_REQUIRE_EQUAL(batch0->first_token, dht::token::from_int64(7));
+    BOOST_REQUIRE_EQUAL(batch0->last_token, dht::token::from_int64(7));
+    BOOST_REQUIRE_EQUAL(batch0->entry_count, 2u);
+    BOOST_REQUIRE(!batch0->exhausted);
+
+    auto batch1 = scan.next_batch(3);
+    BOOST_REQUIRE(batch1);
+    BOOST_REQUIRE_EQUAL(batch1->first_token, dht::token::from_int64(11));
+    BOOST_REQUIRE_EQUAL(batch1->last_token, dht::token::from_int64(11));
+    BOOST_REQUIRE_EQUAL(batch1->entry_count, 3u);
+    BOOST_REQUIRE(!batch1->exhausted);
+
+    auto batch2 = scan.next_batch(3);
+    BOOST_REQUIRE(batch2);
+    BOOST_REQUIRE_EQUAL(batch2->first_token, dht::token::from_int64(19));
+    BOOST_REQUIRE_EQUAL(batch2->last_token, dht::token::from_int64(19));
+    BOOST_REQUIRE_EQUAL(batch2->entry_count, 2u);
+    BOOST_REQUIRE(batch2->exhausted);
+
+    BOOST_REQUIRE(!scan.next_batch(3));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_token_batch_intact) {
+    auto schema = make_logstor_schema();
+    primary_index index(schema, nullptr);
+
+    insert_same_token_keys(index, *schema, 23, 0, 5);
+    insert_same_token_keys(index, *schema, 29, 100, 1);
+
+    auto scan = index.scan();
+
+    auto batch0 = scan.next_batch(2);
+    BOOST_REQUIRE(batch0);
+    BOOST_REQUIRE_EQUAL(batch0->first_token, dht::token::from_int64(23));
+    BOOST_REQUIRE_EQUAL(batch0->last_token, dht::token::from_int64(23));
+    BOOST_REQUIRE_EQUAL(batch0->entry_count, 5u);
+    BOOST_REQUIRE(!batch0->exhausted);
+
+    auto batch1 = scan.next_batch(2);
+    BOOST_REQUIRE(batch1);
+    BOOST_REQUIRE_EQUAL(batch1->first_token, dht::token::from_int64(29));
+    BOOST_REQUIRE_EQUAL(batch1->last_token, dht::token::from_int64(29));
+    BOOST_REQUIRE_EQUAL(batch1->entry_count, 1u);
+    BOOST_REQUIRE(batch1->exhausted);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_exchange) {
-    simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    index.set_cache_tracker(&cache.logstor_tracker);
+    primary_index index(schema, &cache.logstor_tracker);
 
     constexpr int64_t fixed_token = 19;
-    auto keys = insert_same_token_keys(index, schema, fixed_token, 20'000, 8);
+    auto keys = insert_same_token_keys(index, *schema, fixed_token, 20'000, 8);
 
     std::vector<mutation> mutations;
     mutations.reserve(keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
-        auto m = make_mutation(schema, keys[i], format("compaction-v{}", i));
+        auto m = make_mutation(schema, format("fixed-pk-{:06d}", 20'000 + i), format("compaction-v{}", i));
         populate(index, keys[i], m);
         mutations.push_back(std::move(m));
     }
 
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
-        assert_that(lookup(index, cache.logstor_tracker, keys[i], schema.schema())).is_equal_to(mutations[i]);
+        assert_that(schema, lookup(index, keys[i], schema)).is_equal_to(mutations[i].partition());
     }
 
     // Create fragmentation so full_compaction() has live cached objects to move.
@@ -313,44 +369,43 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_excha
     cache.logstor_tracker.region().full_compaction();
 
     for (size_t i = 2; i < keys.size(); ++i) {
-        BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, keys[i], schema.schema()));
-        assert_that(lookup(index, cache.logstor_tracker, keys[i], schema.schema())).is_equal_to(mutations[i]);
+        BOOST_REQUIRE(lookup_exists(index, keys[i], schema));
+        assert_that(schema, lookup(index, keys[i], schema)).is_equal_to(mutations[i].partition());
     }
 
-    auto [replaced, old_entry] = index.insert(primary_index_key{keys[2]}, make_index_entry(900, 0, 32, 2));
+    auto [replaced, old_entry] = index.insert(keys[2], make_index_entry(900, 0, 32, 2));
     BOOST_REQUIRE(replaced);
     BOOST_REQUIRE(old_entry);
-    BOOST_REQUIRE(!lookup_exists(index, cache.logstor_tracker, keys[2], schema.schema()));
+    BOOST_REQUIRE(!lookup_exists(index, keys[2], schema));
 
-    auto replacement = make_mutation(schema, keys[2], "compaction-replaced");
+    auto replacement = make_mutation(schema, "fixed-pk-020002", "compaction-replaced");
     populate(index, keys[2], replacement);
-    assert_that(lookup(index, cache.logstor_tracker, keys[2], schema.schema())).is_equal_to(replacement);
+    assert_that(schema, lookup(index, keys[2], schema)).is_equal_to(replacement.partition());
+    index.drain_cache().get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_upgrades_cached_partition_after_schema_change) {
-    simple_schema schema(simple_schema::with_static::no);
-    primary_index index(schema.schema());
+    auto schema = make_logstor_schema();
     shared_logstor_cache cache;
-    index.set_cache_tracker(&cache.logstor_tracker);
+    primary_index index(schema, &cache.logstor_tracker);
 
-    auto dk = schema.make_pkey("pk0");
-    BOOST_REQUIRE(!index.insert(primary_index_key{dk}, make_index_entry(1, 0, 10, 1)).second);
+    auto key = make_primary_index_key(*schema, "pk0");
+    BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).second);
 
-    auto original = make_mutation(schema, dk, "v0");
-    populate(index, dk, original);
+    auto original = make_mutation(schema, "pk0", "v0");
+    populate(index, key, original);
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_insertions, 1);
 
-    auto new_schema = schema_builder(schema.schema()).with_column("v2", utf8_type).build();
-    schema.set_schema(new_schema);
+    auto new_schema = schema_builder(schema).with_column("v2", utf8_type).build();
     index.set_schema(new_schema);
 
     auto hits_before = cache.shared_tracker.get_stats().partition_hits;
-    BOOST_REQUIRE(lookup_exists(index, cache.logstor_tracker, dk, new_schema));
+    BOOST_REQUIRE(lookup_exists(index, key, new_schema));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_hits, hits_before + 1);
 
-    auto cached = lookup(index, cache.logstor_tracker, dk, new_schema);
+    auto cached = lookup(index, key, new_schema);
     auto expected = original;
     expected.upgrade(new_schema);
-    BOOST_REQUIRE_EQUAL(cached.schema()->version(), new_schema->version());
-    assert_that(cached).is_equal_to(expected);
+    assert_that(new_schema, cached).is_equal_to(expected.partition());
+    index.drain_cache().get();
 }

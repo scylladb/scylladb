@@ -12,6 +12,7 @@
 #include "types/types.hh"
 #include "utils/chunked_vector.hh"
 
+#include <concepts>
 #include <limits>
 #include <seastar/net/byteorder.hh>
 #include <fmt/format.h>
@@ -285,7 +286,7 @@ inline constexpr std::strong_ordering tri_compare_raw(const int64_t l1, const in
 
 template <typename T>
 concept TokenCarrier = requires (const T& v) {
-    { v.token() } noexcept -> std::same_as<const token&>;
+    { v.token() } noexcept -> std::convertible_to<token>;
 };
 
 struct raw_token_less_comparator {
