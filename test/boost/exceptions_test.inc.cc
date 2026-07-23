@@ -79,7 +79,7 @@ static void check_no_catch(Throw&& ex) {
             << " is NOT caught as " << seastar::pretty_type_name(typeid(Capture)));
 
     auto typed_eptr = try_catch<Capture>(eptr);
-    BOOST_CHECK_EQUAL(typed_eptr, nullptr);
+    BOOST_CHECK(typed_eptr == nullptr);
 }
 
 template<typename A, typename B>
@@ -213,13 +213,13 @@ SEASTAR_TEST_CASE(test_make_nested_exception_ptr) {
         BOOST_REQUIRE_EQUAL(std::string(ex.what()), "outer");
         auto* nested = dynamic_cast<const std::nested_exception*>(&ex);
         BOOST_REQUIRE_NE(nested, nullptr);
-        BOOST_REQUIRE_EQUAL(nested->nested_ptr(), inner);
+        BOOST_REQUIRE(nested->nested_ptr() == inner);
     }
 
     try {
         std::rethrow_exception(outer);
     } catch (const std::nested_exception& ex) {
-        BOOST_REQUIRE_EQUAL(ex.nested_ptr(), inner);
+        BOOST_REQUIRE(ex.nested_ptr() == inner);
     }
 
     // Not a class
@@ -238,7 +238,7 @@ SEASTAR_TEST_CASE(test_make_nested_exception_ptr) {
         try {
             std::rethrow_exception(make_nested_exception_ptr(already_nested_exception(), inner));
         } catch (const already_nested_exception& ex) {
-            BOOST_REQUIRE_EQUAL(ex.nested_ptr(), inner2);
+            BOOST_REQUIRE(ex.nested_ptr() == inner2);
         }
     }
 

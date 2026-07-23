@@ -193,7 +193,7 @@ private:
             auto raw = from_hex(*_string);
             _pkey.emplace(partition_key::from_bytes(raw));
         } catch (...) {
-            return error("failed to parse partition key from raw string: {}", fmt::streamed(std::current_exception()));
+            return error("failed to parse partition key from raw string: {}", std::current_exception());
         }
         return true;
     }
@@ -203,7 +203,7 @@ private:
             auto raw = from_hex(*_string);
             _ckey.emplace(clustering_key::from_bytes(raw));
         } catch (...) {
-            return error("failed to parse clustering key from raw string: {}", fmt::streamed(std::current_exception()));
+            return error("failed to parse clustering key from raw string: {}", std::current_exception());
         }
         return true;
     }
