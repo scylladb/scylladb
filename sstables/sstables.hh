@@ -919,6 +919,13 @@ public:
         _features = sef;
     }
 
+    // Use this instead of assigning _components directly, so that you don't desync
+    // _features from _components.
+    void set_components(foreign_ptr<lw_shared_ptr<shareable_components>> components) {
+        _components = std::move(components);
+        _features = _components->scylla_metadata ? _components->scylla_metadata->get_features() : sstable_enabled_features{};
+    }
+
     bool has_feature(sstable_feature f) const {
         return features().is_enabled(f);
     }
