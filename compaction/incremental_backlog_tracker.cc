@@ -17,7 +17,7 @@ incremental_backlog_tracker::inflight_component incremental_backlog_tracker::com
         }
         auto compacted = crp.second->compacted();
         in.total_bytes += compacted;
-        in.contribution += compacted * log4((crp.first->data_size()));
+        in.contribution += compacted * log4(effective_backlog_size(crp.first->data_size()));
     }
     return in;
 }
@@ -38,8 +38,12 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const std::
             auto& run = *run_ptr;
             auto data_size = run.data_size();
             if (data_size > 0) {
-                total_backlog_bytes += data_size;
-                sstables_backlog_contribution += data_size * log4(data_size);
+                // See effective_backlog_size in compaction_backlog_manager.hh: tiny runs are
+                // taxed with a minimum size so they still contribute meaningfully to the
+                // backlog, instead of being practically invisible to the controller.
+                auto size = effective_backlog_size(data_size);
+                total_backlog_bytes += size;
+                sstables_backlog_contribution += size * log4(size);
                 sstable_runs_contributing_backlog.insert((*run.all().begin())->run_identifier());
             }
         }
@@ -95,7 +99,9 @@ void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::s
     if (sst->data_size() > 0) {
         // note: we don't expect failed insertions since each sstable will be inserted once
         (void)all[sst->run_identifier()].insert(sst);
-        total_bytes += sst->data_size();
+        // Tax tiny SSTables so they still affect _total_bytes (used as T in log4(T) by
+        // backlog()). See effective_backlog_size in compaction_backlog_manager.hh.
+        total_bytes += effective_backlog_size(sst->data_size());
         // Deduce threshold from the last SSTable added to the set
         threshold = sst->get_schema()->min_compaction_threshold();
     }
@@ -108,7 +114,8 @@ void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::s
         if (all[run_identifier].all().empty()) {
             all.erase(run_identifier);
         }
-        total_bytes -= sst->data_size();
+        // Mirror the taxation applied when this SSTable was added.
+        total_bytes -= effective_backlog_size(sst->data_size());
     }
     }
 
