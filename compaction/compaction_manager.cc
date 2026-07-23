@@ -1126,6 +1126,10 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the number of failed compaction tasks.")),
         sm::make_gauge("postponed_compactions", [this] { return _postponed.size(); },
                        sm::description("Holds the number of tables with postponed compaction.")),
+        sm::make_gauge("regular_compaction_task_backlog", [this] { return _tasks.size(); },
+                       sm::description("Holds the number of regular compaction task objects currently retained by the compaction manager.")),
+        sm::make_gauge("regular_compaction_task_backlog_limit", [this] { return _startup_regular_compaction_backlog_limit_enabled ? regular_compaction_task_backlog_limit() : 0; },
+                       sm::description("Startup-only maximum number of regular compaction task objects retained before additional submissions are postponed. Reports 0 after the startup limiter is disabled.")),
         sm::make_gauge("backlog", [this] { return _last_backlog; },
                        sm::description("Holds the sum of compaction backlog for all tables in the system.")),
         sm::make_gauge("normalized_backlog", [this] { return _last_backlog / available_memory(); },
@@ -1173,29 +1177,40 @@ future<> compaction_manager::postponed_compactions_reevaluation() {
             _postponed.clear();
             co_return;
         }
-        // A task_state being reevaluated can re-insert itself into postponed list, which is the reason
-        // for moving the list to be processed into a local.
-        auto postponed = std::exchange(_postponed, {});
         try {
-            for (auto it = postponed.begin(); it != postponed.end();) {
+            while (!_postponed.empty() && !regular_compaction_task_backlog_full()) {
+                auto it = _postponed.begin();
                 compaction_group_view* t = *it;
-                it = postponed.erase(it);
+                _postponed.erase(it);
                 // skip reevaluation of a compaction_group_view that became invalid post its removal
                 if (!_compaction_state.contains(t)) {
                     continue;
                 }
                 cmlog.debug("resubmitting postponed compaction for table {} [{}]", *t, fmt::ptr(t));
-                submit(*t);
+                try {
+                    submit(*t);
+                } catch (...) {
+                    _postponed.insert(t);
+                    throw;
+                }
                 co_await coroutine::maybe_yield();
             }
         } catch (...) {
-            _postponed.insert(postponed.begin(), postponed.end());
+            cmlog.warn("Failed to reevaluate postponed compactions: {}", std::current_exception());
         }
     }
 }
 
 void compaction_manager::reevaluate_postponed_compactions() noexcept {
     _postponed_reevaluation.signal();
+}
+
+void compaction_manager::disable_startup_regular_compaction_backlog_limit() noexcept {
+    if (!_startup_regular_compaction_backlog_limit_enabled) {
+        return;
+    }
+    _startup_regular_compaction_backlog_limit_enabled = false;
+    reevaluate_postponed_compactions();
 }
 
 future<> compaction_manager::stop_postponed_compactions() noexcept {
@@ -1545,6 +1560,13 @@ void compaction_manager::submit(compaction_group_view& t) {
         return;
     }
 
+    if (regular_compaction_task_backlog_full()) {
+        if (!is_disabled() && _compaction_state.contains(&t)) {
+            postpone_compaction_for_table(&t);
+        }
+        return;
+    }
+
     auto gh = start_compaction(t);
     if (!gh) {
         return;
@@ -1552,7 +1574,10 @@ void compaction_manager::submit(compaction_group_view& t) {
 
     // OK to drop future.
     // waited via compaction_task_executor::compaction_done()
-    (void)perform_compaction<regular_compaction_task_executor>(throw_if_stopping::no, tasks::task_info{}, t).then_wrapped([gh = std::move(gh)] (auto f) { f.ignore_ready_future(); });
+    (void)perform_compaction<regular_compaction_task_executor>(throw_if_stopping::no, tasks::task_info{}, t).then_wrapped([this, gh = std::move(gh)] (auto f) {
+        f.ignore_ready_future();
+        reevaluate_postponed_compactions();
+    });
 }
 
 bool compaction_manager::can_perform_regular_compaction(compaction_group_view& t) {
