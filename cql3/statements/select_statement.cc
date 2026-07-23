@@ -200,21 +200,21 @@ select_statement::select_statement(schema_ptr schema,
     : cql_statement(select_timeout(*restrictions))
     , _schema(schema)
     , _query_schema(is_reversed ? schema->get_reversed() : schema)
-    , _bound_terms(bound_terms)
     , _parameters(std::move(parameters))
     , _selection(std::move(selection))
     , _restrictions(std::move(restrictions))
-    , _restrictions_need_filtering(_restrictions->need_filtering())
     , _group_by_cell_indices(group_by_cell_indices)
-    , _is_reversed(is_reversed)
     , _limit_unset_guard(limit)
     , _limit(std::move(limit))
     , _per_partition_limit_unset_guard(per_partition_limit)
     , _per_partition_limit(std::move(per_partition_limit))
-    , _ordering_comparator(std::move(ordering_comparator))
+    , _ordering_comparator(ordering_comparator ? std::make_unique<ordering_comparator_type>(std::move(ordering_comparator)) : nullptr)
     , _stats(stats)
     , _ks_sel(::is_internal_keyspace(schema->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
     , _attrs(std::move(attrs))
+    , _bound_terms(bound_terms)
+    , _restrictions_need_filtering(_restrictions->need_filtering())
+    , _is_reversed(is_reversed)
 {
     _opts = _selection->get_query_options();
     _opts.set_if<query::partition_slice::option::bypass_cache>(_parameters->bypass_cache());
@@ -348,10 +348,10 @@ select_statement::make_partition_slice(const query_options& options) const
         std::move(static_columns), std::move(regular_columns), _opts, nullptr, per_partition_limit);
 }
 
-uint64_t select_statement::get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit) const
+uint64_t select_statement::get_limit(const query_options& options, const optimized_optional<expr::expression>& limit, bool is_per_partition_limit) const
 {
     const auto& unset_guard = is_per_partition_limit ? _per_partition_limit_unset_guard : _limit_unset_guard;
-    if (!limit.has_value() || unset_guard.is_unset(options)) {
+    if (!limit || unset_guard.is_unset(options)) {
         return query::max_rows;
     }
     try {
@@ -998,7 +998,7 @@ select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::resul
         auto rs = builder.build();
 
         if (needs_post_query_ordering()) {
-            rs->sort(_ordering_comparator);
+            rs->sort(*_ordering_comparator);
             if (_is_reversed) {
                 rs->reverse();
             }
