@@ -13,15 +13,22 @@
 #include <memory>
 #include <span>
 #include <vector>
+#include <variant>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sstring.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include "utils/rjson.hh"
+
+namespace s3 { class client; }
 
 namespace alternator {
 
 // An interface encapsulating write (sink) pipeline for exporting data. Is used to implement DynamoDB export api (ExportTableToPointInTime call).
 // The pipeline is a multistage processing unit, which takes `rjson::value` item (of any content), serializes it as-is and writes it depending on the configuration.
 // Currently supporting only test-only in-memory pipeline, serializing to raw text JSON lines. In the future we will add support for S3, compression and different formats (e.g. Ion, CSV).
-// Call respective factory method below (`create_in_memory_sink_pipeline`) to construct.
+// Call respective factory method below (`create_sink_pipeline`) to construct.
 // Call `process()` method for each item (they might come in random order) - they will be serialized and written to the appropriate sink.
 // After all items are processed, call `flush_and_close()` to flush and finalize the pipeline - the call is mandatory, otherwise part of the data might not be written.
 // Calling `flush_and_close()` is required and needs to be done manually.
@@ -43,23 +50,23 @@ struct export_pipeline_interface {
 // An interface encapsulating read (source) pipeline. This mirrors write (sink) pipeline - what sink pipeline can produce, source pipeline will consume.
 // This will be used in future for DynamoDB import api (ImportTable call).
 // Added currently for testing purposes - so we have a consistent way to read exported data without relying on connection to S3 / DynamoDB.
-// Call respective factory method below (`create_in_memory_source_pipeline`) to construct.
+// Call respective factory method below (`create_source_pipeline`) to construct.
 // Call `read()` (only once!) method to start reading the data - it will read all data, pass it through the decompressor and parser
 // and call the callback provided to the factory function for each parsed item. The pipeline will wait
 // for each callback's future to complete before processing the next item.
-// After all data is read (the future from `read()` call completes), call `flush_and_close()` to flush and finalize the pipeline.
-// Calling `flush_and_close()` is required and needs to be done manually.
+// After all data is read (the future from `read()` call completes), call `close()` to flush and finalize the pipeline.
+// Calling `close()` is required and needs to be done manually. `close()` can be called more than once.
 struct import_pipeline_interface {
     // Reads all available data from the source, feeds it through the decompression and parsing pipeline,
     // and invokes the on_item callback (passed to the pipeline constructor function) for each parsed item.
     // The future completes after source is exhausted.
-    // Note: you still need to call `flush_and_close()` to finalize the pipeline - there might be some remaining data to process.
-    virtual seastar::future<> read() = 0;
+    // `abort_source` if passed, can be used to abort the read operation early.
+    // Note: you still need to call `close()` to finalize the pipeline - there might be some remaining data to process.
+    virtual seastar::future<> read_all(seastar::abort_source *abort_source = nullptr) = 0;
 
-    // Flushes and closes the pipeline. The future will complete once all remaining, already read data is processed, flushed and pipeline is finalized.
-    // The call doesn't read additional data.
-    // Do not call read() after calling flush_and_close().
-    virtual seastar::future<> flush_and_close() = 0;
+    // Closes the pipeline, releasing all resources. The call doesn't read additional data.
+    // Do not call read() after calling close().
+    virtual seastar::future<> close() = 0;
 
     virtual ~import_pipeline_interface() = default;
 };
@@ -83,14 +90,26 @@ public:
     bool is_write_flushed() const { return _write_flushed; }
 };
 
-// Create in-memory sink pipeline for a single file
-// You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
-// you need to complete sink pipeline first, then create and run source pipeline.
-std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_memory_test_storage&);
+struct in_memory_target_config {
+    std::shared_ptr<in_memory_test_storage> storage;
+};
+struct s3_target_config {
+    seastar::shared_ptr<s3::client> client;
+    seastar::sstring object_name;
+};
+// Create sink pipeline for a single file. Depending on the configuration:
+// - in_memory_target_config - creates in-memory sink pipeline for testing.
+//   You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
+//   you need to complete sink pipeline first, then create and run source pipeline.
+// - s3_target_config - creates sink pipeline that will write to S3 object. The object will be created if it doesn't exist, or overwritten if it does.
+std::unique_ptr<export_pipeline_interface> create_sink_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config);
 
-// Create in-memory source pipeline for a single file
-// You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
-// you need to complete sink pipeline first, then create and run source pipeline.
-std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage &, std::function<seastar::future<>(rjson::value)> on_item);
+// Create source pipeline for a single file. Depending on the configuration:
+// - in_memory_target_config - creates in-memory source pipeline for testing.
+//   You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
+//   you need to complete sink pipeline first, then create and run source pipeline.
+// - s3_target_config - creates source pipeline that will read from S3 object.
+std::unique_ptr<import_pipeline_interface> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<seastar::future<>(rjson::value)> on_item);
+
 
 } // namespace alternator
