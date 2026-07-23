@@ -71,6 +71,7 @@
 #include "utils/assert.hh"
 #include "utils/pretty_printers.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/storage.hh"
 
 BOOST_AUTO_TEST_SUITE(sstable_compaction_test)
 
@@ -6962,7 +6963,8 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
     std::vector<utils::observer<sstable&>> observers;
     std::vector<shared_sstable> ssts;
     size_t sstables_closed = 0;
-    size_t sstables_missing_on_delete = 0;
+    size_t sstables_deleted = 0;
+    std::vector<sstring> deleted_filenames;
     static constexpr size_t sstables_nr = 10;
 
     dht::token_range_vector owned_token_ranges;
@@ -7000,7 +7002,21 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
         owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_decorated_key().token()));
         gens.insert(ssts[i]->generation());
     }
-
+    // Build an independent storage instance so we can query for file/object
+    // existence after all input sstables (and their owned per-sstable storage)
+    // have been destroyed. component_fqn() and exists() derive the target path
+    // from the sstable (dir/generation/schema/version) combined with the
+    // storage's connection config (dir for local, bucket+location+client for
+    // S3/GCS). Because env.make_storage(s) constructs an instance from the
+    // same env storage options as the input sstables, it produces the same
+    // paths and can query the same locations.
+    auto owned_storage = env.make_storage(s);
+    const storage& scylla_storage = *owned_storage;
+    for (const auto& sst : ssts) {
+        auto component_fqn = scylla_storage.component_fqn(*sst, component_type::Data);
+        BOOST_REQUIRE_MESSAGE(scylla_storage.exists(component_fqn).get(),
+            fmt::format("{} doesnt exist even before cleanup", component_fqn));
+    }
     {
         auto t = env.make_table_for_tests(s);
         auto& cm = t->get_compaction_manager();
@@ -7010,33 +7026,56 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
         for (auto&& sst : ssts) {
             testlog.info("run id {}", sst->run_identifier());
             column_family_test(t).add_sstable(sst, sstables::offstrategy::yes).get();
-            observers.push_back(sst->add_on_closed_handler([&] (sstable& sst) mutable {
+            observers.push_back(sst->add_on_closed_handler([&](sstable& tmp_sst) mutable {
                 auto sstables = t->get_sstables();
-                testlog.info("Closing sstable of generation {}, table set size: {}", sst.generation(), sstables->size());
+                testlog.info("Closing sstable of generation {}, table set size: {}", tmp_sst.generation(), sstables->size());
                 sstables_closed++;
             }));
-                observers.push_back(sst->add_on_delete_handler([&] (sstable& sst) mutable {
-                // ATTN -- the _on_delete callback is not necessarily running in thread
-                    auto missing = (::access(fmt::to_string(sst.get_filename()).c_str(), F_OK) != 0);
-                    testlog.info("Deleting sstable of generation {}: missing={}", sst.generation(), missing);
-                    sstables_missing_on_delete += missing;
+            observers.push_back(sst->add_on_delete_handler([&](sstable& tmp_sst) mutable {
+                // The _on_delete callback runs on the reactor (not in a seastar::thread),
+                // so it must be purely synchronous. Just capture the fully-qualified
+                // component path here and verify its actual removal later, via scylla_storage.exists().
+                deleted_filenames.emplace_back(scylla_storage.component_fqn(tmp_sst, component_type::Data));
+                sstables_deleted++;
             }));
         }
-        ssts = {}; // releases references
         auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
         t->perform_cleanup_compaction(std::move(owned_ranges_ptr), tasks::task_info{}).get();
         BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_compaction_group_view_with_static_sharding()).empty());
         testlog.info("Cleanup has finished");
+        ssts = {}; // release test-side references; remaining refs are dropped
+                   // when the table/compaction manager tear down at block exit.
+        while (sstables_deleted != sstables_nr) {
+            yield().get();
+        }
     }
 
-    while (sstables_closed != sstables_nr) {
-        yield().get();
-    }
-
-    testlog.info("Closed sstables {}, missing on delete {}", sstables_closed, sstables_missing_on_delete);
+    testlog.info("Closed sstables {}, deleted {}", sstables_closed, sstables_deleted);
 
     BOOST_REQUIRE_EQUAL(sstables_closed, sstables_nr);
-    BOOST_REQUIRE_EQUAL(sstables_missing_on_delete, 0);
+    BOOST_REQUIRE_EQUAL(sstables_deleted, sstables_nr);
+
+    // For filesystem_storage, wipe() (invoked from unlink() during compaction's
+    // delete_atomically) has already removed the on-disk files by the time the
+    // _on_delete callback fires, so the checks below are effectively a
+    // regression tripwire.
+    //
+    // For object_storage backends (S3/GCS), wipe() only marks the sstable for
+    // deletion and updates its registry entry; the actual DELETE requests are
+    // issued later from _storage->destroy(), which runs fire-and-forget from
+    // sstables_manager::deactivate() when the last shared_sstable reference is
+    // dropped. So `sstables_deleted == sstables_nr` (i.e., all _on_delete
+    // callbacks fired) does not imply the objects have been deleted from the
+    // bucket. Poll exists() with a bounded retry budget to let the fire-and-
+    // forget destroy chain complete.
+    using namespace std::chrono_literals;
+    for (const auto& component_location : deleted_filenames) {
+        for (int i = 0; i < 100 && scylla_storage.exists(component_location).get(); ++i) {
+            seastar::sleep(10ms).get();
+        }
+        BOOST_REQUIRE_MESSAGE(!scylla_storage.exists(component_location).get(),
+            fmt::format("{} still exists after cleanup", component_location));
+    }
 }
 
 SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
@@ -7044,25 +7083,15 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
 }
 
 SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
-    // TODO: Figure out how to make the `add_on_delete_handler` synchronous
-    testlog.info("cleanup_during_offstrategy_incremental_compaction_test_s3 is not supported for S3 storage yet, skipping test");
-    return make_ready_future();
-#if 0
     return test_env::do_with_async([](test_env& env) { cleanup_during_offstrategy_incremental_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
-#endif
 }
 
 SEASTAR_FIXTURE_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test_gcs,
                           gcs_fixture,
                           *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
-    // TODO: Figure out how to make the `add_on_delete_handler` synchronous
-    testlog.info("cleanup_during_offstrategy_incremental_compaction_test_gcs is not supported for S3 storage yet, skipping test");
-    return make_ready_future();
-#if 0
     return test_env::do_with_async([](test_env& env) { cleanup_during_offstrategy_incremental_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
-#endif
 }
 
 future<> test_sstables_excluding_staging_correctness(test_env_config cfg) {

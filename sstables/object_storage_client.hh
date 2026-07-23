@@ -49,6 +49,7 @@ class object_name {
 public:
     object_name(const object_name&);
     object_name(object_name&&);
+    explicit object_name(std::string bucket);
     // Used by native backup/restore with externally supplied prefixes
     // following the foreign Scylla Manager bucket layout.
     object_name(std::string_view bucket, std::string_view prefix, std::string_view type);
