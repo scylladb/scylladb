@@ -486,7 +486,7 @@ void cql_server::init_messaging_service() {
                 });
             auto prepare_id = _query_processor.local().compute_id(req.query_string, qs.get_client_state().get_raw_keyspace(), req.dialect).key();
             clogger.trace("Successfully prepared statement {} from forward request", prepare_id);
-            co_return prepare_id;
+            co_return prepare_id.id.to_bytes();
         });
 }
 
@@ -626,12 +626,19 @@ cql_server::forward_cql(
         }
         case forward_cql_status::prepared_not_found: {
             _stats.requests_forwarded_prepared_not_found++;
+            // A valid prepared id is always cql_prepared_id_type::size bytes. Guard
+            // against a different length before constructing the fixed-size cache key
+            // (whose constructor throws on a size mismatch), and surface the normal
+            // UNPREPARED error instead of an unexpected SERVER_ERROR.
+            if (response.prepared_id.size() != cql3::cql_prepared_id_type::size) {
+                co_return coroutine::exception(std::make_exception_ptr(exceptions::prepared_query_not_found_exception(std::move(response.prepared_id))));
+            }
             cql3::prepared_cache_key_type cache_key(std::move(response.prepared_id), req.dialect);
 
             auto prepared = _query_processor.local().get_prepared(cache_key);
             if (!prepared) {
                 clogger.info("Prepared statement with cache key {} not found locally for prepare request, cannot prepare on target {}", cache_key.key(), current_host);
-                co_return coroutine::exception(std::make_exception_ptr(exceptions::prepared_query_not_found_exception(cache_key.key())));
+                co_return coroutine::exception(std::make_exception_ptr(exceptions::prepared_query_not_found_exception(cache_key.key().id.to_bytes())));
             }
 
             tracing::trace(trace_state, "Prepared statement not found on target, preparing query on target node");
@@ -646,7 +653,7 @@ cql_server::forward_cql(
 
             auto prepared_id = co_await ser::forward_cql_rpc_verbs::send_forward_cql_prepare(&_ms, current_host, timeout, prepare_req);
 
-            if (prepared_id != cache_key.key()) {
+            if (prepared_id != cache_key.key().id.to_bytes()) {
                 on_internal_error(clogger, format("Prepared ID returned from target node does not match local prepared ID for the same query. Local ID: {}, Target ID: {}", cache_key.key(), prepared_id));
             }
             continue;
@@ -1704,8 +1711,16 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     if (!cache_key_bytes) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(cache_key_bytes).assume_error());
     }
-    cql3::prepared_cache_key_type cache_key(cache_key_bytes.assume_value(), dialect);
-    auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
+    bytes cache_key_value = std::move(cache_key_bytes).assume_value();
+    // A valid prepared id is always cql_prepared_id_type::size bytes. An id of a
+    // different length (malformed/unknown client input) can never match a cached
+    // statement; return the normal UNPREPARED error instead of letting the
+    // fixed-size key constructor throw (which would surface as a SERVER_ERROR).
+    if (cache_key_value.size() != cql3::cql_prepared_id_type::size) {
+        return make_exception_future<cql_server::process_fn_return_type>(exceptions::prepared_query_not_found_exception(std::move(cache_key_value)));
+    }
+    cql3::prepared_cache_key_type cache_key(cache_key_value, dialect);
+    const auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
     bool needs_authorization = false;
 
     // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
@@ -1717,7 +1732,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     }
 
     if (!prepared) {
-        throw exceptions::prepared_query_not_found_exception(id);
+        throw exceptions::prepared_query_not_found_exception(id.to_bytes());
     }
 
     cql_metadata_id_wrapper metadata_id = cql_metadata_id_wrapper();
@@ -1852,8 +1867,17 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             if (!cache_key_bytes) {
                 return make_exception_future<cql_server::process_fn_return_type>(std::move(cache_key_bytes).assume_error());
             }
-            cql3::prepared_cache_key_type cache_key(cache_key_bytes.assume_value(), dialect);
-            auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
+            bytes cache_key_value = std::move(cache_key_bytes).assume_value();
+            // A valid prepared id is always cql_prepared_id_type::size bytes. An id of
+            // a different length (malformed/unknown client input) can never match a
+            // cached statement; return the normal UNPREPARED error instead of letting
+            // the fixed-size key constructor throw (which would surface as a
+            // SERVER_ERROR).
+            if (cache_key_value.size() != cql3::cql_prepared_id_type::size) {
+                return make_exception_future<cql_server::process_fn_return_type>(exceptions::prepared_query_not_found_exception(std::move(cache_key_value)));
+            }
+            cql3::prepared_cache_key_type cache_key(cache_key_value, dialect);
+            const auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
 
             // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
             // look for the prepared statement and then authorize it.
@@ -1861,7 +1885,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             if (!ps) {
                 ps = qp.local().get_prepared(cache_key);
                 if (!ps) {
-                    return make_exception_future<cql_server::process_fn_return_type>(exceptions::prepared_query_not_found_exception(id));
+                    return make_exception_future<cql_server::process_fn_return_type>(exceptions::prepared_query_not_found_exception(id.to_bytes()));
                 }
                 // authorize a particular prepared statement only once
                 needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
