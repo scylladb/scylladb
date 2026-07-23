@@ -74,6 +74,7 @@ struct tuple_constructor;
 struct collection_constructor;
 struct usertype_constructor;
 struct temporary;
+struct external_value;
 
 template <typename T>
 concept ExpressionElement
@@ -94,6 +95,7 @@ concept ExpressionElement
         || std::same_as<T, collection_constructor>
         || std::same_as<T, usertype_constructor>
         || std::same_as<T, temporary>
+        || std::same_as<T, external_value>
         ;
 
 template <typename Func>
@@ -115,6 +117,7 @@ concept invocable_on_expression
         && std::invocable<Func, collection_constructor>
         && std::invocable<Func, usertype_constructor>
         && std::invocable<Func, temporary>
+        && std::invocable<Func, external_value>
         ;
 
 template <typename Func>
@@ -136,6 +139,7 @@ concept invocable_on_expression_ref
         && std::invocable<Func, collection_constructor&>
         && std::invocable<Func, usertype_constructor&>
         && std::invocable<Func, temporary&>
+        && std::invocable<Func, external_value&>
         ;
 
 /// A CQL expression -- union of all possible expression types.
@@ -195,6 +199,7 @@ concept LeafExpression
         || std::same_as<constant, E>
         || std::same_as<column_value, E>
         || std::same_as<temporary, E>
+        || std::same_as<external_value, E>
         ;
 
 /// A column, usually encountered on the left side of a restriction.
@@ -480,13 +485,34 @@ struct temporary {
     data_type type;
 };
 
+// Represents a value that is external to the expression, semantically similar
+// to a column_value, but not originating from the base table, for example 
+// a BM25 relevance score or an ANN similarity score returned by the vector store.
+// Unlike temporary, which is used for aggregation inter-row state, 
+// external_value carries read-only input data for the current row.
+struct external_value {
+    size_t index; // within evaluation_inputs::external_values
+    data_type type;
+    // The original expression that this external_value replaced (e.g. a BM25
+    // function_call). Used solely for result-set metadata formatting so that
+    // nested replacements still produce user-visible column names instead of
+    // internal "@external_value0" identifiers.
+    std::optional<expression> replaced_expr;
+
+    friend bool operator==(const external_value& a, const external_value& b) {
+        // Equality is semantic: same slot and type means same value at runtime.
+        // replaced_expr is presentational metadata and does not affect semantics.
+        return a.index == b.index && a.type == b.type;
+    }
+};
+
 // now that all expression types are fully defined, we can define expression::impl
 struct expression::impl final {
     using variant_type = std::variant<
             conjunction, binary_operator, column_value, unresolved_identifier,
             column_mutation_attribute, function_call, cast, field_selection,
             bind_variable, untyped_constant, constant, tuple_constructor,
-            collection_constructor, usertype_constructor, subscript, temporary,
+            collection_constructor, usertype_constructor, subscript, temporary, external_value,
             unary_operator>;
     variant_type v;
     impl(variant_type v) : v(std::move(v)) {}

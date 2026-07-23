@@ -84,6 +84,10 @@ selectable_processes_selection(const expr::expression& selectable) {
             // so we can't use the fast path. In any case it won't be seen.
             return true;
         },
+        [&] (const expr::external_value& v) -> bool {
+            // Same as temporary: drives selection_with_processing so the provider can inject values.
+            return true;
+        },
     }, selectable);
 };
 

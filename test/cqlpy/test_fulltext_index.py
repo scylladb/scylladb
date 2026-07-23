@@ -569,9 +569,20 @@ def test_order_by_two_bm25_rejected(cql, fulltext_table):
 
 
 def test_bm25_in_select_clause_rejected(cql, fulltext_table):
-    """BM25() is not allowed in the SELECT clause and must be rejected at prepare time."""
+    """BM25() in SELECT is rejected without both a BM25 WHERE and ORDER BY clause."""
     with pytest.raises(InvalidRequest, match="not supported in the SELECT clause"):
         cql.prepare(f"SELECT BM25(content, 'hello') FROM {fulltext_table}")
+
+
+def test_bm25_in_select_clause_with_order_by_accepted(cql, fulltext_table):
+    """BM25() in SELECT is accepted when the query has both a BM25 WHERE and ORDER BY."""
+    cql.prepare(f"SELECT BM25(content, 'hello') FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_bm25_in_select_clause_different_term_rejected(cql, fulltext_table):
+    """BM25() in SELECT with a different literal search term than ORDER BY must be rejected at prepare time."""
+    with pytest.raises(InvalidRequest, match="same search term"):
+        cql.prepare(f"SELECT BM25(content, 'world') FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
 
 
 def test_bm25_on_partition_key_rejected(cql, test_keyspace):

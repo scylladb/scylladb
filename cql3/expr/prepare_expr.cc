@@ -1816,6 +1816,9 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
         [&] (const temporary& t) -> std::optional<expression> {
             on_internal_error(expr_logger, "temporary found during prepare, should have been introduced post-prepare");
         },
+        [&] (const external_value& v) -> std::optional<expression> {
+            on_internal_error(expr_logger, "external_value found during prepare, should have been introduced post-prepare");
+        },
     }, expr);
 }
 
@@ -1901,6 +1904,9 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         },
         [&] (const temporary& t) -> test_result {
             on_internal_error(expr_logger, "temporary found in test_assignment, should have been introduced post-prepare");
+        },
+        [&] (const external_value& v) -> test_result {
+            on_internal_error(expr_logger, "external_value found in test_assignment, should have been introduced post-prepare");
         },
     }, expr);
 }
@@ -2004,6 +2010,9 @@ test_assignment_any_size_float_vector(const expression& expr) {
             return NOT_ASSIGNABLE;
         },
         [&] (const temporary& t) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const external_value& v) -> test_result {
             return NOT_ASSIGNABLE;
         },
     }, expr);
