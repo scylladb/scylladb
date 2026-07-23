@@ -49,6 +49,7 @@ static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason r
         streaming::stream_reason::decommission,
         streaming::stream_reason::repair,
         streaming::stream_reason::rebuild,
+        streaming::stream_reason::restore,
     };
     return sstables::offstrategy(operations_supported.contains(reason));
 }

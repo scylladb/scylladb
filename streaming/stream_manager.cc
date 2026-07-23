@@ -50,6 +50,7 @@ stream_manager::stream_manager(db::config& cfg,
     _finished_percentage[streaming::stream_reason::rebuild] = 1;
     _finished_percentage[streaming::stream_reason::repair] = 1;
     _finished_percentage[streaming::stream_reason::replace] = 1;
+    _finished_percentage[streaming::stream_reason::restore] = 1;
 
     auto ops_label_type = sm::label("ops");
     _metrics.add_group("streaming", {
@@ -76,6 +77,9 @@ stream_manager::stream_manager(db::config& cfg,
 
         sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::replace]; },
                 sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace"), basic_level}),
+
+        sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::restore]; },
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("restore"), basic_level}),
     });
 }
 
