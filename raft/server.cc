@@ -398,12 +398,27 @@ future<> server_impl::start() {
     if (commit_idx > stable_idx) {
         on_internal_error(logger, "Raft init failed: committed index cannot be larger then persisted one");
     }
+
+    // Set up the fsm-level lease configuration, if leases are enabled for this
+    // server. The clock is owned by the caller via _config and must outlive the
+    // fsm, which only holds a reference to it.
+    std::optional<fsm_config::leaseguard_config> fsm_leaseguard;
+    if (_config.leaseguard) {
+        fsm_leaseguard.emplace(fsm_config::leaseguard_config{
+            .clock = _config.leaseguard->clock.get(),
+            .delta = _config.leaseguard->delta,
+        });
+        logger.info("[{}] LeaseGuard leader leases enabled, delta={}", _id,
+                std::chrono::duration_cast<std::chrono::milliseconds>(_config.leaseguard->delta));
+    }
+
     _fsm = std::make_unique<fsm>(_id, _tag, term, vote, std::move(log), commit_idx, *_failure_detector,
                                  fsm_config {
                                      .append_request_threshold = _config.append_request_threshold,
                                      .max_log_size = _config.max_log_size,
                                      .enable_prevoting = _config.enable_prevoting,
-                                     .fast_bootstrap_seed = _config.fast_bootstrap_seed
+                                     .fast_bootstrap_seed = _config.fast_bootstrap_seed,
+                                     .leaseguard = fsm_leaseguard,
                                  },
                                  _events);
 

@@ -22,6 +22,8 @@ target_sources(service
     strong_consistency/raft_groups_storage.cc
     strong_consistency/raft_commitlog.cc
     raft/discovery.cc
+    raft/bounded_clock_adjtimex.cc
+    raft/bounded_clock_clockbound.cc
     raft/group0_state_id_handler.cc
     raft/group0_state_machine.cc
     raft/group0_state_machine_merger.cc
@@ -54,7 +56,8 @@ target_link_libraries(service
     raft
     repair
     streaming
-    systemd)
+    systemd
+    Rust::clockbound)
 if (Scylla_USE_PRECOMPILED_HEADER_USE)
   target_precompile_headers(service REUSE_FROM scylla-precompiled-header)
 endif()

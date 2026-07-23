@@ -18,6 +18,7 @@
 #include "bytes_ostream.hh"
 #include "internal.hh"
 #include "logical_clock.hh"
+#include "bounded_clock.hh"
 
 namespace raft {
 // Keeps user defined command. A user is responsible to serialize
@@ -240,6 +241,13 @@ struct log_entry {
     term_t term;
     index_t idx;
     std::variant<command, configuration, dummy> data;
+    // LeaseGuard: the leader's bounded-uncertainty time interval, recorded when
+    // the entry was created. Empty unless the leader had leases enabled (and a
+    // synchronized clock) at creation time. Used to reason about the age of a
+    // deposed leader's lease; nullopt means "no lease information" and callers
+    // must fall back to the safe path. Not persisted by all storage backends;
+    // reloaded entries may have this empty even if it was set originally.
+    std::optional<time_bounds> lease_time;
 
     size_t get_size() const;
 };
