@@ -9,6 +9,7 @@
 
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/semaphore.hh>
 
 #include "data_dictionary/data_dictionary.hh"
 #include "keys/keys.hh"
@@ -22,6 +23,12 @@
 
 namespace gms {
 class feature_service;
+}
+
+namespace db {
+namespace schema_tables {
+class schema_applier;
+}
 }
 
 namespace service {
@@ -111,6 +118,31 @@ class group0_state_machine : public raft_state_machine {
     group0_state_id_handler _state_id_handler;
     gms::feature_service& _feature_service;
 
+    // Holds the result of Phase 1 of a schema change that was initiated
+    // during transfer_snapshot().  Phase 2 is completed in reload_state()
+    // after topology_state_load() has brought token_metadata up to date.
+    std::unique_ptr<db::schema_tables::schema_applier> _pending_schema_change;
+
+    // Holds the read_apply mutex acquired in transfer_snapshot() so that the
+    // on-disk snapshot application and the subsequent in-memory reload in
+    // load_snapshot() form a single critical section, atomic with respect to
+    // group0 readers (start_operation) and command application (apply).
+    //
+    // transfer_snapshot() acquires the mutex, applies the snapshot to disk and
+    // leaves the holder here. load_snapshot() picks it up, reloads the in-memory
+    // state and releases it. If the Raft FSM rejects the snapshot as outdated
+    // (or application fails), load_snapshot() is never called; in that case
+    // abort_snapshot_transfer() releases the holder instead. There can be at
+    // most one pending snapshot application at a time: the read_apply mutex has a
+    // single unit and the pending holder owns it, so a concurrent
+    // transfer_snapshot() (the leader may resend install_snapshot) blocks on the
+    // mutex until this holder is consumed.
+    struct pending_snapshot_application {
+        raft::snapshot_id id;
+        semaphore_units<> read_apply_mutex_holder;
+    };
+    std::optional<pending_snapshot_application> _pending_snapshot_application;
+
     // This boolean controls whether the in-memory data structures should be updated
     // after snapshot transfer / command application.
     //
@@ -142,11 +174,13 @@ class group0_state_machine : public raft_state_machine {
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
             gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately);
+    ~group0_state_machine();
     future<> apply(raft::log_entry_ptr_list commands) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
     future<> load_snapshot(raft::snapshot_id id) override;
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override;
+    future<> abort_snapshot_transfer(raft::snapshot_id id) override;
     future<> abort() override;
     future<> enable_in_memory_state_machine();
 };

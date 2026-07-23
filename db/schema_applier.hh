@@ -29,8 +29,6 @@ namespace db {
 
 namespace schema_tables {
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, utils::chunked_vector<mutation> mutations);
-
 enum class table_kind { table, view };
 
 struct table_selector {
@@ -201,6 +199,23 @@ public:
             sharded<db::system_keyspace>& sys_ks)
             : _proxy(proxy), _ss(ss), _sys_ks(sys_ks) {};
 
+    // Phase 1: capture the current on-disk schema state ('before') and persist
+    // mutations to disk.  Does NOT require the merge_lock to be held, and does
+    // NOT modify any in-memory schema state.
+    future<> prepare_and_persist(utils::chunked_vector<mutation> mutations);
+
+    // Phase 2: read the new on-disk schema state ('after'), diff it against
+    // 'before', and atomically commit the result to in-memory state including
+    // ERMs.  Must be called with the merge_lock held by the caller.  The
+    // token_metadata (and therefore topology) must already be up-to-date
+    // before this is called so that ERMs are computed against the correct
+    // replica placement.
+    future<> update_and_commit();
+
+    // Some destruction may need to be done on particular shard hence we need to run it in coroutine.
+    future<> destroy();
+
+private:
     // Gets called before mutations are applied,
     // preferably no work should be done here but subsystem
     // may do some snapshot of 'before' data.
@@ -217,8 +232,6 @@ public:
     // atomicity either for legacy reasons or causes side effects to an external system
     // (e.g. informing client's driver).
     future<> post_commit();
-    // Some destruction may need to be done on particular shard hence we need to run it in coroutine.
-    future<> destroy();
 
 private:
     future<> merge_keyspaces();

@@ -42,6 +42,9 @@ class gossiper;
 
 namespace db {
 class system_keyspace;
+namespace schema_tables {
+class schema_applier;
+}
 }
 
 namespace service {
@@ -87,11 +90,22 @@ public:
     // Makes sure that this node knows about all schema changes known by "nodes" that were made prior to this call.
     future<> sync_schema(const replica::database& db, const std::vector<locator::host_id>& nodes);
 
-    // Merge mutations received from src.
-    // Keep mutations alive around whole async operation.
-    future<> merge_schema_from(locator::host_id src, const utils::chunked_vector<canonical_mutation>& mutations);
-    // Incremented each time the function above is called. Needed by tests.
-    size_t canonical_mutation_merge_count = 0;
+    // Two-phase schema change API, used by the group0 state machine to
+    // ensure topology is up-to-date before ERMs are computed.
+    //
+    // Phase 1: convert canonical mutations, snapshot the current on-disk
+    // schema state ('before'), and persist mutations to disk.
+    // Does NOT acquire the merge_lock and does NOT modify in-memory state.
+    // The returned schema_applier holds intermediate state required by Phase 2.
+    future<std::unique_ptr<db::schema_tables::schema_applier>>
+    prepare_schema_change(locator::host_id src, utils::chunked_vector<canonical_mutation> mutations);
+
+    // Phase 2: diff the new on-disk schema state against 'before' and
+    // atomically commit updated keyspace/table objects and ERMs to in-memory
+    // state.  Acquires the merge_lock internally.
+    // Topology (token_metadata) must be fully up-to-date before this is
+    // called so that ERMs are computed against the correct replica placement.
+    future<> complete_schema_change(std::unique_ptr<db::schema_tables::schema_applier> applier);
 
     // The function needs to be called if the user wants to read most up-to-date group 0 state (including schema state)
     // (the function ensures that all previously finished group0 operations are visible on this node) or to write it.
