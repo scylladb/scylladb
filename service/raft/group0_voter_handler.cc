@@ -573,6 +573,35 @@ future<> group0_voter_handler::update_nodes(
         add_node(id, *node, _gossiper.is_alive(locator::host_id{id.uuid()}));
     }
 
+    // Ensure the current node is present in the nodes list, even if it is not in the gossiper's live or dead members
+    // (e.g., if in the shutdown phase).
+    const auto self_id = raft_server.id();
+    if (!nodes.contains(self_id) && group0_config.can_vote(self_id) == raft::is_voter::yes) {
+        if (const auto* node = get_replica_state(self_id, true)) {
+            add_node(self_id, *node, _gossiper.is_alive(locator::host_id{self_id.uuid()}));
+        } else {
+            // During initial bootstrap the current node may not have any topology state yet (neither normal nor transitioning); in that case there is nothing to add.
+            rvlogger.debug("Current node {} is a voter, but has no topology state yet (bootstrapping), skipping voter update", self_id);
+            // In such case, we must skip the whole calculation as the current node is a voter and must be present in the nodes list for the calculation to be correct.
+            co_return;
+        }
+    }
+
+    // Invariant: every voting config member must be present in the nodes list.
+    // There might be nodes without topology state that are still bootstrapping and will be picked up once they reach normal/transition state,
+    // but are expected to be non-voters then (should only be able to acquire votership once they fully join and have the topology state).
+    for (const auto& member : group0_config.current) {
+        const raft::server_id id = member.addr.id;
+        if (group0_config.can_vote(id) != raft::is_voter::yes) {
+            continue;
+        }
+        if (!nodes.contains(id)) {
+            // A voter that isn't contained in the nodes list at this stage is not expected and thus breaking the invariant
+            // (except for the initial topology node, which is handled in the "self" section).
+            on_internal_error(rvlogger, format("group0 voter {} is absent from node list", id));
+        }
+    }
+
     std::unordered_set<raft::server_id> voters_add;
     std::unordered_set<raft::server_id> voters_del;
 
