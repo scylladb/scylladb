@@ -20,9 +20,8 @@ Check the node status from the other nodes in the cluster to verify that the sta
 .. note::
   The ``nodetool netstats`` command does not show ongoing streaming. 
 
-The following error message will appear in the logs_:
+The following error message will appear in the :doc:`logs </getting-started/logging>`:
 
-.. _logs: /getting-started/logging/ 
 
 .. code-block:: shell
 
