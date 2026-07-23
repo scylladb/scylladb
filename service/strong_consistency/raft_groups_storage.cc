@@ -225,6 +225,20 @@ future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, ra
     );
 }
 
+future<> raft_groups_storage::store_stable_timestamp(cql3::query_processor& qp, raft::group_id gid, shard_id shard, api::timestamp_type ts) {
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, stable_timestamp) VALUES (?, ?, ?)", db::system_keyspace::RAFT_GROUPS);
+    co_await qp.execute_internal(store_cql, {int16_t(shard), gid.id, int64_t(ts)}, cql3::query_processor::cache_internal::yes);
+}
+
+future<api::timestamp_type> raft_groups_storage::load_stable_timestamp(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT stable_timestamp FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
+    auto rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (rs->empty() || !rs->one().has("stable_timestamp")) {
+        co_return api::min_timestamp;
+    }
+    co_return api::timestamp_type(rs->one().get_as<int64_t>("stable_timestamp"));
+}
+
 future<> raft_groups_storage::execute_with_linearization_point(std::function<future<>()> f) {
     promise<> task_promise;
     auto pending_fut = std::exchange(_pending_op_fut, task_promise.get_future());

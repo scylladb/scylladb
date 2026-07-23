@@ -304,6 +304,11 @@ bool tablet_info::operator==(const tablet_info& o) const {
         && sstables_repaired_at == o.sstables_repaired_at;
 }
 
+const tablet_replica* tablet_info::maybe_find_replica(host_id host) const {
+    auto it = std::ranges::find_if(replicas, [&](const auto& r) { return r.host == host; });
+    return it != replicas.end() ? it : nullptr;
+}
+
 std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
     static const tablet_task_info empty_task_info;
     auto repair_task_info = tablet_task_info::merge_repair_tasks(

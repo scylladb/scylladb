@@ -8,6 +8,7 @@
 #pragma once
 
 #include "raft/raft.hh"
+#include "mutation/timestamp.hh"
 
 #include <vector>
 #include <functional>
@@ -80,6 +81,10 @@ public:
     // re-apply already applied entries on restart. Only writes if the new
     // index is higher than the existing one (safe to call on repeated replays).
     static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
+
+    // Persist stable_timestamp so the value survives restarts.
+    static future<> store_stable_timestamp(cql3::query_processor& qp, raft::group_id gid, shard_id shard, api::timestamp_type ts);
+    static future<api::timestamp_type> load_stable_timestamp(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
 
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 

@@ -637,8 +637,10 @@ private:
     // This is the main function that other functions call. It compares the version from the 
     // fencing_token with the fence_version on the local node/shard and returns an instance of
     // stale_topology_exception if the request coordinator is lagging behind.
+public:
     std::optional<replica::stale_topology_exception> check_fence(fencing_token token,
         locator::host_id caller_address) noexcept;
+private:
 
     // Checks the fence_token when the future is ready.
     //
