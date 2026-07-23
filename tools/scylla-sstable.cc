@@ -905,6 +905,30 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
     compaction::compact_sstables(std::move(compaction_descriptor), compaction_data, compaction_group_view, progress_monitor).get();
 }
 
+void write_index_component(schema_ptr schema, reader_permit permit, const sstables::shared_sstable& sst, json_writer& writer) {
+    auto idx_reader = sst->make_index_reader(permit);
+    auto close_idx_reader = deferred_close(*idx_reader);
+
+    writer.StartArray();
+    while (!idx_reader->eof()) {
+        idx_reader->read_partition_data().get();
+        auto pos = idx_reader->data_file_positions().start;
+        auto pkey = idx_reader->get_partition_key();
+
+        writer.StartObject();
+        if (pkey) {
+            writer.Key("key");
+            writer.DataKey(*schema, *pkey);
+        }
+        writer.Key("pos");
+        writer.Uint64(pos);
+        writer.EndObject();
+
+        idx_reader->advance_to_next_partition().get();
+    }
+    writer.EndArray();
+}
+
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
@@ -914,29 +938,8 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        auto idx_reader = sst->make_index_reader(permit);
-        auto close_idx_reader = deferred_close(*idx_reader);
-
         writer.Key(fmt::to_string(sst->get_filename()));
-        writer.StartArray();
-
-        while (!idx_reader->eof()) {
-            idx_reader->read_partition_data().get();
-            auto pos = idx_reader->data_file_positions().start;
-            auto pkey = idx_reader->get_partition_key();
-
-            writer.StartObject();
-            if (pkey) {
-                writer.Key("key");
-                writer.DataKey(*schema, *pkey);
-            }
-            writer.Key("pos");
-            writer.Uint64(pos);
-            writer.EndObject();
-
-            idx_reader->advance_to_next_partition().get();
-        }
-        writer.EndArray();
+        write_index_component(schema, permit, sst, writer);
     }
     writer.EndStream();
 }
@@ -944,6 +947,32 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
 template <typename Integer>
 sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
     return sstring(ds.value.begin(), ds.value.end());
+}
+
+void write_compression_info_component(const sstables::shared_sstable& sst, json_writer& writer) {
+    const auto& compression = sst->get_compression();
+
+    writer.StartObject();
+    writer.Key("name");
+    writer.String(disk_string_to_string(compression.name));
+    writer.Key("options");
+    writer.StartObject();
+    for (const auto& opt : compression.options.elements) {
+        writer.Key(disk_string_to_string(opt.key));
+        writer.String(disk_string_to_string(opt.value));
+    }
+    writer.EndObject();
+    writer.Key("chunk_len");
+    writer.Uint(compression.uncompressed_chunk_length());
+    writer.Key("data_len");
+    writer.Uint64(compression.data_len);
+    writer.Key("offsets");
+    writer.StartArray();
+    for (const auto& offset : compression.offsets) {
+        writer.Uint64(offset);
+    }
+    writer.EndArray();
+    writer.EndObject();
 }
 
 void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -954,34 +983,63 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
 
     json_writer writer;
     writer.StartStream();
-
     for (auto& sst : sstables) {
-        const auto& compression = sst->get_compression();
-
         writer.Key(fmt::to_string(sst->get_filename()));
-        writer.StartObject();
-        writer.Key("name");
-        writer.String(disk_string_to_string(compression.name));
-        writer.Key("options");
-        writer.StartObject();
-        for (const auto& opt : compression.options.elements) {
-            writer.Key(disk_string_to_string(opt.key));
-            writer.String(disk_string_to_string(opt.value));
-        }
-        writer.EndObject();
-        writer.Key("chunk_len");
-        writer.Uint(compression.uncompressed_chunk_length());
-        writer.Key("data_len");
-        writer.Uint64(compression.data_len);
-        writer.Key("offsets");
-        writer.StartArray();
-        for (const auto& offset : compression.offsets) {
-            writer.Uint64(offset);
-        }
-        writer.EndArray();
-        writer.EndObject();
+        write_compression_info_component(sst, writer);
     }
     writer.EndStream();
+}
+
+void write_summary_component(schema_ptr schema, const sstables::shared_sstable& sst, json_writer& writer) {
+    auto& summary = sst->get_summary();
+
+    writer.StartObject();
+
+    writer.Key("header");
+    writer.StartObject();
+    writer.Key("min_index_interval");
+    writer.Uint64(summary.header.min_index_interval);
+    writer.Key("size");
+    writer.Uint64(summary.header.size);
+    writer.Key("memory_size");
+    writer.Uint64(summary.header.memory_size);
+    writer.Key("sampling_level");
+    writer.Uint64(summary.header.sampling_level);
+    writer.Key("size_at_full_sampling");
+    writer.Uint64(summary.header.size_at_full_sampling);
+    writer.EndObject();
+
+    writer.Key("positions");
+    writer.StartArray();
+    for (const auto& pos : summary.positions) {
+        writer.Uint64(pos);
+    }
+    writer.EndArray();
+
+    writer.Key("entries");
+    writer.StartArray();
+    for (const auto& e : summary.entries) {
+        writer.StartObject();
+
+        auto pkey = e.get_key().to_partition_key(*schema);
+        writer.Key("key");
+        writer.DataKey(*schema, pkey, e.get_token());
+        writer.Key("position");
+        writer.Uint64(e.position);
+
+        writer.EndObject();
+    }
+    writer.EndArray();
+
+    auto first_key = dht::decorate_key(*schema, sstables::key_view(summary.first_key.value).to_partition_key(*schema));
+    writer.Key("first_key");
+    writer.DataKey(*schema, first_key);
+
+    auto last_key = dht::decorate_key(*schema, sstables::key_view(summary.last_key.value).to_partition_key(*schema));
+    writer.Key("last_key");
+    writer.DataKey(*schema, last_key);
+
+    writer.EndObject();
 }
 
 void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -992,58 +1050,9 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
 
     json_writer writer;
     writer.StartStream();
-
     for (auto& sst : sstables) {
-        auto& summary = sst->get_summary();
-
         writer.Key(fmt::to_string(sst->get_filename()));
-        writer.StartObject();
-
-        writer.Key("header");
-        writer.StartObject();
-        writer.Key("min_index_interval");
-        writer.Uint64(summary.header.min_index_interval);
-        writer.Key("size");
-        writer.Uint64(summary.header.size);
-        writer.Key("memory_size");
-        writer.Uint64(summary.header.memory_size);
-        writer.Key("sampling_level");
-        writer.Uint64(summary.header.sampling_level);
-        writer.Key("size_at_full_sampling");
-        writer.Uint64(summary.header.size_at_full_sampling);
-        writer.EndObject();
-
-        writer.Key("positions");
-        writer.StartArray();
-        for (const auto& pos : summary.positions) {
-            writer.Uint64(pos);
-        }
-        writer.EndArray();
-
-        writer.Key("entries");
-        writer.StartArray();
-        for (const auto& e : summary.entries) {
-            writer.StartObject();
-
-            auto pkey = e.get_key().to_partition_key(*schema);
-            writer.Key("key");
-            writer.DataKey(*schema, pkey, e.get_token());
-            writer.Key("position");
-            writer.Uint64(e.position);
-
-            writer.EndObject();
-        }
-        writer.EndArray();
-
-        auto first_key = dht::decorate_key(*schema, sstables::key_view(summary.first_key.value).to_partition_key(*schema));
-        writer.Key("first_key");
-        writer.DataKey(*schema, first_key);
-
-        auto last_key = dht::decorate_key(*schema, sstables::key_view(summary.last_key.value).to_partition_key(*schema));
-        writer.Key("last_key");
-        writer.DataKey(*schema, last_key);
-
-        writer.EndObject();
+        write_summary_component(schema, sst, writer);
     }
     writer.EndStream();
 }
@@ -1274,12 +1283,7 @@ void dump_serialization_header(json_writer& writer, sstables::sstable_version_ty
     });
 }
 
-void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
-    if (sstables.empty()) {
-        throw std::invalid_argument("no sstables specified on the command line");
-    }
-
+void write_statistics_component(const sstables::shared_sstable& sst, json_writer& writer) {
     auto to_string = [] (sstables::metadata_type t) {
         switch (t) {
             case sstables::metadata_type::Validation: return "validation";
@@ -1290,42 +1294,51 @@ void dump_statistics_operation(schema_ptr schema, reader_permit permit, const st
         std::abort();
     };
 
+    auto& statistics = sst->get_statistics();
+
+    writer.StartObject();
+
+    writer.Key("offsets");
+    writer.StartObject();
+    for (const auto& [k, v] : statistics.offsets.elements) {
+        writer.Key(to_string(k));
+        writer.Uint(v);
+    }
+    writer.EndObject();
+
+    const auto version = sst->get_version();
+    for (const auto& [type, _] : statistics.offsets.elements) {
+        const auto& metadata_ptr = statistics.contents.at(type);
+        switch (type) {
+            case sstables::metadata_type::Validation:
+                dump_validation_metadata(writer, version, *dynamic_cast<const sstables::validation_metadata*>(metadata_ptr.get()));
+                break;
+            case sstables::metadata_type::Compaction:
+                dump_compaction_metadata(writer, version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
+                break;
+            case sstables::metadata_type::Stats:
+                dump_stats_metadata(writer, version, *dynamic_cast<const sstables::stats_metadata*>(metadata_ptr.get()));
+                break;
+            case sstables::metadata_type::Serialization:
+                dump_serialization_header(writer, version, *dynamic_cast<const sstables::serialization_header*>(metadata_ptr.get()));
+                break;
+        }
+    }
+
+    writer.EndObject();
+}
+
+void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        auto& statistics = sst->get_statistics();
-
         writer.Key(fmt::to_string(sst->get_filename()));
-        writer.StartObject();
-
-        writer.Key("offsets");
-        writer.StartObject();
-        for (const auto& [k, v] : statistics.offsets.elements) {
-            writer.Key(to_string(k));
-            writer.Uint(v);
-        }
-        writer.EndObject();
-
-        const auto version = sst->get_version();
-        for (const auto& [type, _] : statistics.offsets.elements) {
-            const auto& metadata_ptr = statistics.contents.at(type);
-            switch (type) {
-                case sstables::metadata_type::Validation:
-                    dump_validation_metadata(writer, version, *dynamic_cast<const sstables::validation_metadata*>(metadata_ptr.get()));
-                    break;
-                case sstables::metadata_type::Compaction:
-                    dump_compaction_metadata(writer, version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
-                    break;
-                case sstables::metadata_type::Stats:
-                    dump_stats_metadata(writer, version, *dynamic_cast<const sstables::stats_metadata*>(metadata_ptr.get()));
-                    break;
-                case sstables::metadata_type::Serialization:
-                    dump_serialization_header(writer, version, *dynamic_cast<const sstables::serialization_header*>(metadata_ptr.get()));
-                    break;
-            }
-        }
-
-        writer.EndObject();
+        write_statistics_component(sst, writer);
     }
     writer.EndStream();
 }
@@ -1544,6 +1557,21 @@ public:
     }
 };
 
+void write_scylla_metadata_component(schema_ptr schema, const sstables::shared_sstable& sst, json_writer& writer) {
+    writer.StartObject();
+    auto m = sst->get_scylla_metadata();
+    if (m) {
+        for (const auto& [k, v] : m->data.data) {
+            std::visit(scylla_metadata_visitor(writer, schema), v);
+        }
+        if (m->digest.has_value()) {
+            writer.Key("digest");
+            writer.Uint(m->digest.value());
+        }
+    }
+    writer.EndObject();
+}
+
 void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map&) {
     if (sstables.empty()) {
@@ -1554,19 +1582,123 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     writer.StartStream();
     for (auto& sst : sstables) {
         writer.Key(fmt::to_string(sst->get_filename()));
+        write_scylla_metadata_component(schema, sst, writer);
+    }
+    writer.EndStream();
+}
+
+// An sstable_consumer that serializes the data component of a single sstable as
+// a JSON array into an already-positioned writer. The caller must write the
+// component key before calling consume_reader(), e.g.:
+//   writer.Key("data");
+//   data_component_consumer consumer(mf_writer);
+//   consume_reader(rd, consumer, sst, partitions, no_skips);
+class data_component_consumer : public sstable_consumer {
+    tools::mutation_fragment_stream_json_writer& _writer;
+public:
+    explicit data_component_consumer(tools::mutation_fragment_stream_json_writer& w) : _writer(w) {}
+
+    future<> consume_stream_start() override { return make_ready_future<>(); }
+    future<stop_iteration> consume_sstable_start(const sstables::sstable* const) override {
+        _writer.writer().StartArray();
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(partition_start&& ps) override {
+        _writer.start_partition(ps);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(static_row&& sr) override {
+        _writer.partition_element(sr);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(clustering_row&& cr) override {
+        _writer.partition_element(cr);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(range_tombstone_change&& rtc) override {
+        _writer.partition_element(rtc);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(partition_end&&) override {
+        _writer.end_partition();
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume_sstable_end() override {
+        _writer.writer().EndArray();
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<> consume_stream_end() override { return make_ready_future<>(); }
+};
+
+static const std::vector<std::string> all_dump_components = {
+    "data", "index", "compression-info", "summary", "statistics", "scylla-metadata"
+};
+
+void dump_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+
+    const bool all_components = vm.count("all-components");
+    std::set<std::string> components_to_dump;
+    if (!all_components) {
+        if (!vm.count("components")) {
+            throw std::invalid_argument("neither --components nor --all-components was specified, don't know which components to dump");
+        }
+        const auto& comps = vm["components"].as<std::vector<sstring>>();
+        for (const auto& c : comps) {
+            const auto cs = std::string(c);
+            if (std::ranges::find(all_dump_components, cs) == all_dump_components.end()) {
+                throw std::invalid_argument(fmt::format("unknown component: {}, valid components are: {}", c, fmt::join(all_dump_components, ", ")));
+            }
+            components_to_dump.insert(cs);
+        }
+    }
+
+    const auto should_dump = [&](const std::string& name) {
+        return all_components || components_to_dump.count(name);
+    };
+
+    const auto no_skips = false;
+    const auto partitions = partition_set(dht::decorated_key::less_comparator(schema));
+
+    // Use a single mutation_fragment_stream_json_writer so we share one json_writer
+    // instance for both the outer structure and the data component serialization.
+    tools::mutation_fragment_stream_json_writer mf_writer(*schema);
+    auto& writer = mf_writer.writer();
+
+    writer.StartStream();
+    for (auto& sst : sstables) {
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartObject();
-        auto m = sst->get_scylla_metadata();
-        if (!m) {
-            writer.EndObject();
-            continue;
+
+        if (should_dump("data")) {
+            writer.Key("data");
+            data_component_consumer consumer(mf_writer);
+            consume_reader(sst->make_full_scan_reader(schema, permit), consumer, sst.get(), partitions, no_skips);
         }
-        for (const auto& [k, v] : m->data.data) {
-            std::visit(scylla_metadata_visitor(writer, schema), v);
+        if (should_dump("index")) {
+            writer.Key("index");
+            write_index_component(schema, permit, sst, writer);
         }
-        if (m->digest.has_value()) {
-            writer.Key("digest");
-            writer.Uint(m->digest.value());
+        if (should_dump("compression-info")) {
+            writer.Key("compression-info");
+            write_compression_info_component(sst, writer);
         }
+        if (should_dump("summary")) {
+            writer.Key("summary");
+            write_summary_component(schema, sst, writer);
+        }
+        if (should_dump("statistics")) {
+            writer.Key("statistics");
+            write_statistics_component(sst, writer);
+        }
+        if (should_dump("scylla-metadata")) {
+            writer.Key("scylla-metadata");
+            write_scylla_metadata_component(schema, sst, writer);
+        }
+
         writer.EndObject();
     }
     writer.EndStream();
@@ -2702,7 +2834,30 @@ For more information, see: {}
             {
             }},
             dump_schema_operation},
-/* filter */
+/* dump */
+    {{"dump",
+            "Dump one or more components of sstable(s)",
+fmt::format(R"(
+Dump one or more components of the sstable(s) into a single JSON object per
+sstable. The output format is:
+
+    {{"sstables": {{"/path/to/Data.db": {{"component-name": <component>, ...}}, ...}}}}
+
+The components to dump must be specified via --components (a comma-separated
+list) or --all-components (to dump all supported components). If neither is
+provided, the command exits with an error.
+
+Supported component names: {}
+
+The "data" component uses the same format as dump-data.
+
+For more information, see: {}
+)", fmt::join(all_dump_components, ", "), doc_link("operating-scylla/admin-tools/scylla-sstable#dump")),
+            {
+                    typed_option<std::vector<sstring>>("components", "component(s) to dump, a comma-separated list of component names"),
+                    typed_option<>("all-components", "dump all supported components"),
+            }},
+            dump_operation},
     {{"filter",
             "Filter the sstable(s), including/excluding specified partitions",
 fmt::format(R"(
