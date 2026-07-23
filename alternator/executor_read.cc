@@ -578,10 +578,11 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     }
     auto pos = paging_state.get_position_in_partition();
     if (pos.has_key()) {
-        // Alternator itself allows at most one column in clustering key, but 
-        // user can use Alternator api to access system tables which might have
-        // multiple clustering key columns. So we need to handle that case here.
-        auto cdef_it = schema.clustering_key_columns().begin();        
+        // Base tables and LSIs have at most one clustering-key column, but
+        // composite GSI range keys, as well as Alternator's
+        // internal access to system tables, may have multiple clustering-key
+        // columns. So we need to handle that case here.
+        auto cdef_it = schema.clustering_key_columns().begin();
         for(const auto &exploded_ck : pos.key().explode()) {
             rjson::add_with_string_name(last_evaluated_key, std::string_view(cdef_it->name_as_text()), rjson::empty_object());
             rjson::value& key_entry = last_evaluated_key[cdef_it->name_as_text()];
@@ -643,12 +644,20 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     }
 
     if (exclusive_start_key) {
-        partition_key pk = pk_from_json(*exclusive_start_key, table_schema);
-        auto pos = position_in_partition::for_partition_start();
-        if (table_schema->clustering_key_size() > 0) {
-            pos = pos_from_json(*exclusive_start_key, table_schema);
+        try {
+            partition_key pk = pk_from_json(*exclusive_start_key, table_schema);
+            auto pos = position_in_partition::for_partition_start();
+            if (table_schema->clustering_key_size() > 0) {
+                pos = pos_from_json(*exclusive_start_key, table_schema);
+            }
+            old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+        } catch (api_error& e) {
+            // Try catch standardizes errors msg here.
+            if (e._type == "ValidationException") {
+                throw api_error::validation(fmt::format("The provided start key is invalid: {}", e._msg));
+            }
+            throw;
         }
-        old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
     co_await verify_permission(enforce_authorization, warn_authorization, client_state, table_schema, auth::permission::SELECT, stats);
@@ -858,6 +867,29 @@ static query::clustering_range get_clustering_range_for_begins_with(bytes&& targ
     return query::clustering_range::make_starting_with(query::clustering_range::bound(ck));
 }
 
+// Same as above, but for a composite (multi-attribute) sort key: prefix_values
+// holds the raw values of the EQ-constrained sort-key columns that precede
+// the begins_with()-constrained one (may be empty if the begins_with()
+// condition is on the first sort-key column). target is the raw begins_with()
+// value for that last, non-EQ, column - must not be empty (callers handle the
+// empty case, which behaves differently, separately).
+static query::clustering_range get_clustering_range_for_begins_with(std::vector<bytes>&& prefix_values, bytes&& target, schema_ptr schema) {
+    auto it = boost::range::find_end(target, bytes("\xFF"), std::not_equal_to<bytes::value_type>());
+    if (it == target.end()) {
+        prefix_values.push_back(std::move(target));
+        clustering_key ck = clustering_key::from_exploded(*schema, prefix_values);
+        return query::clustering_range::make_starting_with(query::clustering_range::bound(std::move(ck)));
+    }
+    std::vector<bytes> lower_values(prefix_values);
+    lower_values.push_back(target);
+    clustering_key ck = clustering_key::from_exploded(*schema, lower_values);
+    ++*it;
+    target.resize(std::distance(target.begin(), it) + 1);
+    prefix_values.push_back(std::move(target));
+    clustering_key upper_limit = clustering_key::from_exploded(*schema, prefix_values);
+    return query::clustering_range::make(query::clustering_range::bound(std::move(ck)), query::clustering_range::bound(std::move(upper_limit), false));
+}
+
 static query::clustering_range calculate_ck_bound(schema_ptr schema, const column_definition& ck_cdef, const rjson::value& comp_definition, const rjson::value& attrs) {
     auto op = get_comparison_operator(comp_definition);
     const size_t expected_attrs_size = (op == comparison_operator_type::BETWEEN) ? 2 : 1;
@@ -1025,9 +1057,12 @@ static void condition_expression_and_list(
     }, condition_expression._expression);
 }
 
-// Calculates primary key bounds from KeyConditionExpression
+// Calculates primary key bounds from KeyConditionExpression.
 static std::pair<dht::partition_range_vector, std::vector<query::clustering_range>>
 calculate_bounds_condition_expression(schema_ptr schema,
+        uint8_t pk_size,
+        uint8_t sk_size,
+        uint8_t total_size,
         const rjson::value& expression,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_values,
@@ -1059,23 +1094,60 @@ calculate_bounds_condition_expression(schema_ptr schema,
     std::vector<const parsed::primitive_condition*> conditions;
     condition_expression_and_list(p, conditions);
 
-    if (conditions.size() < 1 || conditions.size() > 2) {
+    if (conditions.size() < 1 || conditions.size() > total_size) {
         throw api_error::validation(
-                "KeyConditionExpression syntax error: must have 1 or 2 conditions");
+                fmt::format("KeyConditionExpression syntax error: must have between 1 and {} conditions", total_size));
     }
-    // Scylla allows us to have an (equality) constraint on the partition key
-    // pk_cdef, and a range constraint on the *first* clustering key ck_cdef.
-    // Note that this is also good enough for our GSI implementation - the
-    // GSI's user-specified sort key will be the first clustering key.
-    // FIXME: In the case described in issue #5320 (base and GSI both have
-    // just hash key - but different ones), this may allow the user to Query
-    // using the base key which isn't officially part of the GSI.
-    const column_definition& pk_cdef = schema->partition_key_columns().front();
-    const column_definition* ck_cdef = schema->clustering_key_size() > 0 ?
-            &schema->clustering_key_columns().front() : nullptr;
+    // Scylla allows us to have an (equality) constraint on every column of
+    // the partition key, and on every column of the sort key but the last
+    // (which may additionally have a range constraint - BETWEEN,
+    // begins_with(), or an inequality - instead of, or in addition to,
+    // equality). Base tables and LSIs always have exactly one partition-key
+    // column and at most one sort-key column, but GSIs may have a
+    // "composite" (multi-attribute) partition key made of up to 4 HASH
+    // columns, and a composite sort key made of up to 4 RANGE columns - so
+    // below we look up both partition-key and sort-key conditions by name.
+
+    std::vector<const column_definition*> pk_cdefs;
+    pk_cdefs.reserve(pk_size);
+    // Maps a partition-key column name to its position in the partition key.
+    std::unordered_map<std::string_view, uint8_t> pk_positions;
+    for (const column_definition& cdef : schema->partition_key_columns()) {
+        pk_positions.emplace(cdef.name_as_text(), static_cast<uint8_t>(pk_cdefs.size()));
+        pk_cdefs.push_back(&cdef);
+    }
+    std::vector<const column_definition*> sk_cdefs;
+    sk_cdefs.reserve(sk_size);
+    // Maps a sort-key column name to its position in the clustering key.
+    std::unordered_map<std::string_view, uint8_t> sk_positions;
+    for (const column_definition& cdef : schema->clustering_key_columns()) {
+        if (static_cast<uint8_t>(sk_cdefs.size()) >= sk_size) {
+            break;
+        }
+        sk_positions.emplace(cdef.name_as_text(), static_cast<uint8_t>(sk_cdefs.size()));
+        sk_cdefs.push_back(&cdef);
+    }
+
+    // Describes the (at most one) non-equality condition allowed on the
+    // sort key - a BETWEEN, a begins_with(), or an inequality (<, <=, >, >=).
+    // It must be on the last sort-key position that has any condition on it.
+    enum class sk_range_kind { BETWEEN, BEGINS_WITH, INEQUALITY };
+    struct sk_range_condition {
+        uint8_t position;
+        sk_range_kind kind;
+        parsed::primitive_condition::type op = parsed::primitive_condition::type::UNDEFINED;
+        int toplevel_ind = 0;
+        bytes value1;
+        bytes value2; // only used for BETWEEN (the upper bound)
+    };
 
     dht::partition_range_vector partition_ranges;
     std::vector<query::clustering_range> ck_bounds;
+    std::vector<std::optional<bytes>> optional_pk_values(pk_size);
+    uint8_t pk_values_set = 0;
+    std::vector<std::optional<bytes>> optional_sk_eq_values(sk_size);
+    // Represents the (optional) last range condition
+    std::optional<sk_range_condition> sk_range;
     for (const parsed::primitive_condition* condp : conditions) {
         const parsed::primitive_condition& cond = *condp;
         // In all comparison operators, one operand must be a column name,
@@ -1141,23 +1213,23 @@ calculate_bounds_condition_expression(schema_ptr schema,
         } else if (cond._op == parsed::primitive_condition::type::EQ) {
             // the EQ operator (=) is the only one which can be used for both
             // the partition key and sort key:
-            if (sstring(key) == pk_cdef.name_as_text()) {
-                if (!partition_ranges.empty()) {
+            auto pk_it = pk_positions.find(key);
+            auto sk_it = sk_positions.find(key);
+            if (pk_it != pk_positions.end()) {
+                uint8_t pos = pk_it->second;
+                if (optional_pk_values[pos]) {
                     throw api_error::validation(
                             "KeyConditionExpression allows only one condition for each key");
                 }
-                bytes raw_value = get_constant_value(cond._values[!toplevel_ind], pk_cdef);
-                partition_key pk = partition_key::from_singular_bytes(*schema, std::move(raw_value));
-                auto decorated_key = dht::decorate_key(*schema, pk);
-                partition_ranges.push_back(dht::partition_range(decorated_key));
-            } else if (ck_cdef && sstring(key) == ck_cdef->name_as_text()) {
-                if (!ck_bounds.empty()) {
+                optional_pk_values[pos] = get_constant_value(cond._values[!toplevel_ind], *pk_cdefs[pos]);
+                ++pk_values_set;
+            } else if (sk_it != sk_positions.end()) {
+                uint8_t pos = sk_it->second;
+                if (optional_sk_eq_values[pos] || (sk_range && sk_range->position == pos)) {
                     throw api_error::validation(
                             "KeyConditionExpression allows only one condition for each key");
                 }
-                bytes raw_value = get_constant_value(cond._values[!toplevel_ind], *ck_cdef);
-                clustering_key ck = clustering_key::from_single_value(*schema, raw_value);
-                ck_bounds.push_back(query::clustering_range(ck));
+                optional_sk_eq_values[pos] = get_constant_value(cond._values[!toplevel_ind], *sk_cdefs[pos]);
             } else {
                 throw api_error::validation(
                         fmt::format("KeyConditionExpression condition on non-key attribute {}", key));
@@ -1166,72 +1238,170 @@ calculate_bounds_condition_expression(schema_ptr schema,
         }
         // If we're still here, it's any other operator besides EQ, and these
         // are allowed *only* on the clustering key:
-        if (sstring(key) == pk_cdef.name_as_text()) {
+        if (pk_positions.contains(key)) {
             throw api_error::validation(
-                    fmt::format("KeyConditionExpression only '=' condition is supported on partition key {}", key));
-        } else if (!ck_cdef || sstring(key) != ck_cdef->name_as_text()) {
+                    fmt::format("KeyConditionExpression: HASH key {} must use an equality (=) condition, other conditions are not supported", key));
+        }
+        auto sk_it = sk_positions.find(key);
+        if (sk_it == sk_positions.end()) {
             throw api_error::validation(
                     fmt::format("KeyConditionExpression condition on non-key attribute {}", key));
         }
-        if (!ck_bounds.empty()) {
+        uint8_t pos = sk_it->second;
+        if (optional_sk_eq_values[pos] || sk_range) {
             throw api_error::validation(
-                    "KeyConditionExpression allows only one condition for each key");
+                    "KeyConditionExpression: the RANGE key allows only one non-equality condition");
         }
         if (cond._op == parsed::primitive_condition::type::BETWEEN) {
-            clustering_key ck1 = clustering_key::from_single_value(*schema,
-                    get_constant_value(cond._values[1], *ck_cdef));
-            clustering_key ck2 = clustering_key::from_single_value(*schema,
-                    get_constant_value(cond._values[2], *ck_cdef));
-            ck_bounds.push_back(query::clustering_range::make(
-                    query::clustering_range::bound(ck1), query::clustering_range::bound(ck2)));
-            continue;
+            sk_range = sk_range_condition{
+                .position = pos,
+                .kind = sk_range_kind::BETWEEN,
+                .value1 = get_constant_value(cond._values[1], *sk_cdefs[pos]),
+                .value2 = get_constant_value(cond._values[2], *sk_cdefs[pos]),
+            };
         } else if (cond._values.size() == 1) {
             // We already verified above, that this case this can only be a
             // function call to begins_with(), with the first parameter the
             // key, the second the value reference.
             bytes raw_value = get_constant_value(
-                    std::get<parsed::value::function_call>(cond._values[0]._value)._parameters[1], *ck_cdef);
-            if (!ck_cdef->type->is_compatible_with(*utf8_type)) {
+                    std::get<parsed::value::function_call>(cond._values[0]._value)._parameters[1], *sk_cdefs[pos]);
+            if (!sk_cdefs[pos]->type->is_compatible_with(*utf8_type)) {
                 // begins_with() supported on bytes and strings (both stored
                 // in the database as strings) but not on numbers.
                 throw api_error::validation(
                         fmt::format("KeyConditionExpression begins_with() not supported on type {}",
-                                type_to_string(ck_cdef->type)));
-            } else if (raw_value.empty()) {
-                ck_bounds.push_back(query::clustering_range::make_open_ended_both_sides());
-            } else {
-                clustering_key ck = clustering_key::from_single_value(*schema, raw_value);
-                ck_bounds.push_back(get_clustering_range_for_begins_with(std::move(raw_value), ck, schema, ck_cdef->type));
+                                type_to_string(sk_cdefs[pos]->type)));
             }
-            continue;
-        }
-
-        // All remaining operator have one value reference parameter in index
-        // !toplevel_ind. Note how toplevel_ind==1 reverses the direction of
-        // an inequality.
-        bytes raw_value = get_constant_value(cond._values[!toplevel_ind], *ck_cdef);
-        clustering_key ck = clustering_key::from_single_value(*schema, raw_value);
-        if ((cond._op == parsed::primitive_condition::type::LT && toplevel_ind == 0) ||
-            (cond._op == parsed::primitive_condition::type::GT && toplevel_ind == 1)) {
-            ck_bounds.push_back(query::clustering_range::make_ending_with(query::clustering_range::bound(ck, false)));
-        } else if ((cond._op == parsed::primitive_condition::type::GT && toplevel_ind == 0) ||
-                   (cond._op == parsed::primitive_condition::type::LT && toplevel_ind == 1)) {
-            ck_bounds.push_back(query::clustering_range::make_starting_with(query::clustering_range::bound(ck, false)));
-        } else if ((cond._op == parsed::primitive_condition::type::LE && toplevel_ind == 0) ||
-                   (cond._op == parsed::primitive_condition::type::GE && toplevel_ind == 1)) {
-            ck_bounds.push_back(query::clustering_range::make_ending_with(query::clustering_range::bound(ck)));
-        } else if ((cond._op == parsed::primitive_condition::type::GE && toplevel_ind == 0) ||
-                   (cond._op == parsed::primitive_condition::type::LE && toplevel_ind == 1)) {
-            ck_bounds.push_back(query::clustering_range::make_starting_with(query::clustering_range::bound(ck)));
+            sk_range = sk_range_condition{
+                .position = pos,
+                .kind = sk_range_kind::BEGINS_WITH,
+                .value1 = std::move(raw_value),
+            };
+        } else {
+            // All remaining operators (LT, LE, GT, GE) have one value
+            // reference parameter in index !toplevel_ind.
+            sk_range = sk_range_condition{
+                .position = pos,
+                .kind = sk_range_kind::INEQUALITY,
+                .op = cond._op,
+                .toplevel_ind = toplevel_ind,
+                .value1 = get_constant_value(cond._values[!toplevel_ind], *sk_cdefs[pos]),
+            };
         }
     }
 
-    if (partition_ranges.empty()) {
+    if (pk_values_set != pk_size) {
+        for (uint8_t i = 0; i < pk_size; ++i) {
+            if (!optional_pk_values[i]) {
+                throw api_error::validation(
+                        format("KeyConditionExpression: HASH key {} must have an equality (=) condition", pk_cdefs[i]->name_as_text()));
+            }
+        }
+    }
+    std::vector<bytes> raw_pk_values;
+    raw_pk_values.reserve(pk_size);
+    for (auto& v : optional_pk_values) {
+        raw_pk_values.push_back(std::move(*v));
+    }
+    partition_key pk = partition_key::from_exploded(*schema, raw_pk_values);
+    auto decorated_key = dht::decorate_key(*schema, pk);
+    partition_ranges.push_back(dht::partition_range(std::move(decorated_key)));
+
+    // Determine the highest sort-key position that has any condition on it
+    // (EQ, or the single allowed range condition), and verify there's no gap
+    // among positions 0..that position: e.g. constraining r2 without r1 is
+    // illegal, and so is constraining r1 and r3 without r2.
+    std::optional<uint8_t> max_sk_position_set;
+    for (uint8_t i = 0; i < sk_size; ++i) {
+        if (optional_sk_eq_values[i] || (sk_range && sk_range->position == i)) {
+            max_sk_position_set = i;
+        }
+    }
+    if (max_sk_position_set) {
+        for (uint8_t i = 0; i <= *max_sk_position_set; ++i) {
+            if (!optional_sk_eq_values[i] && !(sk_range && sk_range->position == i)) {
+                throw api_error::validation(
+                        format("KeyConditionExpression: RANGE key {} must have an equality (=) condition", sk_cdefs[i]->name_as_text()));
+            }
+        }
+    }
+    // The one allowed range condition (if any) must be on the *last*
+    // constrained sort-key position - it cannot be followed by an EQ
+    // condition on a later position.
+    if (sk_range && max_sk_position_set != sk_range->position) {
         throw api_error::validation(
-                format("KeyConditionExpression requires a condition on partition key {}", pk_cdef.name_as_text()));
+                "KeyConditionExpression: only the last constrained RANGE key may skip the equality (=) condition");
     }
-    if (ck_bounds.empty()) {
+
+    if (!max_sk_position_set) {
+        // No sort-key condition at all - a hash-only query.
         ck_bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+    } else if (!sk_range) {
+        // All constrained positions (0..max_sk_position_set) are EQ - build a
+        // clustering-key prefix match.
+        std::vector<bytes> raw_ck_values;
+        raw_ck_values.reserve(*max_sk_position_set + 1);
+        for (uint8_t i = 0; i <= *max_sk_position_set; ++i) {
+            raw_ck_values.push_back(std::move(*optional_sk_eq_values[i]));
+        }
+        clustering_key ck = clustering_key::from_exploded(*schema, raw_ck_values);
+        ck_bounds.push_back(query::clustering_range(std::move(ck)));
+    } else {
+        std::vector<bytes> prefix_values;
+        prefix_values.reserve(sk_range->position);
+        for (uint8_t i = 0; i < sk_range->position; ++i) {
+            prefix_values.push_back(std::move(*optional_sk_eq_values[i]));
+        }
+        switch (sk_range->kind) {
+        case sk_range_kind::BETWEEN: {
+            std::vector<bytes> lo_values(prefix_values);
+            lo_values.push_back(std::move(sk_range->value1));
+            std::vector<bytes> hi_values = std::move(prefix_values);
+            hi_values.push_back(std::move(sk_range->value2));
+            clustering_key ck1 = clustering_key::from_exploded(*schema, lo_values);
+            clustering_key ck2 = clustering_key::from_exploded(*schema, hi_values);
+            ck_bounds.push_back(query::clustering_range::make(
+                    query::clustering_range::bound(std::move(ck1)), query::clustering_range::bound(std::move(ck2))));
+            break;
+        }
+        case sk_range_kind::BEGINS_WITH: {
+            if (sk_range->value1.empty()) {
+                if (prefix_values.empty()) {
+                    ck_bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+                } else {
+                    // The last position's begins_with("") matches anything,
+                    // so only the EQ prefix constrains the range.
+                    clustering_key ck = clustering_key::from_exploded(*schema, prefix_values);
+                    ck_bounds.push_back(query::clustering_range::make_starting_with(query::clustering_range::bound(std::move(ck))));
+                }
+            } else {
+                ck_bounds.push_back(get_clustering_range_for_begins_with(std::move(prefix_values), std::move(sk_range->value1), schema));
+            }
+            break;
+        }
+        case sk_range_kind::INEQUALITY: {
+            std::vector<bytes> ck_values = std::move(prefix_values);
+            ck_values.push_back(std::move(sk_range->value1));
+            clustering_key ck = clustering_key::from_exploded(*schema, ck_values);
+            if ((sk_range->op == parsed::primitive_condition::type::LT && sk_range->toplevel_ind == 0) ||
+                (sk_range->op == parsed::primitive_condition::type::GT && sk_range->toplevel_ind == 1)) {
+                ck_bounds.push_back(query::clustering_range::make_ending_with(query::clustering_range::bound(std::move(ck), false)));
+            } else if ((sk_range->op == parsed::primitive_condition::type::GT && sk_range->toplevel_ind == 0) ||
+                       (sk_range->op == parsed::primitive_condition::type::LT && sk_range->toplevel_ind == 1)) {
+                ck_bounds.push_back(query::clustering_range::make_starting_with(query::clustering_range::bound(std::move(ck), false)));
+            } else if ((sk_range->op == parsed::primitive_condition::type::LE && sk_range->toplevel_ind == 0) ||
+                       (sk_range->op == parsed::primitive_condition::type::GE && sk_range->toplevel_ind == 1)) {
+                ck_bounds.push_back(query::clustering_range::make_ending_with(query::clustering_range::bound(std::move(ck))));
+            } else if ((sk_range->op == parsed::primitive_condition::type::GE && sk_range->toplevel_ind == 0) ||
+                       (sk_range->op == parsed::primitive_condition::type::LE && sk_range->toplevel_ind == 1)) {
+                ck_bounds.push_back(query::clustering_range::make_starting_with(query::clustering_range::bound(std::move(ck))));
+            }
+            break;
+        }
+        default:
+            // Shouldn't happen unless we have a bug in the parser
+            throw std::logic_error(format("Unknown sk_range_kind {} for sort key range condition", static_cast<int>(sk_range->kind)));
+        }
     }
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
@@ -1727,13 +1897,18 @@ future<executor::request_return_type> executor::query(client_state& client_state
                 "KeyConditions or KeyConditionExpression");
     }
 
+    auto [pk_size, sk_size, total_size] = get_key_sizes(schema);
+    if (key_conditions && (pk_size > 1 || sk_size > 1)) {
+        throw api_error::validation("Legacy KeyConditions are not supported for composite key GSIs in Alternator");
+    }
+
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
 
     // exactly one of key_conditions or key_condition_expression
     auto [partition_ranges, ck_bounds] = key_conditions
                 ? calculate_bounds_conditions(schema, *key_conditions)
-                : calculate_bounds_condition_expression(schema, *key_condition_expression,
+                : calculate_bounds_condition_expression(schema, pk_size, sk_size, total_size, *key_condition_expression,
                         expression_attribute_values,
                         used_attribute_values,
                         expression_attribute_names,
@@ -1743,21 +1918,28 @@ future<executor::request_return_type> executor::query(client_state& client_state
             used_attribute_names, used_attribute_values);
 
     // A query is not allowed to filter on the partition key or the sort key.
-    for (const column_definition& cdef : schema->partition_key_columns()) { // just one
+    // The partition key may have up to 4 columns (composite GSI hash key);
+    // the sort key may also have up to 4 genuine columns (composite GSI
+    // range key) - sk_size (from get_key_sizes() above) excludes
+    // any irrelevant to the user trailing clustering columns the view has beyond those.
+    for (const column_definition& cdef : schema->partition_key_columns()) {
         if (filter.filters_on(cdef.name_as_text())) {
             return make_ready_future<request_return_type>(api_error::validation(
-                    format("QueryFilter can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text())));
+                    format("Filter expression can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text())));
         }
     }
-    for (const column_definition& cdef : schema->clustering_key_columns()) {
-        if (filter.filters_on(cdef.name_as_text())) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    format("QueryFilter can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text())));
+    {
+        uint8_t i = 0;
+        for (const column_definition& cdef : schema->clustering_key_columns()) {
+            if (i >= sk_size) {
+                break;
+            }
+            if (filter.filters_on(cdef.name_as_text())) {
+                return make_ready_future<request_return_type>(api_error::validation(
+                        format("Filter expression can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text())));
+            }
+            ++i;
         }
-        // FIXME: this "break" can avoid listing some clustering key columns
-        // we added for GSIs just because they existed in the base table -
-        // but not in all cases. We still have issue #5320.
-        break;
     }
 
     select_type select = parse_select(request, table_type);

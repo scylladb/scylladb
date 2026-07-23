@@ -115,7 +115,7 @@ inline constexpr int max_auxiliary_table_name_length = 222;
 
 /// validate_table_name() validates the TableName parameter in a request - it
 /// should be called in CreateTable, and in other requests only when noticing
-/// that the named table doesn't exist. 
+/// that the named table doesn't exist.
 /// The DynamoDB developer guide, https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules
 /// specifies that table "names must be between 3 and 255 characters long and
 /// can contain only the following characters: a-z, A-Z, 0-9, _ (underscore),
@@ -193,6 +193,31 @@ future<> verify_create_permission(bool enforce_authorization, bool warn_authoriz
 // adds mappings from key attribute names to their DynamoDB type string into
 // attribute_types.
 void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string, std::string>* attribute_types = nullptr, const std::map<sstring, sstring>* tags = nullptr);
+
+// Returns how many of the *leading* clustering-key columns of the given
+// schema are genuine, user-specified sort-key (RANGE key) attributes, as
+// opposed to spurious base-table key columns Alternator appends to a
+// GSI view for materialized-view correctness. For base tables (which
+// never have spurious clustering columns) and for schemas without the
+// NUMBER_OF_USER_SPECIFIED_RANGE_KEYS_TAG_KEY tag (e.g., LSIs,
+// or GSIs predating composite keys), this falls back to translation of the
+// SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY
+// tag to either "0" or "1" genuine user-specified range keys.
+uint8_t genuine_range_key_count(const schema&, const std::map<sstring, sstring>* tags);
+
+/// The genuine user-specified partition key and sort key sizes
+/// of a schema.
+struct key_sizes {
+    uint8_t pk_size;
+    uint8_t sk_size;
+    uint8_t total_size;
+};
+
+// Returns the number of partition key columns and genuine sort key
+// columns (see genuine_range_key_count() above) of the given schema,
+// GSIs may have a composite (multi-attribute) partition key of up to 4
+// HASH columns and a composite sort key of up to 4 RANGE columns.
+key_sizes get_key_sizes(const schema_ptr schema);
 
 /// is_big() checks approximately if the given JSON value is "bigger" than
 /// the given big_size number of bytes. The goal is to *quickly* detect
