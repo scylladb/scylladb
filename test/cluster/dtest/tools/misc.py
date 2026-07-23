@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
 
@@ -76,3 +77,26 @@ def set_trace_probability(nodes: list[ScyllaNode], probability_value: float) -> 
     with ThreadPoolExecutor(max_workers=len(nodes)) as executor:
         threads = [executor.submit(_set_trace_probability_for_node, node) for node in nodes]
         [thread.result() for thread in threads]
+
+
+class ImmutableMapping(Mapping):
+    """
+    Convenience class for when you want an immutable-ish map.
+
+    Useful at class level to prevent mutability problems (such as a method altering the class level mutable)
+    """
+
+    def __init__(self, init_dict):
+        self._data = init_dict.copy()
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self._data})"
