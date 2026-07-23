@@ -78,8 +78,9 @@ The current migration procedure has the following limitations:
 * Only **single-DC clusters** are supported.
 * **No schema changes** during the migration. Do not create, alter, or drop
   tables in the migrating keyspace until the migration is finished.
-* **No topology changes** during the migration. Do not add, remove, decommission,
-  replace, or rebuild nodes while a migration is in progress.
+* **No planned topology changes** during the migration. Do not add, remove,
+  decommission, or rebuild nodes while a migration is in progress. Replacing
+  a dead node is supported as an emergency recovery operation.
 * **No repair** operations during the migration. Do not run ``nodetool repair``
   on the migrating keyspace while a migration is in progress.
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
@@ -445,3 +446,16 @@ To migrate multiple keyspaces simultaneously, follow these steps:
       scylla nodetool migrate-to-tablets finalize <keyspace1>
       scylla nodetool migrate-to-tablets finalize <keyspace2>
       ...
+
+Replacing a Dead Node during Migration
+--------------------------------------
+
+If a node fails during the migration, replace it using the standard procedure
+for :doc:`replacing a dead node </operating-scylla/procedures/cluster-management/replace-dead-node/>`.
+
+The replacing node must have the same shard count as the replaced node. If the
+shard count differs, the replacement will fail.
+
+After replacement completes, you can resume the migration. The replacing node
+always starts in vnode mode and must be upgraded to tablets, regardless of the
+storage mode of node it replaced.
