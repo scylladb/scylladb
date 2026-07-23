@@ -16,7 +16,9 @@
 #include <seastar/http/function_handlers.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/core/with_scheduling_group.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/defer.hh>
 #include "seastarx.hh"
@@ -48,6 +50,28 @@ using request = http::request;
 using reply = http::reply;
 
 namespace alternator {
+
+// The `fut` future must be completed (either successfully or with an exception) - otherwise on_internal_error() will be called.
+// If the future `fut` has failed, the exception will be retrieved from `fut`, converted to suitable api_error and returned by value.
+// Otherwise std::nullopt will be returned and future `fut` will be left unchanged.
+std::optional<api_error> convert_exception_if_thrown(future<executor::request_return_type> &fut) {
+    if (!fut.available()) {
+        on_internal_error(slogger, "convert_exception_if_thrown() called on a future that is not yet completed");
+    }
+    if (!fut.failed()) {
+        return std::nullopt;
+    }
+
+    auto eptr = fut.get_exception();
+
+    if (auto* ae = try_catch<api_error>(eptr)) {
+        return std::move(*ae);
+    } else if (auto* re = try_catch<rjson::error>(eptr)) {
+        return api_error::validation(re->what());
+    } else {
+        return api_error::internal(format("Internal server error: {}", eptr));
+    }
+}
 
 inline std::vector<std::string_view> split(std::string_view text, char separator) {
     std::vector<std::string_view> tokens;
@@ -131,22 +155,8 @@ public:
          sstring accept_encoding = _response_compressor.get_accepted_encoding(*req);
          return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped(
             [this, rep = std::move(rep), accept_encoding=std::move(accept_encoding)](future<executor::request_return_type> resf) mutable {
-             if (resf.failed()) {
-                 // Exceptions of type api_error are wrapped as JSON and
-                 // returned to the client as expected. Other types of
-                 // exceptions are unexpected, and returned to the user
-                 // as an internal server error:
-                 try {
-                     resf.get();
-                 } catch (api_error &ae) {
-                     generate_error_reply(*rep, ae);
-                 } catch (rjson::error & re) {
-                     generate_error_reply(*rep,
-                             api_error::validation(re.what()));
-                 } catch (...) {
-                     generate_error_reply(*rep,
-                             api_error::internal(format("Internal server error: {}", std::current_exception())));
-                 }
+             if (auto error = convert_exception_if_thrown(resf)) {
+                 generate_error_reply(*rep, *error);
                  return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
              }
              auto res = resf.get();
@@ -327,7 +337,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
         authentication_error(_executor._stats, _enforce_authorization.get(), _warn_authorization.get(),
-            api_error::invalid_signature("Host header is mandatory for signature verification"), 
+            api_error::invalid_signature("Host header is mandatory for signature verification"),
             "", req.get_client_address());
         return make_ready_future<std::string>();
     }
@@ -809,21 +819,25 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             co_return api_error::validation("Request content must be an object");
         }
         std::unique_ptr<audit::audit_info_alternator> audit_info;
-        std::exception_ptr ex = {};
-        executor::request_return_type ret;
-        try {
-            ret = co_await callback(_executor, client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req), audit_info);
-        } catch (...) {
-            ex = std::current_exception();
-        }
+
+        future<executor::request_return_type> ret = co_await coroutine::as_future(callback(_executor, client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req), audit_info));
+        // We convert an exception to an error here (and return it by value) as it's much faster than rethrowing.
+        // For exceptions raised before / after call to `callback` - the same handling code is in `api_handler` constructor and the exception will be handled there.
+        auto error = convert_exception_if_thrown(ret);
         if (audit_info) {
-            bool error = ex != nullptr || std::holds_alternative<api_error>(ret);
-            co_await audit::inspect(*audit_info, client_state, error);
+            // `has_error` will be true if:
+            // - `error` is set (returned by `convert_exception_if_thrown`), which means `ret` contained an exception (which was converted to an error),
+            // - `ret.get()` contains an `api_error` (which means the request succeed but returned an error by value).
+            // Note: - `coroutine::as_future` will return a future that is completed (either with a value or an exception).
+            // Note: `ret.get()` in right side of `||` will return a value (and not throw), because `||` shortcuts - if the right side is executing, then
+            // the left side is false - this means `error` is not set, which means `ret` does not contain an exception, which means it contains a value.
+            bool has_error = bool(error) || std::holds_alternative<api_error>(ret.get());
+            co_await audit::inspect(*audit_info, client_state, has_error);
         }
-        if (ex) {
-            co_return coroutine::exception(std::move(ex));
+        if (error) {
+            co_return std::move(*error);
         }
-        co_return ret;
+        co_return ret.get();
     };
     co_return co_await _sl_controller.with_user_service_level(user, std::ref(f));
 }
@@ -1134,5 +1148,4 @@ const char* api_error::what() const noexcept {
     }
     return _what_string.c_str();
 }
-
 }
