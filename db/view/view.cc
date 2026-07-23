@@ -3141,6 +3141,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
         step.reader.unpop_mutation_fragment(mutation_fragment_v2(*step.reader.schema(), step.reader.permit(), std::move(ds->partition_start)));
     }
 
+    utils::get_local_injector().inject("view_builder_pause_before_mark_success", utils::wait_for_message(std::chrono::minutes(10), &_as)).get();
     _as.check();
 
     std::vector<future<>> bookkeeping_ops;
