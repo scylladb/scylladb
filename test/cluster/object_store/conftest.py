@@ -57,3 +57,9 @@ async def object_storage(request, pytestconfig, tmpdir):
 async def s3_storage(request, pytestconfig, tmpdir):
     async with make_object_storage('s3', pytestconfig, tmpdir, request.node.name) as server:
         yield server
+
+
+@pytest.fixture(scope="function")
+async def gs_storage(request, pytestconfig, tmpdir):
+    async with make_object_storage('gs', pytestconfig, tmpdir, request.node.name) as server:
+        yield server
