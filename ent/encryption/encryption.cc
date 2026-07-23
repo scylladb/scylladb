@@ -741,6 +741,31 @@ public:
     }
 
     future<bool> wrap_writeonly(const sstables::sstable& sst, sstables::component_type type, std::function<void(shared_ptr<symmetric_key>)> apply) {
+        if (type == sstables::component_type::TemporaryStatistics) {
+            // Some places (e.g. incremental repair) rewrite the Statistics
+            // component to update some piece of metadata without modifying any
+            // other part of the sstable. (For example, in case of incremental repair,
+            // the updated piece is repaired_at).
+            //
+            // This "modification" is done by writing a Statistics.db.tmp component,
+            // and then atomically renaming it to Statistics.db.
+            //
+            // To make this work with encryption correctly,
+            // we must write Statistics.db.tmp with the same encryption settings
+            // as were used for the original Statistics.db,
+            // instead of using the settings meant for new files.
+            type = sstables::component_type::Statistics;
+            auto [id, esx] = get_encryption_schema_extension(sst, type);
+            if (!esx) {
+                // The original component was not encrypted.
+                logg.debug("Rewrite unencrypted sstable component {} (original sstable was not encrypted)", sst.component_basename(type));
+                co_return false;
+            }
+            logg.debug("Rewrite encrypted sstable component {} using {} (id: {})", sst.component_basename(type), *esx, id);
+            auto k = co_await esx->key_for_read(std::move(id));
+            apply(std::move(k));
+            co_return true;
+        }
         auto s = sst.get_schema();
         shared_ptr<encryption_schema_extension> esx;
         auto e = s->extensions().find(encryption_attribute);
