@@ -2485,3 +2485,96 @@ async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, ma
         for t in replicas:
             assert len(t.replicas) == 1
             assert t.replicas[0][0] == dc1_host_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
+    """Verifies that set_split_mode() is called on storage groups when a node
+    catches up on a resize decision it missed while down (SCYLLADB-1867).
+
+    The production scenario:
+
+    A tablet split goes through three Raft entries:
+      Entry A (schema_change) — table/view creation.
+      Entry B (topology_change) — resize decision added; tablet count stays
+          the same (e.g. 1) but needs_split() becomes true.
+      Entry C (topology_change) — new tablet count committed (e.g. 1 → 2).
+
+    When a node that was down during entries A and B restarts:
+      - Schema loaded from system tables without resize decision →
+        allocate_storage_group() sees needs_split()=false → no set_split_mode().
+      - topology_state_load() applies the resize decision from Raft log →
+        update_effective_replication_map() fires with old_tmap (no resize)
+        and new_tmap (resize, same tablet count).
+      - The fix's else-if branch detects needs_split() becoming true and
+        calls set_split_mode() on existing storage groups.
+
+    Without the fix, subsequent writes would land in _main_cg and when
+    entry C arrives, handle_tablet_split_completion() would crash because
+    _main_cg is non-empty.
+
+    This test verifies the fix by checking that the log message from the
+    else-if branch is emitted when the node restarts and catches up.
+    """
+    logger.info("Bootstrapping cluster")
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    cmdline = ['--smp', '2']
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    target = servers[2]
+
+    # Stop the target BEFORE creating the table.  Its local system.tablets
+    # will not have any info for the table, forcing Raft log replay to
+    # apply entries A and B from scratch on restart.
+    await manager.server_stop(target.server_id, convict=True)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        # Create the table (entry A) and trigger a split (entry B) while
+        # the target is down.
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}};")
+
+        # Configure the target to hold the split monitor at startup.
+        await manager.server_update_config(target.server_id, "error_injections_at_startup", ['tablet_split_monitor_wait'])
+
+        # Start the target.  On startup, Raft log replay applies:
+        #   - Entry A: table created with stale tmap (no resize decision)
+        #   - Entry B: resize decision added → update_effective_replication_map()
+        #     detects needs_split() becoming true → calls set_split_mode().
+        await manager.server_start(target.server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        log_target = await manager.server_open_log(target.server_id)
+
+        # Verify the fix code path was hit: the log message from the else-if
+        # branch in update_effective_replication_map().
+        matches = await log_target.grep('Detected new split decision for table.*setting split mode on existing storage groups')
+        assert matches, "Fix code path not hit: set_split_mode() was not called via update_effective_replication_map()"
+
+        # Insert data to confirm writes land in split-ready groups (not _main_cg).
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+        await manager.api.flush_keyspace(target.ip_addr, ks)
+
+        mark_target = await log_target.mark()
+
+        # Release the split monitor — it will ACK the split (set seq number),
+        # the coordinator will see all replicas agree and commit entry C.
+        await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
+
+        # Wait for the split to complete on the target node.
+        await log_target.wait_for('Detected tablet split for table', from_mark=mark_target, timeout=60)
+
+        # The bug manifests as on_internal_error logged at ERR level.
+        # With the fix, _main_cg is empty because set_split_mode() was called
+        # during Raft log replay, so writes landed in split-ready groups.
+        errors = await log_target.grep("wasn't split correctly", from_mark=mark_target)
+        assert not errors, f"Crash reproduced — storage group wasn't split correctly: {errors}"
+
+        # Release the split monitor hold for clean shutdown.
+        await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
+        await manager.server_update_config(target.server_id, "error_injections_at_startup", [])
