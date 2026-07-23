@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, path_to
 from test.pylib.runner import PHASE_REPORT_KEY
-from test.cluster.object_store.conftest import make_object_storage
+from test.cluster.object_store.conftest import make_object_storage, register_object_storage_teardown
 from test.pylib.random_tables import RandomTables
 from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
@@ -381,7 +381,7 @@ def failure_detector_timeout(build_mode):
     return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
 
 @pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
-async def storage(request, pytestconfig, tmpdir):
+async def storage(request, pytestconfig, tmpdir, manager: ManagerClient):
     """Parametrize tests over local / S3 / GCS storage.
 
     When storage is None the test runs with local (filesystem) storage.
@@ -392,4 +392,5 @@ async def storage(request, pytestconfig, tmpdir):
         return
 
     async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name) as server:
+        register_object_storage_teardown(manager, server)
         yield server
