@@ -613,6 +613,27 @@ private:
     } _marked_for_deletion = mark_for_deletion::none;
     bool _active = true;
 
+    // Some sstables are produced by performing a metadata update on another sstable.
+    // For example, at the time of this writing, to update repaired_at,
+    // we create a new sstable which shares (by filesystem hardlinks) all files
+    // with the old sstable, except for a fresh Statistics.db which contains
+    // the new repaired_at.
+    // 
+    // Normally the encryption layer adds encryption settings to components based
+    // on the sstable's _schema (and/or the global per-node config).
+    // This works for normal writes where all components have the same schema,
+    // but it doesn't work for single-component rewrites.
+    //
+    // The schema (and/or config) during the rewrite might be different than during the
+    // original write. Using it could result in an sstable where the rewritten
+    // component has different encryption parameters from other components, which
+    // is illegal.
+    // 
+    // We need some way to tell the encryption layer that it's dealing with
+    // a rewrite, not a fresh write. In this case it should ignore schema/config
+    // and strictly obey scylla_metadata.
+    bool _created_by_component_rewrite = false;
+
     db_clock::time_point _now;
 
     io_error_handler _read_error_handler;
@@ -1188,6 +1209,12 @@ public:
     int64_t update_repaired_at(int64_t repaired_at);
     future<> copy_components(const sstable& src);
     bool should_update_repaired_at(int64_t repaired_at) const;
+
+    // See _created_by_component_rewrite. Consulted by file_io_extensions (e.g.
+    // encryption) so the rewritten component matches the parent sstable's
+    // original on-disk encoding rather than the current schema.
+    void mark_created_by_component_rewrite() noexcept { _created_by_component_rewrite = true; }
+    bool created_by_component_rewrite() const noexcept { return _created_by_component_rewrite; }
 
     // Creates a new sstable by linking all sstable components except for the specified component,
     // which is created by calling the provided sstable_creator function and then written to the disc.
