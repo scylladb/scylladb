@@ -2030,6 +2030,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             groups_manager.start(std::ref(messaging), std::ref(raft_gr), std::ref(qp), 
                 std::ref(db), std::ref(mm), std::ref(sys_ks), std::ref(feature_service), std::ref(gossiper),
                 std::ref(raft_replay_buffer)).get();
+            db.local().set_strong_consistency_groups_manager(groups_manager.local());
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
                 groups_manager.stop().get();
             });
@@ -2227,6 +2228,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         return make_ready_future<>();
                     }).get();
                 }
+
+                // Reconcile system.raft_groups_snapshots.idx with system.raft_groups.commit_idx
+                // for every known strongly-consistent tablet raft group. Must run unconditionally
+                // (independent of whether there were commitlog segments to replay): after a clean
+                // shutdown all SC tablet segments have been reclaimed, yet the persisted
+                // commit_idx may still be ahead of the persisted snapshot idx, which would
+                // otherwise trip the "committed index cannot be larger then persisted one"
+                // assert in raft::server::start.
+                supervisor::notify("bumping raft snapshot indices");
+                raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
+                    return buffer.bump_snapshot_indices(db.local(), qp.local());
+                }).get();
             }
 
             // Once stuff is replayed, we can empty RP:s from truncation records. 

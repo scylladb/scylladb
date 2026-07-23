@@ -33,25 +33,38 @@ class raft_commitlog {
 private:
     const raft::group_id _group_id;
     const db::cf_id_type _table_id;
+    // cf_id used for the trailing commit_idx entry written alongside raft log
+    // entries by store_log_entries(). The entry's rp_handle is handed to the
+    // matching column family's memtable, so its cf_id must match to keep
+    // per-cf dirty-count accounting consistent.
+    const db::cf_id_type _raft_groups_table_id;
     // Common commit log.
     db::commitlog& _commit_log;
-    // Replay positions in the commit log for each raft log entry.
-    // Contains entries that have been added but not yet removed by either:
-    //  - truncate_log() (leader change discarding uncommitted tail)
-    //  - truncate_log_tail() (snapshot allowing old entries to be reclaimed)
-    // After a snapshot, some entries with index below the snapshot index may
-    // still be present, in accordance with raft trailing log settings.
-    replay_position_list _replay_positions;
+    // Replay position handles for committed and uncommitted command entries
+    // (raft::command). Consumed by
+    // acquire_replay_position_handles_for() when state_machine::apply() hands
+    // the entry to its target memtable, which takes over segment lifetime.
+    replay_position_list _command_positions;
+    // Replay position handles for non-command entries (raft::configuration and
+    // raft::log_entry::dummy). Never consumed by apply(); released only by
+    // truncate_log() / truncate_log_tail() / release_noncommand_rp_handles().
+    replay_position_list _noncommand_positions;
     // The log entries that were loaded from database commit log on startup.
     raft::log_entries _replayed_entries;
 
 public:
-    raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id, replayed_data_per_group replayed_data);
+    raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id,
+            db::cf_id_type raft_groups_table_id, replayed_data_per_group replayed_data);
 
     ~raft_commitlog();
 
-    // Persist the given log entries in the commit log and get the replay position handles for them.
-    future<> store_log_entries(const raft::log_entry_ptr_list& entries);
+    // Persist the given log entries in the commit log together with a small
+    // commit_idx entry for the current commit index (a raft_commit_idx_entry).
+    // Returns the rp_handle of that commit_idx entry so the caller
+    // (raft_groups_storage) can attach it to a fake system.raft_groups mutation
+    // applied in-memory. The N raft entries' rp_handles are placed into
+    // _command_positions or _noncommand_positions based on entry->data type.
+    future<db::rp_handle> store_log_entries(const raft::log_entry_ptr_list& entries, raft::index_t commit_idx);
 
     // Get the log items that were loaded from database commit log on startup.
     raft::log_entries load_log();
@@ -65,10 +78,16 @@ public:
     // Called from store_snapshot_descriptor after the snapshot is persisted.
     void truncate_log_tail(raft::index_t index);
 
-    // Move replay position handles out of the map for the specified indices.
-    // The handles are handed to memtables in the raft state machine apply(),
-    // and removed from the map since the memtable now owns segment lifetime.
-    // Triggers on_internal_error if an entry is missing from the map.
+    // Release non-command rp_handles with index <= idx. Safe only after
+    // system.raft_groups.commit_idx has been durably persisted at or above
+    // idx: below that watermark raft would need those non-command entries on
+    // restart.
+    void release_noncommand_rp_handles(raft::index_t idx);
+
+    // Move replay position handles out of _command_positions for the specified
+    // entries. The handles are handed to memtables in the raft state machine
+    // apply(), transferring segment ownership. Triggers on_internal_error if a
+    // requested entry is missing.
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 };
 } // namespace service::strong_consistency

@@ -31,6 +31,7 @@ class migration_manager;
 namespace service::strong_consistency {
 
 class raft_server;
+class raft_groups_storage;
 
 /// A cache of leader locations for raft groups where this node is not a replica.
 /// Populated by the CQL transport layer after a redirect reveals the actual leader.
@@ -116,6 +117,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
 
+        // The persistence object for this Raft group. Held as a raw pointer
+        // because the raft::server owns the persistence and destroys it when
+        // stopped; save_commit_log_index() checks this against nullptr and
+        // uses the server_control_op + gate to protect against use-after-free.
+        raft_groups_storage* storage = nullptr;
+
         // Serialized chain of raft::server control operations (start/stop).
         // This serialization handles (rare) cases where a tablet is migrated out
         // before the raft::server has finished initializing, or conversely,
@@ -146,7 +153,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     tablet_group_leader_cache _leader_cache;
 
     // Should be called on the shard that hosts the Raft group
-    future<> start_raft_group(locator::global_tablet_id tablet,
+    future<raft_groups_storage*> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
 
@@ -175,6 +182,18 @@ public:
 
     // The raft_server instance is used to submit write commands and perform read_barrier() before reads.
     future<raft_server> acquire_server(table_id table_id, raft::group_id group_id, abort_source& as);
+
+    // Called from the memtable flush path for strongly consistent tablet tables
+    // (replica::table::seal_active_memtable). Reaches raft_groups_storage for
+    // the given group and asks it to persist its current commit index, so that
+    // system.raft_groups.commit_idx never lags behind data flushed to SSTables.
+    //
+    // Safe to call concurrently with tablet migration and group teardown: guarded
+    // by the group's gate and serialized with start/stop control ops. A no-op if
+    // the group is already gone or being torn down (commit_idx durability does
+    // not depend on this hook — the per-batch fake system.raft_groups mutation
+    // covers it — so nothing is lost).
+    future<> save_commit_log_index(table_id table_id, raft::group_id group_id);
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.

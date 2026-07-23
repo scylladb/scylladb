@@ -1535,6 +1535,47 @@ async def test_read_forwarding(manager: ManagerClient):
                 assert len(rows) == 1, f"Expected 1 row for pk={100 + i}, got {len(rows)}"
                 assert rows[0].c == i * 10, f"Linearizability violation: pk={100 + i}, expected c={i * 10}, got c={rows[0].c}"
 
+@pytest.mark.asyncio
+async def test_data_survives_crash(manager: ManagerClient):
+    """Verify that SC table data survives a non-graceful crash and is recovered
+    from commitlog replay. After a crash, committed raft entries in the commitlog
+    must be re-applied to memtables even if they were already snapshotted, because
+    the snapshot data may not have been flushed to sstables."""
+    config = {
+        'experimental_features': ['strongly-consistent-tables'],
+        # Prevent automatic memtable flushes so data stays in the commitlog
+        # and is not persisted to sstables before the crash.
+        'commitlog_total_space_in_mb': 10000,
+    }
+    cmdline = [
+        '--logger-log-level', 'sc_groups_manager=debug',
+        '--logger-log-level', 'sc_coordinator=debug',
+    ]
+    server = await manager.server_add(config=config, cmdline=cmdline)
+    (cql, hosts) = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        for pk in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {pk * 10})")
+
+        # Crash the node (non-graceful stop — no flush)
+        await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql = manager.get_cql()
+
+        for pk in range(5):
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};")
+            assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"
+            assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
+
+        # Note: commit_idx is no longer persisted on every batch (optimization),
+        # so after a crash without flush the raft server may re-commit entries
+        # from the raft log rather than relying on an advanced snapshot index.
+
+    await manager.server_stop_gracefully(server.server_id)
+
 
 async def test_write_from_non_replica_after_leader_down(manager: ManagerClient):
     """

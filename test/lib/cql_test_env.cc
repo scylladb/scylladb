@@ -995,6 +995,7 @@ private:
             _groups_manager.start(std::ref(_ms), std::ref(_group0_registry), std::ref(_qp), 
                 std::ref(_db), std::ref(_mm), std::ref(_sys_ks), std::ref(_feature_service), std::ref(_gossiper),
                 std::ref(_raft_replay_buffer)).get();
+            _db.local().set_strong_consistency_groups_manager(_groups_manager.local());
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
 
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper)).get();

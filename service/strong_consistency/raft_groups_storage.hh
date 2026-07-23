@@ -48,6 +48,24 @@ class raft_groups_storage : public raft::persistence {
     // Used to linearize write operations to system.raft_groups table.
     // This is managed by `execute_with_linearization_point` helper function.
     future<> _pending_op_fut;
+    // Set once abort() is called. abort() does not persist commit_idx itself
+    // (shutdown may have closed the CQL / storage_proxy gates); durability is
+    // provided by the per-batch fake system.raft_groups mutation and the
+    // raft_groups memtable flush. After this point persist_commit_idx() becomes
+    // a quiet no-op so no new CQL write starts while the object is being torn
+    // down. abort() drains any in-flight operation via _pending_op_fut before
+    // this object is destroyed.
+    bool _aborted = false;
+    // Last commit index reported by the raft io_fiber via store_commit_idx().
+    // The io_fiber calls store_commit_idx() *before* pushing entries to the
+    // applier_fiber for apply(), so this value is always >= the raft index
+    // of any entry that has been applied to a memtable.
+    raft::index_t _last_known_commit_idx{0};
+    // Last commit index recorded to system.raft_groups, by either the flush-hook
+    // CQL write (persist_commit_idx()) or the per-batch fake mutation
+    // (store_log_entries()) — both target the raft_groups memtable. Both paths
+    // skip when commit_idx has not advanced past this watermark.
+    raft::index_t _last_persisted_commit_idx{0};
 
 public:
     explicit raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard,
@@ -75,6 +93,10 @@ public:
     // Static version that doesn't require constructing a full raft_groups_storage object.
     // Useful during commitlog replay when only read access to metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Load the current persisted snapshot's (idx, term) for this group.
+    // Returns (0, 0) if no snapshot has been recorded yet.
+    static future<std::pair<raft::index_t, raft::term_t>> load_snapshot_idx_and_term(
+            cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Store snapshot idx and term without updating the configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new
@@ -82,6 +104,10 @@ public:
     static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
 
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
+
+    // Persist _last_known_commit_idx to system.raft_groups. Skips the write
+    // if it hasn't advanced since the last persist, or if abort() has begun.
+    future<> persist_commit_idx();
 
 private:
 
