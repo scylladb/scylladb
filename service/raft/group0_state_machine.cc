@@ -202,6 +202,16 @@ group0_state_machine::modules_to_reload group0_state_machine::get_modules_to_rel
 
     for (auto& mut: mutations) {
         modules.entries.push_back({.pk = mut.key(), .table = mut.column_family_id()});
+
+        if (mut.column_family_id() == db::system_keyspace::cdc_streams_state()->id()) {
+            const auto elements = mut.key().explode(*db::system_keyspace::cdc_streams_state());
+            auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
+            modules.update_cdc_streams.insert(cdc_log_table_id);
+        } else if (mut.column_family_id() == db::system_keyspace::cdc_streams_history()->id()) {
+            const auto elements = mut.key().explode(*db::system_keyspace::cdc_streams_history());
+            auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
+            modules.update_cdc_streams.insert(cdc_log_table_id);
+        }
     }
 
     return modules;
@@ -222,7 +232,6 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     bool update_service_levels_cache = false;
     bool update_service_levels_effective_cache = false;
     bool make_view_building_state_transition = false;
-    std::unordered_set<table_id> update_cdc_streams;
     std::unordered_set<auth::cache::role_name_t> update_auth_cache_roles;
 
     for (const auto& m : modules.entries) {
@@ -237,14 +246,6 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
             make_view_building_state_transition = true;
         } else if (m.table == db::system_keyspace::scylla_local()->id()) {
             make_view_building_state_transition = true;
-        } else if (m.table == db::system_keyspace::cdc_streams_state()->id()) {
-            const auto elements = m.pk.explode(*db::system_keyspace::cdc_streams_state());
-            auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
-            update_cdc_streams.insert(cdc_log_table_id);
-        } else if (m.table == db::system_keyspace::cdc_streams_history()->id()) {
-            const auto elements = m.pk.explode(*db::system_keyspace::cdc_streams_history());
-            auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
-            update_cdc_streams.insert(cdc_log_table_id);
         } else if (auth::cache::includes_table(m.table)) {
             if (m.table == db::system_keyspace::role_members()->id() ||
                     m.table == db::system_keyspace::role_attributes()->id()) {
@@ -293,8 +294,8 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     if (make_view_building_state_transition) {
         co_await _ss.view_building_transition();
     }
-    if (update_cdc_streams.size()) {
-        co_await _ss.load_cdc_streams(std::move(update_cdc_streams));
+    if (modules.update_cdc_streams.size()) {
+        co_await _ss.load_cdc_streams(std::move(modules.update_cdc_streams));
     }
 }
 
@@ -330,12 +331,12 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     },
     [&] (topology_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
-        topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(chng.mutations)};
+        topology_state_change_hint = storage_service::state_change_hint(replica::get_tablet_metadata_change_hint(chng.mutations));
         co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
     },
     [&] (mixed_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
-        topology_state_change_hint.emplace();
+        topology_state_change_hint = storage_service::state_change_hint(replica::get_tablet_metadata_change_hint(chng.mutations));
         if (_in_memory_state_machine_enabled) {
             co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
         } else {
@@ -350,6 +351,15 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 
     if (_in_memory_state_machine_enabled) {
         if (topology_state_change_hint) {
+            if (topology_state_change_hint->tablets_hint && modules_to_reload.update_cdc_streams.size()) {
+                // Tablet resize finalization publishes a new tablet map and appends
+                // the matching CDC stream generation in the same group0 change.
+                // Load the stream generation first so local CDC writes cannot see
+                // the finalized tablet map with stale stream metadata.
+                co_await _ss.load_cdc_streams(std::move(modules_to_reload.update_cdc_streams));
+                modules_to_reload.update_cdc_streams.clear();
+                topology_state_change_hint->cdc_streams_reloaded = true;
+            }
             co_await _ss.topology_transition(std::move(*topology_state_change_hint));
         }
         co_await reload_modules(std::move(modules_to_reload));

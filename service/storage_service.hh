@@ -923,7 +923,13 @@ private:
     future<> update_topology_with_local_metadata(raft::server&);
 
     struct state_change_hint {
+        state_change_hint(std::optional<locator::tablet_metadata_change_hint> tablets_hint = {}, bool cdc_streams_reloaded = false)
+            : tablets_hint(std::move(tablets_hint))
+            , cdc_streams_reloaded(cdc_streams_reloaded)
+        {}
+
         std::optional<locator::tablet_metadata_change_hint> tablets_hint;
+        bool cdc_streams_reloaded;
     };
 
     // This is called on all nodes for each new command received through raft
