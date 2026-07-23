@@ -790,7 +790,8 @@ static future<> collect_lister_entries(abstract_lister& lister, object_storage_r
 future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid) {
     object_storage_reference_names refs;
     try {
-        auto refs_prefix = fmt::format("{}/{}/refs/", prefix, sid);
+        auto refs_name = object_name(bucket, prefix, sid, "refs/");
+        auto refs_prefix = std::string(refs_name.object());
         auto lister = client.make_object_lister(std::move(bucket), refs_prefix, [] (const std::filesystem::path&, const directory_entry&) { return true; });
         co_await with_closeable(std::move(lister), [&refs] (abstract_lister& lister) {
             return collect_lister_entries(lister, refs);
