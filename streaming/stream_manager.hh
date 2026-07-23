@@ -100,6 +100,7 @@ private:
     std::unordered_map<streaming::stream_reason, float> _finished_percentage;
 
     scheduling_group _streaming_group;
+    scheduling_group _backup_scheduling_group;
     utils::updateable_value<uint32_t> _io_throughput_mbs;
 
 public:
@@ -108,7 +109,7 @@ public:
             sharded<db::view::view_building_worker>& view_building_worker,
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm,
-            gms::gossiper& gossiper, scheduling_group sg);
+            gms::gossiper& gossiper, scheduling_group sg, scheduling_group backup_sg);
 
     future<> start(abort_source& as);
     future<> stop();
@@ -196,6 +197,7 @@ public:
     future<> fail_stream_plan(streaming::plan_id plan_id);
 
     scheduling_group get_scheduling_group() const noexcept { return _streaming_group; }
+    scheduling_group get_backup_scheduling_group() const noexcept { return _backup_scheduling_group; }
 };
 
 } // namespace streaming
