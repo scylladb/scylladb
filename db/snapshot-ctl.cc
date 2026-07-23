@@ -16,6 +16,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -276,13 +277,6 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
 
     co_await coroutine::switch_to(_config.backup_sched_group);
     snap_log.info("Backup sstables from {}({}) to {}", keyspace, snapshot_name, endpoint);
-    auto global_table = co_await get_table_on_all_shards(_db, keyspace, table);
-    auto& storage_options = global_table->get_storage_options();
-    if (!storage_options.is_local_type()) {
-        throw std::invalid_argument("not able to backup a non-local table");
-    }
-    cancel_expiration(snapshot_name, {keyspace}, table);
-    auto& local_storage_options = std::get<data_dictionary::storage_options::local>(storage_options.value);
     //
     // The keyspace data directories and their snapshots are arranged as follows:
     //
@@ -301,11 +295,44 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
     //  |- <keyspace name2>
     //  |- ...
     //
-    auto dir = (local_storage_options.dir /
-                sstables::snapshots_dir /
-                std::string_view(snapshot_name));
+    // The backup only reads the on-disk snapshot files, so it must succeed even
+    // if the table or keyspace was dropped after the snapshot was created. While
+    // the table is still alive, resolve its snapshot directory from the live
+    // storage options. If the table is already gone, or it was dropped and
+    // recreated under the same name, fallback to locating the snapshot directory on disk.
+    std::filesystem::path dir;
+    std::exception_ptr no_table_ex;
+    try {
+        auto global_table = co_await get_table_on_all_shards(_db, keyspace, table);
+        auto& storage_options = global_table->get_storage_options();
+        if (!storage_options.is_local_type()) {
+            throw std::invalid_argument("not able to backup a non-local table");
+        }
+        auto& local_storage_options = std::get<data_dictionary::storage_options::local>(storage_options.value);
+        dir = local_storage_options.dir / sstables::snapshots_dir / std::string_view(snapshot_name);
+    } catch (const data_dictionary::no_such_column_family&) {
+        // The table (or its keyspace) was most likely dropped.
+        no_table_ex = std::current_exception();
+    }
+    
+    // It might be that the table was dropped and recreated under the same name,
+    // in which case the snapshot directory from the live table is not the one we want
+    // (most likely it won't even exist as the table itself is fresh).
+    // Check if the snapshot directory exists under the resolved path, and if not,
+    // fallback to locating it on disk.
+    if (no_table_ex || !co_await file_exists(dir.native())) {
+        auto found = co_await _db.local().find_snapshot_dir(keyspace, table, snapshot_name);
+        if (found) {
+            dir = std::move(*found);
+        } else if (no_table_ex) {
+            std::rethrow_exception(no_table_ex);
+        }
+    }
+
+    cancel_expiration(snapshot_name, {keyspace}, table);
+
     auto task = co_await _task_manager_module->make_and_start_task<::db::snapshot::backup_task_impl>(
-        {}, *this, _storage_manager.container(), std::move(endpoint), std::move(bucket), std::move(prefix), keyspace, dir, global_table->schema()->id(), move_files);
+        {}, *this, _storage_manager.container(), std::move(endpoint), std::move(bucket), std::move(prefix), keyspace, dir, move_files);
     co_return task->id();
 }
 

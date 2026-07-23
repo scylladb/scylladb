@@ -2056,6 +2056,8 @@ public:
     using snapshot_details = db::snapshot_ctl::db_snapshot_details;
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
+    future<std::optional<std::filesystem::path>> find_snapshot_dir(sstring ks_name, sstring table_name, sstring tag);
+
     friend std::ostream& operator<<(std::ostream& out, const database& db);
     const flat_hash_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
@@ -2097,6 +2099,10 @@ public:
     }
 
     sstables::sstables_manager& get_sstables_manager(const schema& s) const;
+
+    // Selects the sstables_manager by keyspace name alone, so it's possible to
+    // get an sstables manager even if the live table doesnt exist anymore (but its snapshots do).
+    sstables::sstables_manager& get_sstables_manager(std::string_view ks_name) const;
 
     // Returns the list of ranges held by this endpoint
     // The returned list is sorted, and its elements are non overlapping and non wrap-around.

@@ -1055,14 +1055,21 @@ void database::drop_keyspace(const sstring& name) {
     _keyspaces.erase(name);
 }
 
+static bool is_system_table(std::string_view ks_name) {
+    return ks_name == db::system_keyspace::NAME ||
+        ks_name == db::system_distributed_keyspace::NAME;
+}
+
 static bool is_system_table(const schema& s) {
-    auto& k = s.ks_name();
-    return k == db::system_keyspace::NAME ||
-        k == db::system_distributed_keyspace::NAME;
+    return is_system_table(s.ks_name());
 }
 
 sstables::sstables_manager& database::get_sstables_manager(const schema& s) const {
-    return get_sstables_manager(system_keyspace(is_system_table(s)));
+    return get_sstables_manager(s.ks_name());
+}
+
+sstables::sstables_manager& database::get_sstables_manager(std::string_view ks_name) const {
+    return get_sstables_manager(system_keyspace(is_system_table(ks_name)));
 }
 
 void database::init_schema_commitlog() {
@@ -3336,6 +3343,45 @@ future<std::unordered_map<sstring, database::snapshot_details>> database::get_sn
     }
 
     co_return details;
+}
+
+future<std::optional<std::filesystem::path>> database::find_snapshot_dir(sstring ks_name, sstring table_name, sstring tag) {
+    // The table may have been dropped (and possibly recreated) after the
+    // snapshot was taken. Its data directory '<keyspace>/<table>-<uuid>' is kept
+    // on disk as long as it holds snapshots, so scan for a '<table>-<uuid>'
+    // directory that contains 'snapshots/<tag>' and return the first match.
+    auto table_dir_prefix = get_snapshot_table_dir_prefix(table_name);
+    for (const auto& datadir : _cfg.data_file_directories()) {
+        auto ks_dir = fs::path(datadir) / ks_name;
+        if (!co_await file_exists(ks_dir.native())) {
+            continue;
+        }
+        auto table_dir_lister = directory_lister(ks_dir, lister::dir_entry_types::of<directory_entry_type::directory>(),
+                lister::filter_type([table_dir_prefix] (const fs::path&, const directory_entry& de) {
+                    return de.name.find(table_dir_prefix) == 0;
+                }));
+        std::optional<fs::path> snapshot_dir;
+        std::exception_ptr ex;
+        try {
+            while (auto table_ent = co_await table_dir_lister.get()) {
+                auto candidate = ks_dir / table_ent->name / sstables::snapshots_dir / tag;
+                if (co_await file_exists(candidate.native())) {
+                    snapshot_dir = std::move(candidate);
+                    break;
+                }
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await table_dir_lister.close();
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+        if (snapshot_dir) {
+            co_return snapshot_dir;
+        }
+    }
+    co_return std::nullopt;
 }
 
 // For the filesystem operations, this code will assume that all keyspaces are visible in all shards

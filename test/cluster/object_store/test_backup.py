@@ -1534,3 +1534,107 @@ async def test_drop_keyspace_during_tablet_restore(manager: ManagerClient, objec
     await manager.api.message_injection(servers[1].ip_addr, "pause_download_sstable")
 
     await drop_task
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_table_during_backup(manager: ManagerClient, object_storage):
+    """Verify that dropping a table while a native backup is running does not
+    fail the backup.
+    The 'backup_task_before_worker' injection pauses the backup after the
+    snapshot directory has been scanned but before the per-shard worker is
+    constructed. We drop the table while the
+    backup is parked there, then release it and expect the backup to finish.
+    """
+
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300,
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    cql = manager.get_cql()
+    cf = 'test_cf'
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
+        snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
+        assert len(files) > 0
+
+        # Pause the backup before the per-shard worker runs.
+        await manager.api.enable_injection(server.ip_addr, "backup_task_before_worker", one_shot=True)
+        server_log = await manager.server_open_log(server.server_id)
+        log_mark = await server_log.mark()
+
+        prefix = unique_name('backup_')
+        tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
+
+        await server_log.wait_for("backup_task_before_worker: waiting for message", from_mark=log_mark)
+
+        # Drop the table while the backup is parked. The snapshot files remain on
+        # disk, so the backup should still be able to upload them.
+        await cql.run_async(f"DROP TABLE {ks}.{cf}")
+
+        # Release the backup and let it finish.
+        await manager.api.message_injection(server.ip_addr, "backup_task_before_worker")
+
+        status = await manager.api.wait_task(server.ip_addr, tid)
+        assert status is not None, "Backup task status is missing"
+        assert status['state'] == 'done', f"Backup failed after the table was dropped: {status}"
+
+        # The snapshot's SSTables must have been uploaded to the bucket.
+        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+        for f in files:
+            assert f'{prefix}/{f}' in objects, f"{f} was not uploaded to the backup"
+
+
+@pytest.mark.parametrize("drop", ["table", "keyspace", "table_recreated"])
+async def test_backup_after_schema_dropped(manager: ManagerClient, object_storage, drop):
+    """Verify that a native backup can be started for a snapshot whose table (or
+    whole keyspace) was already dropped before the backup was requested.
+
+    Snapshot files survive DROP TABLE and DROP KEYSPACE: the table's
+    <cf>-<uuid>/snapshots/<name> directory is kept on disk, and the parent
+    keyspace directory is never removed (it stays non-empty because of the
+    surviving snapshot). So the backup should locate the snapshot on disk and
+    complete independent of table existence.
+    """
+
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300,
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    cql = manager.get_cql()
+    cf = 'test_cf'
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
+        snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
+        assert len(files) > 0
+
+        # Drop the table/keyspace BEFORE requesting the backup.
+        # The snapshot files remain on disk under <cf>-<uuid>/snapshots/<snap_name>.
+        if drop == "table":
+            await cql.run_async(f"DROP TABLE {ks}.{cf}")
+        elif drop == "keyspace":
+            await cql.run_async(f"DROP KEYSPACE {ks}")
+        else:
+            await cql.run_async(f"DROP TABLE {ks}.{cf}")
+            await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+
+        prefix = unique_name('backup_')
+        tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
+
+        status = await manager.api.wait_task(server.ip_addr, tid)
+        assert status is not None, "Backup task status is missing"
+        assert status['state'] == 'done', f"Backup failed for a dropped {drop}'s snapshot: {status}"
+
+        # The snapshot's SSTables must have been uploaded to the bucket.
+        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+        for f in files:
+            assert f'{prefix}/{f}' in objects, f"{f} was not uploaded to the backup"
