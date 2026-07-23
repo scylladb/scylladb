@@ -138,13 +138,16 @@ future<> controller::start_server() {
                 // to allow this, for backward compatibility.
                 opts = _config.server_encryption_options();
                 if (!opts.empty()) {
-                logger.warn("Setting server_encryption_options to configure "
-                        "Alternator's HTTPS encryption is deprecated. Please "
-                        "switch to setting alternator_encryption_options instead.");
+                    logger.warn("Setting server_encryption_options to configure "
+                            "Alternator's HTTPS encryption is deprecated. Please "
+                            "switch to setting alternator_encryption_options instead.");
+                    // server_encryption_options is for internode encryption.
+                    // Its require_client_auth and truststore settings must not
+                    // bleed into Alternator's client-facing HTTPS endpoint.
+                    opts.erase("require_client_auth");
+                    opts.erase("truststore");
                 }
             }
-            opts.erase("require_client_auth");
-            opts.erase("truststore");
             try {
                 utils::configure_tls_creds_builder(creds.value(), std::move(opts)).get();
             } catch(...) {

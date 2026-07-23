@@ -13,6 +13,7 @@ import pytest
 import boto3
 import requests
 import re
+from botocore import UNSIGNED
 
 from test.alternator.util import create_test_table, is_aws, scylla_log
 from test.conftest import dynamic_scope
@@ -49,6 +50,13 @@ def pytest_addoption(parser):
     parser.addoption("--https", action="store_true",
         help="communicate via HTTPS protocol on port 8043 instead of HTTP when"
             " running against a local Scylla installation", default=False)
+    parser.addoption("--mtls", action="store_true",
+        help="use mutual TLS (client certificate authentication) when running"
+            " with --https against a local Scylla installation", default=False)
+    parser.addoption("--client-cert-file", action="store",
+        help="path to the PEM client certificate file to use for mTLS", default=None)
+    parser.addoption("--client-key-file", action="store",
+        help="path to the PEM client private key file to use for mTLS", default=None)
     parser.addoption("--url", action="store",
         help="communicate with given URL instead of defaults", default=None)
     parser.addoption("--runveryslow", action="store_true",
@@ -140,10 +148,22 @@ def dynamodb(request, get_valid_alternator_role):
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
         verify = not request.config.getoption('https')
-        user, secret = get_valid_alternator_role(local_url)
-        res = boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
-            region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
-            config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
+        extra_config = botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)
+        if request.config.getoption('mtls'):
+            # When using mTLS, send requests unsigned so that only the client
+            # certificate is used for authentication, not SigV4 credentials.
+            cert_file = request.config.getoption('client_cert_file')
+            key_file = request.config.getoption('client_key_file')
+            res = boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
+                region_name='us-east-1',
+                config=boto_config.merge(extra_config.merge(botocore.client.Config(
+                    signature_version=UNSIGNED,
+                    client_cert=(cert_file, key_file)))))
+        else:
+            user, secret = get_valid_alternator_role(local_url)
+            res = boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
+                region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
+                config=boto_config.merge(extra_config))
     yield res
     res.meta.client.close()
 
@@ -185,10 +205,22 @@ def dynamodbstreams(request, get_valid_alternator_role):
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
         verify = not request.config.getoption('https')
-        user, secret = get_valid_alternator_role(local_url)
-        res = boto3.client('dynamodbstreams', endpoint_url=local_url, verify=verify,
-            region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
-            config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
+        extra_config = botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)
+        if request.config.getoption('mtls'):
+            # When using mTLS, send requests unsigned so that only the client
+            # certificate is used for authentication, not SigV4 credentials.
+            cert_file = request.config.getoption('client_cert_file')
+            key_file = request.config.getoption('client_key_file')
+            res = boto3.client('dynamodbstreams', endpoint_url=local_url, verify=verify,
+                region_name='us-east-1',
+                config=boto_config.merge(extra_config.merge(botocore.client.Config(
+                    signature_version=UNSIGNED,
+                    client_cert=(cert_file, key_file)))))
+        else:
+            user, secret = get_valid_alternator_role(local_url)
+            res = boto3.client('dynamodbstreams', endpoint_url=local_url, verify=verify,
+                region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
+                config=boto_config.merge(extra_config))
     yield res
     res.close()
 
@@ -205,7 +237,11 @@ def dynamodb_test_connection(dynamodb, request, optional_rest_api):
         # We want to run a do-nothing DynamoDB command. The health-check
         # URL is the fastest one.
         url = dynamodb.meta.client._endpoint.host
-        response = requests.get(url, verify=False)
+        cert = None
+        if request.config.getoption('mtls'):
+            cert = (request.config.getoption('client_cert_file'),
+                    request.config.getoption('client_key_file'))
+        response = requests.get(url, verify=False, cert=cert)
         # We don't check response: In Alternator and DynamoDB, we expect
         # response.ok (200), but in recent versions of DynamoDB Local we can
         # get error code 400 because it only allows signed health requests

@@ -26,7 +26,7 @@ namespace alternator {
 
 static logging::logger alogger("alternator-auth");
 
-future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::string username) {
+future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::string username, bool get_password) {
     schema_ptr schema = proxy.data_dictionary().find_schema(db::system_keyspace::NAME, "roles");
     partition_key pk = partition_key::from_single_value(*schema, utf8_type->decompose(username));
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
@@ -59,6 +59,9 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::strin
         // This is a valid role name, but has "login=False" so should not be
         // usable for authentication (see #19735).
         co_await coroutine::return_exception(api_error::unrecognized_client(fmt::format("Role {} has login=false so cannot be used for login", username)));
+    }
+    if (!get_password) {
+        co_return std::string();
     }
     const managed_bytes_opt& salted_hash = result.front();
     if (!salted_hash) {
