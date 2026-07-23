@@ -1626,6 +1626,21 @@ struct environment_config {
     std::mt19937 rnd;
     std::uniform_int_distribution<raft::logical_clock::rep> network_delay;
     raft::logical_clock::duration fd_convict_threshold;
+
+    // LeaseGuard: when set, every node created in this environment is configured
+    // with leader leases, backed by a per-node simulated bounded-uncertainty
+    // clock. The clocks are driven from simulated (logical) time by
+    // environment::update_lease_clocks(), mapping one logical tick to
+    // `tick_duration` of physical time. All nodes report the same interval
+    // [now - error, now + error], so the bounds always contain the true
+    // simulated time and leases are safe.
+    struct leaseguard_config {
+        std::chrono::system_clock::duration delta;
+        std::chrono::system_clock::duration error;
+        std::chrono::system_clock::duration tick_duration;
+        std::chrono::system_clock::time_point epoch;
+    };
+    std::optional<leaseguard_config> leaseguard;
 };
 
 // A set of `raft_server`s connected by a `network`.
@@ -1649,10 +1664,21 @@ class environment : public seastar::weakly_referencable<environment<M>> {
         raft::server::configuration _cfg;
         lw_shared_ptr<persistence<state_t>> _persistence;
         std::unique_ptr<raft_server<M>> _server;
+        // LeaseGuard: per-node simulated bounded-uncertainty clock. Node-scoped
+        // so it survives crash/stop/restart, keeping the reference stored in
+        // `_cfg.leaseguard` valid across server instances.
+        raft::bounded_clock_mock _clock;
+        // LeaseGuard: when true, the clock-failure nemesis has made this node's
+        // clock unsynchronized; update_lease_clocks() reports nullopt for it
+        // until it is healed.
+        bool _clock_broken = false;
     };
 
     // Passed to newly created failure detectors.
     const raft::logical_clock::duration _fd_convict_threshold;
+
+    // LeaseGuard configuration applied to every node, if enabled.
+    const std::optional<environment_config::leaseguard_config> _leaseguard;
 
     // Used to deliver messages coming from the network to appropriate servers and their failure detectors.
     // Also keeps the servers and the failure detectors alive (owns them).
@@ -1690,6 +1716,7 @@ class environment : public seastar::weakly_referencable<environment<M>> {
 public:
     environment(environment_config cfg)
             : _fd_convict_threshold(cfg.fd_convict_threshold)
+            , _leaseguard(cfg.leaseguard)
             , _network(std::move(cfg.network_delay), std::move(cfg.rnd),
         [this] (raft::server_id src, raft::server_id dst, const message_t& m) {
             auto& n = _routes.at(dst);
@@ -1736,6 +1763,42 @@ public:
         tick_crashing_servers();
     }
 
+    // LeaseGuard: advance every node's simulated physical clock to match the
+    // current simulated (logical) time. Called from the ticker each iteration so
+    // that all nodes observe the same advancing physical time within a fixed
+    // uncertainty window. Because every fsm clock read happens at a tick
+    // boundary where the interval is set to [now - error, now + error], the
+    // bounds always contain the true simulated time and leases stay correct.
+    void update_lease_clocks(raft::logical_clock::time_point now) {
+        if (!_leaseguard) {
+            return;
+        }
+        const auto ticks = (now - raft::logical_clock::min()).count();
+        const auto t = _leaseguard->epoch + ticks * _leaseguard->tick_duration;
+        for (auto& [id, r] : _routes) {
+            if (r._clock_broken) {
+                // Simulated clock failure: the node cannot bound the current
+                // time. LeaseGuard must fall back to the safe path (defer / no
+                // lease reads / step down).
+                r._clock.set_unsynchronized();
+            } else {
+                r._clock.set(t, _leaseguard->error);
+            }
+        }
+    }
+
+    // LeaseGuard clock-failure nemesis: make (or restore) a node's simulated
+    // clock unsynchronized. The node's `route` (and thus this flag) persists
+    // across crash/stop/restart, so it is safe to call even if no server is
+    // currently running on the node.
+    void break_clock(raft::server_id id) {
+        _routes.at(id)._clock_broken = true;
+    }
+
+    void heal_clock(raft::server_id id) {
+        _routes.at(id)._clock_broken = false;
+    }
+
     // A 'node' is a container for a Raft server, its storage ('persistence') and failure detector.
     // At a given point in time at most one Raft server instance can be running on a node.
     // Different instances may be running at different points in time, but they will all have
@@ -1756,6 +1819,16 @@ public:
             ._server = nullptr,
         });
         SCYLLA_ASSERT(inserted);
+
+        // LeaseGuard: point the node's lease configuration at its own stable,
+        // node-scoped clock (emplace: the reference member makes the optional
+        // non-assignable).
+        if (_leaseguard) {
+            it->second._cfg.leaseguard.emplace(raft::server::configuration::leaseguard_configuration{
+                .delta = _leaseguard->delta,
+                .clock = it->second._clock,
+            });
+        }
 
         return id;
     }
@@ -2750,6 +2823,80 @@ struct fmt::formatter<network_majority_grudge<M>> : fmt::formatter<string_view> 
     }
 };
 
+// LeaseGuard clock-failure nemesis: make a single node's simulated clock
+// unsynchronized for a while, then restore it. Biases toward the current leader
+// so we exercise a leaseholder losing its clock: while a freshly elected leader
+// is still deferring the deposed lease this forces it to step down (a node with
+// a healthy clock then takes over); a leader that has already committed in its
+// term instead falls back to quorum read barriers. Only one node's clock is
+// broken at a time (the op sleeps for the whole failure and is pinned to a
+// dedicated generator thread), so a healthy-clock quorum always remains and the
+// cluster keeps making progress. `nullopt` bounds only degrade availability, not
+// correctness, so this must never cause a linearizability violation.
+// Distinct (empty) result type so the operation result variant does not collide
+// with other monostate-returning nemeses.
+struct clock_failure_result {};
+
+template <>
+struct fmt::formatter<clock_failure_result> : fmt::formatter<string_view> {
+    auto format(clock_failure_result, fmt::format_context& ctx) const {
+        return ctx.out();
+    }
+};
+
+template <PureStateMachine M>
+class clock_failure {
+    raft::logical_clock::duration _duration;
+
+    friend fmt::formatter<clock_failure>;
+
+public:
+    struct state_type {
+        environment<M>& env;
+        const std::unordered_set<raft::server_id>& known;
+        logical_timer& timer;
+        std::mt19937 rnd;
+    };
+
+    using result_type = clock_failure_result;
+
+    clock_failure(raft::logical_clock::duration d) : _duration(d) {
+        static_assert(operation::Executable<clock_failure<M>>);
+    }
+
+    future<result_type> execute(state_type& s, const operation::context& ctx) {
+        SCYLLA_ASSERT(s.known.size() > 0);
+
+        // Prefer the current leader; otherwise pick a random known node.
+        auto leader_it = std::find_if(s.known.begin(), s.known.end(),
+                [&env = s.env] (raft::server_id id) { return env.is_leader(id); });
+        raft::server_id target;
+        if (leader_it != s.known.end()) {
+            target = *leader_it;
+        } else {
+            auto it = s.known.begin();
+            std::advance(it, std::uniform_int_distribution<size_t>{0, s.known.size() - 1}(s.rnd));
+            target = *it;
+        }
+
+        tlogger.debug("clock_failure start tid {} time {} target {} duration {}",
+                ctx.thread, s.timer.now(), target, _duration);
+        s.env.break_clock(target);
+        co_await s.timer.sleep(_duration);
+        s.env.heal_clock(target);
+        tlogger.debug("clock_failure end tid {} time {} target {}", ctx.thread, s.timer.now(), target);
+
+        co_return clock_failure_result{};
+    }
+};
+
+template <PureStateMachine M>
+struct fmt::formatter<clock_failure<M>> : fmt::formatter<string_view> {
+    auto format(const clock_failure<M>& c, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "clock_failure{{duration:{}}}", c._duration);
+    }
+};
+
 // Must be executed sequentially.
 template <PureStateMachine M>
 struct reconfiguration {
@@ -3279,31 +3426,40 @@ template <> struct fmt::formatter<AppendReg::ret> : fmt::formatter<string_view> 
     }
 };
 
-SEASTAR_TEST_CASE(basic_generator_test) {
+static future<> run_basic_generator_test(
+        int32_t seed,
+        raft::logical_clock::duration fd_convict_threshold,
+        std::optional<environment_config::leaseguard_config> leaseguard,
+        std::optional<bool> force_forwarding,
+        bool read_only_tail = false) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
             raft_read<AppendReg>,
             network_majority_grudge<AppendReg>,
             reconfiguration<AppendReg>,
-            stop_crash<AppendReg>
+            stop_crash<AppendReg>,
+            clock_failure<AppendReg>
         >>;
     using history_t = utils::chunked_vector<std::variant<op_type, operation::completion<op_type>>>;
 
     static_assert(operation::Invocable<op_type>);
 
-    auto seed = tests::random::get_int<int32_t>();
     std::mt19937 random_engine{seed};
 
     logical_timer timer;
     environment_config cfg {
         .rnd{random_engine},
         .network_delay{0, 6},
-        .fd_convict_threshold = 50_t,
+        .fd_convict_threshold = fd_convict_threshold,
+        .leaseguard = leaseguard,
     };
     co_await with_env_and_ticker<AppendReg>(cfg, [&] (environment<AppendReg>& env, ticker& t) -> future<> {
         t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
             env.tick_network();
             timer.tick();
+            // LeaseGuard: advance every node's simulated physical clock to the
+            // current simulated time (no-op unless leases are enabled).
+            env.update_lease_clocks(timer.now());
             env.for_each_server([&] (raft::server_id, raft_server<AppendReg>* srv) {
                 // Tick each server with probability 1/10.
                 // Thus each server is ticked, on average, once every 10 timer/network ticks.
@@ -3320,8 +3476,9 @@ SEASTAR_TEST_CASE(basic_generator_test) {
 
         // With probability 1/2 enable forwarding: when we send a command to a follower, it automatically
         // forwards it to the known leader or waits for learning about a leader instead of returning
-        // `not_a_leader`.
-        bool forwarding = bdist(random_engine);
+        // `not_a_leader`. The lease variant forces this on so that `raft_read` operations are generated
+        // (they require forwarding) and thus exercise the lease read path.
+        bool forwarding = force_forwarding.value_or(bdist(random_engine));
 
         // With probability 1/2, run the servers with a configuration which causes frequent snapshotting.
         // Note: with the default configuration we won't observe any snapshots at all, since the default
@@ -3329,8 +3486,24 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         bool frequent_snapshotting = bdist(random_engine);
 
         bool nemesis_partitions = true;
-        bool nemesis_reconfigurations = true;
+        // Reconfiguration is disabled whenever leases are enabled. With leases a
+        // cluster is legitimately less available under chaos (a new leader defers
+        // committing for delta after every failover, and steps down if its clock
+        // is lost), and reconfiguration retries interact badly with that leader
+        // instability -- a reconfiguration that cannot commit is retried against a
+        // constantly-changing leader, churning without ever settling ("server
+        // already exists in configuration ..."). Reconfiguration is exercised
+        // heavily by the non-lease basic_generator_test; here we keep the core
+        // LeaseGuard coverage (failovers -> deferred commit, concurrent leaders ->
+        // no stale reads) via partitions and crashes.
+        bool nemesis_reconfigurations = !leaseguard.has_value();
         bool nemesis_crashes = true;
+        // LeaseGuard clock-failure nemesis is only meaningful (and only enabled)
+        // when leases are on. Disable it in the read-only-tail variant: with no
+        // client writes to commit, a leader whose clock is broken while deferring
+        // steps down, and the resulting continuous failover livelocks a cluster
+        // that never gets to make progress.
+        bool nemesis_clock_failures = leaseguard.has_value() && !read_only_tail;
 
         // TODO: randomize the snapshot thresholds between different servers for more chaos.
         const auto max_command_size = 2 * sizeof(raft::log_entry);
@@ -3348,7 +3521,8 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 .enable_forwarding = forwarding,
             };
 
-        tlogger.info("basic_generator_test: forwarding: {}, frequent snapshotting: {}", forwarding, frequent_snapshotting);
+        tlogger.info("basic_generator_test: seed: {}, forwarding: {}, frequent snapshotting: {}, leaseguard: {}, read_only_tail: {}",
+                seed, forwarding, frequent_snapshotting, leaseguard.has_value(), read_only_tail);
 
         auto leader_id = co_await env.new_server(true, srv_cfg);
 
@@ -3390,8 +3564,8 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             co_await env.reconfigure(leader_id,
                 std::vector<raft::server_id>{known_config.begin(), known_config.end()}, timer.now() + 100_t, timer)));
 
-        auto threads = operation::make_thread_set(all_servers.size() + 3);
-        auto [partition_thread, reconfig_thread, crash_thread] = take<3>(threads);
+        auto threads = operation::make_thread_set(all_servers.size() + 4);
+        auto [partition_thread, reconfig_thread, crash_thread, clock_thread] = take<4>(threads);
 
 
         raft_call<AppendReg>::state_type db_call_state {
@@ -3428,12 +3602,20 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             .rnd = std::mt19937{seed}
         };
 
+        clock_failure<AppendReg>::state_type clock_failure_state {
+            .env = env,
+            .known = known_config,
+            .timer = timer,
+            .rnd = std::mt19937{seed}
+        };
+
         auto init_state = op_type::state_type{
             std::move(db_call_state),
             std::move(read_state),
             std::move(network_majority_grudge_state),
             std::move(reconfiguration_state),
-            std::move(crash_state)
+            std::move(crash_state),
+            std::move(clock_failure_state)
         };
 
         using namespace generator;
@@ -3450,6 +3632,12 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         // we will set request timeout 600_t ~= 6s and partition every 1200_t ~= 12s
 
         auto num_ops = 500;
+        // LeaseGuard read-only tail: cap writes to an initial burst so the rest
+        // of the run is read-only for far longer than Δ. This exercises automatic
+        // lease extension -- without renewal no-ops the lease would expire and
+        // every read would fall back to a quorum barrier (and a new leader with
+        // no client writes would never re-establish a read lease).
+        const auto write_op_limit = read_only_tail ? num_ops / 5 : num_ops;
         auto gen = op_limit(num_ops,
             pin(partition_thread,
                 op_limit(nemesis_partitions ? num_ops : 0,
@@ -3475,18 +3663,42 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                                 })
                             )
                         ),
-                        either(
-                            stagger(seed, timer.now(), 0_t, 50_t,
-                                sequence(1, [] (int32_t i) {
-                                    SCYLLA_ASSERT(i > 0);
-                                    return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
-                                })
-                            ),
-                            op_limit(forwarding ? num_ops : 0 /* only produce raft_reads in forwarding mode */,
-                                stagger(seed, timer.now(), 0_t, 200_t,
-                                    sequence(1, [] (int32_t i) {
-                                        return op_type{raft_read<AppendReg>{i, 200_t}};
+                        pin(clock_thread,
+                            op_limit(nemesis_clock_failures ? num_ops : 0,
+                                // Space clock failures at least a full failover apart. A newly
+                                // elected leader must defer committing for delta (400_t) before it
+                                // can make progress; if clock failures arrived faster than that
+                                // (and they always target the current leader), every new leader's
+                                // clock would break mid-deferral and it would step down, livelocking
+                                // the group with no progress. With ~1000-1600_t between failures and
+                                // durations <= 300_t, there is a contiguous healthy window well above
+                                // election-timeout + delta for a healthy-clock leader to commit.
+                                stagger(seed, timer.now() + 200_t, 1000_t, 1600_t,
+                                    random(seed, [] (std::mt19937& engine) {
+                                        // Durations span both sides of the step-down threshold
+                                        // (~100_t): short failures cause a brief defer-and-recover
+                                        // on a leaseholder, long ones make a deferring leader step
+                                        // down so a healthy-clock node can take over.
+                                        static std::uniform_int_distribution<raft::logical_clock::rep> dist{0, 300};
+                                        return op_type{clock_failure<AppendReg>{raft::logical_clock::duration{dist(engine)}}};
                                     })
+                                )
+                            ),
+                            either(
+                                op_limit(write_op_limit,
+                                    stagger(seed, timer.now(), 0_t, 50_t,
+                                        sequence(1, [] (int32_t i) {
+                                            SCYLLA_ASSERT(i > 0);
+                                            return op_type{raft_call<AppendReg>{AppendReg::append{i}, 200_t}};
+                                        })
+                                    )
+                                ),
+                                op_limit(forwarding ? num_ops : 0 /* only produce raft_reads in forwarding mode */,
+                                    stagger(seed, timer.now(), 0_t, 200_t,
+                                        sequence(1, [] (int32_t i) {
+                                            return op_type{raft_read<AppendReg>{i, 200_t}};
+                                        })
+                                    )
                                 )
                             )
                         )
@@ -3650,4 +3862,61 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         tlogger.error("Failed to obtain a final successful response at the end of the test. Number of attempts: {}", cnt);
         SCYLLA_ASSERT(false);
     });
+}
+
+SEASTAR_TEST_CASE(basic_generator_test) {
+    co_await run_basic_generator_test(
+            tests::random::get_int<int32_t>(),
+            50_t /* fd_convict_threshold */,
+            std::nullopt /* leaseguard */,
+            std::nullopt /* force_forwarding */);
+}
+
+SEASTAR_TEST_CASE(basic_generator_test_leaseguard) {
+    // LeaseGuard: run the full nemesis (partitions/failovers, crashes+restarts,
+    // reconfigurations, snapshotting) with leader leases enabled and a per-node
+    // simulated bounded-uncertainty clock, and check linearizability. Leases
+    // being safe means the existing model must never observe a stale read, even
+    // when a deposed leader serves local lease reads during a partition.
+    //
+    // Δ must exceed the cluster's failover time so that a deposed leader still
+    // holds a valid lease (and may serve local reads) while a newly elected
+    // leader defers committing -- otherwise the old lease always expires before
+    // a new leader appears and neither the deferred-commit nor the concurrent
+    // lease-read path is exercised. We therefore shorten failure detection for
+    // this test and pick Δ above the resulting failover time. 1_t maps to 10ms
+    // of simulated physical time.
+    constexpr auto tick = std::chrono::milliseconds{10};
+    co_await run_basic_generator_test(
+            tests::random::get_int<int32_t>(),
+            20_t /* fd_convict_threshold */,
+            environment_config::leaseguard_config{
+                .delta = 400 * tick,
+                .error = 20 * tick,
+                .tick_duration = tick,
+                .epoch = std::chrono::system_clock::time_point{std::chrono::hours{24 * 365}},
+            },
+            true /* force_forwarding */);
+}
+
+SEASTAR_TEST_CASE(basic_generator_test_leaseguard_read_only) {
+    // LeaseGuard automatic lease extension (arXiv:2512.15659, Section 5.1) under
+    // a read-only workload. Writes are capped to an initial burst, so most of the
+    // run is read-only for far longer than Δ. Without renewal no-ops the lease
+    // would expire and every read would fall back to a quorum barrier; worse, a
+    // new leader elected during the read-only tail (nemeses still run) would have
+    // no client writes to establish its own read lease. The renewal no-ops keep
+    // leases alive, and the model still checks that no read is ever stale.
+    constexpr auto tick = std::chrono::milliseconds{10};
+    co_await run_basic_generator_test(
+            tests::random::get_int<int32_t>(),
+            20_t /* fd_convict_threshold */,
+            environment_config::leaseguard_config{
+                .delta = 400 * tick,
+                .error = 20 * tick,
+                .tick_duration = tick,
+                .epoch = std::chrono::system_clock::time_point{std::chrono::hours{24 * 365}},
+            },
+            true /* force_forwarding */,
+            true /* read_only_tail */);
 }

@@ -8,6 +8,7 @@
 #pragma once
 #include <seastar/core/abort_source.hh>
 #include "raft.hh"
+#include <functional>
 
 namespace raft {
 
@@ -67,6 +68,7 @@ public:
         // Helps distinguish raft instances when multiple groups share the
         // same server_id. If empty, server_id is used as the default.
         sstring tag;
+
         // Selects which voting member fast-bootstraps as the initial leader on
         // a fresh group: the one at rank (fast_bootstrap_seed % number_of_voters)
         // in ascending server_id order. Callers that manage many groups (e.g.
@@ -76,6 +78,22 @@ public:
         // always enables fast bootstrap (unlike a bare fsm, which disables it
         // when no seed is provided).
         uint64_t fast_bootstrap_seed = 0;
+
+        // LeaseGuard leader leases. When set, the leader serves linearizable
+        // reads locally (no quorum round-trip) while its lease is valid, and
+        // defers committing writes until a deposed leader's lease has expired.
+        // Requires a bounded-uncertainty clock; see raft/bounded_clock.hh.
+        struct leaseguard_configuration {
+            // Lease duration (Δ). Should be on the order of the election
+            // timeout.
+            std::chrono::system_clock::duration delta;
+            // Clock providing bounded-uncertainty time readings. The caller owns
+            // it and must keep it alive for the lifetime of the server. A
+            // reference_wrapper (rather than a plain reference) is used so that
+            // configuration remains copy-assignable. See raft/bounded_clock.hh.
+            std::reference_wrapper<bounded_clock> clock;
+        };
+        std::optional<leaseguard_configuration> leaseguard;
     };
 
     virtual ~server() {}
