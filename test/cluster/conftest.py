@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import aiohttp
 import ssl
 import tempfile
 import urllib.parse
@@ -231,7 +232,32 @@ async def manager(request: pytest.FixtureRequest,
     test_py_log_test = suite_log_dir / f"{test_log.stem}_cluster.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
-    await manager_client.before_test(test_case_name, test_log)
+
+    # Set up (before test): install a per-test log handler on the root logger to
+    # intercept all logs produced by the pytest process, cycle the cluster/driver
+    # if needed, and notify the Manager server that the test is starting.
+    root_logger = logging.getLogger()
+    test_log_fh = logging.FileHandler(test_log, mode='w+')
+    # to have the custom formatter with a timestamp that is used in test.py but for each
+    # testcase's log, we extract it from the root logger and apply it to the handler
+    test_log_fh.setFormatter(root_logger.handlers[0].formatter)
+    test_log_fh.setLevel(root_logger.getEffectiveLevel())
+    root_logger.addHandler(test_log_fh)
+
+    logger.debug("before_test for %s", test_case_name)
+    if await manager_client.is_dirty():
+        manager_client.driver_close()  # Close driver connection to old cluster
+    try:
+        cluster_str = await manager_client.client.put_json(
+            f"/cluster/before-test/{test_case_name}", timeout=600, response_type="json")
+        logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
+    except aiohttp.ClientError as exc:
+        raise RuntimeError(f"Failed before test check {exc}") from exc
+    servers = await manager_client.running_servers()
+    if manager_client.cql is None and servers:
+        # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
+        await manager_client.driver_connect()  # Connect driver to new cluster
+
     yield manager_client
     # `request.node.stash` contains reports stored per phase in `pytest_runtest_makereport`
     # from where we can retrieve test failure.
@@ -269,7 +295,18 @@ async def manager(request: pytest.FixtureRequest,
                                                 urllib.parse.quote(dir_path_relative))
                 record_property("TEST_LOGS", full_url)
 
-        cluster_status = await manager_client.after_test(test_case_name, not failed)
+        # Tear down (after test): remove the per-test log handler, delete its file,
+        # and notify the Manager server that the test finished. The finished event
+        # is set first (mirroring the previous ManagerClient.after_test behavior),
+        # so we use the raw per-loop client because the `client` property becomes
+        # inaccessible once the event is set.
+        root_logger.removeHandler(test_log_fh)
+        Path(test_log_fh.baseFilename).unlink()
+        logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
+        manager_client.test_finished_event.set()
+        _client = manager_client.client_for_asyncio_loop.get(asyncio.get_running_loop())
+        cluster_status = await _client.put_json(f"/cluster/after-test/{not failed}", response_type="json")
+        logger.info("Cluster after test (success: %s): %s", not failed, cluster_status)
     finally:
         await manager_client.stop()  # Stop client session and close driver after each test
 
