@@ -11,6 +11,7 @@ target_sources(scylla_auth
     authenticator.cc
     cache.cc
     certificate_authenticator.cc
+    certificate_or_password_authenticator.cc
     common.cc
     default_authorizer.cc
     ldap_role_manager.cc

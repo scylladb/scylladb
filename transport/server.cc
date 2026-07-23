@@ -1477,17 +1477,25 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     std::unique_ptr<cql_server::response> res;
     if (auto& a = client_state.get_auth_service()->underlying_authenticator(); a.require_authentication()) {
         _authenticating = true;
-        auto opt_user = co_await a.authenticate([this]() -> future<std::optional<auth::certificate_info>> {
-            auto dn_info = co_await tls::get_dn_information(this->_fd);
-            if (dn_info) {
-                co_return auth::certificate_info{ dn_info->subject, [this]() -> future<std::string> {
-                    auto altnames = co_await tls::get_alt_name_information(this->_fd);
-                    auto res = fmt::format("{}", fmt::join(altnames, ","));
-                    co_return res;
-                } };
-            }
-            co_return std::nullopt;
-        });
+        auth::session_dn_func dn_func;
+        if (_ssl_enabled) {
+            dn_func = [this]() -> future<std::optional<auth::certificate_info>> {
+                auto dn_info = co_await tls::get_dn_information(this->_fd);
+                if (dn_info) {
+                    co_return auth::certificate_info{ dn_info->subject, [this]() -> future<std::string> {
+                        auto altnames = co_await tls::get_alt_name_information(this->_fd);
+                        auto res = fmt::format("{}", fmt::join(altnames, ","));
+                        co_return res;
+                    } };
+                }
+                co_return std::nullopt;
+            };
+        } else {
+            dn_func = []() -> future<std::optional<auth::certificate_info>> {
+                co_return std::nullopt;
+            };
+        }
+        auto opt_user = co_await a.authenticate(std::move(dn_func));
         if (opt_user) {
             client_state.set_login(std::move(*opt_user));
             co_await client_state.check_user_can_login();

@@ -1333,11 +1333,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "* org.apache.cassandra.auth.AllowAllAuthenticator: Disables authentication; no checks are performed.\n"
         "* org.apache.cassandra.auth.PasswordAuthenticator: Authenticates users with user names and hashed passwords stored in the system_auth.credentials table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
         "* com.scylladb.auth.CertificateAuthenticator: Authenticates users based on TLS certificate authentication subject. Roles and permissions still need to be defined as normal. Super user can be set using the 'auth_superuser_name' configuration value. Query to extract role name from subject string is set using 'auth_certificate_role_queries'.\n"
+        "* com.scylladb.auth.CertificateOrPasswordAuthenticator: Accepts either a TLS client certificate (role name derived via 'auth_certificate_role_queries', no SASL exchange) or a username/password pair (SASL). Designed for use with a truststore and require_client_auth=optional (REQUEST mode), enabling a single CQL port to serve both certificate-bearing and password-authenticated clients.\n"
         "* com.scylladb.auth.TransitionalAuthenticator: Wraps around the PasswordAuthenticator, logging them in if username/password pair provided is correct and treating them as anonymous users otherwise.\n"
         "* com.scylladb.auth.SaslauthdAuthenticator : Use saslauthd for authentication.\n"
         "\n"
         "Related information: Internal authentication", 
-        {"AllowAllAuthenticator", "PasswordAuthenticator", "CertificateAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator", "com.scylladb.auth.SaslauthdAuthenticator", "org.apache.cassandra.auth.AllowAllAuthenticator", "com.scylladb.auth.TransitionalAuthenticator", "com.scylladb.auth.CertificateAuthenticator"})
+        {"AllowAllAuthenticator", "PasswordAuthenticator", "CertificateAuthenticator", "CertificateOrPasswordAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator", "com.scylladb.auth.SaslauthdAuthenticator", "org.apache.cassandra.auth.AllowAllAuthenticator", "com.scylladb.auth.TransitionalAuthenticator", "com.scylladb.auth.CertificateAuthenticator", "com.scylladb.auth.CertificateOrPasswordAuthenticator"})
     , internode_authenticator(this, "internode_authenticator", value_status::Unused, "enabled",
         "Internode authentication backend. It implements org.apache.cassandra.auth.AllowAllInternodeAuthenticator to allows or disallow connections from peer nodes.")
     , authorizer(this, "authorizer", value_status::Used, "org.apache.cassandra.auth.AllowAllAuthorizer",
@@ -1377,7 +1378,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The advanced settings are:\n"
         "\n"
         "* priority_string: (Default: not set, use default) GnuTLS priority string controlling TLS algorithms used/allowed.\n"
-        "* require_client_auth: (Default: false ) Enables or disables certificate authentication.\n"
+        "* require_client_auth: (Default: false) Controls peer certificate verification. Valid values: true (require a peer certificate), false (no peer certificate), optional (request but do not require a peer certificate).\n"
         "\n"
         "Related information: Node-to-node encryption")
     , client_encryption_options(this, "client_encryption_options", value_status::Used, {/*none*/},
@@ -1391,7 +1392,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The advanced settings are:\n"
         "\n"
         "* priority_string: (Default: not set, use default) GnuTLS priority string controlling TLS algorithms used/allowed.\n"
-        "* require_client_auth: (Default: false) Enables or disables certificate authentication.\n"
+        "* require_client_auth: (Default: false) Controls client certificate verification. Valid values: true (require a client certificate), false (no client certificate), optional (request but do not require a client certificate; clients may authenticate via certificate or fall back to other mechanisms, e.g., password for CQL CertificateOrPasswordAuthenticator).\n"
         "* enable_session_tickets: (Default: true) Enables or disables TLS1.3 session tickets.\n"
         "\n"
         "Related information: Client-to-node encryption")
@@ -1399,10 +1400,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "When Alternator via HTTPS is enabled with alternator_https_port, where to take the key and certificate. The available options are:\n"
         "* certificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"
         "* keyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
+        "* truststore: (Default: <not set, use system truststore>) Location of the truststore containing the trusted certificate for authenticating client certificates.\n"
         "\n"
         "The advanced settings are:\n"
         "\n"
         "* priority_string: GnuTLS priority string controlling TLS algorithms used/allowed.\n"
+        "* require_client_auth: (Default: false) Controls client certificate verification. Valid values: true (require a client certificate), false (no client certificate), optional (request but do not require a client certificate; clients may authenticate via certificate or fall back to SigV4 signatures in requests).\n"
         "* enable_session_tickets: (Default: true) Enables or disables TLS1.3 session tickets.")
     , alternator_force_read_before_write(this, "alternator_force_read_before_write", liveness::LiveUpdate, value_status::Used, false, "Forces Alternator to perform Read Before Write. Used for better DynamoDB compatibility in WCU calculation")
     , ssl_storage_port(this, "ssl_storage_port", value_status::Used, 7001,
@@ -2201,8 +2204,17 @@ future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, d
     if (options.contains("priority_string")) {
         creds.set_priority_string(options.at("priority_string"));
     }
-    if (is_true(get_or_default(options, "require_client_auth", "false"))) {
+    auto require_client_auth_val = get_or_default(options, "require_client_auth", "false");
+    std::transform(require_client_auth_val.begin(), require_client_auth_val.end(), require_client_auth_val.begin(), ::tolower);
+    if (is_true(require_client_auth_val)) {
         creds.set_client_auth(seastar::tls::client_auth::REQUIRE);
+    } else if (require_client_auth_val == "optional") {
+        // "optional": request a client certificate during the TLS handshake but
+        // do not require one. If the client presents a cert it will be validated
+        // and used for certificate-based authentication; if it doesn't, fallback
+        // mechanisms will be used (e.g., Alternator will try SigV4 authentication,
+        // and CQL CertificateOrPasswordAuthenticator will try password authentication).
+        creds.set_client_auth(seastar::tls::client_auth::REQUEST);
     }
     if (is_true(get_or_default(options, "enable_session_tickets", "true"))) {
         creds.set_session_resume_mode(seastar::tls::session_resume_mode::TLS13_SESSION_TICKET);
