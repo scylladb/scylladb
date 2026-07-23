@@ -70,6 +70,9 @@ class ManagerClient:
         self.test_finished_event = asyncio.Event()
         self.ignore_log_patterns = []  # patterns to ignore in server logs when checking for errors
         self.ignore_cores_log_patterns = []  # patterns to ignore in server logs when checking for core files
+        # Callbacks registered via on_teardown(); invoked from after_test()
+        # in LIFO order, after the per-test after-test hook has run.
+        self._teardown_callbacks: list[Callable[[], Any]] = []
 
     @property
     def client(self):
@@ -190,7 +193,33 @@ class ManagerClient:
                                                  response_type = "json")
         logger.info("Cluster after test %s: %s", test_case_name, cluster_status)
 
+        # Fire teardown callbacks in LIFO order.  Exceptions are logged and
+        # swallowed so one failing callback cannot prevent the others from
+        # running.
+        while self._teardown_callbacks:
+            cb = self._teardown_callbacks.pop()
+            try:
+                res = cb()
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception as e:
+                logger.warning("on_teardown callback %s failed: %s", cb, e)
+
         return cluster_status
+
+    def on_teardown(self, callback: Callable[[], Any]) -> None:
+        """Register a callback to run from after_test().  Callbacks fire in
+        LIFO order; both sync callables and coroutine-returning callables are
+        supported.  Exceptions raised by a callback are logged and swallowed.
+
+        The mechanism is deliberately generic: it does not know or assume
+        anything about the cluster or its state.  When the callback depends
+        on the cluster being in a particular state (for example, an
+        object-storage bucket destroy that must not race with in-flight
+        tablet migration -- SCYLLADB-2471), the caller is responsible for
+        registering the state-preparation step as an earlier callback.
+        """
+        self._teardown_callbacks.append(callback)
     
     async def check_all_errors(self, check_all_errors=False) -> dict[ServerInfo, dict[str, Union[list[str], list[str], Path, list[str]]]]:
         
