@@ -153,6 +153,23 @@ struct appending_hash<std::vector<T>> {
     }
 };
 
+namespace utils {
+template <typename T, size_t max_contiguous_allocation>
+class chunked_vector;
+}
+
+template<typename T, size_t max_contiguous_allocation>
+struct appending_hash<utils::chunked_vector<T, max_contiguous_allocation>> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const utils::chunked_vector<T, max_contiguous_allocation>& value) const noexcept {
+        feed_hash(h, value.size());
+        for (auto&& v : value) {
+            appending_hash<T>()(h, v);
+        }
+    }
+};
+
 template<typename K, typename V>
 struct appending_hash<std::map<K, V>> {
     template<typename H>

@@ -127,7 +127,7 @@ const sstring version = "3";
 using computed_columns_map = std::unordered_map<bytes, column_computation_ptr>;
 static computed_columns_map get_computed_columns(const schema_mutations& sm);
 
-static std::vector<column_definition> create_columns_from_column_rows(
+static schema::columns_type create_columns_from_column_rows(
                 const query::result_set& rows, const sstring& keyspace,
                 const sstring& table, bool is_super, column_view_virtual is_view_virtual, const computed_columns_map& computed_columns,
                 const data_dictionary::user_types_storage& user_types);
@@ -2257,7 +2257,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     }
 
     auto computed_columns = get_computed_columns(sm);
-    std::vector<column_definition> column_defs = create_columns_from_column_rows(
+    schema::columns_type column_defs = create_columns_from_column_rows(
             query::result_set(sm.columns_mutation()),
             ks_name,
             cf_name,/*,
@@ -2438,7 +2438,7 @@ static computed_columns_map get_computed_columns(const schema_mutations& sm) {
     }) | std::ranges::to<computed_columns_map>();
 }
 
-static std::vector<column_definition> create_columns_from_column_rows(
+static schema::columns_type create_columns_from_column_rows(
                                                                const query::result_set& rows,
                                                                const sstring& keyspace,
                                                                const sstring& table, /*,
@@ -2448,7 +2448,7 @@ static std::vector<column_definition> create_columns_from_column_rows(
                                                                const computed_columns_map& computed_columns,
                                                                const data_dictionary::user_types_storage& user_types)
 {
-    std::vector<column_definition> columns;
+    schema::columns_type columns;
     for (auto&& row : rows.rows()) {
         auto kind = deserialize_kind(row.get_nonnull<sstring>("kind"));
         auto type = cql_type_parser::parse(keyspace, row.get_nonnull<sstring>("type"), user_types);
@@ -2465,7 +2465,7 @@ static std::vector<column_definition> create_columns_from_column_rows(
         column_computation_ptr computation;
         auto computed_it = computed_columns.find(name_bytes);
         if (computed_it != computed_columns.end()) {
-            computation = computed_it->second->clone();
+            computation = computed_it->second;
         }
 
         columns.emplace_back(name_bytes, type, kind, position, is_view_virtual, std::move(computation));
@@ -2812,7 +2812,7 @@ future<std::optional<column_mapping>> get_column_mapping_if_exists(db::system_ke
     if (results->empty()) {
         co_return std::nullopt;
     }
-    std::vector<column_definition>  static_columns, regular_columns;
+    utils::chunked_vector<column_definition>  static_columns, regular_columns;
     for (const auto& row : *results) {
         auto kind = deserialize_kind(row.get_as<sstring>("kind"));
         auto type = cql_type_parser::parse("" /*unused*/, row.get_as<sstring>("type"), data_dictionary::dummy_user_types_storage());
@@ -2830,7 +2830,7 @@ future<std::optional<column_mapping>> get_column_mapping_if_exists(db::system_ke
             regular_columns.emplace_back(name_bytes, type, kind, position);
         }
     }
-    std::vector<column_mapping_entry> cm_columns;
+    utils::chunked_vector<column_mapping_entry> cm_columns;
     for (const column_definition& def : boost::range::join(static_columns, regular_columns)) {
         cm_columns.emplace_back(column_mapping_entry{def.name(), def.type});
     }

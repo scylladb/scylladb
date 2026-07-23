@@ -3705,7 +3705,7 @@ class chunked_vector(object):
         self._max_contiguous_allocation = int(list(template_arguments(self.ref.type))[1])
 
     def max_chunk_capacity(self):
-        return max(self._max_contiguous_allocation / self.ref.type.sizeof, 1);
+        return max(self._max_contiguous_allocation // self.ref.type.template_argument(0).sizeof, 1);
 
     def __len__(self):
         return int(self.ref['_size'])
@@ -5681,7 +5681,7 @@ class scylla_schema(gdb.Command):
 
         gdb.write('\n')
         gdb.write("columns:\n")
-        for cdef in std_vector(raw_schema['_columns']):
+        for cdef in chunked_vector(raw_schema['_columns']):
             gdb.write("    {:27} id={} ordinal_id={} {} {} is_atomic={} is_counter={}\n".format(
                     str(cdef['kind']),
                     cdef['id'],
