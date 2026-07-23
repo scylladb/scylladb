@@ -205,6 +205,8 @@ public:
 
     future<> wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id);
 
+    future<> local_topology_barrier(locator::token_metadata_ptr tm, lowres_clock::time_point timeout);
+
     // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
     // until the raft groups for those tablets are started and ready to serve queries.
     // For the local node, waits directly without an RPC.

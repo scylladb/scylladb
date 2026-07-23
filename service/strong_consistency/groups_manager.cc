@@ -508,6 +508,64 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
     }
 }
 
+static raft::configuration expected_raft_config_for_tablet(
+        const locator::tablet_info& tinfo,
+        const locator::tablet_transition_info* trinfo) {
+    if (!trinfo) {
+        raft::config_member_set current;
+        for (const auto& r : tinfo.replicas) {
+            current.emplace(raft::server_address{to_server_id(r.host), {}}, raft::is_voter::yes);
+        }
+        return raft::configuration{std::move(current)};
+    }
+
+    switch (trinfo->stage) {
+        case tablet_transition_stage::start_migration:
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
+        case tablet_transition_stage::rebuild_repair:
+        case tablet_transition_stage::repair:
+        case tablet_transition_stage::end_repair:
+        case tablet_transition_stage::restore: {
+            raft::config_member_set current;
+            for (const auto& r : tinfo.replicas) {
+                current.emplace(raft::server_address{to_server_id(r.host), {}}, raft::is_voter::yes);
+            }
+            return raft::configuration{std::move(current)};
+        }
+        case tablet_transition_stage::sc_add_nonvoter:
+        case tablet_transition_stage::sc_snapshot_transfer: {
+            raft::config_member_set current;
+            for (const auto& r : tinfo.replicas) {
+                current.emplace(raft::server_address{to_server_id(r.host), {}}, raft::is_voter::yes);
+            }
+            if (trinfo->pending_replica) {
+                current.emplace(raft::server_address{to_server_id(trinfo->pending_replica->host), {}}, raft::is_voter::no);
+            }
+            return raft::configuration{std::move(current)};
+        }
+        case tablet_transition_stage::sc_become_voter:
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::end_migration: {
+            raft::config_member_set current;
+            for (const auto& r : trinfo->next) {
+                current.emplace(raft::server_address{to_server_id(r.host), {}}, raft::is_voter::yes);
+            }
+            return raft::configuration{std::move(current)};
+        }
+        case tablet_transition_stage::sc_rollback:
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration: {
+            raft::config_member_set current;
+            for (const auto& r : tinfo.replicas) {
+                current.emplace(raft::server_address{to_server_id(r.host), {}}, raft::is_voter::yes);
+            }
+            return raft::configuration{std::move(current)};
+        }
+    }
+    std::abort();
+}
+
 struct raft_config_delta {
     std::vector<raft::config_member> to_add;
     std::vector<raft::server_id> to_del;
@@ -726,6 +784,59 @@ void groups_manager::maybe_update_group_configuration(raft_group_state& state, g
             id, tablet, ep);
         state.migration_action_stage.reset();
     });
+}
+
+future<> groups_manager::local_topology_barrier(token_metadata_ptr tm, lowres_clock::time_point timeout) {
+    if (!_features.strongly_consistent_tables) {
+        co_return;
+    }
+
+    const auto this_host = tm->get_my_id();
+    const auto this_id = to_server_id(this_host);
+    const auto this_replica = locator::tablet_replica {
+        .host = this_host,
+        .shard = this_shard_id()
+    };
+
+    const auto& tablets = tm->tablets();
+    for (const auto& [table_id, _]: tablets.all_table_groups()) {
+        const auto& tablet_map = tablets.get_tablet_map(table_id);
+        if (!tablet_map.has_raft_info()) {
+            continue;
+        }
+        for (const auto& tid: tablet_map.tablet_ids()) {
+            const global_tablet_id tablet{table_id, tid};
+            const auto gid = tablet_map.get_tablet_raft_info(tid).group_id;
+
+            if (!tablet_map.has_replica(tid, this_replica)) {
+                continue;
+            }
+
+            const auto tinfo = tablet_map.get_tablet_info(tid);
+            const auto* trinfo = tablet_map.get_tablet_transition_info(tid);
+            const auto expected_config = expected_raft_config_for_tablet(tinfo, trinfo);
+
+            // validate only on expected voter replicas.
+            auto it = expected_config.current.find(this_id);
+            if (it == expected_config.current.end() || it->can_vote == raft::is_voter::no) {
+                continue;
+            }
+
+            auto& state = _raft_groups[gid];
+            if (!state.gate || state.gate->is_closed()) {
+                throw std::runtime_error(format("local_topology_barrier: raft group {} is not running", gid));
+            }
+
+            // wait for running server control operations - server start, config update
+            logger.debug("local_topology_barrier({}-{}): waiting for server control operation to complete", tablet, gid);
+            co_await state.server_control_op.get_future();
+
+            const auto& raft_config = state.server->get_configuration();
+            if (raft_config.current != expected_config.current) {
+                throw std::runtime_error(format("local_topology_barrier({}-{}): config mismatch", tablet, gid));
+            }
+        }
+    }
 }
 
 void groups_manager::update(token_metadata_ptr new_tm) {
