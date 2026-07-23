@@ -371,11 +371,15 @@ public:
             auto partition_key = key.explode(_schema);
             _builder.accept_new_partition(partition_key);
             _partition_key = std::move(partition_key);
+            // Stale from the previous partition: a partition with no rows never calls
+            // accept_new_row(), so it must not observe the old clustering key.
+            _clustering_key.clear();
             _row_count = row_count;
             _filter.reset(&key);
         }
 
         void accept_new_partition(uint64_t row_count) {
+            _clustering_key.clear();
             _row_count = row_count;
             _filter.reset();
         }
