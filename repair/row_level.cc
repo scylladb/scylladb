@@ -11,6 +11,7 @@
 #include <seastar/util/defer.hh>
 #include "dht/auto_refreshing_sharder.hh"
 #include "db/view/view_building_worker.hh"
+#include "db/view/view_builder.hh"
 #include "gms/endpoint_state.hh"
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
@@ -572,9 +573,29 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
         sst->being_repaired = sid;
         sst_list.insert(sst);
     };
+    // Sstables produced by incremental repair are later marked as repaired
+    // (see repair_meta::mark_sstable_as_repaired()), which rewrites them via a
+    // component rewrite and replaces the sstable object. Registering a staging
+    // sstable with the view building machinery before that rewrite happens
+    // would leave it holding a reference invalidated by the rewrite. So defer
+    // the registration until after mark_sstable_as_repaired() has run; see
+    // repair_meta::register_pending_view_update_sstables().
+    streaming::view_update_registration_override_fn defer_view_update_registration;
+    if (mark_as_repaired) {
+        auto& pending_ssts = w->get_pending_view_update_sstables();
+        defer_view_update_registration = [&pending_ssts, shard] (std::vector<sstables::shared_sstable> ssts,
+                db::view::sstable_destination_decision decision, lw_shared_ptr<replica::table> table) mutable {
+            if (shard != this_shard_id()) {
+                return;
+            }
+            for (auto& sst : ssts) {
+                pending_ssts.push_back({std::move(sst), decision, table});
+            }
+        };
+    }
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder.sharder, std::move(_queue_reader),
             streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, _view_building_worker, w->get_estimated_partitions(), _reason, off_str,
-                _topo_guard, inc_repair_handler),
+                _topo_guard, inc_repair_handler, defer_view_update_registration),
     t.stream_in_progress()).then([w] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
@@ -1833,6 +1854,10 @@ public:
             co_await stop();
             if (mark_as_repaired) {
                 co_await mark_sstable_as_repaired();
+            } else {
+                // The repair round didn't succeed, so no rewrite happened;
+                // register the deferred sstables as-is.
+                co_await register_pending_view_update_sstables();
             }
             co_return;
         }
@@ -2189,82 +2214,130 @@ public:
     }
 
 public:
+    // Registers staging sstables produced by this repair round's writer whose
+    // registration with the view building machinery was deferred (see
+    // repair_writer::pending_view_update_sstable) until this repair round
+    // finished trying to mark its output sstables as repaired.
+    //
+    // `rewritten_sstables` maps an original sstable produced by the repair
+    // writer to its replacement, for sstables that underwent a component
+    // rewrite as part of mark_sstable_as_repaired(). A pending sstable found
+    // in this map is registered as its replacement instead of the original,
+    // since the original's on-disk files no longer exist by the time this
+    // runs. When the map is empty (e.g. mark_sstable_as_repaired() was never
+    // called because the repair round failed or was aborted), pending
+    // sstables are registered unchanged, matching the moment they would have
+    // been registered without the deferral.
+    //
+    // Safe to call multiple times: it drains the pending list, so calling it
+    // again after it already ran is a no-op.
+    future<> register_pending_view_update_sstables(
+            const std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables = {}) {
+        auto pending = std::exchange(_repair_writer->get_pending_view_update_sstables(), {});
+        if (pending.empty()) {
+            co_return;
+        }
+
+        std::unordered_map<table_id, std::vector<sstables::shared_sstable>> vbc_tasks;
+        for (auto& p : pending) {
+            auto sst = p.sst;
+            if (auto it = rewritten_sstables.find(sst); it != rewritten_sstables.end()) {
+                sst = it->second;
+            }
+            switch (p.decision) {
+            case db::view::sstable_destination_decision::staging_managed_by_vbc:
+                vbc_tasks[p.table->schema()->id()].push_back(std::move(sst));
+                break;
+            case db::view::sstable_destination_decision::staging_directly_to_generator:
+                co_await _rs.get_view_builder().register_staging_sstable(std::move(sst), p.table);
+                break;
+            case db::view::sstable_destination_decision::normal_directory:
+                // repair_writer_impl::create_writer() never defers registration
+                // with this decision.
+                on_internal_error(rlogger, "register_pending_view_update_sstables(): unexpected normal_directory decision");
+            }
+        }
+        for (auto& [tid, ssts] : vbc_tasks) {
+            co_await _rs.get_view_building_worker().local().register_staging_sstable_tasks(std::move(ssts), tid);
+        }
+    }
+
     future<> mark_sstable_as_repaired() {
         auto& sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
-        if (!_incremental_repair_meta.sst_set && sstables.empty()) {
-            co_return;
-        }
+        std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten_sstables;
 
-        auto& table = _db.local().find_column_family(_schema->id());
-        int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
+        if (_incremental_repair_meta.sst_set || !sstables.empty()) {
+            auto& table = _db.local().find_column_family(_schema->id());
+            int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
 
-        // Keep the new sstables marked as being_repaired until repair_update_compaction_ctrl
-        // is called (after sstables_repaired_at is committed to Raft). This is an additional
-        // in-memory guard; the classifier itself also protects these sstables via the
-        // repaired_at > sstables_repaired_at check.
-        auto modifier = [repaired_at, session = _frozen_topology_guard] (sstables::sstable& new_sst) {
-            new_sst.update_repaired_at(repaired_at);
-            new_sst.mark_as_being_repaired(session);
-        };
+            // Keep the new sstables marked as being_repaired until repair_update_compaction_ctrl
+            // is called (after sstables_repaired_at is committed to Raft). This is an additional
+            // in-memory guard; the classifier itself also protects these sstables via the
+            // repaired_at > sstables_repaired_at check.
+            auto modifier = [repaired_at, session = _frozen_topology_guard] (sstables::sstable& new_sst) {
+                new_sst.update_repaired_at(repaired_at);
+                new_sst.mark_as_being_repaired(session);
+            };
 
-        // Build the candidate set of sstables we want to mark as repaired.
-        // The actual capture of these sstables (and the membership check
-        // against each view's main sstable set) is delegated to
-        // perform_component_rewrite, which captures them while compaction is
-        // disabled on the target view.  That way:
-        //   - every captured sstable is provably in the view's compaction
-        //     group at capture time (no cross-CG routing mismatch), and
-        //   - no concurrent compaction (split bypass, regular minor compaction,
-        //     etc.) can move the inputs to a different CG mid-rewrite.
-        std::unordered_set<sstables::shared_sstable> repair_set;
-        auto add_sstable = [&] (const sstables::shared_sstable& sst) {
-            if (sst->should_update_repaired_at(repaired_at)) {
-                rlogger.info("Marking sstable={} repaired_at={} being_repaired={} for incremental repair",
-                             sst->toc_filename(), repaired_at, sst->being_repaired);
-                repair_set.insert(sst);
-            }
-        };
-
-        if (_incremental_repair_meta.sst_set) {
-            _incremental_repair_meta.sst_set->for_each_sstable(add_sstable);
-        }
-
-        for (auto& sst : sstables) {
-            add_sstable(sst);
-        }
-
-        if (repair_set.empty()) {
-            co_return;
-        }
-
-        auto filter = [&repair_set] (const sstables::shared_sstable& sst) {
-            return repair_set.contains(sst);
-        };
-
-        co_await utils::get_local_injector().inject("repair_before_component_rewrite",
-                utils::wait_for_message(5min));
-
-        // Rewrite the matching sstables across every compaction group of every
-        // storage group covering the repair range, using the filter-based
-        // perform_component_rewrite which captures sstables while compaction
-        // is disabled on the target view.
-        auto rewritten_sstables = co_await table.perform_component_rewrite(
-                _range, tasks::task_info{}, filter,
-                sstables::component_type::Statistics, modifier);
-        // FIXME: indent.
-            // remove the old sstables from incremental repair meta and add the new ones
-            for (auto& ss : rewritten_sstables) {
-                bool erased = _incremental_repair_meta.sst_set->erase(ss.first);
-                if (erased) {
-                    _incremental_repair_meta.sst_set->insert(ss.second);
+            // Build the candidate set of sstables we want to mark as repaired.
+            // The actual capture of these sstables (and the membership check
+            // against each view's main sstable set) is delegated to
+            // perform_component_rewrite, which captures them while compaction is
+            // disabled on the target view.  That way:
+            //   - every captured sstable is provably in the view's compaction
+            //     group at capture time (no cross-CG routing mismatch), and
+            //   - no concurrent compaction (split bypass, regular minor compaction,
+            //     etc.) can move the inputs to a different CG mid-rewrite.
+            std::unordered_set<sstables::shared_sstable> repair_set;
+            auto add_sstable = [&] (const sstables::shared_sstable& sst) {
+                if (sst->should_update_repaired_at(repaired_at)) {
+                    rlogger.info("Marking sstable={} repaired_at={} being_repaired={} for incremental repair",
+                                 sst->toc_filename(), repaired_at, sst->being_repaired);
+                    repair_set.insert(sst);
                 }
+            };
 
-                auto it = sstables.find(ss.first);
-                if (it != sstables.end()) {
-                    sstables.erase(it);
-                    sstables.insert(ss.second);
-                }
+            if (_incremental_repair_meta.sst_set) {
+                _incremental_repair_meta.sst_set->for_each_sstable(add_sstable);
             }
+
+            for (auto& sst : sstables) {
+                add_sstable(sst);
+            }
+
+            if (!repair_set.empty()) {
+                auto filter = [&repair_set] (const sstables::shared_sstable& sst) {
+                    return repair_set.contains(sst);
+                };
+
+                co_await utils::get_local_injector().inject("repair_before_component_rewrite",
+                        utils::wait_for_message(5min));
+
+                // Rewrite the matching sstables across every compaction group of every
+                // storage group covering the repair range, using the filter-based
+                // perform_component_rewrite which captures sstables while compaction
+                // is disabled on the target view.
+                rewritten_sstables = co_await table.perform_component_rewrite(
+                        _range, tasks::task_info{}, filter,
+                        sstables::component_type::Statistics, modifier);
+                // FIXME: indent.
+                    // remove the old sstables from incremental repair meta and add the new ones
+                    for (auto& ss : rewritten_sstables) {
+                        bool erased = _incremental_repair_meta.sst_set->erase(ss.first);
+                        if (erased) {
+                            _incremental_repair_meta.sst_set->insert(ss.second);
+                        }
+
+                        auto it = sstables.find(ss.first);
+                        if (it != sstables.end()) {
+                            sstables.erase(it);
+                            sstables.insert(ss.second);
+                        }
+                    }
+            }
+        }
+
+        co_await register_pending_view_update_sstables(rewritten_sstables);
     }
 };
 
@@ -3503,6 +3576,11 @@ public:
             auto auto_stop_master = defer([&master] noexcept {
                 try {
                     master.stop().get();
+                    // Safety net in case the main loop below never reached the
+                    // point where it calls repair_row_level_stop() for the
+                    // master's own node (e.g. an exception was thrown earlier).
+                    // No-op if already handled there.
+                    master.register_pending_view_update_sstables().get();
                 } catch (...) {
                     std::exception_ptr ep = std::current_exception();
                     rlogger.warn("Failed auto-stopping Row Level Repair (Master): {}. Ignored.", ep);
@@ -3945,7 +4023,11 @@ repair_service::insert_repair_meta(
             // Start stop() in the background. The topology_guard (gate::holder) inside
             // repair_meta is released when stop() completes and the shared_ptr drops,
             // which ensures session drain waits for this cleanup to finish.
-            (void)rm->stop().handle_exception([rm, local_id, local_topo_guard] (auto ep) {
+            (void)rm->stop().then([rm] {
+                // The session was aborted, so mark_sstable_as_repaired() was never
+                // called for this round; register any deferred sstables as-is.
+                return rm->register_pending_view_update_sstables();
+            }).handle_exception([rm, local_id, local_topo_guard] (auto ep) {
                 rlogger.warn("Session {}: failed to stop orphaned repair_meta_id {} for node {}: {}", local_topo_guard, local_id.repair_meta_id, local_id.ip, ep);
             });
         });
@@ -3953,6 +4035,7 @@ repair_service::insert_repair_meta(
             repair_meta_map().erase(id);
             rlogger.info("Session {} already closed, removing late repair_meta_id {} for node {}", topo_guard, id.repair_meta_id, id.ip);
             co_await rm->stop();
+            co_await rm->register_pending_view_update_sstables();
             co_return;
         }
         rm->set_session_abort_subscription(std::move(sub));
@@ -3978,6 +4061,10 @@ repair_service::remove_repair_meta(const locator::host_id& from,
         co_await rm->stop();
         if (mark_as_repaired) {
             co_await rm->mark_sstable_as_repaired();
+        } else {
+            // The repair round didn't succeed, so no rewrite happened;
+            // register the deferred sstables as-is.
+            co_await rm->register_pending_view_update_sstables();
         }
         rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
     }
@@ -3997,6 +4084,10 @@ repair_service::remove_repair_meta(locator::host_id from) {
     }
     co_await coroutine::parallel_for_each(*repair_metas, [&] (auto& rm) -> future<> {
         co_await rm->stop();
+        // These repair_meta instances are torn down abruptly (e.g. node
+        // removal), so mark_sstable_as_repaired() may never run for them;
+        // register any deferred sstables as-is.
+        co_await rm->register_pending_view_update_sstables();
         rm = {};
     });
     rlogger.debug("Removed all repair_meta for single node {}", from);
@@ -4011,6 +4102,10 @@ repair_service::remove_repair_meta() {
     repair_meta_map().clear();
     co_await coroutine::parallel_for_each(*repair_metas, [&] (auto& rm) -> future<> {
         co_await rm->stop();
+        // These repair_meta instances are torn down abruptly (e.g. service
+        // shutdown), so mark_sstable_as_repaired() may never run for them;
+        // register any deferred sstables as-is.
+        co_await rm->register_pending_view_update_sstables();
         rm = {};
     });
     rlogger.debug("Removed all repair_meta for all nodes");
