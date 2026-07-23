@@ -34,7 +34,6 @@ class operation;
 
 namespace statements {
 
-class broadcast_modification_statement;
 
 namespace raw { class modification_statement; }
 
@@ -264,8 +263,6 @@ public:
     future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, json_cache_opt& json_cache, std::vector<dht::partition_range> keys) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
-
-    virtual ::shared_ptr<broadcast_modification_statement> prepare_for_broadcast_tables() const;
 
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 

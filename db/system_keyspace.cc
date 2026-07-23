@@ -89,7 +89,6 @@ namespace {
     const auto set_use_schema_commitlog = schema_builder::register_schema_initializer([](schema_builder& builder) {
         static const std::unordered_set<sstring> tables = {
             schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
-            system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::RAFT,
             system_keyspace::RAFT_SNAPSHOTS,
             system_keyspace::RAFT_SNAPSHOT_CONFIG,
@@ -1129,18 +1128,6 @@ schema_ptr system_keyspace::discovery() {
             // May be unknown during discovery, then it's set to UUID 0.
             .with_column("raft_server_id", uuid_type)
             .set_comment("State of cluster discovery algorithm: the set of discovered peers")
-            .with_hash_version()
-            .build();
-    }();
-    return schema;
-}
-
-schema_ptr system_keyspace::broadcast_kv_store() {
-    static thread_local auto schema = [] {
-        auto id = generate_legacy_id(NAME, BROADCAST_KV_STORE);
-        return schema_builder(this_smp_shard_count(), NAME, BROADCAST_KV_STORE, id)
-            .with_column("key", utf8_type, column_kind::partition_key)
-            .with_column("value", utf8_type)
             .with_hash_version()
             .build();
     }();
@@ -2275,10 +2262,6 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
                     dicts(), view_building_tasks(), client_routes(), cdc_streams_state(), cdc_streams_history()
     });
-
-    if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
-        r.insert(r.end(), {broadcast_kv_store()});
-    }
 
     r.insert(r.end(), {tablets()});
 

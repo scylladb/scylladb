@@ -19,7 +19,6 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include "service/broadcast_tables/experimental/query_result.hh"
 #include "schema/schema_mutations.hh"
 #include "schema/frozen_schema.hh"
 #include "serialization_visitors.hh"
@@ -29,8 +28,6 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
-#include "idl/experimental/broadcast_tables_lang.dist.hh"
-#include "idl/experimental/broadcast_tables_lang.dist.impl.hh"
 #include "service/storage_service.hh"
 #include "idl/storage_service.dist.hh"
 #include "idl/group0_state_machine.dist.hh"
@@ -324,9 +321,8 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
             co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
         }
     },
-    [&] (broadcast_table_query& query) -> future<> {
-        auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
-        _client.set_query_result(cmd.new_state_id, std::move(result));
+    [] (unused&) -> future<> {
+        co_return;
     },
     [&] (topology_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
@@ -382,8 +378,7 @@ static void ensure_group0_schema(const group0_command& cmd, data_dictionary::dat
             [validate_schema](const schema_change& change) {
                 validate_schema(change.mutations);
             },
-            [](const broadcast_table_query&) {
-                // no mutations to validate
+            [](const unused&) {
             },
             [validate_schema](const topology_change& change) {
                 validate_schema(change.mutations);

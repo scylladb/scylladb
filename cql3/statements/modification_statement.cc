@@ -12,7 +12,6 @@
 #include "utils/assert.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/modification_statement.hh"
-#include "cql3/statements/broadcast_modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -30,7 +29,6 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "db/large_data_handler.hh"
-#include "service/broadcast_tables/experimental/lang.hh"
 #include "cql3/statements/strong_consistency/modification_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 
@@ -608,12 +606,6 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
     }
 }
 
-::shared_ptr<broadcast_modification_statement>
-modification_statement::prepare_for_broadcast_tables() const {
-    // FIXME: implement for every type of `modification_statement`.
-    throw service::broadcast_tables::unsupported_operation_error{};
-}
-
 namespace raw {
 
 std::unique_ptr<prepared_statement>
@@ -628,9 +620,6 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats, 
             return ::make_shared<strong_consistency::modification_statement>(std::move(result));
         }
 
-        if (service::broadcast_tables::is_broadcast_table_statement(keyspace(), column_family())) {
-            return result->prepare_for_broadcast_tables();
-        }
         return result;
     });
 

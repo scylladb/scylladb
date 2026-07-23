@@ -111,7 +111,6 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         # to add here specific experimental features as they are introduced.
         'enable_user_defined_functions': True,
         'experimental_features': ['udf',
-                                  'broadcast-tables',
                                   'keyspace-storage-options',
                                   'views-with-tablets'],
 
@@ -242,8 +241,6 @@ async def get_scylla_2025_1_description(build_mode: str) -> ScyllaVersionDescrip
 # [--smp=1], [--smp=2] -> [--smp, 2]
 # [--smp=1], [--smp=__remove__] -> []
 # [--overprovisioned, --smp=1, --abort-on-ebadf], [--smp=2] -> [--overprovisioned, --smp=2, --abort-on-ebadf]
-# [], [--experimental-features, raft, --experimental-features, broadcast-tables] ->
-# [--experimental-features, raft, --experimental-features, broadcast-tables]
 def merge_cmdline_options(
         base: List[str], override: List[str], appending_options: List[str] = ["--logger-log-level"]) -> List[str]:
     if len(override) == 0:
