@@ -735,7 +735,17 @@ class CQLAuditTester(AuditTester):
     def assert_exactly_n_audit_entries_were_added(self, session: Session, expected_entries: int):
         counts_before = self.get_audit_entries_count_dict(session)
         yield
-        counts_after = self.get_audit_entries_count_dict(session)
+
+        counts_after: dict[str, int] = {}
+
+        def audit_entry_counts_reached_expected():
+            nonlocal counts_after
+            counts_after = self.get_audit_entries_count_dict(session)
+            assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
+            return all(counts_after[mode] - count_before >= expected_entries for mode, count_before in counts_before.items())
+
+        wait_for(audit_entry_counts_reached_expected, timeout=60)
+
         assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
         for mode, count_before in counts_before.items():
             count_after = counts_after[mode]
