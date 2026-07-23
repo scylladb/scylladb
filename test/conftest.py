@@ -34,6 +34,12 @@ else:
     pytest_plugins.append("test.pylib.runner")
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    # In the root conftest so it is registered in every pytest session (incl. runpy).
+    parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
+                     help='URL to the artifacts directory, used to generate links to failed tests log folders')
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.pluginmanager.register(ReportPlugin())
 
