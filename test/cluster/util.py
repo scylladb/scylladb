@@ -13,7 +13,11 @@ import operator
 import time
 import re
 from contextlib import asynccontextmanager, contextmanager, suppress
+from copy import deepcopy
+from dataclasses import dataclass, field
+from enum import Enum
 
+import pytest
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
@@ -25,6 +29,136 @@ from typing import Optional, List, Union
 logger = logging.getLogger(__name__)
 
 UUID_REGEX = re.compile(r"([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})")
+
+
+@dataclass(frozen=True)
+class FeatureConfig:
+    """Describes how a test's keyspace, table and cluster config should be
+    adjusted to run under a particular storage/consistency configuration.
+
+    - ``ks_opts``: appended to the keyspace ``WITH ...`` clause.
+    - ``table_opts``: appended to the ``CREATE TABLE ...`` statement.
+    - ``cluster_cfg``: merged into the per-server config dict passed to
+      ``manager.server_add``.
+    """
+    ks_opts: str = ""
+    table_opts: str = ""
+    cluster_cfg: dict = field(default_factory=dict)
+
+    @property
+    def strongly_consistent(self) -> bool:
+        """True if this configuration creates a strongly-consistent keyspace.
+        NOTE: it checks only global, since local strong consistency is not yet implemented.
+        """
+        return "consistency = 'global'" in ' '.join(self.ks_opts.split())
+
+
+    def get_cluster_cfg(self, base: dict) -> dict:
+        """Merge a FeatureConfig's cluster_cfg into a test's base config dict.
+
+        List-valued keys (e.g. 'experimental_features', 'error_injections_at_startup')
+        are unioned so a configuration can add features without clobbering the ones
+        the test already relies on. Other keys overwrite the base value. The base
+        dict is not modified; a new merged dict is returned.
+        """
+        merged = deepcopy(base)
+        for key, value in self.cluster_cfg.items():
+            if isinstance(value, list) and isinstance(merged.get(key), list):
+                merged[key] = merged[key] + [v for v in value if v not in merged[key]]
+            else:
+                merged[key] = deepcopy(value)
+        return merged
+
+    @staticmethod
+    def _merge_with_clause(stmt: str, opts: str) -> str:
+        """Merge a WITH clause into a CQL statement, preserving validity.
+
+        If the statement already contains a WITH clause, the option is folded in with AND.
+        A trailing ';' is preserved.
+        """
+        if not opts:
+            return stmt
+
+        stmt = stmt.rstrip()
+        has_semicolon = stmt.endswith(";")
+        if has_semicolon:
+            stmt = stmt[:-1].rstrip()
+
+        # A statement can only have one WITH clause, so fold ours in with AND.
+        if "with " in stmt.lower():
+            opts = opts.replace(" WITH ", " AND ", 1)
+
+        return f"{stmt}{opts}{';' if has_semicolon else ''}"
+
+    def get_table_opts(self, create_stmt: str) -> str:
+        """Append a FeatureConfig's table_opts to a CREATE TABLE statement."""
+        return self._merge_with_clause(create_stmt, self.table_opts)
+
+    def get_keyspace_opts(self, create_stmt: str) -> str:
+        """Append a FeatureConfig's ks_opts to a CREATE KEYSPACE statement."""
+        return self._merge_with_clause(create_stmt, self.ks_opts)
+
+
+class FeatureConfigurations(Enum):
+    EVENTUAL_CONSISTENCY = FeatureConfig()
+    STRONG_CONSISTENCY = FeatureConfig(
+        ks_opts=" WITH consistency = 'global'",
+        cluster_cfg={"experimental_features": ["strongly-consistent-tables"]},
+    )
+    LOGSTOR_EVENTUAL_CONSISTENCY = FeatureConfig(
+        table_opts=" WITH storage_engine = 'logstor'",
+        cluster_cfg={"experimental_features": ["logstor"]},
+    )
+    LOGSTOR_STRONG_CONSISTENCY = FeatureConfig(
+        ks_opts=" WITH consistency = 'global'",
+        table_opts=" WITH storage_engine = 'logstor'",
+        cluster_cfg={"experimental_features": ["logstor", "strongly-consistent-tables"]},
+    )
+
+
+def feature_configs(*configs: FeatureConfigurations):
+    """Build pytest.mark.parametrize arguments for the named configurations.
+    The enum name becomes the test id.
+    """
+    return [pytest.param(config.value, id=config.name.lower()) for config in configs]
+
+
+async def count_rows(cql, feature_config: FeatureConfig, query_template: str, ks: str, table: str, keys, partition_key: str):
+    """Count rows in a table, honoring the feature config's consistency model.
+
+    ``query_template`` must be a ``SELECT COUNT(*)`` aggregate that references
+    the table as ``{ks}.{table}`` (this token is used as the insertion anchor).
+    Post-FROM clauses (e.g. ``BYPASS CACHE``, ``LIMIT``) are allowed.
+
+    Eventual-consistency keyspaces run ``query_template`` once at CL=ALL and
+    return the count.
+
+    Strongly-consistent keyspaces reject that query on two counts: CL=ALL is not
+    allowed ("must use QUORUM/LOCAL_QUORUM or ONE/LOCAL_ONE"), and scans are
+    rejected ("strongly consistent queries can only target a single partition").
+    For those we run the same template scoped to a single partition by inserting
+    ``WHERE {partition_key} = <key>`` after the table token (so clause order
+    stays valid) for each key at LOCAL_QUORUM, and sum the per-partition counts.
+    """
+
+    async def run_query_with_semaphore(sem, head, sep, tail, key):
+        async with sem:
+            return await cql.run_async(SimpleStatement(
+                    f"{head}{sep} WHERE {partition_key} = {key}{tail}",
+                    consistency_level=ConsistencyLevel.LOCAL_QUORUM))
+
+    query = query_template.format(ks=ks, table=table)
+    if feature_config.strongly_consistent:
+        semaphore = asyncio.Semaphore(100)
+        anchor = f"{ks}.{table}"
+        head, sep, tail = query.partition(anchor)
+        rows = await asyncio.gather(*[run_query_with_semaphore(semaphore, head, sep, tail, key) for key in keys])
+        return sum(r[0].count for r in rows)
+    else:
+        row = await cql.run_async(SimpleStatement(
+            query,
+            consistency_level=ConsistencyLevel.ALL))
+        return row[0].count
 
 
 async def reconnect_driver(manager: ManagerClient) -> Session:
