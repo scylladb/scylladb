@@ -75,7 +75,6 @@ Limitations
 
 The current migration procedure has the following limitations:
 
-* Only **single-DC clusters** are supported.
 * **No schema changes** during the migration. Do not create, alter, or drop
   tables in the migrating keyspace until the migration is finished.
 * **No topology changes** during the migration. Do not add, remove, decommission,
