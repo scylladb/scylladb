@@ -673,6 +673,14 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const std::option
     return KeyType::from_range(exploded_base_key);
 }
 
+bool view_indexed_table_select_statement::needs_post_filtering() const {
+    const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
+    if (cdef && (cdef->is_regular() || cdef->is_static())) {
+        return true;
+    }
+    return select_statement::needs_post_filtering();
+}
+
 lw_shared_ptr<query::read_command>
 view_indexed_table_select_statement::prepare_command_for_base_query(query_processor& qp, const query_options& options,
         service::query_state& state, gc_clock::time_point now, bool use_paging) const {

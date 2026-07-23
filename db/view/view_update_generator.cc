@@ -414,6 +414,14 @@ future<> view_update_generator::populate_views(const replica::table& table,
                 err = std::make_exception_ptr(std::runtime_error("Timeout a view building update"));
                 continue;
             }
+            // Lets tests interleave reads between the generation of backfill
+            // updates and their application.
+            co_await utils::get_local_injector().inject("populate_views_pause_before_apply",
+                    [] (auto& handler) -> future<> {
+                vug_logger.info("populate_views: paused before applying updates, waiting for message");
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(2));
+                vug_logger.info("populate_views: released, applying updates");
+            });
             co_await mutate_MV(schema, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(),
                     tracing::trace_state_ptr(), std::move(memory_units), service::allow_hints::no, wait_for_all_updates::yes);
         } catch (...) {
@@ -521,6 +529,8 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
         }
 
         try {
+            utils::get_local_injector().inject("view_update_generation_failure",
+                [] { throw std::runtime_error("Error injection: failing view update generation"); });
             co_await mutate_MV(base, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(), tr_state,
                 std::move(memory_units), service::allow_hints::yes, wait_for_all_updates::no);
         } catch (...) {
