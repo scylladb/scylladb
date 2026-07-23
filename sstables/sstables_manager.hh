@@ -96,7 +96,9 @@ public:
 
     storage_manager(const db::config&, config cfg);
     shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint);
-    bool is_known_endpoint(sstring endpoint) const;
+    // With no type (default), just checks that the endpoint is configured at all.
+    // With a type ("s3"/"gs"), also checks that the endpoint is configured as that type.
+    bool is_known_endpoint(sstring endpoint, sstring type = "") const;
     sstring get_endpoint_type(sstring endpoint);
     future<> stop();
     std::vector<sstring> endpoints(sstring type = "") const noexcept;
@@ -223,9 +225,9 @@ public:
         return _storage->get_endpoint_client(std::move(endpoint));
     }
 
-    bool is_known_endpoint(sstring endpoint) const {
+    bool is_known_endpoint(sstring endpoint, sstring type = "") const {
         SCYLLA_ASSERT(_storage != nullptr);
-        return _storage->is_known_endpoint(std::move(endpoint));
+        return _storage->is_known_endpoint(std::move(endpoint), std::move(type));
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
