@@ -1309,8 +1309,8 @@ static unsigned get_cas_shard(const schema& s, dht::token token, const locator::
 }
 
 cas_shard::cas_shard(const schema& s, dht::token token)
-    : _token_guard(s.table(), token)
-    , _shard(get_cas_shard(s, token, *_token_guard.get_erm()))
+    : _erm{s.table().get_effective_replication_map()}
+    , _shard(get_cas_shard(s, token, *_erm))
 {
 }
 
@@ -1547,7 +1547,10 @@ public:
 class paxos_response_handler : public enable_shared_from_this<paxos_response_handler> {
 private:
     shared_ptr<storage_proxy> _proxy;
-    locator::token_metadata_guard _token_guard;
+    // Paxos sends topology-version-gated RPCs over several phases, so the ERM must not
+    // refresh between them. Otherwise, a delayed RPC can be rejected as stale after an
+    // unrelated tablet migration advances the topology version (SCYLLADB-1524).
+    locator::effective_replication_map_ptr _effective_replication_map;
     // The schema for the table the operation works upon.
     schema_ptr _schema;
     // Read command used by this CAS request.
@@ -1589,7 +1592,7 @@ public:
     tracing::trace_state_ptr tr_state;
 
 public:
-    paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, locator::token_metadata_guard token_guard_arg,
+    paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, locator::effective_replication_map_ptr effective_replication_map_arg,
         tracing::trace_state_ptr tr_state_arg, service_permit permit_arg,
         dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
         db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
@@ -1631,7 +1634,7 @@ public:
     bool learned(locator::host_id ep);
 
     const locator::effective_replication_map_ptr& get_effective_replication_map() const noexcept {
-        return _token_guard.get_erm();
+        return _effective_replication_map;
     }
 
     fencing_token get_fence() const {
@@ -2175,13 +2178,13 @@ static future<> sleep_approx_50ms() {
     return seastar::sleep(std::chrono::milliseconds(dist(re)));
 }
 
-paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, locator::token_metadata_guard token_guard_arg,
+paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, locator::effective_replication_map_ptr effective_replication_map_arg,
         tracing::trace_state_ptr tr_state_arg, service_permit permit_arg,
         dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
         db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
         storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg)
         : _proxy(proxy_arg)
-        , _token_guard(std::move(token_guard_arg))
+        , _effective_replication_map(std::move(effective_replication_map_arg))
         , _schema(std::move(schema_arg))
         , _cmd(cmd_arg)
         , _cl_for_paxos(cl_for_paxos_arg)
@@ -6900,10 +6903,10 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
     db::validate_for_cas(cl_for_paxos);
     db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
 
-    auto token_guard = std::move(cas_shard).token_guard();
     auto key = partition_ranges[0].start()->value().as_decorated_key();
     const auto token = key.token();
-    if (get_cas_shard(*schema, token, *token_guard.get_erm()) != this_shard_id()) {
+    
+    if (get_cas_shard(*schema, token, *(cas_shard.get_erm())) != this_shard_id()) {
         on_internal_error(paxos::paxos_state::logger, "storage_proxy::cas called on a wrong shard");
     }
 
@@ -6918,7 +6921,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
     shared_ptr<paxos_response_handler> handler;
     try {
         handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
-                std::move(token_guard),
+                std::move(cas_shard).get_erm(),
                 query_options.trace_state, query_options.permit,
                 std::move(key),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
