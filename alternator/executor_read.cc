@@ -1598,12 +1598,16 @@ static future<executor::request_return_type> query_vector(
                 base_schema->id(), base_schema->version(), partition_slice,
                 proxy.get_max_result_size(partition_slice),
                 query::tombstone_limit(proxy.get_tombstone_limit()));
-        service::storage_proxy::coordinator_query_result qr =
-                co_await proxy.query(base_schema, command,
+        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+                co_await proxy.query_result(base_schema, command,
                         {dht::partition_range(pkey.partition)},
                         db::consistency_level::LOCAL_ONE,
                         service::storage_proxy::coordinator_query_options(
                                 timeout, permit, client_state, trace_state));
+        if (!rqr) {
+            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+        }
+        auto qr = std::move(rqr).assume_value();
         auto opt_item = describe_single_item(base_schema, partition_slice,
                 *selection, *qr.query_result, *attrs_to_get);
         if (opt_item && (!flt || flt.check(*opt_item))) {
@@ -1867,10 +1871,14 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
     rcu_consumed_capacity_counter add_capacity(request, cl == db::consistency_level::LOCAL_QUORUM);
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::SELECT, _stats);
-    service::storage_proxy::coordinator_query_result qr =
-        co_await _proxy.query(
-            schema, std::move(command), std::move(partition_ranges), cl,
-            service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state));
+    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+            co_await _proxy.query_result(
+                schema, std::move(command), std::move(partition_ranges), cl,
+                service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state));
+    if (!rqr) {
+        co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+    }
+    auto qr = std::move(rqr).assume_value();
     per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     uint64_t rcu_half_units = 0;
@@ -1952,7 +1960,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     _stats.api_operations.batch_get_item_histogram.add(batch_size);
     // If we got here, all "requests" are valid, so let's start the
     // requests for the different partitions all in parallel.
-    std::vector<future<std::vector<rjson::value>>> response_futures;
+    using batch_get_item_result = service::storage_proxy::result<std::vector<rjson::value>>;
+    std::vector<future<batch_get_item_result>> response_futures;
     std::vector<uint64_t> consumed_rcu_half_units_per_table(requests.size());
     for (size_t i = 0; i < requests.size(); i++) {
         const table_requests& rs = requests[i];
@@ -1984,11 +1993,18 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     per_table_stats->operation_sizes.batch_get_item_op_size_kb.add(bytes_to_kb_ceil(size));
                 }
             };
-            future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
-                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
-                    [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get, item_callback = std::move(item_callback)] (service::storage_proxy::coordinator_query_result qr) mutable {
+            future<batch_get_item_result> f = 
+                    _proxy.query_result(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
+                        service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
+                    [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get, item_callback = std::move(item_callback)] (service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr) mutable -> future<batch_get_item_result> {
+                if (!rqr) {
+                    return make_ready_future<batch_get_item_result>(std::move(rqr).as_failure());
+                }
+                auto qr = std::move(rqr).assume_value();
                 utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
-                return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get), std::move(item_callback));
+                return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get), std::move(item_callback)).then([] (std::vector<rjson::value> result) {
+                    return make_ready_future<batch_get_item_result>(std::move(result));
+                });
             });
             response_futures.push_back(std::move(f));
         }
@@ -1998,6 +2014,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // In case of full failure (no reads succeeded), an arbitrary error
     // from one of the operations will be returned.
     bool some_succeeded = false;
+    std::optional<exceptions::coordinator_exception_container> query_error;
     std::exception_ptr eptr;
     audit::audit_table_set audited_table_names;
     bool only_audited_tables = true;
@@ -2007,6 +2024,27 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     rjson::add(response, "UnprocessedKeys", rjson::empty_object());
     auto fut_it = response_futures.begin();
     rjson::value consumed_capacity = rjson::empty_array();
+    auto add_unprocessed_keys = [&] (const std::string& table, const auto& cks) {
+        // Read failed on item represented by `cks` key(s), we need to add it to UnprocessedKeys field in reply object.
+        // We create `UnprocessedKeys` object on first failure - multiple items might fail for the same BatchGetItem call.
+        if (!response["UnprocessedKeys"].HasMember(table)) {
+            // Add the table's entry in UnprocessedKeys. Need to copy all the table's parameters from the request except the
+            // Keys field, which we start empty and then build below.
+            rjson::add_with_string_name(response["UnprocessedKeys"], table, rjson::empty_object());
+            rjson::value& unprocessed_item = response["UnprocessedKeys"][table];
+            rjson::value& request_item = request_items[table];
+            for (auto it = request_item.MemberBegin(); it != request_item.MemberEnd(); ++it) {
+                if (it->name != "Keys") {
+                    rjson::add_with_string_name(unprocessed_item,
+                        rjson::to_string_view(it->name), rjson::copy(it->value));
+                }
+            }
+            rjson::add_with_string_name(unprocessed_item, "Keys", rjson::empty_array());
+        }
+        for (auto& ck : cks) {
+            rjson::push_back(response["UnprocessedKeys"][table]["Keys"], std::move(*ck.second));
+        }
+    };
     for (size_t i = 0; i < requests.size(); i++) {
         const table_requests& rs = requests[i];
         std::string table = rs.schema->cf_name();
@@ -2021,7 +2059,18 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             auto& fut = *fut_it;
             ++fut_it;
             try {
-                std::vector<rjson::value> results = co_await std::move(fut);
+                // The future here (`storage_proxy::result`, which is a `bo::result`) might contain an error as value
+                // or it might contain an exception (which will be rethrown on `co_await` call).
+                // We need to handle both failures in the same way.
+                batch_get_item_result result = co_await std::move(fut);
+                if (!result) {
+                    if (!query_error) {
+                        query_error.emplace(std::move(result).assume_error());
+                    }
+                    add_unprocessed_keys(table, cks);
+                    continue;
+                }
+                std::vector<rjson::value> results = std::move(result).assume_value();
                 some_succeeded = true;
                 if (!response["Responses"].HasMember(table)) {
                     rjson::add_with_string_name(response["Responses"], table, rjson::empty_array());
@@ -2031,26 +2080,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                 }
             } catch(...) {
                 eptr = std::current_exception();
-                // This read of potentially several rows in one partition,
-                // failed. We need to add the row key(s) to UnprocessedKeys.
-                if (!response["UnprocessedKeys"].HasMember(table)) {
-                    // Add the table's entry in UnprocessedKeys. Need to copy
-                    // all the table's parameters from the request except the
-                    // Keys field, which we start empty and then build below.
-                    rjson::add_with_string_name(response["UnprocessedKeys"], table, rjson::empty_object());
-                    rjson::value& unprocessed_item = response["UnprocessedKeys"][table];
-                    rjson::value& request_item = request_items[table];
-                    for (auto it = request_item.MemberBegin(); it != request_item.MemberEnd(); ++it) {
-                        if (it->name != "Keys") {
-                            rjson::add_with_string_name(unprocessed_item,
-                                rjson::to_string_view(it->name), rjson::copy(it->value));
-                        }
-                    }
-                    rjson::add_with_string_name(unprocessed_item, "Keys", rjson::empty_array());
-                }
-                for (auto& ck : cks) {
-                    rjson::push_back(response["UnprocessedKeys"][table]["Keys"], std::move(*ck.second));
-                }
+                add_unprocessed_keys(table, cks);
             }
         }
         uint64_t rcu_half_units = consumed_rcu_half_units_per_table[i];
@@ -2084,6 +2114,9 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     }
     if (!some_succeeded && eptr) {
         co_await coroutine::return_exception_ptr(std::move(eptr));
+    }
+    if (!some_succeeded && query_error) {
+        co_return create_api_error_from_coordinators_exception(*query_error);
     }
     auto duration = std::chrono::steady_clock::now() - start_time;
     _stats.api_operations.batch_get_item_latency.mark(duration);
