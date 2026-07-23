@@ -14,6 +14,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/iostream.hh>
+#include <seastar/core/byteorder.hh>
 #include <fmt/core.h>
 
 #include "utils/log.hh"
@@ -28,6 +29,8 @@
 #include "utils/s3/creds.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/lister.hh"
+#include "utils/murmur_hash.hh"
+#include "utils/base64.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -35,13 +38,19 @@ using namespace utils;
 
 static logging::logger osclog("object_storage_client");
 
+static std::string prefix_hash(const sstable_id& sid) {
+    auto hash_bytes = uninitialized_string<bytes>(4);
+    auto hash = utils::murmur_hash::hash32(sid.id.serialize(), 0);
+    write_le(reinterpret_cast<char*>(hash_bytes.data()), hash);
+    return base64url_encode(hash_bytes);
+}
 
 sstables::object_name::object_name(std::string_view bucket, std::string_view prefix, std::string_view type)
     : _name(fmt::format("/{}/{}/{}", bucket, prefix, type))
 {}
 
 sstables::object_name::object_name(std::string_view bucket, std::string_view prefix, const sstable_id& sid, std::string_view type)
-    : _name(fmt::format("/{}/{}/{}/{}", bucket, prefix, sid, type))
+    : _name(fmt::format("/{}/{}/{}/{}/{}", bucket, prefix, prefix_hash(sid), sid, type))
 {
     if (!sid) {
         on_internal_error(sstlog, fmt::format("SSTable identifier is required for object storage: bucket={} prefix={}", bucket, prefix));

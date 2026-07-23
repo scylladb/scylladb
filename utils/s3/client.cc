@@ -1942,9 +1942,13 @@ public:
         if (offset >= _stats->size) {
             co_return temporary_buffer<uint8_t>();
         }
-
+      try {
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ offset, range_size }, _as);
         co_return temporary_buffer<uint8_t>(reinterpret_cast<uint8_t*>(buf.get_write()), buf.size(), buf.release());
+      } catch (...) {
+        s3l.error("Failed to read {} bytes from {} at offset {}: {}", range_size, _object_name, offset, std::current_exception());
+        throw;
+      }
     }
 
     virtual future<> close() override {
