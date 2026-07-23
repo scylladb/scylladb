@@ -2734,6 +2734,45 @@ std::vector<size_t> select_statement::prepare_group_by(const schema& schema, sel
 
 }
 
+size_t select_statement::external_memory_usage() const {
+    size_t s = cql_statement::external_memory_usage();
+
+    // _selection (polymorphic — virtual object_size + external_memory_usage)
+    if (_selection) {
+        s += _selection->object_size() + _selection->external_memory_usage();
+    }
+
+    // _restrictions
+    if (_restrictions) {
+        s += sizeof(restrictions::statement_restrictions) + _restrictions->external_memory_usage();
+    }
+
+    // _limit and _per_partition_limit (optional expressions)
+    if (_limit) {
+        s += _limit->external_memory_usage();
+    }
+    if (_per_partition_limit) {
+        s += _per_partition_limit->external_memory_usage();
+    }
+
+    // _group_by_cell_indices
+    if (_group_by_cell_indices) {
+        s += sizeof(std::vector<size_t>) + _group_by_cell_indices->capacity() * sizeof(size_t);
+    }
+
+    // _attrs
+    if (_attrs) {
+        s += sizeof(cql3::attributes) + _attrs->external_memory_usage();
+    }
+
+    // Not counted (known approximations):
+    // - _parameters: typically shared with _default_parameters (globally shared, not owned)
+    // - _ordering_comparator: std::function; the comparators built here capture a
+    //   few pointers and fit libstdc++'s SBO, so there is no heap allocation to count.
+
+    return s;
+}
+
 }
 
 namespace util {

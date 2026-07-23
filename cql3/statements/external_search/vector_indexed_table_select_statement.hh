@@ -69,6 +69,7 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_search(
             query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const override;
+    size_t object_size() const override { return sizeof(*this); }
 };
 
 } // namespace cql3::statements
