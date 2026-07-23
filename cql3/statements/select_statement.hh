@@ -197,6 +197,22 @@ class view_indexed_table_select_statement : public select_statement {
     schema_ptr _view_schema;
     noncopyable_function<dht::partition_range_vector(const query_options&)> _get_partition_ranges_for_posting_list;
     noncopyable_function<query::partition_slice(const query_options&)> _get_partition_slice_for_posting_list;
+    // Additional global indexes (with their view schemas) whose posting lists are
+    // intersected with the primary index's, so we only read base rows that match
+    // every indexed equality restriction (CUSTOMER-303 phase 2). Empty when the
+    // primary index is local or no additional equality-indexed columns apply.
+    std::vector<std::pair<secondary_index::index, schema_ptr>> _intersection_indexes;
+
+    // CUSTOMER-303 phase 3: a global equality-indexed column participating in an
+    // intersection, resolved for a particular query (its posting-list partition
+    // key `value` is solved from the bound parameters). When several such indexes
+    // apply, the one with the smallest posting list is chosen at execution time
+    // to drive paging (see choose_primary_index()); the rest are intersected in.
+    struct index_candidate {
+        secondary_index::index index;
+        schema_ptr view_schema;
+        bytes value;
+    };
 public:
     static constexpr size_t max_base_table_query_concurrency = 4096;
 
@@ -227,6 +243,7 @@ public:
                                    cql_stats &stats,
                                    const secondary_index::index& index,
                                    schema_ptr view_schema,
+                                   std::vector<std::pair<secondary_index::index, schema_ptr>> intersection_indexes,
                                    std::unique_ptr<cql3::attributes> attrs);
 
 private:
@@ -236,16 +253,27 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>> actually_do_execute(query_processor& qp,
             service::query_state& state, const query_options& options) const;
 
+    // Throughout the pipeline below, `primary` selects which index drives the
+    // scan/paging. When nullptr the statement's own _index / _view_schema are used
+    // (the ordinary single-index path, unchanged). When non-null it points at a
+    // runtime-chosen global equality index (CUSTOMER-303 phase 3 cost-based
+    // selection); `others` are the remaining equality-indexed columns whose
+    // posting lists are intersected in.
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
-            const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options, uint32_t internal_page_size) const;
+            const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options, uint32_t internal_page_size,
+            const index_candidate* primary = nullptr) const;
 
     future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>> find_index_partition_ranges(query_processor& qp,
                                                                     service::query_state& state,
-                                                                    const query_options& options) const;
+                                                                    const query_options& options,
+                                                                    const index_candidate* primary = nullptr,
+                                                                    const std::vector<index_candidate>& others = {}) const;
 
     future<coordinator_result<std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>>> find_index_clustering_rows(query_processor& qp,
                                                                 service::query_state& state,
-                                                                const query_options& options) const;
+                                                                const query_options& options,
+                                                                const index_candidate* primary = nullptr,
+                                                                const std::vector<index_candidate>& others = {}) const;
 
     future<shared_ptr<cql_transport::messages::result_message>>
     process_base_query_results(
@@ -255,7 +283,8 @@ private:
             const query_options& options,
             gc_clock::time_point now,
             lw_shared_ptr<const service::pager::paging_state> paging_state,
-            uint32_t internal_page_size) const;
+            uint32_t internal_page_size,
+            const index_candidate* primary = nullptr) const;
 
     lw_shared_ptr<query::read_command>
     prepare_command_for_base_query(query_processor& qp, const query_options& options, service::query_state& state, gc_clock::time_point now,
@@ -268,7 +297,8 @@ private:
             service::query_state& state,
             const query_options& options,
             gc_clock::time_point now,
-            lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+            lw_shared_ptr<const service::pager::paging_state> paging_state,
+            const index_candidate* primary = nullptr) const;
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(
             query_processor& qp,
@@ -276,7 +306,8 @@ private:
             service::query_state& state,
             const query_options& options,
             gc_clock::time_point now,
-            lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+            lw_shared_ptr<const service::pager::paging_state> paging_state,
+            const index_candidate* primary = nullptr) const;
 
     // Function for fetching the selected columns from a list of clustering rows.
     // It is currently used only in our Secondary Index implementation - ordinary
@@ -294,7 +325,8 @@ private:
             service::query_state& state,
             const query_options& options,
             gc_clock::time_point now,
-            lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+            lw_shared_ptr<const service::pager::paging_state> paging_state,
+            const index_candidate* primary = nullptr) const;
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(
             query_processor& qp,
@@ -302,7 +334,8 @@ private:
             service::query_state& state,
             const query_options& options,
             gc_clock::time_point now,
-            lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+            lw_shared_ptr<const service::pager::paging_state> paging_state,
+            const index_candidate* primary = nullptr) const;
 
     virtual void update_stats_rows_read(int64_t rows_read) const override {
         _stats.rows_read += rows_read;
@@ -316,7 +349,44 @@ private:
             service::query_state& state,
             gc_clock::time_point now,
             db::timeout_clock::time_point timeout,
+            bool include_base_clustering_key,
+            const index_candidate* primary = nullptr) const;
+
+    // CUSTOMER-303 phase 2/3: posting-list intersection helpers.
+    //
+    // read_intersection_index_keys() reads the base primary keys present in an
+    // additional index's posting list (partition = indexed_value). The clustering
+    // ranges target exactly the current page's candidate base keys (phase 4), so
+    // the promoted index skips the entries in between. The returned keys are in
+    // base-token (view-clustering) order.
+    future<coordinator_result<std::vector<primary_key>>> read_intersection_index_keys(
+            query_processor& qp, service::query_state& state, const query_options& options,
+            schema_ptr view_schema, const bytes& indexed_value,
+            std::vector<query::clustering_range> clustering_ranges,
             bool include_base_clustering_key) const;
+
+    // Filters the candidate base keys from the primary index down to those that
+    // also appear in every `others` index's posting list (a streaming merge over
+    // the shared base-token order). No-op when `others` is empty.
+    future<coordinator_result<dht::partition_range_vector>> intersect_partition_ranges(
+            query_processor& qp, service::query_state& state, const query_options& options,
+            dht::partition_range_vector candidates, const std::vector<index_candidate>& others) const;
+    future<coordinator_result<std::vector<primary_key>>> intersect_primary_keys(
+            query_processor& qp, service::query_state& state, const query_options& options,
+            std::vector<primary_key> candidates, const std::vector<index_candidate>& others) const;
+
+    // CUSTOMER-303 phase 3: builds the equality-indexed candidate columns for this
+    // query (chosen index + intersection indexes, with values solved from options),
+    // returns empty if cost-based intersection doesn't apply; probes posting-list
+    // sizes and returns the index of the smallest (the paging driver).
+    std::vector<index_candidate> build_index_candidates(const query_options& options) const;
+    // Best-effort: probe posting-list sizes and return the smallest candidate's
+    // index and its (probed, capped) size. Probe read errors are swallowed (that
+    // candidate is just skipped), so this never fails the query - the optimization
+    // degrades to the chosen index. The size lets the caller decide whether the
+    // driver is already so selective that intersecting is not worth it.
+    future<std::pair<size_t, uint64_t>> choose_primary_index(query_processor& qp, service::query_state& state,
+            const query_options& options, const std::vector<index_candidate>& candidates, uint64_t skip_threshold) const;
 
     dht::partition_range_vector get_partition_ranges_for_local_index_posting_list(const query_options& options) const;
     dht::partition_range_vector get_partition_ranges_for_global_index_posting_list(const query_options& options) const;

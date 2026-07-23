@@ -97,6 +97,47 @@ given table. A name for the index itself can be specified before the ``ON`` keyw
 for the column, it will be indexed asynchronously. After the index is created, new data for the column is indexed
 automatically at insertion time.
 
+.. _querying-multiple-indexed-columns:
+
+Querying multiple indexed columns
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When a query restricts several indexed columns with equality — for example
+``WHERE a = ? AND b = ?`` where both ``a`` and ``b`` have a secondary index —
+ScyllaDB uses the indexes together. It reads each index's posting list,
+intersects them by the base table's primary key, and reads from the base table
+only the rows that match *all* of the indexed restrictions. This avoids reading
+every row that matches one restriction only to discard most of them.
+
+Example:
+
+.. code-block:: cql
+
+   CREATE TABLE orders (id int PRIMARY KEY, customer int, status int);
+   CREATE INDEX ON orders (customer);
+   CREATE INDEX ON orders (status);
+
+   -- The posting lists for `customer = 42` and `status = 1` are intersected,
+   -- so only the orders matching both are read from the base table.
+   SELECT * FROM orders WHERE customer = 42 AND status = 1 ALLOW FILTERING;
+
+ScyllaDB drives the query with the most selective index (the one whose value
+matches the fewest rows) and intersects the other indexes into it. If that most
+selective index already matches only a few rows, the intersection is skipped and
+that index is used on its own, since reading those few rows and filtering is
+cheaper than the extra index reads. The row-count threshold for this decision is
+controlled by the
+:ref:`secondary_index_intersection_skip_max_rows <confprop_secondary_index_intersection_skip_max_rows>`
+configuration parameter (set it to ``0`` to always intersect).
+
+.. note::
+
+   Index intersection combines independent secondary indexes at query time and
+   is subject to the same eventual consistency as the indexes themselves. For a
+   known, frequent query pattern on a fixed set of columns, modeling the table
+   (or a :doc:`materialized view </features/materialized-views>`) around that
+   pattern is typically more efficient than relying on intersection.
+
 Local Secondary Index
 ^^^^^^^^^^^^^^^^^^^^^
 

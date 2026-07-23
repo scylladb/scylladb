@@ -784,6 +784,11 @@ struct do_find_idx_result {
     std::optional<secondary_index::index> index;
     expr::expression restrictions;
     std::vector<predicate> indexed_column_predicates;
+    // Additional global indexes (other than the chosen one) whose target column is
+    // restricted by an equality in this query. Their posting lists can be
+    // intersected with the chosen index's to avoid reading base-table rows that
+    // don't match every indexed restriction (CUSTOMER-303 phase 2).
+    std::vector<std::pair<secondary_index::index, std::vector<predicate>>> additional_eq_indexes;
 };
 
 static do_find_idx_result do_find_idx(
@@ -791,6 +796,8 @@ static do_find_idx_result do_find_idx(
         const secondary_index::secondary_index_manager& sim,
         std::span<const index_search_group> search_groups,
         allow_local_index allow_local);
+
+static get_singleton_value_fn_t build_value_fn_from_predicates(std::vector<predicate> preds);
 
 
 bool is_empty_restriction(const expression& e) {
@@ -1212,6 +1219,10 @@ statement_restrictions::statement_restrictions(private_tag,
             _idx_opt = std::make_unique<secondary_index::index>(std::move(*idx_result.index));
         }
         _idx_column_predicates = std::move(idx_result.indexed_column_predicates);
+        for (auto& [idx, preds] : idx_result.additional_eq_indexes) {
+            _intersection_indexes.push_back(idx);
+            _intersection_index_value_fns.push_back(build_value_fn_from_predicates(std::move(preds)));
+        }
     }
 
     calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db, sc_pk_pred_vectors, sc_ck_pred_vectors, sc_nonpk_pred_vectors);
@@ -1391,13 +1402,21 @@ static do_find_idx_result do_find_idx(
     expr::expression chosen_index_restrictions = expr::conjunction({});
     std::vector<predicate> chosen_index_predicates;
 
+    // All usable global indexes whose target column is restricted by an equality,
+    // keyed by index name (so each index is collected once). After the primary
+    // index is chosen below, the rest become candidates for posting-list
+    // intersection (CUSTOMER-303 phase 2). Keyed and later returned in a stable
+    // (sorted) order so the set is a pure function of the query.
+    std::map<sstring, std::pair<secondary_index::index, std::vector<predicate>>> eq_global_indexes;
+
     // Several indexes may be usable for this query. When their score is tied,
     // let's pick one by order of the columns mentioned in the restriction
-    // expression. This specific order isn't important (and maybe in the
-    // future we could plan a better order based on the specificity of each
-    // index), but it is critical that two coordinators - or the same
-    // coordinator over time - must choose the same index for the same query.
-    // Otherwise, paging can break (see issue #7969).
+    // expression. This specific order isn't important, but it is critical that
+    // two coordinators - or the same coordinator over time (including across a
+    // rolling upgrade) - choose the same index for the same query. Otherwise,
+    // paging can break (see issue #7969). Any cost-based refinement of this
+    // choice must therefore be gated behind a cluster feature and pinned in the
+    // paging state; see view_indexed_table_select_statement (CUSTOMER-303).
     for (const auto& group : search_groups) {
         // Iterate columns in WHERE-clause order (from the restriction expression)
         // rather than schema-position order (from the pred_vectors map).  When
@@ -1411,9 +1430,19 @@ static do_find_idx_result do_find_idx(
             }
             const auto& [col, preds] = *it;
             for (const auto& index : sim.list_indexes()) {
-                if (col->name_as_text() == index.target_column() &&
-                        are_predicates_supported_by(preds, index) &&
-                        index_score(index) > chosen_index_score) {
+                if (col->name_as_text() != index.target_column() ||
+                        !are_predicates_supported_by(preds, index)) {
+                    continue;
+                }
+                // Remember every global equality-restricted index; these become the
+                // candidates for posting-list intersection once the primary index
+                // is chosen (CUSTOMER-303). This does not influence the choice below,
+                // so the deterministic single-index selection is unchanged.
+                if (!index.metadata().local()
+                        && std::ranges::any_of(preds, [] (const predicate& p) { return p.equality; })) {
+                    eq_global_indexes.insert_or_assign(index.metadata().name(), std::make_pair(index, preds));
+                }
+                if (index_score(index) > chosen_index_score) {
                     chosen_index = index;
                     chosen_index_score = index_score(index);
                     chosen_index_restrictions = group.restriction_expr;
@@ -1422,7 +1451,19 @@ static do_find_idx_result do_find_idx(
             }
         });
     }
-    return {chosen_index, chosen_index_restrictions, std::move(chosen_index_predicates)};
+    std::vector<std::pair<secondary_index::index, std::vector<predicate>>> additional_eq_indexes;
+    if (chosen_index) {
+        for (auto& [name, idx_and_preds] : eq_global_indexes) {
+            // Skip the chosen index itself, and any other index on the same base
+            // column (intersecting a column with itself is pointless).
+            if (name == chosen_index->metadata().name()
+                    || idx_and_preds.first.target_column() == chosen_index->target_column()) {
+                continue;
+            }
+            additional_eq_indexes.push_back(idx_and_preds);
+        }
+    }
+    return {chosen_index, chosen_index_restrictions, std::move(chosen_index_predicates), std::move(additional_eq_indexes)};
 }
 
 std::optional<secondary_index::index>
@@ -2678,14 +2719,16 @@ std::vector<query::clustering_range> statement_restrictions::get_local_index_clu
     return _get_local_index_clustering_ranges_fn(options);
 }
 
-get_singleton_value_fn_t
-statement_restrictions::build_value_for_index_partition_key_fn() const {
-    if (_idx_column_predicates.empty()) {
+// Builds a function that, given query options, solves a column's equality
+// predicate(s) to the single value used as the index view's partition key.
+// Shared by the chosen index and by the additional intersection indexes.
+static get_singleton_value_fn_t build_value_fn_from_predicates(std::vector<predicate> preds) {
+    if (preds.empty()) {
         return {};
     }
-    auto merged = _idx_column_predicates[0];
-    for (size_t i = 1; i < _idx_column_predicates.size(); ++i) {
-        merged = make_conjunction(std::move(merged), _idx_column_predicates[i]);
+    auto merged = preds[0];
+    for (size_t i = 1; i < preds.size(); ++i) {
+        merged = make_conjunction(std::move(merged), preds[i]);
     }
     return [merged = std::move(merged)] (const query_options& options) -> bytes_opt {
         value_set possible_vals = solve(merged, options);
@@ -2706,6 +2749,11 @@ statement_restrictions::build_value_for_index_partition_key_fn() const {
             }
         }, possible_vals);
     };
+}
+
+get_singleton_value_fn_t
+statement_restrictions::build_value_for_index_partition_key_fn() const {
+    return build_value_fn_from_predicates(_idx_column_predicates);
 }
 
 bytes_opt

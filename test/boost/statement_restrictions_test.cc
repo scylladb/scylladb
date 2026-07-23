@@ -488,6 +488,10 @@ SEASTAR_TEST_CASE(index_selection) {
         verify(check("s1 CONTAINS 1 AND s1 CONTAINS 2"), {"", none, false, true});
 
         // --- I. Collection + regular column tiebreak (WHERE-clause order) ---
+        // The deterministic single-index choice is by WHERE-clause order (it must
+        // stay stable across coordinators/upgrades). The cost-based intersection
+        // that prefers the more selective index is decided at execution time behind
+        // a cluster feature, not here.
         verify(check("s1 CONTAINS 1 AND v1 = 1"), {"", idx("idx_s1"), true, true});
         verify(check("v1 = 1 AND s1 CONTAINS 1"), {"", idx("idx_v1"), true, true});
 
