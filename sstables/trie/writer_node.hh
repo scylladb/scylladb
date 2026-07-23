@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <new>
 #include "common.hh"
 #include "utils/assert.hh"
 
@@ -192,8 +193,11 @@ private:
         if (_spare) {
             _current = std::move(_spare);
         } else {
-            _current = std::unique_ptr<std::byte[], aligned_deleter>(
-                static_cast<std::byte*>(aligned_alloc(_segment_size, _segment_size)));
+            auto p = static_cast<std::byte*>(aligned_alloc(_segment_size, _segment_size));
+            if (!p) {
+                throw std::bad_alloc();
+            }
+            _current = std::unique_ptr<std::byte[], aligned_deleter>(p);
         }
     }
 
