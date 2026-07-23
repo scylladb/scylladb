@@ -1630,6 +1630,14 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
 
+        // Mark the new sstable as a component-rewrite output so that when the
+        // component is written below it preserves the parent sstable's original
+        // encoding (e.g. encryption, recorded in scylla_metadata) instead of
+        // adopting the current schema (or config), which might be different than
+        // for all other components.
+        // The rest of the sstable is hard-linked and its scylla_metadata is carried over.
+        new_sst->mark_created_by_component_rewrite();
+
         _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}).get();
         new_sst->copy_components(*this).get();
 
