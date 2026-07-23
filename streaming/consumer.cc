@@ -30,8 +30,10 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
         stream_reason reason,
         sstables::offstrategy offstrategy,
         service::frozen_topology_guard frozen_guard,
-        std::function<void (sstables::shared_sstable sst)> on_sstable_written) {
-    return [&db, &vb = vb.container(), &vbw, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, on_sstable_written] (mutation_reader reader) -> future<> {
+        std::function<void (sstables::shared_sstable sst)> on_sstable_written,
+        view_update_registration_override_fn view_update_registration_override) {
+    return [&db, &vb = vb.container(), &vbw, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, on_sstable_written,
+            view_update_registration_override = std::move(view_update_registration_override)] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {
             if (current_scheduling_group() != debug::streaming_scheduling_group) {
@@ -52,7 +54,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
             const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
             mutation_reader_consumer consumer =
                     [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, &vbw, origin = std::move(origin),
-                offstrategy, on_sstable_written] (mutation_reader reader) {
+                offstrategy, on_sstable_written, view_update_registration_override] (mutation_reader reader) {
                 sstables::shared_sstable sst;
                 try {
                     sst = use_view_update_path == db::view::sstable_destination_decision::normal_directory ? cf->make_streaming_sstable_for_write() : cf->make_streaming_staging_sstable();
@@ -95,10 +97,19 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                         cf->enable_off_strategy_trigger();
                     }
                     co_return co_await cf->add_new_sstable_and_update_cache(sst, on_add, offstrategy);
-                }).then([cf, s, sst, use_view_update_path, &vb, &vbw] (std::vector<sstables::shared_sstable> new_sstables) mutable -> future<> {
+                }).then([cf, s, sst, use_view_update_path, &vb, &vbw, view_update_registration_override] (std::vector<sstables::shared_sstable> new_sstables) mutable -> future<> {
                     auto& vb_ = vb;
                     auto new_sstables_ = std::move(new_sstables);
                     auto table = cf;
+
+                    if (use_view_update_path == db::view::sstable_destination_decision::normal_directory) {
+                        co_return;
+                    }
+
+                    if (view_update_registration_override) {
+                        view_update_registration_override(std::move(new_sstables_), use_view_update_path, std::move(table));
+                        co_return;
+                    }
 
                     if (use_view_update_path == db::view::sstable_destination_decision::staging_managed_by_vbc) {
                         co_return co_await vbw.local().register_staging_sstable_tasks(new_sstables_, cf->schema()->id());
