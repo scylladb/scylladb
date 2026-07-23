@@ -346,10 +346,12 @@ paxos_store::paxos_store(db::system_keyspace& sys_ks, gms::feature_service& feat
     , _features(features)
     , _db(db)
     , _mm(mm)
+    , _prepared_statements_prune_timer([this] { prune_invalid_prepared_statements(); })
 {
     if (this_shard_id() == 0) {
         _mm.get_notifier().register_listener(this);
     }
+    _prepared_statements_prune_timer.arm_periodic(prepared_statements_prune_period);
 }
 
 paxos_store::~paxos_store() {
@@ -357,10 +359,26 @@ paxos_store::~paxos_store() {
 }
 
 future<> paxos_store::stop() {
+    _prepared_statements_prune_timer.cancel();
     auto stopped = this_shard_id() == 0 
         ? _mm.get_notifier().unregister_listener(this) 
         : make_ready_future<>();
     return stopped.then([this] { _stopped = true; });
+}
+
+void paxos_store::prune_invalid_prepared_statements() {
+    std::erase_if(_prepared_statements, [] (const auto& entry) {
+        return !entry.second;
+    });
+}
+
+const paxos_store::prepared_statement_cache& paxos_store::get_prepared_statements_cache() const {
+    return _prepared_statements;
+}
+
+void paxos_store::set_prepared_statements_prune_period(seastar::lowres_clock::duration period) {
+    SCYLLA_ASSERT(_prepared_statements_prune_timer.armed());
+    _prepared_statements_prune_timer.rearm_periodic(period);
 }
 
 schema_ptr paxos_store::create_paxos_state_schema(const schema& s) {
@@ -461,11 +479,18 @@ std::optional<std::string_view> paxos_store::try_get_base_table(std::string_view
     return cf_name.substr(0, cf_name.size() - paxos_state_table_suffix.size());
 }
 
-static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
+future<cql3::untyped_result_set> paxos_store::do_execute_cql_with_timeout(const schema& s, paxos_state_query query,
+        noncopyable_function<sstring(const schema&, const schema&)> make_query,
         db::timeout_clock::time_point timeout,
-        std::vector<data_value_or_unset> values,
-        cql3::query_processor& qp)
+        std::vector<data_value_or_unset> values)
 {
+    auto paxos_cache_key = prepared_statement_cache_key{s.id(), query};
+    const auto it = _prepared_statements.find(paxos_cache_key);
+    auto ps_ptr = it != _prepared_statements.end()
+        ? it->second
+        : prepared_statement_ptr();
+
+    auto& qp = _sys_ks.query_processor();
     const auto now = db::timeout_clock::now();
     const auto d = now < timeout
         ? timeout - now
@@ -474,15 +499,16 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
         timeout_config{d, d, d, d, d, d, d});
     service::query_state qs(client_state, empty_service_permit());
 
-    const auto cache_key = qp.compute_id(req, "", cql3::internal_dialect());
-    auto ps_ptr = qp.get_prepared(cache_key);
     shared_ptr<cql_transport::messages::result_message::prepared> prepared_msg;
     if (!ps_ptr) {
+        const auto state_schema = co_await get_paxos_state_schema(s, timeout);
+        const auto req = make_query(s, *state_schema);
         prepared_msg = co_await qp.prepare(req, qs, cql3::internal_dialect());
         ps_ptr = prepared_msg->get_prepared();
         if (!ps_ptr) {
             on_internal_error(paxos_state::logger, "prepared statement is null");
         }
+        _prepared_statements.insert_or_assign(std::move(paxos_cache_key), ps_ptr);
     }
     // Use an explicit page size to avoid inflating the non-paged reads metric.
     // Each paxos state query returns at most one row, so paging never kicks in.
@@ -497,13 +523,15 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
 }
 
 template <typename... Args>
-future<cql3::untyped_result_set> paxos_store::execute_cql_with_timeout(sstring req,
+future<cql3::untyped_result_set> paxos_store::execute_cql_with_timeout(const schema& s, paxos_state_query query,
+        noncopyable_function<sstring(const schema&, const schema&)> make_query,
         db::timeout_clock::time_point timeout,
         Args&&... args) {
-    return do_execute_cql_with_timeout(std::move(req),
+    return do_execute_cql_with_timeout(s,
+        query,
+        std::move(make_query),
         timeout,
-        { data_value(std::forward<Args>(args))... },
-        _sys_ks.query_processor()
+        { data_value(std::forward<Args>(args))... }
     );
 }
 
@@ -596,14 +624,17 @@ future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema
 {
     co_await utils::get_local_injector().inject("load_paxos_state-enter", utils::wait_for_message(60s));
 
-    const auto state_schema = co_await get_paxos_state_schema(*s, timeout);
     // FIXME: we need execute_cql_with_now()
     (void)now;
     const auto results = co_await execute_cql_with_timeout(
-        format("SELECT * FROM \"{}\".\"{}\" WHERE row_key = ?{} LIMIT 1", 
-            state_schema->ks_name(), state_schema->cf_name(), 
-            paxos_state_cf_filter(*s, *state_schema)
-        ),
+        *s,
+        paxos_state_query::load,
+        [] (const schema& s, const schema& state_s) {
+            return format("SELECT * FROM \"{}\".\"{}\" WHERE row_key = ?{} LIMIT 1",
+                state_s.ks_name(), state_s.cf_name(),
+                paxos_state_cf_filter(s, state_s)
+            );
+        },
         timeout,
         to_legacy(*key.get_compound_type(*s), key.representation())
     );
@@ -635,12 +666,15 @@ future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema
 }
 
 future<> paxos_store::save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
-    const auto state_schema = co_await get_paxos_state_schema(s, timeout);
     co_await execute_cql_with_timeout(
-            format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET promise = ? WHERE row_key = ?{}",
-                state_schema->ks_name(), state_schema->cf_name(), 
-                paxos_state_cf_filter(s, *state_schema)
-            ),
+            s,
+            paxos_state_query::save_promise,
+            [] (const schema& s, const schema& state_s) {
+                return format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET promise = ? WHERE row_key = ?{}",
+                    state_s.ks_name(), state_s.cf_name(),
+                    paxos_state_cf_filter(s, state_s)
+                );
+            },
             timeout,
             utils::UUID_gen::micros_timestamp(ballot),
             paxos_ttl_sec(s),
@@ -650,13 +684,16 @@ future<> paxos_store::save_paxos_promise(const schema& s, const partition_key& k
 }
 
 future<> paxos_store::save_paxos_proposal(const schema& s, const proposal& proposal, db::timeout_clock::time_point timeout) {
-    const auto state_schema = co_await get_paxos_state_schema(s, timeout);
     partition_key_view key = proposal.update.key();
     co_await execute_cql_with_timeout(
-            format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET promise = ?, proposal_ballot = ?, proposal = ? WHERE row_key = ?{}", 
-                state_schema->ks_name(), state_schema->cf_name(), 
-                paxos_state_cf_filter(s, *state_schema)
-            ),
+            s,
+            paxos_state_query::save_proposal,
+            [] (const schema& s, const schema& state_s) {
+                return format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET promise = ?, proposal_ballot = ?, proposal = ? WHERE row_key = ?{}",
+                    state_s.ks_name(), state_s.cf_name(),
+                    paxos_state_cf_filter(s, state_s)
+                );
+            },
             timeout,
             utils::UUID_gen::micros_timestamp(proposal.ballot),
             paxos_ttl_sec(s),
@@ -668,8 +705,6 @@ future<> paxos_store::save_paxos_proposal(const schema& s, const proposal& propo
 }
 
 future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decision, db::timeout_clock::time_point timeout) {
-    const auto state_schema = co_await get_paxos_state_schema(s, timeout);
-
     // We always erase the last proposal when we learn about a new Paxos decision. The ballot
     // timestamp of the decision is used for entire mutation, so if the "erased" proposal is more
     // recent it will naturally stay on top.
@@ -678,11 +713,15 @@ future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decis
     // recent commit.
     partition_key_view key = decision.update.key();
     co_await execute_cql_with_timeout(
-            format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null, "
-                   "most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ?{}",
-                state_schema->ks_name(), state_schema->cf_name(), 
-                paxos_state_cf_filter(s, *state_schema)
-            ),
+            s,
+            paxos_state_query::save_decision,
+            [] (const schema& s, const schema& state_s) {
+                return format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null, "
+                       "most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ?{}",
+                    state_s.ks_name(), state_s.cf_name(),
+                    paxos_state_cf_filter(s, state_s)
+                );
+            },
             timeout,
             utils::UUID_gen::micros_timestamp(decision.ballot),
             paxos_ttl_sec(s),
@@ -693,17 +732,19 @@ future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decis
 }
 
 future<> paxos_store::delete_paxos_decision(const schema& s, const partition_key& key, utils::UUID ballot, db::timeout_clock::time_point timeout) {
-    const auto state_schema = co_await get_paxos_state_schema(s, timeout);
-
     // This should be called only if a learn stage succeeded on all replicas.
     // In this case we can remove learned paxos value using ballot's timestamp which
     // guarantees that if there is more recent round it will not be affected.
 
     co_await execute_cql_with_timeout(
-            format("DELETE most_recent_commit FROM \"{}\".\"{}\" USING TIMESTAMP ? WHERE row_key = ?{}",
-                state_schema->ks_name(), state_schema->cf_name(), 
-                paxos_state_cf_filter(s, *state_schema)
-            ),
+            s,
+            paxos_state_query::delete_decision,
+            [] (const schema& s, const schema& state_s) {
+                return format("DELETE most_recent_commit FROM \"{}\".\"{}\" USING TIMESTAMP ? WHERE row_key = ?{}",
+                    state_s.ks_name(), state_s.cf_name(),
+                    paxos_state_cf_filter(s, state_s)
+                );
+            },
             timeout,
             utils::UUID_gen::micros_timestamp(ballot),
             to_legacy(*key.get_compound_type(s), key.representation())
