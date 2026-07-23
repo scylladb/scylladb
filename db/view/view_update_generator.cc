@@ -128,6 +128,7 @@ future<> view_update_generator::start() {
             // To ensure we don't race with updates, move the entire content
             // into a local variable.
             auto sstables_with_tables = std::exchange(_sstables_with_tables, {});
+            utils::get_local_injector().inject("view_update_generator_pause_main_loop", utils::wait_for_message(std::chrono::minutes(5))).get();
 
             // If we got here, we will process all tables we know about so far eventually so there
             // is no starvation

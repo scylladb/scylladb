@@ -793,6 +793,79 @@ async def test_file_streaming(manager: ManagerClient):
         await assert_row_count_on_host(cql, new_hosts[0], ks, "mv", 1000)
         await manager.server_start(servers[1].server_id)
 
+# Reproduces a race where incremental tablet repair rewrites a staging SSTable
+# after it was registered for view building but before view_update_generator moves
+# it out of staging. The stale registered SSTable reference used to point at files
+# already unlinked by repair's component rewrite, making process_staging retry
+# forever with ENOENT on the staging TOC file.
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_incremental_repair_rewrites_registered_staging_sstable(manager: ManagerClient):
+    node_count = 2
+    smp = 2
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers + [f'--smp={smp}'], property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key))")
+
+        rows = 1000
+        for i in range(rows):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, 1)")
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab "
+                        "WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key)")
+        await wait_for_view(cql, 'mv', node_count)
+
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "tab")
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "mv")
+        await delete_table_sstables(manager, servers[0], ks, "tab")
+        await delete_table_sstables(manager, servers[0], ks, "mv")
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30)
+
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, hosts[0], ks, "tab", 0)
+        await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
+        await manager.server_start(servers[1].server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "view_update_generator_pause_main_loop", one_shot=False)
+
+        repair_task = asyncio.create_task(manager.api.tablet_repair(servers[0].ip_addr, ks, "tab", "all", incremental_mode='incremental'))
+        await s0_log.wait_for("view_update_generator_pause_main_loop: waiting", from_mark=s0_mark, timeout=60)
+        await repair_task
+
+        s0_mark = await s0_log.mark()
+        await manager.api.message_injection(servers[0].ip_addr, "view_update_generator_pause_main_loop")
+        await manager.api.disable_injection(servers[0].ip_addr, "view_update_generator_pause_main_loop")
+        await s0_log.wait_for("Moving sstable .* to .*", from_mark=s0_mark, timeout=60)
+        errors = await s0_log.grep("view_update_generator - Moving some sstable from staging failed", from_mark=s0_mark)
+        assert len(errors) == 0
+
+        async def view_updates_drained():
+            local_metrics = await manager.metrics.query(servers[0].ip_addr)
+            for shard in range(smp):
+                backlog = local_metrics.get("scylla_database_view_update_backlog", {'shard': str(shard)})
+                if backlog > 0:
+                    return None
+            return True
+        await wait_for(view_updates_drained, deadline=time.time() + 30)
+
+        hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30)
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, hosts[0], ks, "tab", rows)
+        await assert_row_count_on_host(cql, hosts[0], ks, "mv", rows)
+        await manager.server_start(servers[1].server_id)
+
 # Reproducer for issue scylladb#26244
 # Purpose of this test is to check if staging sstables managed by `view_building_worker`
 # correctly reacts to tablet merge.
