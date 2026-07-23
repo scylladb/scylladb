@@ -21,6 +21,7 @@ Admin Tools
    Maintenance socket </operating-scylla/admin-tools/maintenance-socket/>
    Maintenance mode </operating-scylla/admin-tools/maintenance-mode/>
    Task manager </operating-scylla/admin-tools/task-manager/>
+   Compression Advisor </operating-scylla/admin-tools/compression-advisor/>
 
 .. panel-box::
   :title: Admin Tools
