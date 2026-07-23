@@ -1761,7 +1761,7 @@ future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noe
 future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
     static_assert(std::is_nothrow_move_constructible_v<sstables::foreign_sstable_open_info>);
     co_await read_toc();
-    _components = std::move(info.components);
+    set_components(std::move(info.components));
     _data_file = make_checked_file(_read_error_handler, info.data.to_file());
   if (info.index) {
     _index_file = make_checked_file(_read_error_handler, info.index->to_file());
