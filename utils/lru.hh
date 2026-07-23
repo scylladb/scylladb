@@ -272,19 +272,16 @@ private:
     }
 
     // Move excess promoted entries from protected to probation.
-    // Directly-inserted entries (multi-row schemas) are skipped — they
-    // are evicted via standard LRU from protected's tail, not demoted.
+    // Directly-inserted entries (multi-row schemas) are skipped in place —
+    // they must remain in protected and their LRU ordering must not be disturbed.
     void rebalance_protected() noexcept {
         size_t promoted_count = _protected_size - _protected_direct_size;
         size_t max_prot = max_protected_size();
-        while (promoted_count > max_prot && !_protected.empty()) {
-            evictable& victim = _protected.front();
+        auto it = _protected.begin();
+        while (promoted_count > max_prot && it != _protected.end()) {
+            evictable& victim = *it;
+            ++it; // advance before remove invalidates the iterator
             if (victim.is_directly_inserted()) {
-                _protected.erase(_protected.iterator_to(victim));
-                _protected.push_back(victim);
-                if (&_protected.front() == &victim) {
-                    break;
-                }
                 continue;
             }
             ++_stats.protected_demotions;
@@ -414,12 +411,10 @@ public:
     void add(evictable& e) noexcept {
         record_access(e);
         add_to_segment(e, lru_segment::window);
-        while (_window_size > max_window_size() && !_window.empty()) {
-            evictable& w_victim = _window.front();
-            remove_from_segment(w_victim);
-            add_to_segment(w_victim, lru_segment::probation);
-            ++_stats.window_to_probation;
-        }
+        // No drain here. The window grows unbounded; drain_window()
+        // inside do_evict() handles the overflow with the admission
+        // gate. This ensures every eviction goes through the frequency
+        // comparison, providing scan resistance.
     }
 
     // Insert directly into the protected segment, bypassing the window.
@@ -450,8 +445,17 @@ public:
                 break;
             case lru_segment::window:
                 record_access(e);
+                // Promote re-accessed window entries directly to protected.
+                // With unbounded window, entries stay here until drain_window()
+                // runs during do_evict(). Promoting on touch() ensures hot
+                // entries reach protected, while cold/scan entries remain in
+                // the window and get evicted by the admission gate.
+                ++_stats.protected_promotions;
                 _window.erase(_window.iterator_to(e));
-                _window.push_back(e);
+                --_window_size;
+                e.set_segment(lru_segment::protected_);
+                _protected.push_back(e);
+                ++_protected_size;
                 break;
             case lru_segment::probation:
                 record_access(e);
