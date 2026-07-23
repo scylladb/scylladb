@@ -14,3 +14,4 @@ verb [[with_timeout]] wait_for_raft_groups_to_start(raft::server_id dst_id, tabl
 verb [[with_timeout, cancellable]] wait_for_snapshot_transfer(raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id group_id, unsigned shard, service::session_id session, sstring stage);
 verb [[with_timeout, cancellable]] sync_raft_group_config(raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id group_id, unsigned shard, service::session_id session, sstring stage);
 verb [[cancellable]] truncate_strongly_consistent_tablet(raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id group_id, utils::UUID request_id, service::frozen_topology_guard guard) -> bool;
+verb [[cancellable]] get_local_applied_timestamps(raft::server_id dst_id, service::fencing_token fence, std::unordered_map<raft::group_id, locator::global_tablet_id> groups [[ref]]) -> std::unordered_map<raft::group_id, api::timestamp_type>;

@@ -604,6 +604,12 @@ public:
     future<> cancel_all_write_response_handlers();
     future<> cancel_nonlocal_write_response_handlers();
 
+    // The main function of the fencing support, see below. It compares the version from the
+    // fencing_token with the fence_version on the local node/shard and returns an instance of
+    // stale_topology_exception if the request coordinator is lagging behind.
+    std::optional<replica::stale_topology_exception> check_fence(fencing_token token,
+        locator::host_id caller_address) noexcept;
+
 private:
     bool only_me(const locator::effective_replication_map& erm, const host_id_vector_replica_set& replicas) const noexcept;
 
@@ -644,12 +650,6 @@ private:
     //     return success, which would incorrectly contribute to achieving the target CL. Otherwise,
     //     the user might observe successful writes that are not readable after the topology
     //     operation completes.
-
-    // This is the main function that other functions call. It compares the version from the 
-    // fencing_token with the fence_version on the local node/shard and returns an instance of
-    // stale_topology_exception if the request coordinator is lagging behind.
-    std::optional<replica::stale_topology_exception> check_fence(fencing_token token,
-        locator::host_id caller_address) noexcept;
 
     // Checks the fence_token when the future is ready.
     //

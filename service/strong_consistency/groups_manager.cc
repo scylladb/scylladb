@@ -556,6 +556,31 @@ future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id g
     co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
 }
 
+future<groups_manager::applied_timestamp_per_group> groups_manager::get_applied_timestamps(const tablet_per_group& groups) const {
+    const auto tm = _db.get_token_metadata_ptr();
+    applied_timestamp_per_group res;
+    res.reserve(groups.size());
+    for (const auto& [gid, tablet] : groups) {
+        co_await coroutine::maybe_yield();
+        // This shard's map may be a version past the one the caller checked the group against.
+        const auto table = _db.get_tables_metadata().get_table_if_exists(tablet.table);
+        if (!table || !tm->tablets().has_tablet_map(tablet.table)) {
+            continue;
+        }
+        const auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+        if (!tmap.has_raft_info() || tablet.tablet.value() >= tmap.tablet_count() || tmap.get_tablet_raft_info(tablet.tablet).group_id != gid) {
+            continue;
+        }
+        auto ts = table->get_max_timestamp_for_token_range(tmap.get_token_range(tablet.tablet)).value_or(api::min_timestamp);
+        // A seal is applied like a write, and may be the newest change.
+        if (const auto boundaries = seal_boundaries_for(gid)) {
+            ts = std::max(ts, boundaries->newest);
+        }
+        res[gid] = ts;
+    }
+    co_return res;
+}
+
 void groups_manager::init_messaging_service() {
     ser::groups_manager_rpc_verbs::register_wait_for_raft_groups_to_start(&_ms,
         [this] (rpc::opt_time_point timeout, raft::server_id dst_id, table_id table) -> future<> {
@@ -598,6 +623,49 @@ void groups_manager::init_messaging_service() {
             co_return co_await container().invoke_on(*shard, [group_id, request_id, frozen_guard] (groups_manager& gm) {
                 return gm.truncate_tablet_group(group_id, request_id, frozen_guard);
             });
+        }
+    );
+    ser::groups_manager_rpc_verbs::register_get_local_applied_timestamps(&_ms,
+        [this] (raft::server_id dst_id, service::fencing_token fence, const tablet_per_group& groups) -> future<applied_timestamp_per_group> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            const auto tm = _db.get_token_metadata_ptr();
+            const auto my_host = tm->get_my_id();
+            if (auto stale = _qp.proxy().check_fence(fence, my_host); stale) {
+                throw std::move(*stale);
+            }
+
+            // The fence keeps the caller's view of the tablets at most one version behind ours.
+            // A group is left out of the answer when its table was dropped meanwhile, when its
+            // tablet was renumbered by a resize, or when its replica has just left this host.
+            applied_timestamp_per_group result;
+            std::unordered_map<shard_id, tablet_per_group> by_shard;
+            for (const auto& [gid, tablet] : groups) {
+                co_await coroutine::maybe_yield();
+                if (!tm->tablets().has_tablet_map(tablet.table)) {
+                    continue;
+                }
+                const auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+                if (!tmap.has_raft_info() || tablet.tablet.value() >= tmap.tablet_count() || tmap.get_tablet_raft_info(tablet.tablet).group_id != gid) {
+                    continue;
+                }
+                if (const auto shard = locator::get_shard_for_reads(tmap, tablet.tablet, my_host)) {
+                    by_shard[*shard].emplace(gid, tablet);
+                }
+            }
+
+            co_await coroutine::parallel_for_each(by_shard, [&] (this auto, const auto& entry) -> future<> {
+                const auto& [shard, local_groups] = entry;
+                auto timestamps = co_await container().invoke_on(shard, [&local_groups] (groups_manager& gm) -> future<foreign_ptr<std::unique_ptr<applied_timestamp_per_group>>> {
+                    co_return make_foreign(std::make_unique<applied_timestamp_per_group>(co_await gm.get_applied_timestamps(local_groups)));
+                });
+                for (const auto& [gid, ts] : *timestamps) {
+                    result[gid] = ts;
+                    co_await coroutine::maybe_yield();
+                }
+            });
+            co_return result;
         }
     );
 }
