@@ -2002,6 +2002,18 @@ void sstable::build_delayed_filter(uint64_t num_partitions) {
     unlink_component(component_type::TemporaryHashes).get();
 }
 
+void sstable::ensure_filter() {
+    // Reads (filter_has_key()) dereference _components->filter unconditionally,
+    // so it must never be null. For sstables that have no Filter component
+    // (bloom_filter_fp_chance == 1.0) neither build_delayed_filter() nor
+    // maybe_rebuild_filter_from_index() installs one, so do it here.
+    // This matches read_filter(), which installs an always_present_filter when
+    // loading an sstable that lacks a Filter component.
+    if (!_components->filter) {
+        _components->filter = std::make_unique<utils::filter::always_present_filter>();
+    }
+}
+
 size_t sstable::total_reclaimable_memory_size() const {
     if (!_total_reclaimable_memory) {
         _total_reclaimable_memory = _components->filter ? _components->filter->memory_size() : 0;

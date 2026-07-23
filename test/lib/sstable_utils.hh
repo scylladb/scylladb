@@ -226,6 +226,10 @@ public:
         return _sst->_components->filter;
     }
 
+    bool filter_has_key(const schema& s, const dht::decorated_key& dk) const {
+        return _sst->filter_has_key(s, dk);
+    }
+
     void set_digest(std::optional<uint32_t> digest) {
         _sst->_components->digest = digest;
     }
