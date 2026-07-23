@@ -1233,16 +1233,23 @@ void view_updates::generate_update(
         // 2. Because has_new_row, we know all elements in that array have
         //    after.has_value() true, so we can use after.get_ts() et al.
         api::timestamp_type new_row_ts = updatable_view_key_cols[0].after.get_ts();
-        // This is the Alternator-only support for *two* regular base columns
-        // that become view key columns. The timestamp we use is the *maximum*
-        // of the two key columns, as explained in pull-request #17172.
-        if (updatable_view_key_cols.size() > 1) {
-            auto second_ts = updatable_view_key_cols[1].after.get_ts();
-            new_row_ts = std::max(new_row_ts, second_ts);
-            // Alternator isn't supposed to have more than two updatable view key columns!
-            if (updatable_view_key_cols.size() != 2) [[unlikely]] {
-                utils::on_internal_error(format("Unexpected updatable_view_key_col length {}", updatable_view_key_cols.size()));
-            }
+        // This is the Alternator-only support for *multiple* user-requested
+        // key columns (e.g. a composite GSI key with several HASH/RANGE
+        // attributes extracted from the item's regular attributes). These are
+        // not the base table's own primary-key columns that get copied into
+        // the view for materialized view correctness - those can't change
+        // and so never appear in updatable_view_key_cols. The timestamp used
+        // is the *maximum* across all user-requested key columns, as explained
+        // in pull-request #17172 (originally for 2 columns, generalized here
+        // to an arbitrary number for composite GSI keys).
+
+        // Alternator isn't supposed to have more than 8 user-specified
+        // key columns (up to 4 HASH + 4 RANGE) in a view key.
+        if (updatable_view_key_cols.size() > 8) [[unlikely]] {
+            utils::on_internal_error(format("Unexpected updatable_view_key_col length {}", updatable_view_key_cols.size()));
+        }
+        for (size_t i = 1; i < updatable_view_key_cols.size(); ++i) {
+            new_row_ts = std::max(new_row_ts, updatable_view_key_cols[i].after.get_ts());
         }
         // We assume that either updatable_view_key_cols has just one column
         // (the only situation allowed in CQL) or if there is more then one
@@ -1263,16 +1270,20 @@ void view_updates::generate_update(
         // 2. Because has_old_row, we know all elements in that array have
         //    before.has_value() true, so we can use before.get_ts().
         auto old_row_ts = updatable_view_key_cols[0].before.get_ts();
-        if (updatable_view_key_cols.size() > 1) {
-            // This is the Alternator-only support for two regular base
-            // columns that become view key columns. See explanation in
-            // view_updates::compute_row_marker().
-            auto second_ts = updatable_view_key_cols[1].before.get_ts();
-            old_row_ts = std::max(old_row_ts, second_ts);
-            // Alternator isn't supposed to have more than two updatable view key columns!
-            if (updatable_view_key_cols.size() != 2) [[unlikely]] {
-                utils::on_internal_error(format("Unexpected updatable_view_key_col length {}", updatable_view_key_cols.size()));
-            }
+        // This is the Alternator-only support for multiple user-requested
+        // key columns that become view key columns (composite GSI keys) -
+        // not the base table's own primary-key columns copied into the view
+        // for materialized-view correctness, which never appear in
+        // updatable_view_key_cols. See explanation in
+        // view_updates::compute_row_marker().
+
+        // Alternator isn't supposed to have more than 8 user-requested key columns
+        // (up to 4 HASH + 4 RANGE) in a view key.
+        if (updatable_view_key_cols.size() > 8) [[unlikely]] {
+            utils::on_internal_error(format("Unexpected updatable_view_key_col length {}", updatable_view_key_cols.size()));
+        }
+        for (size_t i = 1; i < updatable_view_key_cols.size(); ++i) {
+            old_row_ts = std::max(old_row_ts, updatable_view_key_cols[i].before.get_ts());
         }
         if (has_new_row) {
             if (same_row) {
@@ -1957,7 +1968,7 @@ endpoints_to_update get_view_natural_endpoint(
     if (!paired_replica) {
         // We couldn't find any view replica in our rack
         ++cf_stats.total_view_updates_failed_pairing;
-        vlogger.warn("Could not find a view replica in the same rack as base replica {} for base_endpoints={} view_endpoints={}", 
+        vlogger.warn("Could not find a view replica in the same rack as base replica {} for base_endpoints={} view_endpoints={}",
                 me,
                 base_nodes | std::views::transform(std::mem_fn(&locator::node::host_id)),
                 view_nodes | std::views::transform(std::mem_fn(&locator::node::host_id)));
@@ -2672,7 +2683,7 @@ future<> view_builder::handle_create_view_local(const sstring& ks_name, const ss
             [&step] -> future<> {
                 co_await step.base->await_pending_streams(); });
         co_await flush_base(step.base, _as);
-    
+
         // This resets the build step to the current token. It may result in views currently
         // being built to receive duplicate updates, but it simplifies things as we don't have
         // to keep around a list of new views to build the next time the reader crosses a token
@@ -2779,7 +2790,7 @@ future<> view_builder::handle_drop_view_global_cleanup(const sstring& ks_name, c
         co_return;
     }
     vlogger.info0("Starting view global cleanup {}.{}", ks_name, view_name);
-    
+
     try {
         co_await coroutine::all(
             [this, &ks_name, &view_name] -> future<>  {
@@ -3291,7 +3302,7 @@ future<sstable_destination_decision> check_needs_view_update_path(view_builder& 
         }
 
         auto build_status_map = co_await vb.get_sys_ks().get_view_build_status_map();
-        auto views_names = t.views() 
+        auto views_names = t.views()
                 | std::views::transform([] (const view_ptr& v) { return std::make_pair(v->ks_name(), v->cf_name()); })
                 | std::ranges::to<std::set>();
 
@@ -3332,7 +3343,7 @@ future<sstable_destination_decision> check_needs_view_update_path(view_builder& 
         // views are managed by view builder
         if (reason == streaming::stream_reason::repair && !t.views().empty()) {
             co_return sstable_destination_decision::staging_directly_to_generator;
-        } 
+        }
 
         auto any_view_build_ongoing = co_await map_reduce(t.views(),
                 [&] (const view_ptr& view) { return vb.check_view_build_ongoing(*tmptr, view->ks_name(), view->cf_name()); },
