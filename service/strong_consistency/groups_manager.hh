@@ -217,6 +217,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Read from the group's storage; nothing while the group does not run on this shard.
     std::optional<replica::seal_boundaries> seal_boundaries_for(raft::group_id id) const;
 
+    // Groups named by id, with the tablet each one serves to locate it by.
+    using tablet_per_group = std::unordered_map<raft::group_id, locator::global_tablet_id>;
+    using applied_timestamp_per_group = std::unordered_map<raft::group_id, api::timestamp_type>;
+    // The newest change this shard has applied for each of `groups`, which it must host.
+    future<applied_timestamp_per_group> get_applied_timestamps(const tablet_per_group& groups) const;
+
     // A table keeps its metrics until it is dropped, even once its last tablet
     // has left this shard, or the sum over the shards would go backwards.
     void drop_dropped_tables_metrics();

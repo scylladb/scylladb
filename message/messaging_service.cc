@@ -829,6 +829,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::WAIT_FOR_SNAPSHOT_TRANSFER:
     case messaging_verb::SYNC_RAFT_GROUP_CONFIG:
     case messaging_verb::TRUNCATE_STRONGLY_CONSISTENT_TABLET:
+    case messaging_verb::GET_LOCAL_APPLIED_TIMESTAMPS:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
