@@ -368,6 +368,11 @@ public:
         }
 
         uint64_t accept_partition_end(const query::result_row_view& static_row) {
+            // The clustering key belongs to the last row visited by accept_new_row(), so it is
+            // only meaningful until the partition ends. Clear it here so that a partition with
+            // no rows -- which never calls accept_new_row() and produces a pseudo-row out of
+            // the static row alone below -- cannot report the previous partition's value.
+            _clustering_key.clear();
             if (_row_count == 0) {
                 if (!_filter(_selection, _partition_key, _clustering_key, static_row, nullptr)) {
                     return _filter.get_rows_dropped();
