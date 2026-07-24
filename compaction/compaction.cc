@@ -2159,9 +2159,16 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
     for (const auto& sst : descriptor.sstables) {
         clogger.info("Scrubbing in validate mode {}", sst->get_filename());
 
+        try {
+            co_await sst->validate_digests(sstables::sstable::skip_data_digest::yes);
+        } catch (sstables::malformed_sstable_exception& ex) {
+            scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, ex.what());
+            ++validation_errors;
+        }
+
         validation_errors += co_await sst->validate(permit, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
-        }, monitor_generator(sst), true);
+        }, monitor_generator(sst), false);
         // Did validation actually finish because aborted?
         if (cdata.is_stop_requested()) {
             // Compaction manager will catch this exception and re-schedule the compaction.

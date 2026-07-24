@@ -3431,7 +3431,7 @@ void sstable_validate_fn(test_env& env) {
             // Corrupt the data to cause an invalid checksum.
             corrupt_sstable(sst);
 
-            auto res = sstables::validate_checksums(sst, permit).get();
+            auto res = sstables::validate_checksums_and_digests(sst, permit).get();
             BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
             BOOST_REQUIRE(res.has_digest);
 
@@ -7694,5 +7694,44 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
         }
     });
 }
+
+static void test_scrub_validates_component_digests(test_env& env, sstables::component_type type) {
+    scrub_test_framework<random_schema::yes> test(compress_sstable::no);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema()).get();
+
+    test.run(schema, muts, [type] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        corrupt_sstable(sst, type);
+
+        compaction::compaction_type_options::scrub opts = {
+            .operation_mode = compaction::compaction_type_options::scrub::mode::validate,
+        };
+        auto errors = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get()->validation_errors;
+
+        BOOST_REQUIRE_NE(errors, 0);
+    });
+}
+
+SEASTAR_TEST_CASE(test_scrub_validates_toc_digest) {
+    return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::TOC); });
+}
+
+SEASTAR_TEST_CASE(test_scrub_validates_scylla_digest) {
+    return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::Scylla); });
+}
+
+SEASTAR_TEST_CASE(test_scrub_validates_index_digest) {
+    return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::Index); });
+}
+
+SEASTAR_TEST_CASE(test_scrub_validates_statistics_digest) {
+    return test_env::do_with_async([](test_env& env) { test_scrub_validates_component_digests(env, component_type::Statistics); });
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()
