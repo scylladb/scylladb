@@ -1584,18 +1584,11 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
     json_writer writer(json_output_stream);
     writer.StartStream();
     for (auto& sst : sstables) {
-        const auto res = sstables::validate_checksums(sst, permit).get();
+        const auto res = sstables::validate_checksums_and_digests(sst, permit).get();
         writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartObject();
         writer.Key("has_checksums");
-        switch (res.status) {
-        case validate_checksums_status::valid:
-        case validate_checksums_status::invalid:
-            writer.Bool(true);
-            break;
-        case validate_checksums_status::no_checksum:
-            writer.Bool(false);
-        }
+        writer.Bool(res.has_checksum);
         writer.Key("has_digest");
         writer.Bool(res.has_digest);
         switch (res.status) {
