@@ -4816,7 +4816,7 @@ For more information, see: {}
                 {
                     typed_option<>("no-snapshot", "Do not take a snapshot of scrubbed tables before starting scrub (default false)"),
                     typed_option<>("skip-corrupted,s", "Skip corrupted rows or partitions, even when scrubbing counter tables (deprecated, use ‘–-mode’ instead, default false)"),
-                    typed_option<sstring>("mode,m", "How to handle corrupt data (one of: ABORT|SKIP|SEGREGATE|VALIDATE, default ABORT; overrides ‘–-skip-corrupted’)"),
+                    typed_option<sstring>("mode,m", "How to handle corrupt data (one of: VALIDATE|ABORT|SKIP|SEGREGATE, default VALIDATE; overrides ‘–-skip-corrupted’)"),
                     typed_option<sstring>("quarantine-mode,q", "How to handle quarantined sstables (one of: INCLUDE|EXCLUDE|ONLY, default INCLUDE)"),
                     typed_option<>("no-validate,n", "Do not validate columns using column validator (unused)"),
                     typed_option<>("reinsert-overflowed-ttl,r", "Rewrites rows with overflowed expiration date (unused)"),
