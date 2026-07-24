@@ -505,3 +505,91 @@ It's important to re-iterate that the per-cell TTL and per-row TTL features
 are separate and distinct, use a different CQL syntax, have a different
 implementation and provide different guarantees. It is possible to use
 both features in the same table, or even the same row.
+
+## INSERT INTO ... SELECT
+
+`INSERT INTO ... SELECT` copies the result set of an inner `SELECT` into a target
+table, as a server-side, distributed, paged operation. It removes the need to
+read rows out to a client and write them back to perform a table-to-table copy.
+
+```cql
+    INSERT INTO <target> [(col1, col2, ...)] SELECT ... FROM <source> [WHERE ...] [USING TIMESTAMP <ts> | TTL <ttl>];
+```
+
+Two forms are accepted:
+
+```cql
+    -- Copy every selected column into the same-named target column:
+    INSERT INTO dst SELECT * FROM src;
+
+    -- Map the selected columns positionally onto an explicit target column list
+    -- (here source column w is written into target column v2):
+    INSERT INTO dst (a, b, v2) SELECT a, b, w FROM src WHERE a = 1;
+```
+
+Semantics:
+
+* Without an explicit target column list, each selected column is matched to the
+  target column of the **same name**; every selected column must exist in the
+  target.
+* With an explicit column list, the selected columns map **positionally** onto
+  the listed target columns. The counts must match.
+* Every primary-key column of the target must be supplied by the `SELECT`.
+* Selected values must be type-compatible with their target columns.
+* A trailing `USING TIMESTAMP`/`TTL` applies uniformly to every copied row. Note
+  that the inner `SELECT` may also carry its own `USING TIMEOUT`/`SERVICE LEVEL`;
+  a trailing `USING TIMESTAMP`/`TTL` after the `SELECT` belongs to the `INSERT`.
+* The target must not be a counter table, and the statement may not appear inside
+  a `BATCH`.
+
+Execution model and guarantees:
+
+* The source is read with native paging (one page in flight at a time), each page
+  is turned into target mutations, and those are applied through the normal write
+  path — so writes fan out to each row's owning replicas and honor the keyspace's
+  replication strategy, exactly like an ordinary `INSERT`.
+* For a whole-table copy (a full-ring `SELECT` with no `WHERE` on the partition
+  key, no aggregation, `LIMIT`, `ORDER BY`, or secondary index), the token ring is
+  split into disjoint sub-ranges that are scanned **concurrently** (bounded for
+  backpressure). Every partition is read exactly once, so the result is a single
+  complete copy with no duplicated rows.
+* The operation is **NOT atomic** and **NOT idempotent** across coordinator
+  failure: if it aborts partway, rows already written remain in the target.
+
+## CREATE TABLE ... AS SELECT
+
+`CREATE TABLE ... AS SELECT` (CTAS) creates a new table whose columns and types
+are inferred from an inner `SELECT`, then copies that result set into it. It is an
+alias for the two-step process of a `CREATE TABLE` followed by an
+`INSERT INTO ... SELECT`.
+
+```cql
+    CREATE TABLE [IF NOT EXISTS] <target> (PRIMARY KEY (<pk>)) AS SELECT ... FROM <source> [WHERE ...];
+```
+
+The primary key is **required** and is given explicitly; the table's columns (and
+their types) come from the `SELECT` result. This lets CTAS repartition the data
+rather than only cloning the source's key.
+
+```cql
+    -- Exact clone of src's columns, with the chosen primary key:
+    CREATE TABLE dst (PRIMARY KEY (app_id, user_id)) AS SELECT * FROM src;
+
+    -- Project a subset of columns; the target has only a, b, w:
+    CREATE TABLE dst (PRIMARY KEY (a, b)) AS SELECT a, b, w FROM src;
+
+    -- Repartition: choose a different primary key than the source's:
+    CREATE TABLE by_email (PRIMARY KEY (email)) AS SELECT email, app_id, user_id FROM users;
+```
+
+Semantics:
+
+* Every column named in the `PRIMARY KEY` must be produced by the `SELECT` (that
+  is where its type is taken from); otherwise the statement is rejected at prepare
+  time.
+* All other selected columns become regular columns of the new table.
+* `IF NOT EXISTS`: if the target table already exists, the whole statement is a
+  no-op — the table is neither recreated nor copied into.
+* The copy step is the same distributed `INSERT INTO ... SELECT` described above,
+  with the same non-atomicity caveat: if the copy fails partway, the
+  already-created target retains the rows written so far.
