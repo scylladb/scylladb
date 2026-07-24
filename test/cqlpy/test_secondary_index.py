@@ -1811,7 +1811,6 @@ def wait_for_index(cql, keyspace, index_name, timeout_sec=60):
 # pages through the results, and between two pages adds a secondary-index
 # that could be used - or not - for continuing the request, but certainly
 # shouldn't break the request. Reproduces #18992.
-@pytest.mark.xfail(reason="issue #18992")
 def test_paging_and_create_index(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
@@ -1838,6 +1837,9 @@ def test_paging_and_create_index(cql, test_keyspace):
         # We wait for the index to be built, since we don't want to reproduce
         # #7963 again here (an index getting used before actually built).
         wait_for_index(cql, test_keyspace, index_name)
+        # Stop here on Scylla, so the resume below is enforced on Cassandra.
+        if is_scylla(cql):
+            pytest.xfail("issue #18992")
         while r.has_more_pages:
             r = cql.execute(stmt, paging_state=r.paging_state)
             assert len(r.current_rows) <= page_size # sanity check
@@ -1847,7 +1849,6 @@ def test_paging_and_create_index(cql, test_keyspace):
 # This test is the same as the previous one, but in this test the request
 # filters on both v1 and v2 is already using an index for column v2, and
 # now between the pages we add an index for v1. Reproduces #18992.
-@pytest.mark.xfail(reason="issue #18992")
 def test_paging_and_create_index2(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
@@ -1878,8 +1879,72 @@ def test_paging_and_create_index2(cql, test_keyspace):
         index_name1 = unique_name()
         cql.execute(f"CREATE INDEX {index_name1} ON {table}(v1)")
         wait_for_index(cql, test_keyspace, index_name1)
+        # Stop here on Scylla, so the resume below is enforced on Cassandra.
+        if is_scylla(cql):
+            pytest.xfail("issue #18992")
         while r.has_more_pages:
             r = cql.execute(stmt, paging_state=r.paging_state)
+            assert len(r.current_rows) <= page_size
+            got.extend(r.current_rows)
+        assert expected == got
+
+# The two tests above re-parse the query on every page. These two repeat them
+# with a prepared statement, whose plan is derived once. Reproduces #18992.
+def test_paging_and_create_index_prepared(cql, test_keyspace):
+    count = 20
+    with new_test_table(cql, test_keyspace,
+            "p int, v int, PRIMARY KEY (p)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, ?)")
+        for i in range(count):
+            cql.execute(insert, [i, 17])
+        page_size = 7
+        select = cql.prepare(f"SELECT p FROM {table} WHERE v=17 ALLOW FILTERING")
+        select.fetch_size = page_size
+        expected = list(cql.execute(select))
+        got = []
+        r = cql.execute(select)
+        assert len(r.current_rows) == page_size
+        got.extend(r.current_rows)
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+        wait_for_index(cql, test_keyspace, index_name)
+        # Stop here on Scylla, so the resume below is enforced on Cassandra.
+        if is_scylla(cql):
+            pytest.xfail("issue #18992")
+        while r.has_more_pages:
+            r = cql.execute(select, paging_state=r.paging_state)
+            assert len(r.current_rows) <= page_size
+            got.extend(r.current_rows)
+        assert expected == got
+
+# Prepared-statement version of test_paging_and_create_index2: the query is
+# already using an index for v2, and we add an index for v1 between pages.
+def test_paging_and_create_index2_prepared(cql, test_keyspace):
+    count = 20
+    with new_test_table(cql, test_keyspace,
+            "p int, v1 text, v2 int, PRIMARY KEY (p)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (p, v1, v2) VALUES (?, ?, ?)")
+        for i in range(count):
+            cql.execute(insert, [i, "dog", 3])
+        page_size = 7
+        index_name2 = unique_name()
+        cql.execute(f"CREATE INDEX {index_name2} ON {table}(v2)")
+        wait_for_index(cql, test_keyspace, index_name2)
+        select = cql.prepare(f"SELECT p FROM {table} WHERE v1='dog' AND v2=3 ALLOW FILTERING")
+        select.fetch_size = page_size
+        expected = list(cql.execute(select))
+        got = []
+        r = cql.execute(select)
+        assert len(r.current_rows) == page_size
+        got.extend(r.current_rows)
+        index_name1 = unique_name()
+        cql.execute(f"CREATE INDEX {index_name1} ON {table}(v1)")
+        wait_for_index(cql, test_keyspace, index_name1)
+        # Stop here on Scylla, so the resume below is enforced on Cassandra.
+        if is_scylla(cql):
+            pytest.xfail("issue #18992")
+        while r.has_more_pages:
+            r = cql.execute(select, paging_state=r.paging_state)
             assert len(r.current_rows) <= page_size
             got.extend(r.current_rows)
         assert expected == got
@@ -1891,7 +1956,6 @@ def test_paging_and_create_index2(cql, test_keyspace):
 # will do the same without ALLOW FILTERING in the query - and we'll see the
 # query can't be resumed after the index is dropped.
 # Reproduces #18992.
-@pytest.mark.xfail(reason="issue #18992")
 def test_paging_and_drop_index_allow_filtering(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
@@ -1919,16 +1983,17 @@ def test_paging_and_drop_index_allow_filtering(cql, test_keyspace):
         assert len(r.current_rows) == page_size  # sanity check
         got.extend(r.current_rows)
         cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        # Stop here on Scylla, so the resume below is enforced on Cassandra.
+        if is_scylla(cql):
+            pytest.xfail("issue #18992")
         while r.has_more_pages:
             r = cql.execute(stmt, paging_state=r.paging_state)
             assert len(r.current_rows) <= page_size # sanity check
             got.extend(r.current_rows)
         assert expected == got
 
-# This test is the same as the previous one, except that it uses a query
-# *without* ALLOW FILTERING while an index existed, and when it attempts
-# to get the next page after a DROP INDEX, we expect the usual error
-# message about ALLOW FILTERING being necessary.
+# As above but *without* ALLOW FILTERING, so both engines currently raise the
+# usual error about ALLOW FILTERING when the next page follows a DROP INDEX.
 def test_paging_and_drop_index_no_allow_filtering(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
