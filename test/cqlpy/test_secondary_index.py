@@ -1837,9 +1837,6 @@ def test_paging_and_create_index(cql, test_keyspace):
         # We wait for the index to be built, since we don't want to reproduce
         # #7963 again here (an index getting used before actually built).
         wait_for_index(cql, test_keyspace, index_name)
-        # Stop here on Scylla, so the resume below is enforced on Cassandra.
-        if is_scylla(cql):
-            pytest.xfail("issue #18992")
         while r.has_more_pages:
             r = cql.execute(stmt, paging_state=r.paging_state)
             assert len(r.current_rows) <= page_size # sanity check
@@ -1879,9 +1876,6 @@ def test_paging_and_create_index2(cql, test_keyspace):
         index_name1 = unique_name()
         cql.execute(f"CREATE INDEX {index_name1} ON {table}(v1)")
         wait_for_index(cql, test_keyspace, index_name1)
-        # Stop here on Scylla, so the resume below is enforced on Cassandra.
-        if is_scylla(cql):
-            pytest.xfail("issue #18992")
         while r.has_more_pages:
             r = cql.execute(stmt, paging_state=r.paging_state)
             assert len(r.current_rows) <= page_size
@@ -1889,7 +1883,7 @@ def test_paging_and_create_index2(cql, test_keyspace):
         assert expected == got
 
 # The two tests above re-parse the query on every page. These two repeat them
-# with a prepared statement, whose plan is derived once. Reproduces #18992.
+# with a prepared statement, whose plan is derived once and must be re-derived.
 def test_paging_and_create_index_prepared(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
@@ -1908,9 +1902,6 @@ def test_paging_and_create_index_prepared(cql, test_keyspace):
         index_name = unique_name()
         cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
         wait_for_index(cql, test_keyspace, index_name)
-        # Stop here on Scylla, so the resume below is enforced on Cassandra.
-        if is_scylla(cql):
-            pytest.xfail("issue #18992")
         while r.has_more_pages:
             r = cql.execute(select, paging_state=r.paging_state)
             assert len(r.current_rows) <= page_size
@@ -1940,22 +1931,30 @@ def test_paging_and_create_index2_prepared(cql, test_keyspace):
         index_name1 = unique_name()
         cql.execute(f"CREATE INDEX {index_name1} ON {table}(v1)")
         wait_for_index(cql, test_keyspace, index_name1)
-        # Stop here on Scylla, so the resume below is enforced on Cassandra.
-        if is_scylla(cql):
-            pytest.xfail("issue #18992")
         while r.has_more_pages:
             r = cql.execute(select, paging_state=r.paging_state)
             assert len(r.current_rows) <= page_size
             got.extend(r.current_rows)
         assert expected == got
 
-# Similar to the previous tests, but here a secondary index which is used
-# for the original request is suddenly deleted between pages. In this test,
-# the query has "ALLOW FILTERING" so the query can continue to work -
-# inefficiently - after the index is deleted. In the following test, we
-# will do the same without ALLOW FILTERING in the query - and we'll see the
-# query can't be resumed after the index is dropped.
-# Reproduces #18992.
+# The tests from here on read pages while the set of indexes that could serve
+# the query changes underneath them, which is where Scylla deliberately stops
+# being compatible with Cassandra: Cassandra re-plans and keeps paging, Scylla
+# keeps the plan the first page used and refuses the resume once that plan is
+# gone. Each such test asserts per engine and says which behaviour is whose.
+#
+# Re-planning is not something to reproduce here, which is not to say it is
+# wrong on Cassandra: it needs one plan to resume from where another stopped,
+# and Scylla would rather not depend on that; an index created between pages may
+# still be building, so switching to it would return part of the rows; and
+# refusing is not new in kind, since a query that would need ALLOW FILTERING
+# once its index is dropped has to fail on either engine anyway. The error is an
+# InvalidRequest so that no driver retries it on its own, which would not help:
+# the same paging state fails the same way, and the query has to be restarted.
+# Refs #18992
+#
+# The index the request uses is deleted between pages. With "ALLOW FILTERING"
+# Cassandra re-plans to a base-table scan; Scylla refuses.
 def test_paging_and_drop_index_allow_filtering(cql, test_keyspace):
     count = 20
     with new_test_table(cql, test_keyspace,
@@ -1976,21 +1975,24 @@ def test_paging_and_drop_index_allow_filtering(cql, test_keyspace):
         assert expected == list(cql.execute(stmt))
         # Finally, run the same paged query again but this time use the page-
         # by-page API, and do a DROP INDEX between the first and second page.
-        # The query still has ALLOW FILTERING to prevent Scylla from rejecting
-        # the query because now (without the index) it needs ALLOW FILTERING.
         got = []
         r = cql.execute(stmt)
         assert len(r.current_rows) == page_size  # sanity check
         got.extend(r.current_rows)
         cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
-        # Stop here on Scylla, so the resume below is enforced on Cassandra.
         if is_scylla(cql):
-            pytest.xfail("issue #18992")
-        while r.has_more_pages:
-            r = cql.execute(stmt, paging_state=r.paging_state)
-            assert len(r.current_rows) <= page_size # sanity check
-            got.extend(r.current_rows)
-        assert expected == got
+            # On the first resumed page, so a regression that returns wrong rows
+            # and only raises later cannot pass.
+            assert r.has_more_pages
+            with pytest.raises(InvalidRequest, match="no longer available"):
+                cql.execute(stmt, paging_state=r.paging_state)
+        else:
+            # Cassandra re-plans to a base-table scan and resumes correctly.
+            while r.has_more_pages:
+                r = cql.execute(stmt, paging_state=r.paging_state)
+                assert len(r.current_rows) <= page_size  # sanity check
+                got.extend(r.current_rows)
+            assert expected == got
 
 # As above but without ALLOW FILTERING, so neither engine can resume: Scylla's
 # saved position belongs to the dropped index, Cassandra needs the filtering.
