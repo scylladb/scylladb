@@ -7,15 +7,21 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 #pragma once
+#include <chrono>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/timer.hh>
+#include <seastar/util/noncopyable_function.hh>
 #include "service/paxos/proposal.hh"
 #include "utils/log.hh"
 #include "utils/digest_algorithm.hh"
+#include "utils/hash.hh"
 #include "db/timeout_clock.hh"
 #include <unordered_map>
 #include "utils/UUID_gen.hh"
 #include "service/paxos/prepare_response.hh"
 #include "service/migration_listener.hh"
+#include "cql3/statements/prepared_statement.hh"
 
 namespace cql3 {
     class query_processor;
@@ -125,12 +131,34 @@ class paxos_store:
     bool _stopped = false;
     key_lock_map<table_id> _table_lock_map{false};
 
+    enum class paxos_state_query {
+        load,
+        save_promise,
+        save_proposal,
+        save_decision,
+        delete_decision,
+    };
+
+    using prepared_statement_cache_key = std::pair<table_id, paxos_state_query>;
+    using prepared_statement_ptr = cql3::statements::prepared_statement::checked_weak_ptr;
+    using prepared_statement_cache = std::unordered_map<prepared_statement_cache_key, prepared_statement_ptr, utils::tuple_hash>;
+
+    prepared_statement_cache _prepared_statements;
+    static constexpr auto prepared_statements_prune_period = std::chrono::minutes(1);
+    seastar::timer<seastar::lowres_clock> _prepared_statements_prune_timer;
+
     template <typename... Args>
-    future<cql3::untyped_result_set> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
+    future<cql3::untyped_result_set> execute_cql_with_timeout(const schema& s, paxos_state_query query,
+            noncopyable_function<sstring(const schema&, const schema&)> make_query, db::timeout_clock::time_point timeout,
+            Args&&... args);
+    future<cql3::untyped_result_set> do_execute_cql_with_timeout(const schema& s, paxos_state_query query,
+            noncopyable_function<sstring(const schema&, const schema&)> make_query, db::timeout_clock::time_point timeout,
+            std::vector<data_value_or_unset> values);
     future<schema_ptr> get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const;
     future<> create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout);
     static schema_ptr create_paxos_state_schema(const schema& s);
     schema_ptr try_get_paxos_state_schema(const schema& s) const;
+    void prune_invalid_prepared_statements();
 public:
     explicit paxos_store(db::system_keyspace& sys_ks, gms::feature_service& features, replica::database& db, migration_manager& mm);
     ~paxos_store();
@@ -148,6 +176,10 @@ public:
     future<> delete_paxos_decision(const schema& s, const partition_key& key, utils::UUID ballot, db::timeout_clock::time_point timeout);
 
     void on_before_drop_column_family(const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override;
+
+    // For testing only
+    const prepared_statement_cache& get_prepared_statements_cache() const;
+    void set_prepared_statements_prune_period(seastar::lowres_clock::duration period);
 };
 
 } // end of namespace "service::paxos"

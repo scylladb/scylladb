@@ -422,6 +422,10 @@ public:
         return _proxy;
     }
 
+    virtual sharded<service::paxos::paxos_store>& get_paxos_store() override {
+        return _paxos_store;
+    }
+
     virtual sharded<gms::feature_service>& get_feature_service() override {
         return _feature_service;
     }
