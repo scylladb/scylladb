@@ -27,6 +27,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
+#include "index/fulltext_index.hh"
 #include "locator/tablets.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "service/qos/qos_common.hh"
@@ -267,8 +268,14 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
             ? _schema->view_info()->base_name()
             : (cdc ? cdc->cf_name() : column_family());
         const schema_ptr& base_schema = cdc ? cdc : _schema;
-        bool is_vector_indexed = secondary_index::vector_index::has_index(*base_schema);
-        co_await state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT, auth::command_desc::type::OTHER, is_vector_indexed);
+        auth::permission_set relaxing_permissions;
+        if (secondary_index::vector_index::has_index(*base_schema)) {
+            relaxing_permissions.set<auth::permission::VECTOR_SEARCH_INDEXING>();
+        }
+        if (secondary_index::fulltext_index::has_index(*base_schema)) {
+            relaxing_permissions.set<auth::permission::TEXT_SEARCH_INDEXING>();
+        }
+        co_await state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT, auth::command_desc::type::OTHER, relaxing_permissions);
     } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.
         co_return;
