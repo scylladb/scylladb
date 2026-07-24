@@ -187,3 +187,67 @@ future<sstables::shared_sstable> verify_mutation(test_env& env, shared_sstable s
     co_await rd.close();
     co_return sstp;
 }
+
+class corrupted_data_source_impl : public data_source_impl {
+    input_stream<char> _wrapped;
+    size_t _corrupted_byte;
+    size_t _read_bytes;
+
+    void maybe_corrupt(temporary_buffer<char>& buf) {
+        if (_read_bytes <= _corrupted_byte && _corrupted_byte < _read_bytes + buf.size()) {
+            buf.get_write()[_corrupted_byte - _read_bytes] ^= 1u;
+        }
+    }
+public:
+    corrupted_data_source_impl(input_stream<char> wrapped, size_t corrupted_byte)
+        : _wrapped(std::move(wrapped))
+        , _corrupted_byte(corrupted_byte)
+        , _read_bytes(0)
+    {}
+
+    future<seastar::temporary_buffer<char>> get() override {
+        auto inner = co_await _wrapped.read();
+        maybe_corrupt(inner);
+        _read_bytes += inner.size();
+
+        co_return inner;
+    }
+
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
+        co_await _wrapped.skip(n);
+        _read_bytes += n;
+
+        co_return temporary_buffer<char>();
+    }
+
+    future<> close() override {
+        return _wrapped.close();
+    }
+};
+
+class corrupted_data_source : public data_source {
+public:
+    corrupted_data_source(input_stream<char> wrapped, size_t corrupted_byte)
+        : data_source(std::make_unique<corrupted_data_source_impl>(std::move(wrapped), corrupted_byte))
+    {}
+};
+
+class corrupted_sstable_stream_source_impl : public sstable_stream_source {
+    std::unique_ptr<sstable_stream_source> _wrapped;
+    size_t _corrupted_byte;
+public:
+    corrupted_sstable_stream_source_impl(std::unique_ptr<sstable_stream_source> wrapped, sstables::shared_sstable sst, component_type type, size_t corrupted_byte)
+        : sstable_stream_source(std::move(sst), type)
+        , _wrapped(std::move(wrapped))
+        , _corrupted_byte(corrupted_byte)
+    {}
+
+    future<input_stream<char>> input(const file_input_stream_options& opts) const {
+        auto inner = co_await _wrapped->input(opts);
+        co_return input_stream<char>(corrupted_data_source(std::move(inner), _corrupted_byte));
+    }
+};
+
+std::unique_ptr<sstable_stream_source> make_corrupted_sstable_stream_source(std::unique_ptr<sstable_stream_source> wrapped, sstables::shared_sstable sst, component_type type, size_t corrupted_byte) {
+    return std::make_unique<corrupted_sstable_stream_source_impl>(std::move(wrapped), std::move(sst), type, corrupted_byte);
+}

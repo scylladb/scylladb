@@ -53,6 +53,7 @@
 #include "progress_monitor.hh"
 #include "compress.hh"
 #include "checksummed_data_source.hh"
+#include "digest_checked_data_source.hh"
 #include "index_reader.hh"
 #include "downsampling.hh"
 #include <boost/algorithm/string.hpp>
@@ -1285,6 +1286,34 @@ void sstable::validate_partitioner() {
 
 }
 
+future<uint32_t> sstable::read_scylla_file_digest() const {
+    constexpr size_t digest_size = sizeof(uint32_t);
+    auto f = co_await new_sstable_component_file(_read_error_handler, component_type::Scylla, open_flags::ro);
+    auto size = co_await f.size();
+
+    if (size < digest_size) {
+        co_await f.close();
+        throw_malformed_sstable_exception(fmt::format("missing digest in {}", get_filename()));
+    }
+
+    auto reader = file_random_access_reader(std::move(f), size);
+
+    uint32_t digest;
+    std::exception_ptr ex;
+    try {
+        co_await reader.seek(size - digest_size);
+        auto buf = co_await reader.read_exactly(digest_size);
+        digest = seastar::read_be<uint32_t>(buf.get());
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await reader.close();
+
+    maybe_rethrow_exception(std::move(ex));
+
+    co_return digest;
+}
+
 future<uint32_t> sstable::compute_component_file_digest(component_type type) const {
     auto f = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
     auto size = co_await f.size();
@@ -1295,14 +1324,18 @@ future<uint32_t> sstable::compute_component_file_digest(component_type type) con
     co_return co_await compute_component_file_digest(std::move(f), size);
 }
 
-future<uint32_t> sstable::compute_component_file_digest(file f, size_t size) const {
-    return with_closeable(make_file_input_stream(std::move(f), 0, size, {.buffer_size = sstable_buffer_size}), [] (input_stream<char>& in) -> future<uint32_t> {
+static future<uint32_t> do_compute_component_file_digest(file f, size_t size, file_input_stream_options options) {
+    return with_closeable(make_file_input_stream(std::move(f), 0, size, options), [] (input_stream<char>& in) -> future<uint32_t> {
         uint32_t digest = crc32_utils::init_checksum();
         while (auto buf = co_await in.read()) {
             digest = crc32_utils::checksum(digest, buf.get(), buf.size());
         }
         co_return digest;
     });
+}
+
+future<uint32_t> sstable::compute_component_file_digest(file f, size_t size) const {
+    return do_compute_component_file_digest(std::move(f), size, {.buffer_size = sstable_buffer_size});
 }
 
 void sstable::validate_component_digest(component_type type, uint32_t computed_digest) const {
@@ -1314,6 +1347,45 @@ void sstable::validate_component_digest(component_type type, uint32_t computed_d
             sstlog.warn("{}", msg);
         } else {
             throw_malformed_sstable_exception(msg);
+        }
+    }
+}
+
+future<> sstable::validate_component_digest(component_type type) {
+    auto stored_digest = get_component_digest(type);
+    if (!stored_digest.has_value()) {
+        co_return;
+    }
+
+    auto computed_digest = co_await compute_component_file_digest(type);
+    validate_component_digest(type, computed_digest);
+}
+
+future<> sstable::validate_scylla_digest_value() {
+    auto stored_digest = get_component_digest(component_type::Scylla);
+    
+    if (!stored_digest) {
+        co_return;
+    }
+
+    auto disk_digest = co_await read_scylla_file_digest();
+    if (stored_digest != disk_digest) {
+        auto msg = fmt::format("{} digest value does not match the on-disk value in {}: expected {}, read {}",
+            component_type::Scylla, get_filename(), stored_digest, disk_digest);
+        if (_ignore_component_digest_mismatch) {
+            sstlog.warn("{}", msg);
+        } else {
+            throw_malformed_sstable_exception(msg);
+        }
+    }
+}
+
+future<> sstable::validate_digests(sstable::skip_data_digest skip_data) {
+    co_await validate_scylla_digest_value();
+
+    for (const auto& type : _recognized_components) {
+        if (type != component_type::Data || !skip_data) {
+            co_await validate_component_digest(type);
         }
     }
 }
@@ -3365,13 +3437,36 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     co_return std::move(checksum);
 }
 
-future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit) {
-    const auto digest = co_await sst->read_digest();
+future<validate_checksums_result> validate_checksums_and_digests(shared_sstable sst, reader_permit permit) {
+    auto valid = true;
+    std::exception_ptr ex;
+
+    auto has_checksums = sst->has_component(component_type::CRC) || sst->get_compression();
+    auto has_digest = sst->has_component(component_type::Digest);
+
     validate_checksums_result ret = {
         validate_checksums_status::valid,
-        digest.has_value()
+        has_digest,
+        has_checksums
     };
 
+    try {
+        co_await sst->validate_digests(sstable::skip_data_digest::yes);
+    } catch (malformed_sstable_exception& e) {
+        valid = false;
+        sstlog.error("{}", e.what());
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    maybe_rethrow_exception(ex);
+
+    if (!valid) {
+        ret.status = validate_checksums_status::invalid;
+        co_return ret;
+    }
+
+    const auto digest = co_await sst->read_digest();
     auto checksum = co_await sst->read_checksum();
     if (!checksum && !sst->get_compression()) {
         sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
@@ -3389,9 +3484,6 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
                     ret.status = validate_checksums_status::invalid;
                 })
         );
-
-    auto valid = true;
-    std::exception_ptr ex;
 
     try {
         if (sst->get_compression()) {
@@ -4259,6 +4351,13 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
                 // extensions should remove themselves if required.
                 scylla_metadata tmp;
                 uint64_t size = co_await _file.size();
+
+                auto scylla_digest = _sst->get_component_digest(component_type::Scylla);
+                if (scylla_digest) {
+                    auto computed = co_await do_compute_component_file_digest(_file, size - sizeof(uint32_t), {.buffer_size = default_sstable_buffer_size});
+                    _sst->validate_component_digest(component_type::Scylla, computed);
+                }
+
                 auto r = file_random_access_reader(_file, size, default_sstable_buffer_size);
                 co_await parse(*_sst->get_schema(), _sst->get_version(), r, tmp);
                 co_await r.close();
@@ -4277,7 +4376,17 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
                 });
                 co_return seastar::util::as_input_stream(std::move(bufs));
             }
-            co_return make_file_input_stream(_file, options);
+
+            auto stream = make_file_input_stream(_file, options);
+            auto digest = _sst->get_component_digest(_type);
+            auto len = co_await _file.size();
+            if (digest) {
+                co_return make_digest_checked_input_stream(std::move(stream), len, *digest, [&](sstring what) {
+                    throw_malformed_sstable_exception(what);
+                });
+            }
+
+            co_return stream;
         }
     };
 
@@ -4334,12 +4443,16 @@ class sstable_stream_sink_impl : public sstable_stream_sink {
     component_type _type;
     bool _last_component;
     bool _leave_unsealed;
+    checksum _checksum;
+    uint32_t _digest;
 public:
     sstable_stream_sink_impl(shared_sstable sst, component_type type, sstable_stream_sink_cfg cfg)
         : _sst(std::move(sst))
         , _type(type)
         , _last_component(cfg.last_component)
         , _leave_unsealed(cfg.leave_unsealed)
+        , _checksum(DEFAULT_CHUNK_SIZE, {})
+        , _digest(crc32_utils::init_checksum())
     {
         sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed);
     }
@@ -4371,6 +4484,38 @@ private:
             w.close();
         });
     }
+
+    // Validate digest in the sstable. Used instead of sstable::validate_component_digest, as
+    // it requires _recognized_components to be correctly set.
+    void do_validate_component_integrity(component_type type, uint32_t computed_digest) {
+        auto& metadata = _sst->_components->scylla_metadata;
+        if (!metadata) {
+            return;
+        }
+
+        std::optional<uint32_t> expected;
+        if (type == component_type::Scylla) {
+            expected =  metadata->digest;
+        } else {
+            const auto* cd = metadata->get_components_digests();
+            if (cd) {
+                auto it = cd->map.find(type);
+                if (it != cd->map.end()) {
+                    expected = it->second;
+                }
+            }
+        }
+
+        if (expected && *expected != computed_digest) {
+            auto msg = fmt::format("{} digest mismatch in {}: expected {}, computed {}",
+                                type, _sst->get_filename(), *expected, computed_digest);
+            if (_sst->_ignore_component_digest_mismatch) {
+                sstlog.warn("{}", msg);
+            } else {
+                throw_malformed_sstable_exception(msg);
+            }
+        }
+    }
 public:
     future<output_stream<char>> output(const file_open_options& foptions, const file_output_stream_options& stream_options) override {
         assert(_type != component_type::TOC);
@@ -4392,7 +4537,13 @@ public:
             co_await save_metadata();
         }
 
-        co_return output_stream<char>(std::move(sink));
+        if (load_save_meta) {
+            // These components will be validated against the digest in the metadata, if available.
+            auto checksummed_sink = checksummed_file_data_sink<crc32_utils, false>(std::move(sink), _checksum, _digest);
+            co_return output_stream<char>(std::move(checksummed_sink));
+        } else {
+            co_return output_stream<char>(std::move(sink));
+        }
     }
     future<shared_sstable> close() override {
         if (_last_component) {
@@ -4412,6 +4563,24 @@ public:
         // TODO: if we are the last component (or really always), should we remove all component files?
         // For now, this remains the responsibility of calling code (see handle_tablet_migration etc)
         co_await _sst->_storage->unlink_component(*_sst, _type);
+    }
+    future<> validate_integrity() override {
+        if (_type == component_type::TemporaryTOC) {
+            co_return;
+        }
+        
+        co_await load_metadata();
+        if (_type != component_type::Scylla) {
+            do_validate_component_integrity(_type, _digest);
+        } else {
+            auto scylla_digest = co_await _sst->compute_component_file_digest(component_type::Scylla);
+            do_validate_component_integrity(_type, scylla_digest);
+        }
+
+        if (_type == component_type::Scylla) {
+            auto toc_digest = co_await _sst->compute_component_file_digest(component_type::TemporaryTOC);
+            do_validate_component_integrity(component_type::TOC, toc_digest);
+        }
     }
 };
 

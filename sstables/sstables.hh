@@ -759,8 +759,19 @@ private:
     // and so max_local_deletion_time should be discarded for those.
     void validate_max_local_deletion_time();
     void validate_partitioner();
+    future<> validate_scylla_digest_value();
+public:
     void validate_component_digest(component_type type, uint32_t computed_digest) const;
+    // Read component data and validate the digest.
+    future<> validate_component_digest(component_type type);
+    
+    using skip_data_digest = bool_class<struct skip_data_digest_tag>;
+    future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
+private:
     future<> validate_index_digest() const;
+    // Read the Scylla component self-digest from file.
+    // Should only be called by sstables which have a Scylla file digest.
+    future<uint32_t> read_scylla_file_digest() const;
     future<uint32_t> compute_component_file_digest(component_type type) const;
     future<uint32_t> compute_component_file_digest(file f, size_t size) const;
 
@@ -1205,6 +1216,8 @@ public:
 //
 // Sstables have two kind of checksums: per-chunk checksums and a
 // full-checksum (digest) calculated over the entire content of Data.db.
+// Other components have a digest, which is stored in the Scylla-metadata
+// component.
 //
 // The full-checksum (digest) is stored in Digest.crc (component_type::Digest).
 //
@@ -1220,12 +1233,19 @@ public:
 // data, on the compressed data.
 //
 // This method validates both the full checksum and the per-chunk checksum
-// for the entire Data.db.
+// for the entire Data.db, as well as the digests of other components.
 //
 // Returns `valid` if all checksums are valid.
-// Returns `invalid` if at least one checksum is invalid.
+// Returns `invalid` if at least one checksum or digest is invalid.
 // Returns `no_checksum` if the sstable is uncompressed and does not have
-// a CRC component (CRC.db is missing from TOC.txt).
+// a CRC component (CRC.db is missing from TOC.txt) and all validated
+// components have a valid digest.
+//
+// `has_digest` is `true` if the data digest is present in the dedicated
+// Digest component.
+// `has_checksum` is `true` if the sstable is compressed or has a CRC
+// component.
+//
 // Validation errors are logged individually.
 enum class validate_checksums_status {
     invalid = 0,
@@ -1235,8 +1255,9 @@ enum class validate_checksums_status {
 struct validate_checksums_result {
     validate_checksums_status status;
     bool has_digest;
+    bool has_checksum;
 };
-future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit);
+future<validate_checksums_result> validate_checksums_and_digests(shared_sstable sst, reader_permit permit);
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;
@@ -1325,6 +1346,10 @@ public:
     virtual ~sstable_stream_sink() = default;
     // Stream to the component file
     virtual future<output_stream<char>> output(const file_open_options&, const file_output_stream_options&) = 0;
+
+    // Validate the streamed sstable integrity, by verifying against stored digests, if available;
+    virtual future<> validate_integrity() = 0;
+
     // closes this component. If this is the last component in a set (see "last_component" in creating method below)
     // the table on disk will be sealed.
     // Returns sealed sstable if last, or nullptr otherwise.
