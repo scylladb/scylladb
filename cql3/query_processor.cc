@@ -635,6 +635,11 @@ std::optional<service::pager::query_plan> query_processor::pinned_plan_from_pagi
     if (!paging_state) {
         return std::nullopt;
     }
+    // Pretend an older Scylla version wrote this state, to test resuming from
+    // one during a rolling upgrade.
+    if (utils::get_local_injector().enter("paging_state_without_query_plan")) {
+        return std::nullopt;
+    }
     return paging_state->get_query_plan();
 }
 
