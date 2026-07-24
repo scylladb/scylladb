@@ -232,7 +232,6 @@ def test_group_by_non_aggregated_mutation_attribute_of_column(cql, table1):
 
 # This test is from cassandra_tests/validation/operations/select_group_by_test.py::testGroupByWithPaging()
 # Reproduces #21267
-@pytest.mark.xfail(reason="issue #21267")
 def test_group_by_static_column(cql, test_keyspace):
 
     with new_test_table(cql, test_keyspace, "a int, b int, c int, s int static, d int, primary key (a, b, c)") as table:
@@ -254,11 +253,10 @@ def test_group_by_static_column(cql, test_keyspace):
         # This is the expected and correct result of the query:
         assert {(3, None, 3, 0, 1)} == set(result)
 
-        # When we remove the WHERE clause, we get all the rows, and b and count(b)
-        # the wrong values (it seems they have leftover values from the previous row)
+        # When we remove the WHERE clause, we get all the rows. Partition a=3
+        # is static-only and must not inherit b/count(b) from the preceding
+        # partition (a=4) in sort order.
         result = cql.execute(f'SELECT a, b, s, count(b), count(s) FROM {table} GROUP BY a')
-        # FIXME: this test reproduces bug #21267
-        # the assert below is the correct result set
         assert {(1, 2, 3, 4, 4), (2, 2, 2, 2, 2), (4, 8, 3, 1, 1), (3, None, 3, 0, 1)} == set(result)
 
 

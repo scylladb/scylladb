@@ -321,11 +321,13 @@ public:
             auto partition_key = key.explode(_schema);
             _builder.accept_new_partition(partition_key);
             _partition_key = std::move(partition_key);
+            _clustering_key.clear();
             _row_count = row_count;
             _filter.reset(&key);
         }
 
         void accept_new_partition(uint64_t row_count) {
+            _clustering_key.clear();
             _row_count = row_count;
             _filter.reset();
         }
