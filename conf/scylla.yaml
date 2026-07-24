@@ -277,8 +277,9 @@ batch_size_fail_threshold_in_kb: 1024
 # Uncomment to enable experimental features
 # experimental_features:
 #     - udf
-#     - alternator-streams
 #     - keyspace-storage-options
+#     - strongly-consistent-tables
+#     - logstor
 
 # The directory where hints files are stored if hinted handoff is enabled.
 # hints_directory: /var/lib/scylla/hints
