@@ -9,8 +9,8 @@ Querying data from data is done using a ``SELECT`` statement:
 
 .. code-block::
    
-   select_statement: SELECT [ DISTINCT ] ( `select_clause` | '*' )
-                   : FROM `table_name`
+   select_statement: SELECT [ JSON ] [ DISTINCT ] ( `select_clause` | '*' )
+                   : [ FROM `table_name` ]
                    : [ WHERE `where_clause` ]
                    : [ GROUP BY `group_by_clause` ]
                    : [ ORDER BY `ordering_clause` ]
@@ -60,11 +60,13 @@ The ``SELECT`` statement reads one or more columns for one or more rows in a tab
 matching the request, where each row contains the values for the selection corresponding to the query. Additionally,
 functions, including aggregation ones, can be applied to the result.
 
-A ``SELECT`` statement contains at least a :ref:`selection clause <selection-clause>` and the name of the table on which
-the selection is on (note that CQL does **not** support joins or sub-queries, and thus a select statement only applies to a single
-table). In most cases, a select will also have a :ref:`where clause <where-clause>` and it can optionally have additional
-clauses to :ref:`order <ordering-clause>` or :ref:`limit <limit-clause>` the results. Lastly, :ref:`queries that require
-filtering <allow-filtering>` can be allowed if the ``ALLOW FILTERING`` flag is provided.
+A ``SELECT`` statement contains at least a :ref:`selection clause <selection-clause>` and typically the name of the table
+on which the selection is on (note that CQL does **not** support joins or sub-queries, and thus a select statement only
+applies to a single table). The ``FROM`` clause may be omitted; the statement then evaluates the selected expressions
+and returns them as a single row (see :ref:`SELECT without FROM <select-without-from>`). In most cases, a select will also have a
+:ref:`where clause <where-clause>` and it can optionally have additional clauses to :ref:`order <ordering-clause>` or
+:ref:`limit <limit-clause>` the results. Lastly, :ref:`queries that require filtering <allow-filtering>` can be allowed
+if the ``ALLOW FILTERING`` flag is provided.
 
 If your ``SELECT`` query results in what appears to be missing data, see this :doc:`KB Article </kb/cqlsh-results>` for information. 
 
@@ -655,6 +657,30 @@ of the SELECT statement.
 .. note:: The server may use a different execution plan, as long as it arrives at the same result. For
   example, conditions in the WHERE clause will limit the candidate row set first by looking up the
   primary index or a secondary index.
+
+
+.. _select-without-from:
+
+``SELECT`` without ``FROM`` :label-note:`ScyllaDB Extension`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``FROM`` clause is optional. When omitted, the ``SELECT`` statement evaluates the given
+expressions and returns them as a single row, which is useful for evaluating functions or
+computing constant expressions without needing a table. Internally, the statement runs as
+an ordinary select over ``system.one_row``, a built-in table with exactly one row.
+
+``*`` and ``DISTINCT`` are not allowed without ``FROM``, and there are no columns in
+scope to reference. Aggregate functions operate on the single row, so, for example,
+``count(*)`` returns 1.
+
+Examples::
+
+    SELECT 1 AS one, 'hello' AS greeting;
+    SELECT toTimestamp(now()) AS ts;
+    SELECT JSON 1, now();
+
+.. note:: ``SELECT`` without ``FROM`` is a ScyllaDB CQL extension and is not supported
+   by Apache Cassandra.
 
 
 .. _bypass-cache:

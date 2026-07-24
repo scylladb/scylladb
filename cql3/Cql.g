@@ -408,18 +408,21 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         auto attrs = std::make_unique<cql3::attributes::raw>();
         expression wclause = conjunction{};
         bool is_similarity_ordering = false;
+        bool has_from = false;
     }
     : K_SELECT (
                 ( (K_JSON K_DISTINCT)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
-                | (K_JSON selectClause K_FROM)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
+                | (K_JSON selectClause)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
                 )?
                 ( (K_DISTINCT selectClause K_FROM)=> K_DISTINCT { is_distinct = true; } )?
                 sclause=selectClause
                )
-      K_FROM (
-                cf=columnFamilyName
-                | K_MUTATION_FRAGMENTS '(' cf=columnFamilyName ')' { statement_subtype = raw::select_statement::parameters::statement_subtype::MUTATION_FRAGMENTS; }
-             )
+      ( K_FROM { has_from = true; }
+        (
+            cf=columnFamilyName
+            | K_MUTATION_FRAGMENTS '(' cf=columnFamilyName ')' { statement_subtype = raw::select_statement::parameters::statement_subtype::MUTATION_FRAGMENTS; }
+        )
+      )?
       ( K_WHERE w=whereClause { wclause = std::move(w); } )?
       ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
       ( K_ORDER K_BY orderByClause[orderings, is_similarity_ordering] ( ',' orderByClause[orderings, is_similarity_ordering] )* )?
@@ -430,7 +433,11 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( usingTimeoutServiceLevelClause[attrs] )?
       {
           auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
-          $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
+          // A disengaged table name = SELECT without FROM; the statement then
+          // runs on the system.one_row table (see raw::select_statement).
+          $expr = std::make_unique<raw::select_statement>(
+            has_from ? std::optional(std::move(cf)) : std::nullopt,
+            std::move(params),
             std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit),
             std::move(gbcolumns), std::move(attrs));
       }
