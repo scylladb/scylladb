@@ -21,9 +21,9 @@ from test.pylib.minio_server import MinioServer
 from test.pylib.manager_client import ManagerClient
 from test.pylib.object_storage import format_tuples
 from test.cluster.object_store.test_backup import topo, take_snapshot, do_test_streaming_scopes
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, get_topology_version
 from test.pylib.rest_client import read_barrier
-from test.pylib.util import unique_name, wait_for
+from test.pylib.util import unique_name, wait_for, wait_for_cql_and_get_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -172,3 +172,102 @@ async def test_refresh_deletes_uploaded_sstables(manager: ManagerClient):
             await wait_for_upload_dir_empty(upload_dir)
 
         shutil.rmtree(tmpbackup)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_refresh_load_and_stream_releases_stale_topology_version(manager: ManagerClient):
+    """
+    Regression test for SCYLLADB-3336: load_and_stream() held a single erm
+    (pinning its topology version) for the whole streaming operation,
+    blocking concurrent topology changes' barrier_and_drain until streaming
+    finished -- hours, for large data sets. Fixed by
+    sstable_streamer::refresh_erm(), which re-fetches the erm between
+    batches.
+
+    Creates enough sstables for >1 batch, pauses load_and_stream right after
+    it acquires its erm, bootstraps a node concurrently (its
+    barrier_and_drain reports our erm's version as stale), then resumes
+    load_and_stream and checks the erm is refreshed and the barrier
+    completes promptly -- not only after every batch finishes streaming.
+    """
+    cmdline = ['--logger-log-level', 'sstables_loader=debug']
+    server = await manager.server_add(cmdline=cmdline)
+
+    cql = manager.get_cql()
+    ks = unique_name("ks_")
+    cf = "test"
+
+    await cql.run_async(
+        f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+        f"AND tablets = {{'enabled': false}}")
+    try:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY, c int)")
+
+        # One sstable per row: with num_sstables=20 > batch size (16), we get
+        # more than one streaming batch.
+        num_sstables = 20
+        for pk in range(num_sstables):
+            await cql.run_async(f"INSERT INTO {ks}.{cf} (pk, c) VALUES ({pk}, {pk})")
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        snap_name = unique_name("snap_")
+        await manager.api.take_snapshot(server.ip_addr, ks, snap_name)
+
+        workdir = await manager.server_get_workdir(server.server_id)
+        cf_dir = os.listdir(f"{workdir}/data/{ks}")[0]
+        cf_path = os.path.join(f"{workdir}/data/{ks}", cf_dir)
+        upload_dir = os.path.join(cf_path, "upload")
+        os.makedirs(upload_dir, exist_ok=True)
+        snapshots_dir = os.path.join(cf_path, "snapshots", snap_name)
+        exclude_list = ["manifest.json", "schema.cql"]
+        for item in os.listdir(snapshots_dir):
+            if item not in exclude_list:
+                shutil.copy2(os.path.join(snapshots_dir, item), os.path.join(upload_dir, item))
+
+        hosts = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+        version_before = await get_topology_version(cql, hosts[0])
+
+        await manager.api.enable_injection(server.ip_addr, "load_and_stream_before_streaming_batch", one_shot=True)
+        server_log = await manager.server_open_log(server.server_id)
+        log_mark = await server_log.mark()
+
+        refresh_task = asyncio.create_task(
+            manager.api.load_new_sstables(server.ip_addr, ks, cf, load_and_stream=True))
+        await manager.api.wait_for_injection_enter(server.ip_addr, "load_and_stream_before_streaming_batch")
+        logger.info("load_and_stream paused before its first batch, holding erm at topology version %d", version_before)
+
+        # Bootstrapping bumps the topology version and triggers a
+        # barrier_and_drain that must wait for our paused load_and_stream's
+        # stale erm.
+        bootstrap_task = asyncio.create_task(manager.server_add())
+
+        await server_log.wait_for(
+            r"Got raft_topology_cmd::barrier_and_drain,.*stale versions \(version: use_count\):.*"
+            rf"\b{version_before}\b",
+            from_mark=log_mark, timeout=60)
+        logger.info("bootstrap's barrier_and_drain reported our erm's topology version %d as stale", version_before)
+
+        # Resume load_and_stream; refresh_erm() runs first and releases the
+        # stale erm.
+        await manager.api.message_injection(server.ip_addr, "load_and_stream_before_streaming_batch")
+
+        _, matches = await server_log.wait_for(
+            r"refreshed effective_replication_map for table .* to topology version (\d+)",
+            from_mark=log_mark, timeout=30)
+        refreshed_version = int(matches[0][1].group(1))
+        assert refreshed_version > version_before, \
+            f"expected refresh_erm() to move past the stale version {version_before}, got {refreshed_version}"
+
+        # Must complete promptly, not after load_and_stream streams every
+        # remaining batch.
+        await server_log.wait_for(r"raft_topology_cmd::barrier_and_drain version \d+: done",
+                                   from_mark=log_mark, timeout=30)
+        await asyncio.wait_for(bootstrap_task, timeout=60)
+        logger.info("bootstrap completed")
+
+        await asyncio.wait_for(refresh_task, timeout=60)
+        logger.info("load_and_stream completed")
+
+        assert {row.pk for row in cql.execute(f"SELECT pk FROM {ks}.{cf}")} == set(range(num_sstables))
+    finally:
+        await cql.run_async(f"DROP KEYSPACE IF EXISTS {ks}")
