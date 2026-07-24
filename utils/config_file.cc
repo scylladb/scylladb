@@ -331,6 +331,11 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
         // Still, a syntax error is an error warning, not a fail
         try {
             cfg.set_value(node.second, this->_initialization_completed ? config_source::SettingsFile : config_source::None);
+        } catch (const retired_config_value_error&) {
+            // A retired/removed option value is a hard misconfiguration: let it
+            // propagate so startup fails with a readable error, instead of being
+            // downgraded to a warning like ordinary parse errors.
+            throw;
         } catch (std::exception& e) {
             h(label, e.what(), cfg.status());
         } catch (...) {

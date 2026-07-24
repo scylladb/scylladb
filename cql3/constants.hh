@@ -16,10 +16,6 @@
 #include "mutation/mutation.hh"
 #include <seastar/core/shared_ptr.hh>
 
-namespace service::broadcast_tables {
-    class update_query;
-}
-
 namespace cql3 {
 
 /**
@@ -50,7 +46,6 @@ public:
 
         static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value);
 
-        virtual expr::expression prepare_new_value_for_broadcast_tables() const override;
     };
 
     struct adder final : operation_skip_if_unset {

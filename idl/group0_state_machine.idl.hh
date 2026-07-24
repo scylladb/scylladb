@@ -20,8 +20,10 @@ struct schema_change {
     utils::chunked_vector<canonical_mutation> mutations;
 };
 
-struct broadcast_table_query {
-    service::broadcast_tables::query query;
+// Keep this placeholder at its original variant position for wire compatibility
+// with group0 commands written before the experimental broadcast table support was removed.
+struct unused {
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 struct topology_change {
@@ -37,7 +39,7 @@ struct write_mutations {
 };
 
 struct group0_command {
-    std::variant<service::schema_change, service::broadcast_table_query, service::topology_change, service::write_mutations, service::mixed_change> change;
+    std::variant<service::schema_change, service::unused, service::topology_change, service::write_mutations, service::mixed_change> change;
     canonical_mutation history_append;
 
     std::optional<utils::UUID> prev_state_id;

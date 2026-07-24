@@ -198,7 +198,6 @@ public:
     static constexpr auto REPAIR_TASKS = "repair_tasks";
     static constexpr auto GROUP0_HISTORY = "group0_history";
     static constexpr auto DISCOVERY = "discovery";
-    static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
     static constexpr auto TOPOLOGY = "topology";
     static constexpr auto TOPOLOGY_REQUESTS = "topology_requests";
     static constexpr auto SSTABLES_REGISTRY = "sstables";
@@ -254,7 +253,6 @@ public:
     static schema_ptr repair_tasks();
     static schema_ptr group0_history();
     static schema_ptr discovery();
-    static schema_ptr broadcast_kv_store();
     static schema_ptr topology();
     static schema_ptr topology_requests();
     static schema_ptr sstables_registry();
