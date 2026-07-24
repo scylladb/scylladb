@@ -7550,6 +7550,12 @@ static future<> test_perform_component_rewrite_single_sstable(sstables::update_s
 
         BOOST_REQUIRE(original_sst->get_sstable_level() == 0);
 
+        // Sanity: a freshly written sstable has its Scylla features set (e.g.
+        // ShadowableTombstones). The rewrite must preserve them.
+        auto original_features = original_sst->features().enabled_features;
+        BOOST_REQUIRE(original_features != 0);
+        BOOST_REQUIRE(original_sst->has_shadowable_tombstones());
+
         auto table = env.make_table_for_tests(s);
         auto close_table = deferred_stop(table);
 
@@ -7584,6 +7590,11 @@ static future<> test_perform_component_rewrite_single_sstable(sstables::update_s
 
         auto new_sst = it->second;
         BOOST_REQUIRE(new_sst->get_sstable_level() == new_level);
+        // The rewritten sstable must keep the Scylla features of the original
+        // (see the _features handling in link_with_rewritten_component /
+        // write_component_with_metadata / copy_components).
+        BOOST_REQUIRE_EQUAL(new_sst->features().enabled_features, original_features);
+        BOOST_REQUIRE(new_sst->has_shadowable_tombstones());
         BOOST_REQUIRE(new_sst->generation() != original_sst->generation());
         if (update_id) {
             BOOST_REQUIRE(new_sst->sstable_identifier() != original_sst->sstable_identifier());
