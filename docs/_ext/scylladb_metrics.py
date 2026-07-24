@@ -10,7 +10,7 @@ from sphinx.util import logging, ws_re
 from docutils.parsers.rst import Directive, directives
 from docutils.statemachine import StringList
 from sphinxcontrib.datatemplates.directive import DataTemplateJSON
-from utils import maybe_add_filters
+from utils import get_templates_or_fallback, maybe_add_filters
 
 sys.path.insert(0, os.path.abspath("../../scripts"))
 import scripts.get_description as metrics
@@ -117,7 +117,7 @@ class MetricsOption(ObjectDescription):
     def _render(self, name, option_type, component, key, source):
         item = {'name': name, 'type': option_type, 'component': component, 'key': key, 'source': source }
         template = self.config.scylladb_metrics_option_template
-        return self.env.app.builder.templates.render(template, item)
+        return get_templates_or_fallback(self.env.app.builder).render(template, item)
 
     def transform_content(self, contentnode: addnodes.desc_content) -> None:
         name = self.arguments[0]

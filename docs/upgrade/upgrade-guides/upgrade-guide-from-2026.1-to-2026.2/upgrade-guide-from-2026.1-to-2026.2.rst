@@ -3,9 +3,6 @@
 .. |SRC_VERSION| replace:: 2026.1
 .. |NEW_VERSION| replace:: 2026.2
 
-.. |ROLLBACK| replace:: rollback
-.. _ROLLBACK: ./#rollback-procedure
-
 .. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2026.1 to 2026.2
 .. _SCYLLA_METRICS: ../metric-update-2026.1-to-2026.2
 
@@ -140,7 +137,7 @@ Download and install the new release
 ------------------------------------
 
 Before upgrading, check what version you are running now using ``scylla --version``. 
-You should take note of the current version in case you want to |ROLLBACK|_ the upgrade.
+You should take note of the current version in case you want to :ref:`rollback <rollback-2026.1-to-2026.2>` the upgrade.
 
 .. tabs::
 
@@ -219,6 +216,8 @@ Validate
 #. Check again after two minutes to validate no new issues are introduced.
 
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
+
+.. _rollback-2026.1-to-2026.2:
 
 Rollback Procedure
 ==================

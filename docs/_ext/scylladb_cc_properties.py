@@ -12,7 +12,7 @@ from docutils import nodes
 from docutils.parsers.rst import directives
 from docutils.statemachine import StringList
 
-from utils import maybe_add_filters
+from utils import get_templates_or_fallback, maybe_add_filters
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ class ConfigOption(ObjectDescription):
             raise self.error(f'Option "{name}" not found!')
         builder = self.env.app.builder
         template = self.config.scylladb_cc_properties_option_tmpl
-        return builder.templates.render(template, item)
+        return get_templates_or_fallback(builder).render(template, item)
 
     def transform_content(self,
                           contentnode: addnodes.desc_content) -> None:
@@ -246,7 +246,7 @@ class ConfigOptionList(SphinxDirective):
         template = self.options.get('template')
         if template is None:
             self.error(f'Option "template" not specified!')
-        return builder.templates.render(template, context)
+        return get_templates_or_fallback(builder).render(template, context)
 
     def _make_context(self) -> Dict[str, Any]:
         header = self._resolve_src_path(self.arguments[0])
