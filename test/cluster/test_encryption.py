@@ -52,7 +52,6 @@ async def test_file_streaming_respects_encryption(manager: ManagerClient, storag
 
     if storage:
         cfg['object_storage_endpoints'] = storage.create_endpoint_conf()
-        cfg['experimental_features'] = ['keyspace-storage-options']
 
     cmdline = ['--smp=1']
     servers = []

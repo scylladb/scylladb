@@ -97,8 +97,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
 
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options']}
+           'object_storage_endpoints': objconf}
     if mode == 'encrypted':
         d = tmp_path / "system_keys"
         d.mkdir()
@@ -174,8 +173,7 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
 
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options']}
+           'object_storage_endpoints': objconf}
     cmd = ['--logger-log-level', 's3=trace:http=debug:gcp_storage=trace']
     server = await manager.server_add(config=cfg, cmdline=cmd)
 
@@ -217,8 +215,7 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
 
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options']}
+           'object_storage_endpoints': objconf}
     server = await manager.server_add(config=cfg)
 
     cql = manager.get_cql()
@@ -255,8 +252,7 @@ async def test_misconfigured_storage(manager: ManagerClient, object_storage):
     # scylladb/scylladb#15074
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options']}
+           'object_storage_endpoints': objconf}
     server = await manager.server_add(config=cfg)
 
     cql = manager.get_cql()
@@ -279,8 +275,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
     objconf = object_storage.create_endpoint_conf()
 
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options']}
+           'object_storage_endpoints': objconf}
     server = await manager.server_add(config=cfg)
 
     cql = manager.get_cql()
@@ -427,7 +422,6 @@ async def test_tablet_move_updates_registry(manager: ManagerClient, s3_storage):
     """
     cfg = {
         'object_storage_endpoints': s3_storage.create_endpoint_conf(),
-        'experimental_features': ['keyspace-storage-options']
     }
     servers = await manager.servers_add(2, config=cfg)
     await manager.disable_tablet_balancing()
@@ -516,7 +510,6 @@ async def test_decommission_migrates_registry(manager: ManagerClient, s3_storage
     """
     cfg = {
         'object_storage_endpoints': s3_storage.create_endpoint_conf(),
-        'experimental_features': ['keyspace-storage-options']
     }
     servers = await manager.servers_add(2, config=cfg)
     # Avoid racing with the pre-decommission registry check below.
@@ -612,7 +605,6 @@ async def test_repair_creates_registry_entries(manager: ManagerClient, s3_storag
     """
     cfg = {
         'object_storage_endpoints': s3_storage.create_endpoint_conf(),
-        'experimental_features': ['keyspace-storage-options'],
         'rf_rack_valid_keyspaces': False,
         'hinted_handoff_enabled': False,
     }
@@ -705,7 +697,6 @@ async def test_registry_cleanup_on_all_nodes(manager: ManagerClient, object_stor
     """
     cfg = {
         'object_storage_endpoints': object_storage.create_endpoint_conf(),
-        'experimental_features': ['keyspace-storage-options'],
     }
     servers = await manager.servers_add(2, config=cfg,
                                         property_file=[{"dc": "dc1", "rack": "r0"},
@@ -753,8 +744,7 @@ async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, objec
     is left with no orphaned objects from the aborted attempt.
     """
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': object_storage.create_endpoint_conf(),
-           'experimental_features': ['keyspace-storage-options']}
+           'object_storage_endpoints': object_storage.create_endpoint_conf()}
 
     # Two servers are enough to migrate a tablet from one to the other.
     servers = []

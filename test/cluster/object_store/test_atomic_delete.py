@@ -22,7 +22,6 @@ def make_server_config(object_storage):
     return {
         'enable_user_defined_functions': False,
         'object_storage_endpoints': objconf,
-        'experimental_features': ['keyspace-storage-options'],
     }
 
 async def populate_and_flush(cql, manager, server, ks, flushes, rows_per_flush=10):
