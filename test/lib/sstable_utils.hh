@@ -171,12 +171,35 @@ public:
         _sst->_last = last_key;
     }
 
+    void set_component_metadata_digest(component_type type, std::optional<uint32_t> digest) {
+        SCYLLA_ASSERT(_sst->has_scylla_component());
+        if (type == component_type::Scylla) {
+            _sst->_components->scylla_metadata->digest = digest;
+            return;
+        }
+        auto& digests = _sst->_components->scylla_metadata->get_or_create_components_digests();
+        if (digest) {
+            digests.map[type] = *digest;
+        } else {
+            digests.map.erase(type);
+        }
+    }
+
+    future<> recalculate_component_metadata_digest(component_type type) {
+        auto computed = co_await _sst->compute_component_file_digest(type);
+        set_component_metadata_digest(type, computed);
+    }
+
     void rewrite_toc_without_component(component_type component) {
         SCYLLA_ASSERT(component != component_type::TOC);
         _sst->_recognized_components.erase(component);
         remove_file(fmt::to_string(_sst->toc_filename())).get();
         _sst->_storage->open(*_sst);
         _sst->seal_sstable(false).get();
+
+        if (_sst->has_scylla_component() && _sst->_components->scylla_metadata->get_components_digests()) {
+            recalculate_component_metadata_digest(component_type::TOC).get();
+        }
     }
 
     future<> remove_component(component_type c) {
