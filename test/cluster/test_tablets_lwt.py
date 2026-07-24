@@ -880,15 +880,14 @@ async def test_lwt_shutdown(manager: ManagerClient):
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout):
     """
-    This is a regression test for #26437:
+    This is a regression test for #26437 and SCYLLADB-1524:
     1. A cluster with one node, a table with rf=1 and two tablets on the same shard.
     2. Run an LWT on the second tablet, make it hang on the paxos_accept_proposal_wait injection.
-    The LWT coordinator holds a tablet_metadata_guard with a non-migrating topology erm and global_shard=1.
-    3. Trigger tablets merge with the tablet_force_tablet_count_decrease injection, wait for tablet_count == 1.
-    This step invalidates the global_shard, the tablet_metadata_guard should stop refreshing erms.
-    4. Start tablet migration for the merged tablet, check it hangs on the first global barrier.
-    4. Release the paxos_accept_proposal_wait injection, check the barrier is released, the tablet is
-    migrated and the LWT succeeded.
+    The LWT coordinator holds a plain pointer to the current topology ERM.
+    3. Trigger tablets merge with the tablet_force_tablet_count_decrease injection.
+    The old ERM should block the merge's first topology barrier while the LWT is in progress.
+    4. Release the paxos_accept_proposal_wait injection and wait for the merge to finish.
+    5. Start tablet migration for the merged tablet and check that it finishes and the LWT succeeded.
     """
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -941,39 +940,30 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout
 
         m = await log0.mark()
 
+        logger.info("Wait for the merge's global barrier to start draining on shard0")
+        await log0.wait_for("\\[shard 0: gms\\] raft_topology - Got raft_topology_cmd::barrier_and_drain", from_mark=m)
+
+        # The LWT's plain ERM must block the first merge barrier. A tablet_metadata_guard
+        # would refresh its ERM here and allow the merge to make progress while the LWT
+        # is still in flight (SCYLLADB-1524).
+        matches = await log0.grep("\\[shard 0: gms\\] raft_topology - raft_topology_cmd::barrier_and_drain.*done", from_mark=m)
+        assert len(matches) == 0
+
+        logger.info("Trigger 'paxos_accept_proposal_wait'")
+        await manager.api.message_injection(s0.ip_addr, "paxos_accept_proposal_wait")
+
         logger.info("Wait for tablet merge to complete")
         await wait_for_tablet_count(manager, s0, ks, 'test', lambda c: c == 1, 1, scale_timeout=scale_timeout, timeout_s=15)
-
-        logger.info("Ensure the guard decided to retain the erm")
-        m, _ = await log0.wait_for("tablet_metadata_guard::check: retain the erm and abort the guard",
-                            from_mark=m, timeout=10)
 
         tablets = await get_all_tablet_replicas(manager, s0, ks, 'test')
         assert len(tablets) == 1
         tablet = tablets[0]
         assert tablet.replicas == [(s0_host_id, 0)]
 
-        # Since merge now waits for erms before releasing the state machine,
-        # the migration initiated below will not start until paxos released the erm.
-        # The barrier which is blocked is the one in merge finalization.
-        # I keep the tablet movement as a guard against regressions in case the behavior changes.
-
         migration_task = asyncio.create_task(manager.api.move_tablet(s0.ip_addr, ks, "test",
                                                                      s0_host_id, 0,
                                                                      s0_host_id, 1,
                                                                      tablet.last_token))
-        logger.info("Wait for the global barrier to start draining on shard0")
-        await log0.wait_for("\\[shard 0: gms\\] raft_topology - Got raft_topology_cmd::barrier_and_drain", from_mark=m)
-        # Just to confirm that the guard still holds the erm
-        matches = await log0.grep("\\[shard 0: gms\\] raft_topology - raft_topology_cmd::barrier_and_drain.*done", from_mark=m)
-        assert len(matches) == 0
-
-        # Before the fix, the tablet migration global barrier did not wait for the LWT operation.
-        # As a result, the merged tablet could be migrated to another shard while the LWT is still running.
-        # This caused the LWT to crash in paxos_state::prepare/shards_for_writes because of the
-        # unexpected tablet shard change.
-        logger.info("Trigger 'paxos_accept_proposal_wait'")
-        await manager.api.message_injection(s0.ip_addr, "paxos_accept_proposal_wait")
 
         logger.info("Wait for the tablet migration task to finish")
         await migration_task
