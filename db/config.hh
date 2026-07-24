@@ -122,6 +122,12 @@ namespace db {
 struct experimental_features_t {
     enum class feature {
         UNUSED,
+        // A feature that has been removed. Unlike UNUSED (a graduated,
+        // no-longer-experimental feature whose name is silently accepted),
+        // a RETIRED feature name is still recognized but rejected with a
+        // clear, fatal error at startup, so operators notice they must remove
+        // it from their configuration (e.g. after upgrading past its removal).
+        RETIRED,
         UDF,
         KEYSPACE_STORAGE_OPTIONS,
         STRONGLY_CONSISTENT_TABLES,

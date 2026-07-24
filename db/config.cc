@@ -455,6 +455,11 @@ public:
         } catch (boost::program_options::invalid_option_value&) {
             return false;
         }
+        if (rhs == db::experimental_features_t::feature::RETIRED) {
+            throw utils::retired_config_value_error(seastar::format(
+                "experimental feature '{}' has been removed; "
+                "please remove it from the 'experimental_features' configuration", name));
+        }
         return true;
     }
 };
@@ -704,7 +709,8 @@ static db::tri_mode_restriction_t::mode strict_allow_filtering_default() {
 static std::vector<sstring> experimental_feature_names() {
     std::vector<sstring> ret;
     for (const auto& f : db::experimental_features_t::map()) {
-        if (f.second != db::experimental_features_t::feature::UNUSED) {
+        if (f.second != db::experimental_features_t::feature::UNUSED &&
+            f.second != db::experimental_features_t::feature::RETIRED) {
             ret.push_back(f.first);
         }
     }
@@ -2058,7 +2064,7 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"alternator-streams", feature::UNUSED},
         {"alternator-ttl", feature::UNUSED },
         {"consistent-topology-changes", feature::UNUSED},
-        {"broadcast-tables", feature::UNUSED},
+        {"broadcast-tables", feature::RETIRED},
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
         {"tablets", feature::UNUSED},
         {"views-with-tablets", feature::UNUSED},
@@ -2101,7 +2107,8 @@ std::unordered_map<sstring, db::consistency_level> db::consistency_level_restric
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {
     std::vector<enum_option<db::experimental_features_t>> ret;
     for (const auto& f : db::experimental_features_t::map()) {
-        if (f.second != db::experimental_features_t::feature::UNUSED) {
+        if (f.second != db::experimental_features_t::feature::UNUSED &&
+            f.second != db::experimental_features_t::feature::RETIRED) {
             ret.push_back(f.second);
         }
     }

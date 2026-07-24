@@ -57,6 +57,17 @@ public:
 template <typename T>
 extern const config_type& config_type_for();
 
+// Thrown when the configuration references an option value that has been
+// deliberately retired/removed. Unlike ordinary parse errors (typos, unknown
+// options from a newer version), which are tolerated and merely reported via
+// the error_handler, a retired value is a hard misconfiguration: this exception
+// escapes read_from_yaml so startup fails with a readable message asking the
+// operator to remove it.
+class retired_config_value_error : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 class config_file {
     static thread_local unsigned s_shard_id;
     struct any_value {
