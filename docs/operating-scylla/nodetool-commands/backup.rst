@@ -41,6 +41,49 @@ Options
 * ``--nowait`` - Don't wait on the backup process
 * ``--move-files`` - Move files instead of copying them. This will delete the files from the local disk after they are uploaded to the object storage.
 
+=======================
+Nodetool cluster backup
+=======================
+
+**cluster backup** - Copy SSTables from a specified snapshot to a designated bucket in object storage
+
+Note that status of backup can be checked for ``user_task_ttl`` seconds after the operation is done.
+You can set the ttl using :doc:`nodetool tasks user-ttl </operating-scylla/nodetool-commands/tasks/user-ttl>`.
+If ``--nowait`` flag is not set, the command relies on ``user_task_ttl`` internally.
+
+Syntax
+------
+
+.. code-block:: console
+
+   nodetool [(-h <host> | --host <host>)] [(-p <port> | --port <port>)] cluster backup
+               [--keyspace <keyspace>] --table <table>
+               [--snapshot <snapshot>]
+               --location <dc>,<endpoint>,<bucket>(,<prefix>)
+               [--location <dc2>,<endpoint2>,<bucket2>(,<prefix2>)]...
+               [--nowait]
+               [--move-files]
+               [... keyspaces ...]
+
+Example
+-------
+
+.. code-block:: console
+
+    nodetool cluster backup --locations mydc,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar/baz --keyspace ks --table table --snapshot ss --move-files
+
+Options
+-------
+
+* ``-h <host>`` or ``--host <host>`` - Node hostname or IP address.
+* ``--keyspace`` - Name of a keyspace to copy SSTables from
+* ``--table`` - Name of a table to copy SSTables from
+* ``--snapshot`` - Name of a snapshot to copy sstables from
+* ``--locations`` - Tuple of <dc>,<endpoint>,<bucket> and optional <prefix> which to write the backup. This is set per DC
+  Endpoints should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.
+* ``--nowait`` - Don't wait on the backup process
+* ``--move-files`` - Move files instead of copying them. This will delete the files from the local disk after they are uploaded to the object storage.
+
 See also
 
 :doc:`Nodetool restore </operating-scylla/nodetool-commands/restore/>`

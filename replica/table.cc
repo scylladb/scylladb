@@ -18,7 +18,6 @@
 #include <seastar/core/bitops.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
-#include <seastar/json/json_elements.hh>
 
 #include "dht/decorated_key.hh"
 #include "readers/mutation_reader.hh"
@@ -32,6 +31,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/schema_tables.hh"
+#include "db/snapshot/manifest.hh"
 #include "cell_locking.hh"
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
@@ -45,6 +45,7 @@
 #include "compaction/compaction_group_view.hh"
 #include "sstables/sstable_directory.hh"
 #include "db/system_keyspace.hh"
+#include "db/snapshot_types.hh"
 #include "db/extensions.hh"
 #include "query/query-result-writer.hh"
 #include "db/view/view_update_generator.hh"
@@ -3964,295 +3965,6 @@ db::replay_position table::highest_flushed_replay_position() const {
     return _highest_flushed_rp;
 }
 
-struct snapshot_tablet_info {
-    size_t id;
-    dht::token first_token, last_token;
-    db_clock::time_point repair_time;
-    int64_t repaired_at;
-};
-
-struct manifest_json : public json::json_base {
-    struct info : public json::json_base {
-        json::json_element<sstring> version;
-        json::json_element<sstring> scope;
-
-        info() {
-            register_params();
-        }
-        info(const info& e) {
-            register_params();
-            version = e.version;
-            scope = e.scope;
-        }
-        info& operator=(const info& e) {
-            if (this != &e) {
-                version = e.version;
-                scope = e.scope;
-            }
-            return *this;
-        }
-    private:
-        void register_params() {
-            add(&version, "version");
-            add(&scope, "scope");
-        }
-    };
-
-    struct node_info : public json::json_base {
-        json::json_element<sstring> host_id;
-        json::json_element<sstring> datacenter;
-        json::json_element<sstring> rack;
-
-        node_info() {
-            register_params();
-        }
-        node_info(const node_info& e) {
-            register_params();
-            host_id = e.host_id;
-            datacenter = e.datacenter;
-            rack = e.rack;
-        }
-        node_info& operator=(const node_info& e) {
-            if (this != &e) {
-                host_id = e.host_id;
-                datacenter = e.datacenter;
-                rack = e.rack;
-            }
-            return *this;
-        }
-    private:
-        void register_params() {
-            add(&host_id, "host_id");
-            add(&datacenter, "datacenter");
-            add(&rack, "rack");
-        }
-    };
-
-    struct snapshot_info : public json::json_base {
-        json::json_element<sstring> name;
-        json::json_element<time_t> created_at;
-        json::json_element<time_t> expires_at;
-
-        snapshot_info() {
-            register_params();
-        }
-        snapshot_info(const snapshot_info& e) {
-            register_params();
-            name = e.name;
-            created_at = e.created_at;
-            expires_at = e.expires_at;
-        }
-        snapshot_info& operator=(const snapshot_info& e) {
-            if (this != &e) {
-                name = e.name;
-                created_at = e.created_at;
-                expires_at = e.expires_at;
-            }
-            return *this;
-        }
-    private:
-        void register_params() {
-            add(&name, "name");
-            add(&created_at, "created_at");
-            add(&expires_at, "expires_at");
-        }
-    };
-
-    struct table_info : public json::json_base {
-        json::json_element<sstring> keyspace_name;
-        json::json_element<sstring> table_name;
-        json::json_element<sstring> table_id;
-        json::json_element<sstring> tablets_type;
-        json::json_element<size_t> tablet_count;
-
-        table_info() {
-            register_params();
-        }
-        table_info(const table_info& e) {
-            register_params();
-            keyspace_name = e.keyspace_name;
-            table_name = e.table_name;
-            table_id = e.table_id;
-            tablets_type = e.tablets_type;
-            tablet_count = e.tablet_count;
-        }
-        table_info& operator=(const table_info& e) {
-            if (this != &e) {
-                keyspace_name = e.keyspace_name;
-                table_name = e.table_name;
-                table_id = e.table_id;
-                tablets_type = e.tablets_type;
-                tablet_count = e.tablet_count;
-            }
-            return *this;
-        }
-    private:
-        void register_params() {
-            add(&keyspace_name, "keyspace_name");
-            add(&table_name, "table_name");
-            add(&table_id, "table_id");
-            add(&tablets_type, "tablets_type");
-            add(&tablet_count, "tablet_count");
-        }
-    };
-
-    struct sstable_info : public json::json_base {
-        json::json_element<sstring> id;
-        json::json_element<sstring> toc_name;
-        json::json_element<uint64_t> data_size;
-        json::json_element<uint64_t> index_size;
-        json::json_element<int64_t> first_token;
-        json::json_element<int64_t> last_token;
-        json::json_element<uint64_t> tablet_id;
-        json::json_element<int64_t> repaired_at;
-
-        sstable_info() {
-            register_params();
-        }
-        sstable_info(const sstables::sstable_snapshot_metadata& e) {
-            register_params();
-            id = fmt::to_string(e.id);
-            toc_name = e.toc_name;
-            data_size = e.data_size;
-            index_size = e.index_size;
-            first_token = e.first_token;
-            last_token = e.last_token;
-            repaired_at = e.repaired_at;
-            if (e.tablet_id) {
-                tablet_id = *e.tablet_id;
-            }
-        }
-        sstable_info(const sstable_info& e) {
-            register_params();
-            id = e.id;
-            toc_name = e.toc_name;
-            data_size = e.data_size;
-            index_size = e.index_size;
-            first_token = e.first_token;
-            last_token = e.last_token;
-            tablet_id = e.tablet_id;
-            repaired_at = e.repaired_at;
-        }
-        sstable_info(sstable_info&& e) {
-            register_params();
-            id = e.id;
-            toc_name = std::move(e.toc_name);
-            data_size = e.data_size;
-            index_size = e.index_size;
-            first_token = e.first_token;
-            last_token = e.last_token;
-            tablet_id = e.tablet_id;
-            repaired_at = e.repaired_at;
-        }
-        sstable_info& operator=(sstable_info&& e) {
-            id = e.id;
-            toc_name = std::move(e.toc_name);
-            data_size = e.data_size;
-            index_size = e.index_size;
-            first_token = e.first_token;
-            last_token = e.last_token;
-            tablet_id = e.tablet_id;
-            repaired_at = e.repaired_at;
-            return *this;
-        }
-    private:
-        void register_params() {
-            add(&id, "id");
-            add(&toc_name, "toc_name");
-            add(&data_size, "data_size");
-            add(&index_size, "index_size");
-            add(&first_token, "first_token");
-            add(&last_token, "last_token");
-            add(&tablet_id, "tablet_id");
-            add(&repaired_at, "repaired_at");
-        }
-    };
-
-    struct tablet_info : public json::json_base {
-        json::json_element<uint64_t> id;
-        json::json_element<int64_t> first_token;
-        json::json_element<int64_t> last_token;
-        json::json_element<time_t> repair_time;
-        json::json_element<int64_t> repaired_at;
-
-        tablet_info() {
-            register_params();
-        }
-        tablet_info(const snapshot_tablet_info& e) {
-            register_params();
-            id = e.id;
-            first_token = dht::token::to_int64(e.first_token);
-            last_token = dht::token::to_int64(e.last_token);
-            repair_time = db_clock::to_time_t(e.repair_time);
-            repaired_at = e.repaired_at;
-        }
-        tablet_info(const tablet_info& e) {
-            register_params();
-            id = e.id;
-            first_token = e.first_token;
-            last_token = e.last_token;
-            repair_time = e.repair_time;
-            repaired_at = e.repaired_at;
-        }
-        tablet_info& operator=(tablet_info&& e) {
-            id = e.id;
-            first_token = e.first_token;
-            last_token = e.last_token;
-            repair_time = e.repair_time;
-            repaired_at = e.repaired_at;
-            return *this;
-        }
-    private:
-        void register_params() {
-            add(&id, "id");
-            add(&first_token, "first_token");
-            add(&last_token, "last_token");
-            add(&repair_time, "repair_time");
-            add(&repaired_at, "repaired_at");
-        }
-    };
-
-    json::json_element<info> manifest;
-    json::json_element<node_info> node;
-    json::json_element<snapshot_info> snapshot;
-    json::json_element<table_info> table;
-    json::json_chunked_list<sstable_info> sstables;
-    json::json_chunked_list<tablet_info> tablets;
-
-    manifest_json() {
-        register_params();
-    }
-    manifest_json(manifest_json&& e) {
-        register_params();
-        manifest = std::move(e.manifest);
-        node = std::move(e.node);
-        snapshot = std::move(e.snapshot);
-        table = std::move(e.table);
-        sstables = std::move(e.sstables);
-        tablets = std::move(e.tablets);
-    }
-    manifest_json& operator=(manifest_json&& e) {
-        if (this != &e) {
-            manifest = std::move(e.manifest);
-            node = std::move(e.node);
-            snapshot = std::move(e.snapshot);
-            table = std::move(e.table);
-            sstables = std::move(e.sstables);
-            tablets = std::move(e.tablets);
-        }
-        return *this;
-    }
-private:
-    void register_params() {
-        add(&manifest, "manifest");
-        add(&node, "node");
-        add(&snapshot, "snapshot");
-        add(&table, "table");
-        add(&sstables, "sstables");
-        add(&tablets, "tablets");
-    }
-};
-
 class snapshot_writer {
 public:
     virtual future<> init() = 0;
@@ -4263,22 +3975,16 @@ public:
 
 using snapshot_sstable_set = foreign_ptr<std::unique_ptr<utils::chunked_vector<sstables::sstable_snapshot_metadata>>>;
 
-static std::string get_tablets_type(locator::tablet_layout layout) {
-    switch (layout) {
-        case locator::tablet_layout::pow_of_2: return "powof2";
-        case locator::tablet_layout::arbitrary: return "arbitrary";
-    }
-    on_internal_error(tlogger, format("Unknown tablet layout: {}", static_cast<int>(layout)));
-}
-
 static future<> write_manifest(const locator::topology& topology,
                                snapshot_writer& writer,
-                               std::vector<snapshot_sstable_set> sstable_sets,
-                               std::vector<snapshot_tablet_info> tablets,
+                               const std::vector<snapshot_sstable_set>& sstable_sets,
+                               const std::vector<db::snapshot_tablet_entry>& tablets,
                                sstring name, db::snapshot_options opts,
                                schema_ptr schema,
                                std::optional<int64_t> tablet_count,
                                std::optional<locator::tablet_layout> tablet_layout) {
+    using namespace db::snapshot;
+
     manifest_json manifest;
 
     manifest_json::info info;
@@ -4305,7 +4011,7 @@ static future<> write_manifest(const locator::topology& topology,
     table.keyspace_name = schema->ks_name();
     table.table_name = schema->cf_name();
     table.table_id = to_sstring(schema->id());
-    table.tablets_type = tablet_layout ? get_tablets_type(*tablet_layout) : "none";
+    table.tablets_type = tablet_layout ? locator::tablet_layout_to_string(*tablet_layout) : "none";
     table.tablet_count = tablet_count.value_or(0);
     manifest.table = std::move(table);
 
@@ -4395,7 +4101,7 @@ public:
 };
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
-future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts) {
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts, snapshot_callback ssc) {
     auto writer = std::visit(overloaded_functor{
         [&name, &opts] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
             if (loc.dir.empty()) {
@@ -4442,7 +4148,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         const auto& topology = sharded_db.local().get_token_metadata().get_topology();
         std::optional<int64_t> tablet_count;
         std::optional<locator::tablet_layout> tablet_layout;
-        std::vector<snapshot_tablet_info> tablets;
+        std::vector<db::snapshot_tablet_entry> tablets;
         std::unordered_set<size_t> tids;
         if (t.uses_tablets()) {
             auto erm = t.get_effective_replication_map();
@@ -4456,8 +4162,8 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                     sst.tablet_id = tid.id;
                     if (tids.emplace(tid.id).second) {
                         auto& tinfo = tm.get_tablet_info(tid);
-                        tablets.emplace_back(snapshot_tablet_info{
-                            .id = tid.id,
+                        tablets.emplace_back(db::snapshot_tablet_entry{
+                            .tablet_id = tid.id,
                             .first_token = tm.get_first_token(tid),
                             .last_token = tm.get_last_token(tid),
                             .repair_time = tinfo.repair_time,
@@ -4467,13 +4173,35 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                 }
             }
         }
-        co_await write_manifest(topology, *writer, std::move(sstable_sets), std::move(tablets), name, opts, s,
+        co_await write_manifest(topology, *writer, sstable_sets, tablets, name, opts, s, 
                                 tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+
+        if (ssc && !tablets.empty()) {
+            auto me = topology.my_host_id();
+            auto sstables = sstable_sets | std::views::transform([](auto& p) -> auto& { return *p; })
+                | std::views::join | std::views::transform([&me](const sstables::sstable_snapshot_metadata& ssm) {
+                    return db::snapshot_sstable_entry{
+                        .sstable_id = sstables::sstable_id(ssm.id),
+                        .first_token = dht::token::from_int64(ssm.first_token),
+                        .last_token = dht::token::from_int64(ssm.last_token),
+                        .toc_name = ssm.toc_name,
+                        .node = me,
+                        .tablet_id = ssm.tablet_id.value_or(0),
+                        .state = db::snapshot_state::local,
+                        .repaired_at = ssm.repaired_at,
+                    };
+                }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
+
+            co_await ssc(db::snapshot_entries{
+                .sstables = std::move(sstables), 
+                .tablets = std::move(tablets)
+            });
         }
 
         co_await writer->sync();

@@ -124,6 +124,7 @@
 #include "idl/storage_proxy.dist.impl.hh"
 #include "idl/gossip.dist.impl.hh"
 #include "idl/migration_manager.dist.impl.hh"
+#include "idl/snapshot_backup.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
@@ -770,6 +771,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::SNAPSHOT_WITH_TABLETS:
     case messaging_verb::RESTORE_TABLET:
     case messaging_verb::WAIT_FOR_RAFT_GROUPS_TO_START:
+    case messaging_verb::BACKUP_SNAPSHOT_SSTABLES:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:

@@ -20,9 +20,13 @@
 #include "types/set.hh"
 #include "cdc/generation.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/description.hh"
 #include "service/storage_proxy.hh"
+#include "replica/schema_describe_helper.hh"
+
 #include "service/migration_manager.hh"
 #include "locator/host_id.hh"
+#include "view_info.hh"
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -602,21 +606,20 @@ future<> snapshot_table_helper::insert_snapshot_sstable(sstring snapshot_name, s
     , int64_t data_size, int64_t index_size
     , db::consistency_level cl) 
 {
-    static const sstring query = format("INSERT INTO {}.{} (snapshot_name, \"keyspace\", \"table\", datacenter, rack, first_token, sstable_id, last_token, toc_name, prefix, node, tablet, state, repaired_at, data_size, index_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) USING TTL {}"
-        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
-        , snapshot_table_ttl_seconds
-    );
-
-    return _qp.execute_internal(
-            query,
-            cl,
-            internal_distributed_query_state(),
-            { std::move(snapshot_name), std::move(ks), std::move(table), std::move(dc), std::move(rack),
-              dht::token::to_int64(first_token), sstable_id.uuid(), dht::token::to_int64(last_token), std::move(toc_name), std::move(prefix),
-              node.uuid(), int64_t(tablet_id), int32_t(state), repaired_at,
-              data_size, index_size,
-            },
-            cql3::query_processor::cache_internal::yes).discard_result();
+    co_await insert_snapshot_sstables(snapshot_name, ks, table, dc, rack, 
+        std::span<const snapshot_sstable_entry>({ snapshot_sstable_entry{
+            .sstable_id = sstable_id,
+            .first_token = first_token,
+            .last_token = last_token,
+            .toc_name = std::move(toc_name),
+            .prefix = std::move(prefix),
+            .node = node,
+            .tablet_id = tablet_id,
+            .state = state,
+            .repaired_at = repaired_at,
+            .data_size = data_size,
+            .index_size = index_size,
+        }}), cl);
 }
 
 future<snapshot_sstables_progress> snapshot_table_helper::get_snapshot_sstables_progress(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl) const {
@@ -1102,5 +1105,143 @@ future<utils::chunked_vector<snapshot_node_entry>> snapshot_table_helper::get_sn
     co_return entries;
 
 }
+
+template<typename Range>
+requires std::ranges::range<Range>
+static future<> do_insert_snapshot_sstables(cql3::query_processor& qp, std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
+    , const Range& sstables
+    , db::consistency_level cl
+)
+{
+    static const sstring query = format("INSERT INTO {}.{} (snapshot_name, \"keyspace\", \"table\", datacenter, rack, first_token, sstable_id, last_token, toc_name, prefix, node, tablet, state, repaired_at, data_size, index_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) USING TTL {}"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
+        , snapshot_table_ttl_seconds
+    );
+
+    for (auto chunk : sstables | std::views::chunk(snapshot_max_parallel)) {
+        co_await coroutine::parallel_for_each(chunk.begin(), chunk.end(), [&](const snapshot_sstable_entry& e) {
+            return qp.execute_internal(
+                    query,
+                    cl,
+                    internal_distributed_query_state(),
+                    {
+                      std::move(snapshot_name), std::move(ks), std::move(table), std::move(dc), std::move(rack),
+                      dht::token::to_int64(e.first_token), e.sstable_id.uuid(), dht::token::to_int64(e.last_token), std::move(e.toc_name), std::move(e.prefix),
+                      e.node.uuid(), int64_t(e.tablet_id), int32_t(e.state), e.repaired_at,
+                      e.data_size, e.index_size
+                    },
+                    cql3::query_processor::cache_internal::yes).discard_result();
+        });
+    }
+}
+
+/* Inserts multiple SSTable entries for a given snapshot, keyspace, table, datacenter,
+ * and rack. 
+ */
+future<> snapshot_table_helper::insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
+    , std::span<const snapshot_sstable_entry> sstables
+    , db::consistency_level cl
+)
+{
+    co_await do_insert_snapshot_sstables(_qp, snapshot_name, ks, table, dc, rack, sstables, cl);
+}
+
+future<> snapshot_table_helper::insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
+    , const utils::chunked_vector<snapshot_sstable_entry>& sstables
+    , db::consistency_level cl
+)
+{
+    co_await do_insert_snapshot_sstables(_qp, snapshot_name, ks, table, dc, rack, sstables, cl);
+}
+
+/**
+ * Helper to write a full snapshot_entries
+ */
+future<> snapshot_table_helper::insert_snapshot_entries(std::string_view snapshot_name, std::string_view keyspace
+    , std::string_view table, std::string_view datacenter, std::string_view rack, locator::host_id host
+    , const snapshot_entries& e
+    , db::consistency_level cl
+)
+{
+    co_await insert_snapshot_nodes(snapshot_name, std::span<const snapshot_node_entry>({
+        snapshot_node_entry{
+            .datacenter = std::string(datacenter),
+            .rack = std::string(rack),
+            .node = host,
+        }
+    }), cl);
+    co_await insert_snapshot_sstables(snapshot_name, keyspace, table, datacenter, rack, e.sstables, cl);
+    co_await insert_snapshot_tablets(snapshot_name, keyspace, table, datacenter, e.tablets, cl);
+}
+
+/**
+ * Helper to write snapshot base metadata
+ */
+future<> snapshot_table_helper::insert_snapshot_info(std::string_view snapshot_name
+    , db_clock::time_point created, db_clock::time_point expiry
+    , std::span<const lw_shared_ptr<replica::table>> tables_in
+    , db::consistency_level cl
+)
+{
+    co_await insert_snapshot(db::snapshot_entry{
+        .name = std::string(snapshot_name),
+        .created_at = created,
+        .expires_at = expiry,
+        // TODO: namespace/manifest version?
+    }, cl);
+
+    std::unordered_map<std::string, db::snapshot_keyspace_entry> keyspaces;
+    std::vector<db::snapshot_table_entry> tables;
+
+    for (auto t : tables_in) {
+        auto s = t->schema();
+        std::string name = s->ks_name();
+
+        if (!keyspaces.contains(name)) {
+            auto ks_meta = _qp.db().find_keyspace(s->ks_name()).metadata();
+            auto desc = ks_meta->describe(_qp.db().real_database(), cql3::with_create_statement::yes);
+            keyspaces.emplace(name, db::snapshot_keyspace_entry{
+                .snapshot_name = std::string(snapshot_name),
+                .keyspace_name = name,
+                .keyspace_schema = desc.create_statement->linearize(),
+            });
+       }
+
+       auto helper = replica::make_schema_describe_helper(s, _qp.db());
+       auto desc = s->describe(helper, cql3::describe_option::STMTS_AND_INTERNALS);
+
+       auto type = snapshot_table_type::cql_table;
+       table_id base_table_id;
+
+       if (s->is_view()) {
+           type = snapshot_table_type::cql_view;
+           base_table_id = s->view_info()->base_id();
+       }
+
+       std::string tablet_layout = "none";
+
+       if (t->uses_tablets()) {
+           auto erm = t->get_effective_replication_map();
+           auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+           tablet_layout = locator::tablet_layout_to_string(tm.get_layout());
+       }
+
+       // TODO: check alternator etc...
+       tables.emplace_back(db::snapshot_table_entry{
+            .snapshot_name = std::string(snapshot_name),
+            .keyspace_name = name,
+            .table_name = s->cf_name(),
+            .table_id = s->id(),
+            .type = type,
+            .base_table_id = base_table_id,
+            .table_schema = desc.create_statement->linearize(),
+            .tablet_layout = tablet_layout
+       });
+    }
+
+    co_await insert_snapshot_keyspaces(keyspaces | std::views::values | std::ranges::to<std::vector>(), cl);
+    co_await insert_snapshot_tables(tables, cl);
+}
+
 
 } // namespace db

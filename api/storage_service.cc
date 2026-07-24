@@ -37,6 +37,7 @@
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
+#include "db/snapshot_types.hh"
 #include <seastar/http/exception.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/closeable.hh>
@@ -2383,6 +2384,43 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
         auto& ctl = snap_ctl.local();
         auto task_id = co_await ctl.start_backup(std::move(endpoint), std::move(bucket), std::move(prefix), std::move(keyspace), std::move(table), std::move(snapshot_name), move_files);
+        co_return json::json_return_type(fmt::to_string(task_id));
+    });
+
+    ss::start_global_backup.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto column_families = split(req->get_query_param("table"), ",");
+        std::vector<sstring> keynames = split(req->get_query_param("keyspace"), ",");
+        auto snapshot_name = req->get_query_param("snapshot");
+        auto move_files = req_param<bool>(*req, "move_files", false);
+
+        rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
+        rjson::value parsed = rjson::parse(std::move(content));
+        if (!parsed.IsArray()) {
+            throw httpd::bad_param_exception("backup locations (in body) must be a JSON array");
+        }
+
+        std::unordered_map<sstring, db::snapshot_dc_location> dclocs;
+
+        const auto& locations = parsed.GetArray();
+        for (auto& location : locations) {
+            if (!location.IsObject()) {
+                throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
+            }
+
+            auto endpoint = rjson::to_string(location["endpoint"]);
+            auto bucket = rjson::to_string(location["bucket"]);
+            auto prefix = rjson::to_string(location["prefix"]);
+            auto dc = rjson::to_string(location["datacenter"]);
+
+            dclocs[dc] = db::snapshot_dc_location {
+                .endpoint = endpoint,
+                .bucket = bucket,
+                .prefix = prefix,
+            };
+        }
+
+        auto& ctl = snap_ctl.local();
+        auto task_id = co_await ctl.start_global_backup(std::move(dclocs), std::move(keynames), std::move(column_families), std::move(snapshot_name), move_files);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 

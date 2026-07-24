@@ -13,6 +13,11 @@
 #include "locator/host_id.hh"
 #include "sstables/types.hh"
 
+namespace utils {
+template <typename, size_t>
+class chunked_vector;
+}
+
 namespace db {
 
 using is_downloaded = bool_class<class is_downloaded_tag>;
@@ -56,6 +61,7 @@ struct snapshot_entry {
     std::string name;
 
     db_clock::time_point created_at;
+    // Note: if non-expiring, this is db_clock::time_point{} (i.e. zero)
     db_clock::time_point expires_at;
 
     std::string namespace_version;
@@ -129,6 +135,19 @@ struct snapshot_node_entry {
     locator::host_id node;
 
     constexpr bool operator==(const snapshot_node_entry& o) const noexcept = default;
+};
+
+struct snapshot_entries {
+    utils::chunked_vector<snapshot_sstable_entry> sstables;
+    std::vector<snapshot_tablet_entry> tablets;
+};
+
+struct snapshot_dc_location {
+    std::string endpoint;
+    std::string bucket;
+    std::string prefix;
+
+    constexpr bool operator==(const snapshot_dc_location& o) const noexcept = default;
 };
 
 } // namespace db
