@@ -41,7 +41,7 @@ public:
 
 class service_level_statement : public raw::parsed_statement, public cql_statement_no_metadata {
 public:
-    service_level_statement() : cql_statement_no_metadata(&timeout_config::other_timeout) {}
+    service_level_statement() : cql_statement_no_metadata(other_timeout_info) {}
 
     virtual bool needs_guard(query_processor& qp, service::query_state& state) const override;
 

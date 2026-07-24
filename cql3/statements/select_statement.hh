@@ -160,7 +160,7 @@ public:
 
     bool has_group_by() const { return _group_by_cell_indices && !_group_by_cell_indices->empty(); }
 
-    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const override;
 
 protected:
     uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;

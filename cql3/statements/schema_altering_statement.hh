@@ -38,9 +38,9 @@ private:
     const bool _is_column_family_level;
 
 protected:
-    explicit schema_altering_statement(timeout_config_selector timeout_selector = &timeout_config::other_timeout);
+    explicit schema_altering_statement(timeout_info ti = other_timeout_info);
 
-    schema_altering_statement(cf_name name, timeout_config_selector timeout_selector = &timeout_config::other_timeout);
+    schema_altering_statement(cf_name name, timeout_info ti = other_timeout_info);
     
     virtual bool needs_guard(query_processor& qp, service::query_state& state) const override;
 

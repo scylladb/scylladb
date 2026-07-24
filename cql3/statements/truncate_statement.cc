@@ -47,7 +47,7 @@ std::unique_ptr<prepared_statement> truncate_statement::prepare(data_dictionary:
 } // namespace raw
 
 truncate_statement::truncate_statement(schema_ptr schema, std::unique_ptr<attributes> prepared_attrs)
-    : cql_statement_no_metadata(&timeout_config::truncate_timeout)
+    : cql_statement_no_metadata(truncate_timeout_info)
     , _schema{std::move(schema)}
     , _attrs(std::move(prepared_attrs))
 {

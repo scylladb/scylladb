@@ -45,12 +45,12 @@ namespace cql3 {
 
 namespace statements {
 
-timeout_config_selector
+timeout_info
 modification_statement_timeout(const schema& s) {
     if (s.is_counter()) {
-        return &timeout_config::counter_write_timeout;
+        return counter_write_timeout_info;
     } else {
-        return &timeout_config::write_timeout;
+        return write_timeout_info;
     }
 }
 
@@ -669,6 +669,10 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     // participate in the caching mechanism later.
     if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions) {
         ctx.clear_pk_function_calls_cache();
+    }
+    if (prepared_stmt->has_conditions()) {
+        // CAS so a dropped response matches the storage proxy's CAS timeout.
+        prepared_stmt->set_timeout_write_type(db::write_type::CAS);
     }
     prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
     return prepared_stmt;

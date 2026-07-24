@@ -23,7 +23,7 @@ namespace statements {
 
 class authorization_statement : public raw::parsed_statement, public cql_statement_no_metadata {
 public:
-    authorization_statement() : cql_statement_no_metadata(&timeout_config::other_timeout) {}
+    authorization_statement() : cql_statement_no_metadata(other_timeout_info) {}
 
     uint32_t get_bound_terms() const override;
 
