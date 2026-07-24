@@ -10,6 +10,7 @@
 
 #include "cql3/description.hh"
 #include "utils/assert.hh"
+#include "utils/chunked_vector.hh"
 #include <functional>
 #include <optional>
 #include <unordered_map>
@@ -267,35 +268,6 @@ public:
     column_kind kind;
     lw_shared_ptr<cql3::column_specification> column_specification;
 
-    // NOTICE(sarna): This copy constructor is hand-written instead of default,
-    // because it involves deep copying of the computation object.
-    // Computation has a strict ownership policy provided by
-    // unique_ptr, and as such cannot rely on default copying.
-    column_definition(const column_definition& other)
-            : _name(other._name)
-            , _dropped_at(other._dropped_at)
-            , _is_atomic(other._is_atomic)
-            , _is_counter(other._is_counter)
-            , _is_view_virtual(other._is_view_virtual)
-            , _computation(other.get_computation_ptr())
-            , type(other.type)
-            , id(other.id)
-            , ordinal_id(other.ordinal_id)
-            , kind(other.kind)
-            , column_specification(other.column_specification)
-        {}
-
-    column_definition& operator=(const column_definition& other) {
-        if (this == &other) {
-            return *this;
-        }
-        column_definition tmp(other);
-        *this = std::move(tmp);
-        return *this;
-    }
-
-    column_definition& operator=(column_definition&& other) = default;
-
     bool is_static() const { return kind == column_kind::static_column; }
     bool is_regular() const { return kind == column_kind::regular_column; }
     bool is_partition_key() const { return kind == column_kind::partition_key; }
@@ -315,7 +287,7 @@ public:
     bool is_computed() const { return bool(_computation); }
     const column_computation& get_computation() const { return *_computation; }
     column_computation_ptr get_computation_ptr() const {
-        return _computation ? _computation->clone() : nullptr;
+        return _computation;
     }
     void set_computed(column_computation_ptr computation) { _computation = std::move(computation); }
     // Columns hidden from CQL cannot be in any way retrieved by the user,
@@ -386,15 +358,15 @@ private:
     // Contains _n_static definitions for static columns followed by definitions for regular columns,
     // both ordered by consecutive column_ids.
     // Primary key column sets are not mutable so we don't need to map them.
-    std::vector<column_mapping_entry> _columns;
+    utils::chunked_vector<column_mapping_entry> _columns;
     column_count_type _n_static = 0;
 public:
     column_mapping() {}
-    column_mapping(std::vector<column_mapping_entry> columns, column_count_type n_static)
+    column_mapping(utils::chunked_vector<column_mapping_entry> columns, column_count_type n_static)
             : _columns(std::move(columns))
             , _n_static(n_static)
     { }
-    const std::vector<column_mapping_entry>& columns() const { return _columns; }
+    const utils::chunked_vector<column_mapping_entry>& columns() const { return _columns; }
     column_count_type n_static() const { return _n_static; }
     const column_mapping_entry& column_at(column_kind kind, column_id id) const;
     const column_mapping_entry& static_column_at(column_id id) const;
@@ -449,17 +421,17 @@ class view_info;
 class v3_columns {
     bool _is_dense = false;
     bool _is_compound = false;
-    std::vector<column_definition> _columns;
+    utils::chunked_vector<column_definition> _columns;
     std::unordered_map<bytes, const column_definition*> _columns_by_name;
 public:
-    v3_columns(std::vector<column_definition> columns, bool is_dense, bool is_compound);
+    v3_columns(utils::chunked_vector<column_definition> columns, bool is_dense, bool is_compound);
     v3_columns() = default;
     v3_columns(v3_columns&&) = default;
     v3_columns& operator=(v3_columns&&) = default;
     v3_columns(const v3_columns&) = delete;
     static v3_columns from_v2_schema(const schema&);
 public:
-    const std::vector<column_definition>& all_columns() const;
+    const utils::chunked_vector<column_definition>& all_columns() const;
     const std::unordered_map<bytes, const column_definition*>& columns_by_name() const;
     bool is_static_compact() const;
     bool is_compact() const;
@@ -595,7 +567,7 @@ private:
         sstring _cf_name;
         // regular columns are sorted by name
         // static columns are sorted by name, but present only when there's any clustering column
-        std::vector<column_definition> _columns;
+        utils::chunked_vector<column_definition> _columns;
         data_type _regular_column_name_type;
         data_type _default_validation_class = bytes_type;
         bool _is_dense = false;
@@ -650,7 +622,7 @@ private:
 public:
     using row_column_ids_are_ordered_by_name = std::true_type;
 
-    typedef std::vector<column_definition> columns_type;
+    typedef utils::chunked_vector<column_definition> columns_type;
     typedef typename columns_type::iterator iterator;
     typedef typename columns_type::const_iterator const_iterator;
     typedef std::ranges::subrange<iterator> iterator_range_type;

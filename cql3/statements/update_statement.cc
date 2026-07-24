@@ -59,7 +59,7 @@ static std::unordered_map<sstring, rjson::value> handle_case_sensitivity(rjson::
 }
 
 std::unordered_map<sstring, bytes_opt>
-parse(const sstring& json_string, const std::vector<column_definition>& expected_receivers) {
+parse(const sstring& json_string, const schema::columns_type& expected_receivers) {
     std::unordered_map<sstring, bytes_opt> json_map;
     auto prepared_map = handle_case_sensitivity(rjson::parse(json_string));
     for (const auto& def : expected_receivers) {

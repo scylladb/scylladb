@@ -9,6 +9,8 @@
 #include "mutation/counters.hh"
 #include "mutation/mutation.hh"
 
+#include "utils/chunked_vector.hh"
+
 #include "idl/uuid.idl.hh"
 #include "idl/keys.idl.hh"
 #include "idl/position_in_partition.idl.hh"
@@ -142,7 +144,7 @@ class column_mapping_entry {
 };
 
 class column_mapping {
-    std::vector<column_mapping_entry> columns();
+    utils::chunked_vector<column_mapping_entry> columns();
     uint32_t n_static();
 };
 

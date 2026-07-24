@@ -246,7 +246,7 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
             builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
         } else {
             bytes key_column_name = get_available_computed_collection_column_name(*schema);
-            column_computation_ptr collection_column_computation_ptr = [&name = index_target->name(), target_type] {
+            column_computation_ptr collection_column_computation_ptr = seastar::make_shared<collection_column_computation>([&name = index_target->name(), target_type] {
                 switch (target_type) {
                     case cql3::statements::index_target::target_type::keys:
                         return collection_column_computation::for_keys(name);
@@ -257,14 +257,14 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
                     default:
                         throw std::logic_error(format("create_view_for_index: invalid target_type, received {}", to_sstring(target_type)));
                 }
-            }().clone();
+            }());
 
             data_type t = type_for_computed_column(target_type, *index_target->type);
             builder.with_computed_column(key_column_name, t, column_kind::partition_key, std::move(collection_column_computation_ptr));
         }
         // Additional token column is added to ensure token order on secondary index queries
         bytes token_column_name = get_available_token_column_name(*schema);
-        builder.with_computed_column(token_column_name, long_type, column_kind::clustering_key, std::make_unique<token_column_computation>());
+        builder.with_computed_column(token_column_name, long_type, column_kind::clustering_key, seastar::make_shared<token_column_computation>());
 
         for (auto& col : schema->partition_key_columns()) {
             if (col == *index_target) {
@@ -291,7 +291,7 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
         if (target_type == cql3::statements::index_target::target_type::collection_values) {
             data_type t = type_for_computed_column(cql3::statements::index_target::target_type::keys, *index_target->type);
             bytes column_name = get_available_column_name(*schema, "keys_for_values_idx");
-            builder.with_computed_column(column_name, t, column_kind::clustering_key, collection_column_computation::for_keys(index_target->name()).clone());
+            builder.with_computed_column(column_name, t, column_kind::clustering_key, seastar::make_shared<collection_column_computation>(collection_column_computation::for_keys(index_target->name())));
         }
     }
 

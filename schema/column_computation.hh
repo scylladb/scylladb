@@ -11,6 +11,7 @@
 #include "bytes.hh"
 #include "utils/managed_bytes.hh"
 #include <memory>
+#include <seastar/core/shared_ptr.hh>
 
 class schema;
 class partition_key;
@@ -23,7 +24,7 @@ struct view_key_and_action;
 }
 
 class column_computation;
-using column_computation_ptr = std::unique_ptr<column_computation>;
+using column_computation_ptr = seastar::shared_ptr<const column_computation>;
 
 /*
  * Column computation represents a computation performed in order to obtain a value for a computed column.
@@ -40,8 +41,6 @@ public:
     virtual ~column_computation() = default;
 
     static column_computation_ptr deserialize(bytes_view raw);
-
-    virtual column_computation_ptr clone() const = 0;
 
     virtual bytes serialize() const = 0;
     virtual bytes compute_value(const schema& schema, const partition_key& key) const = 0;
@@ -70,9 +69,6 @@ public:
  */
 class legacy_token_column_computation : public column_computation {
 public:
-    virtual column_computation_ptr clone() const override {
-        return std::make_unique<legacy_token_column_computation>(*this);
-    }
     virtual bytes serialize() const override;
     virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
 };
@@ -91,9 +87,6 @@ public:
  */
 class token_column_computation : public column_computation {
 public:
-    virtual column_computation_ptr clone() const override {
-        return std::make_unique<token_column_computation>(*this);
-    }
     virtual bytes serialize() const override;
     virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
 };
@@ -136,9 +129,6 @@ public:
 
     virtual bytes serialize() const override;
     virtual bytes compute_value(const schema& schema, const partition_key& key) const override;
-    virtual column_computation_ptr clone() const override {
-        return std::make_unique<collection_column_computation>(*this);
-    }
     virtual bool depends_on_non_primary_key_column() const override {
         return true;
     }

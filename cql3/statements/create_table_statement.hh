@@ -17,6 +17,8 @@
 
 #include "schema/schema_fwd.hh"
 
+#include "utils/chunked_vector.hh"
+
 #include <seastar/core/shared_ptr.hh>
 
 #include <seastar/util/indirect.hh>
@@ -86,7 +88,7 @@ public:
 
     friend raw_statement;
 private:
-    std::vector<column_definition> get_columns() const;
+    utils::chunked_vector<column_definition> get_columns() const;
 
     void apply_properties_to(schema_builder& builder, const data_dictionary::database) const;
 
