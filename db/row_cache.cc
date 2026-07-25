@@ -1004,7 +1004,6 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
 }
 
 cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row_cache::phase_type phase, const previous_entry_pointer* previous) {
-    cache_routing_guard guard(_tracker, !_single_row_partitions);
     return do_find_or_create_entry(ps.key(), previous, [&] (auto i, const partitions_type::bound_hint& hint) { // create
         // Create an fully discontinuous, except for the partition tombstone, entry
         mutation_partition mp = mutation_partition::make_incomplete(*_schema, ps.partition_tombstone());
@@ -1121,7 +1120,6 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
     });
 
     return seastar::async([this, &m, &preempt_src, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
-        cache_routing_guard guard(_tracker, !_single_row_partitions);
         size_t size_entry;
         // In case updater fails, we must bring the cache to consistency without deferring.
         auto cleanup = defer([&m, this] () noexcept {

@@ -41,15 +41,20 @@ private:
     // Packed layout:
     //   bits [1:0]  — lru_segment tag (none=0, window=1, probation=2, protected=3)
     //   bit  [2]    — has_sketch_key flag
-    //   bit  [3]    — directly_inserted flag (entry entered via add_to_protected)
-    //   bits [63:4] — sketch key value (60 bits of token hash)
+    //   bit  [3]    — directly_inserted flag (entry is linked in protected and
+    //                 counted in _protected_direct_size; cleared on unlink)
+    //   bit  [4]    — routes_to_protected flag (sticky routing hint: this entry
+    //                 always (re-)enters the LRU in the protected segment;
+    //                 survives unlinking)
+    //   bits [63:5] — sketch key value (59 bits of token hash)
     uint64_t _packed = 0;
 
     static constexpr uint64_t segment_mask  = 0x3;
     static constexpr uint64_t has_key_mask  = uint64_t(1) << 2;
     static constexpr uint64_t direct_mask   = uint64_t(1) << 3;
-    static constexpr uint64_t key_shift     = 4;
-    static constexpr uint64_t meta_mask     = segment_mask | has_key_mask | direct_mask;
+    static constexpr uint64_t routing_mask  = uint64_t(1) << 4;
+    static constexpr uint64_t key_shift     = 5;
+    static constexpr uint64_t meta_mask     = segment_mask | has_key_mask | direct_mask | routing_mask;
 
     lru_segment get_segment() const noexcept {
         return static_cast<lru_segment>(_packed & segment_mask);
@@ -77,7 +82,7 @@ public:
     }
 
     void set_sketch_key(uint64_t key) noexcept {
-        _packed = (key << key_shift) | has_key_mask | (_packed & (segment_mask | direct_mask));
+        _packed = (key << key_shift) | has_key_mask | (_packed & (segment_mask | direct_mask | routing_mask));
     }
     uint64_t sketch_key() const noexcept {
         return _packed >> key_shift;
@@ -93,6 +98,21 @@ public:
             _packed |= direct_mask;
         } else {
             _packed &= ~direct_mask;
+        }
+    }
+    // Sticky routing hint for entries of multi-row (clustering key) partitions:
+    // they always (re-)enter the LRU in the protected segment and are never
+    // demoted. Unlike directly_inserted, this survives unlinking, so evicted
+    // entries which get re-linked (e.g. a partition's last dummy touched after
+    // eviction) return to protected rather than the admission window.
+    bool routes_to_protected() const noexcept {
+        return _packed & routing_mask;
+    }
+    void set_routes_to_protected(bool v) noexcept {
+        if (v) {
+            _packed |= routing_mask;
+        } else {
+            _packed &= ~routing_mask;
         }
     }
 };
@@ -271,6 +291,19 @@ private:
         increment_size(seg);
     }
 
+    // Move a linked-out entry to the back of protected. Sticky entries keep
+    // their direct (never-demoted) status; others become regular promoted
+    // entries subject to rebalance_protected().
+    void promote_to_protected(evictable& e) noexcept {
+        if (e.routes_to_protected()) {
+            e.set_directly_inserted(true);
+            ++_protected_direct_size;
+        }
+        e.set_segment(lru_segment::protected_);
+        _protected.push_back(e);
+        ++_protected_size;
+    }
+
     // Move excess promoted entries from protected to probation.
     // Directly-inserted entries (multi-row schemas) are skipped in place —
     // they must remain in protected and their LRU ordering must not be disturbed.
@@ -409,6 +442,10 @@ public:
     }
 
     void add(evictable& e) noexcept {
+        if (e.routes_to_protected()) {
+            add_to_protected(e);
+            return;
+        }
         record_access(e);
         add_to_segment(e, lru_segment::window);
         // No drain here. The window grows unbounded; drain_window()
@@ -421,6 +458,7 @@ public:
     // Used for multi-row schemas where window admission creates MVCC/fairness issues.
     void add_to_protected(evictable& e) noexcept {
         record_access(e);
+        e.set_routes_to_protected(true);
         e.set_directly_inserted(true);
         add_to_segment(e, lru_segment::protected_);
         ++_protected_direct_size;
@@ -429,6 +467,13 @@ public:
     void add_before(evictable& more_recent, evictable& e) noexcept {
         record_access(e);
         auto seg = more_recent.get_segment();
+        if (more_recent.routes_to_protected()) {
+            e.set_routes_to_protected(true);
+        }
+        if (seg == lru_segment::protected_ && more_recent.is_directly_inserted()) {
+            e.set_directly_inserted(true);
+            ++_protected_direct_size;
+        }
         auto& list = segment_list(seg);
         list.insert(list.iterator_to(more_recent), e);
         e.set_segment(seg);
@@ -440,8 +485,9 @@ public:
     void touch(evictable& e) noexcept {
         switch (e.get_segment()) {
             case lru_segment::none:
-                record_access(e);
-                add_to_segment(e, lru_segment::window);
+                // Re-linking an unlinked entry is an insertion, not a promotion:
+                // route sticky (multi-row partition) entries back to protected.
+                add(e);
                 break;
             case lru_segment::window:
                 record_access(e);
@@ -453,18 +499,14 @@ public:
                 ++_stats.protected_promotions;
                 _window.erase(_window.iterator_to(e));
                 --_window_size;
-                e.set_segment(lru_segment::protected_);
-                _protected.push_back(e);
-                ++_protected_size;
+                promote_to_protected(e);
                 break;
             case lru_segment::probation:
                 record_access(e);
                 ++_stats.protected_promotions;
                 _probation.erase(_probation.iterator_to(e));
                 --_probation_size;
-                e.set_segment(lru_segment::protected_);
-                _protected.push_back(e);
-                ++_protected_size;
+                promote_to_protected(e);
                 break;
             case lru_segment::protected_:
                 _protected.erase(_protected.iterator_to(e));

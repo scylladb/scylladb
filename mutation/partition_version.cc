@@ -198,7 +198,11 @@ static partition_version& append_version(partition_version& pv, const schema& s,
     new_version->partition().set_static_row_continuous(pv.partition().static_row_continuous());
     new_version->insert_after(pv);
     if (tracker) {
-        tracker->insert(*new_version);
+        if (s.clustering_key_size() > 0) {
+            tracker->insert_to_protected(*new_version);
+        } else {
+            tracker->insert(*new_version);
+        }
     }
     return *new_version;
 }
@@ -410,7 +414,11 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
     new_version->insert_before(*_version);
     set_version(new_version);
     if (tracker) {
-        tracker->insert(*new_version);
+        if (s.clustering_key_size() > 0) {
+            tracker->insert_to_protected(*new_version);
+        } else {
+            tracker->insert(*new_version);
+        }
     }
     return *new_version;
 }

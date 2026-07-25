@@ -94,7 +94,6 @@ private:
     utils::updateable_value<double> _tinylfu_initial_window_fraction;
     utils::observer<double> _sketch_ratio_observer;
     utils::observer<double> _window_fraction_observer;
-    bool _routing_to_protected = false;
 private:
     void setup_metrics();
 public:
@@ -175,32 +174,9 @@ public:
     /// Must be called before lru::add() since add-time window draining may
     /// trigger on_evicted_shallow() which dereferences current_tracker.
     void set_current_tracker() noexcept;
-
-    /// Controls whether insert(rows_entry&) routes to the SLRU protected
-    /// segment instead of the window. Used by MVCC paths for multi-row schemas.
-    void set_routing_to_protected(bool v) noexcept { _routing_to_protected = v; }
-    bool routing_to_protected() const noexcept { return _routing_to_protected; }
 };
 
 cache_tracker* get_current_cache_tracker() noexcept;
-
-/// RAII guard that sets cache_tracker::routing_to_protected for the duration
-/// of a scope. Used to ensure MVCC-triggered row insertions go to the correct
-/// SLRU segment for multi-row schemas.
-class cache_routing_guard {
-    cache_tracker& _tracker;
-    bool _old_value;
-public:
-    explicit cache_routing_guard(cache_tracker& tracker, bool to_protected) noexcept
-        : _tracker(tracker), _old_value(tracker.routing_to_protected()) {
-        _tracker.set_routing_to_protected(to_protected);
-    }
-    ~cache_routing_guard() noexcept {
-        _tracker.set_routing_to_protected(_old_value);
-    }
-    cache_routing_guard(const cache_routing_guard&) = delete;
-    cache_routing_guard& operator=(const cache_routing_guard&) = delete;
-};
 
 // Compute a stable sketch key from a partition token.
 // All rows in the same partition share this key — partition-level
@@ -235,18 +211,18 @@ void cache_tracker::insert(rows_entry& entry) noexcept {
     ++_stats.row_insertions;
     ++_stats.rows;
     set_current_tracker();
-    if (_routing_to_protected) {
-        _lru.add_to_protected(entry);
-    } else {
-        _lru.add(entry);
-    }
+    // Entries with the routes_to_protected hint (multi-row partitions)
+    // are placed in the protected segment by lru::add() itself.
+    _lru.add(entry);
 }
 
 inline
 void cache_tracker::insert(rows_entry& more_recent, rows_entry& entry) noexcept {
     ++_stats.row_insertions;
     ++_stats.rows;
-    entry.set_sketch_key(more_recent.sketch_key());
+    if (more_recent.has_sketch_key()) {
+        entry.set_sketch_key(more_recent.sketch_key());
+    }
     _lru.add_before(more_recent, entry);
 }
 
@@ -281,7 +257,9 @@ inline
 void cache_tracker::insert_to_protected(rows_entry& more_recent, rows_entry& entry) noexcept {
     ++_stats.row_insertions;
     ++_stats.rows;
-    entry.set_sketch_key(more_recent.sketch_key());
+    if (more_recent.has_sketch_key()) {
+        entry.set_sketch_key(more_recent.sketch_key());
+    }
     _lru.add_before(more_recent, entry);
 }
 

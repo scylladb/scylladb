@@ -896,24 +896,25 @@ BOOST_AUTO_TEST_CASE(test_packed_swap_preserves_all_fields) {
     l.remove(b);
 }
 
-// Verify large key values survive the 61-bit truncation.
+// Verify large key values survive the 59-bit truncation.
 BOOST_AUTO_TEST_CASE(test_packed_large_key_values) {
     test_evictable e(0);
 
-    // Maximum 60-bit value (4 bits used for segment + has_key + direct_insert)
-    uint64_t max_60 = (uint64_t(1) << 60) - 1;
-    e.set_sketch_key(max_60);
+    // Maximum 59-bit value (5 bits used for segment + has_key + direct_insert
+    // + routes_to_protected)
+    uint64_t max_59 = (uint64_t(1) << 59) - 1;
+    e.set_sketch_key(max_59);
     BOOST_REQUIRE(e.has_sketch_key());
-    BOOST_REQUIRE_EQUAL(e.sketch_key(), max_60);
+    BOOST_REQUIRE_EQUAL(e.sketch_key(), max_59);
 
-    // A full 64-bit value gets its top 4 bits truncated
+    // A full 64-bit value gets its top 5 bits truncated
     e.set_sketch_key(UINT64_MAX);
     BOOST_REQUIRE(e.has_sketch_key());
-    BOOST_REQUIRE_EQUAL(e.sketch_key(), max_60);  // top 4 bits lost
+    BOOST_REQUIRE_EQUAL(e.sketch_key(), max_59);  // top 5 bits lost
 
     // Powers of 2 near the boundary
-    e.set_sketch_key(uint64_t(1) << 59);
-    BOOST_REQUIRE_EQUAL(e.sketch_key(), uint64_t(1) << 59);
+    e.set_sketch_key(uint64_t(1) << 58);
+    BOOST_REQUIRE_EQUAL(e.sketch_key(), uint64_t(1) << 58);
 
     // Value 1 (minimal non-zero)
     e.set_sketch_key(1);
