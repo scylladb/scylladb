@@ -104,6 +104,7 @@ public:
     virtual future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
             const std::unordered_set<component_type>& excluded_components,
             optimized_optional<sstable_id> new_sid = {}) const = 0;
+    virtual void open_for_component_rewrite(sstable&) {}
     virtual ~storage() {}
 
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage

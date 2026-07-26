@@ -1678,7 +1678,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         std::function<void(sstable&)> modifier,
         update_sstable_id update_id) {
     if (!is_component_rewrite_supported(component)) {
-        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+        on_internal_error(sstlog, fmt::format("{} component cannot be rewritten.", component_name(*this, component)));
     }
 
     if (!has_component(component)) {
@@ -1686,7 +1686,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
     }
 
     if (!has_scylla_component()) {
-        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+        on_internal_error(sstlog, fmt::format("SSTable must have Scylla component to rewrite {} component.", component_name(*this, component)));
     }
 
     if (_storage->is_object_storage() && !update_id) {
@@ -1696,16 +1696,26 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
     return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_id] {
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
+        new_sst->generate_toc();
+        new_sst->_storage->open_for_component_rewrite(*new_sst);
 
-        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}).get();
+        std::unordered_set<component_type> excluded_components{component_type::Scylla};
+        if (component != component_type::Scylla) {
+            excluded_components.insert(component);
+        }
+        _storage->link_with_excluded_components(*this, generation, excluded_components).get();
         new_sst->copy_components(*this).get();
 
         modifier(*new_sst);
 
-        // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
-        // If unchanged, reuse the existing _components->scylla_metadata instead.
         scylla_metadata metadata;
-        read_simple<component_type::Scylla>(metadata).get();
+        if (component == component_type::Scylla) {
+            metadata = *new_sst->_components->scylla_metadata;
+        } else {
+            // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
+            // If unchanged, reuse the existing _components->scylla_metadata instead.
+            read_simple<component_type::Scylla>(metadata).get();
+        }
         if (update_id) {
             if (auto sid = new_sst->sstable_identifier()) {
                 metadata.set_sstable_identifier(*sid);
@@ -1735,12 +1745,13 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 // 5. Set the in-memory Scylla metadata to the new metadata
 void sstable::write_component_with_metadata(component_type type, scylla_metadata metadata) {
     if (!is_component_rewrite_supported(type)) {
-        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+        on_internal_error(sstlog, fmt::format("{} component cannot be rewritten.", component_name(*this, type)));
     }
 
-    write_component(type);
-
-    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    if (type != component_type::Scylla) {
+        write_component(type);
+        metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    }
     metadata.digest = serialized_checksum(_version, metadata.data);
 
     write_simple<component_type::Scylla>(metadata);
@@ -2134,6 +2145,7 @@ void sstable::disable_component_memory_reload() {
 bool sstable::is_component_rewrite_supported(component_type type) {
     switch (type) {
     case component_type::Statistics:
+    case component_type::Scylla:
         return true;
     default:
         return false;
@@ -2144,6 +2156,8 @@ void sstable::write_component(component_type type) {
     switch (type) {
     case component_type::Statistics:
         write_statistics();
+        break;
+    case component_type::Scylla:
         break;
     default:
         on_internal_error(sstlog, fmt::format("Writing component {} is not supported.", component_name(*this, type)));
@@ -3609,6 +3623,15 @@ void sstable::mutate_sstable_level(uint32_t new_level) {
     }
 
     s.sstable_level = new_level;
+}
+
+void sstable::mutate_sstable_run_identifier(run_id new_run_id) {
+    if (!_components->scylla_metadata) {
+        on_internal_error(sstlog, fmt::format("SSTable {} does not have Scylla metadata to rewrite run identifier.", get_filename()));
+    }
+
+    _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(sstables::run_identifier{new_run_id});
+    _run_identifier = new_run_id;
 }
 
 bool sstable::should_mutate_sstable_level(uint32_t new_level) const {

@@ -692,6 +692,7 @@ public:
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
+    void open_for_component_rewrite(sstable&) override;
     future<> wipe(sstable& sst, const atomic_delete_context* ctx = nullptr) noexcept override;
     future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
@@ -866,6 +867,10 @@ void object_storage_base::open(sstable& sst) {
     sst.write_toc(std::move(w));
     put_object(make_object_name(sst, component_type::TOC), std::move(bufs), make_sstable_object_attributes(sst)).get();
     sstlog.debug("Created reference {}: {}", sst.get_filename(), ref_name);
+}
+
+void object_storage_base::open_for_component_rewrite(sstable& sst) {
+    open(sst);
 }
 
 future<file> object_storage_base::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {

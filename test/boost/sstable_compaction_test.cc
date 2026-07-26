@@ -7669,6 +7669,49 @@ SEASTAR_FIXTURE_TEST_CASE(test_object_storage_perform_component_rewrite_single_s
             test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+SEASTAR_TEST_CASE(test_perform_component_rewrite_sstable_run_identifier) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+
+        auto mut = mutation(s, pk);
+        mut.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto original_sst = make_sstable_containing(env.make_sstable(s), {mut}).get();
+        auto original_run_id = original_sst->run_identifier();
+        auto new_run_id = run_id::create_random_id();
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+        table->add_sstable_and_update_cache(original_sst).get();
+
+        auto& cm = table->get_compaction_manager();
+        auto& compaction_group_view = table->compaction_group_view_for_sstable(original_sst);
+        auto rewritten_map = cm.perform_component_rewrite(compaction_group_view,
+                                                          tasks::task_info{},
+                                                          [original_sst] (const sstables::shared_sstable& sst) {
+                                                              return sst == original_sst;
+                                                          },
+                                                          component_type::Scylla,
+                                                          [new_run_id] (sstable& sst) {
+                                                              sst.mutate_sstable_run_identifier(new_run_id);
+                                                          },
+                                                          sstables::update_sstable_id::yes).get();
+
+        BOOST_REQUIRE_EQUAL(rewritten_map.size(), 1);
+        auto new_sst = rewritten_map.at(original_sst);
+        BOOST_REQUIRE(new_sst->run_identifier() == new_run_id);
+        BOOST_REQUIRE(new_sst->run_identifier() != original_run_id);
+        BOOST_REQUIRE(new_sst->generation() != original_sst->generation());
+        BOOST_REQUIRE(new_sst->sstable_identifier() != original_sst->sstable_identifier());
+
+        auto all_sstables = table->get_sstables();
+        BOOST_REQUIRE_EQUAL(all_sstables->size(), 1);
+        BOOST_REQUIRE(!all_sstables->contains(original_sst));
+        BOOST_REQUIRE(all_sstables->contains(new_sst));
+    });
+}
+
 SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;

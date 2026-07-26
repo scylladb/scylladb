@@ -1060,6 +1060,8 @@ public:
         _run_identifier = run_id::create_random_id();
     }
 
+    void mutate_sstable_run_identifier(run_id);
+
     double get_compression_ratio() const;
 
     const sstables::compression& get_compression() const {
