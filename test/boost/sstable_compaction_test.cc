@@ -71,6 +71,8 @@
 #include "utils/assert.hh"
 #include "utils/pretty_printers.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/object_storage_client.hh"
+#include "sstables/sstable_version.hh"
 
 BOOST_AUTO_TEST_SUITE(sstable_compaction_test)
 
@@ -7608,6 +7610,18 @@ static future<> test_perform_component_rewrite_single_sstable(sstables::update_s
     });
 }
 
+static void require_sstable_toc_object_attributes(test_env& env, const sstables::shared_sstable& sst) {
+    auto storage_map = env.get_storage_options().to_map();
+    auto client = env.manager().get_endpoint_client(env.db_config().object_storage_endpoints().front().key());
+    auto sid = sst->sstable_identifier();
+    BOOST_REQUIRE(sid);
+    auto prefix = storage_map.contains("prefix") ? storage_map["prefix"] : "sstables";
+    auto object = sstables::object_name(storage_map["bucket"], prefix, *sid, sstable_version_constants::TOC_SUFFIX);
+    auto metadata = client->get_object_metadata(object).get();
+    BOOST_REQUIRE_EQUAL(metadata.attributes.at(sstring(object_storage_sstable_version_attribute)), fmt::format("{}", sst->get_version()));
+    BOOST_REQUIRE_EQUAL(metadata.attributes.at(sstring(object_storage_sstable_format_attribute)), fmt::format("{}", sst->get_format()));
+}
+
 SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_with_backup) {
     return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::yes);
 }
@@ -7623,8 +7637,8 @@ static void object_storage_perform_component_rewrite_single_sstable_fn(test_env&
 
     auto mut1 = mutation(s, pk);
     mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-    auto original_sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
-    BOOST_REQUIRE(original_sst->sstable_identifier());
+    auto original_sst = make_sstable_containing(env.make_sstable(s), {mut1}).get();
+    require_sstable_toc_object_attributes(env, original_sst);
 
     uint32_t new_level = 5;
     auto modifier = [new_level] (sstable& sst) {
@@ -7642,7 +7656,7 @@ static void object_storage_perform_component_rewrite_single_sstable_fn(test_env&
     BOOST_REQUIRE(new_sst->sstable_identifier());
     BOOST_REQUIRE(new_sst->sstable_identifier() != original_sst->sstable_identifier());
     BOOST_REQUIRE(new_sst->get_sstable_level() == new_level);
-    BOOST_REQUIRE(new_sst->generation() != original_sst->generation());
+    require_sstable_toc_object_attributes(env, new_sst);
 }
 
 SEASTAR_TEST_CASE(test_object_storage_perform_component_rewrite_single_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {

@@ -735,10 +735,16 @@ public:
     bool is_object_storage() const override { return true; }
 
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs) const {
-        return _client->put_object(std::move(name), std::move(bufs), abort_source());
+        return _client->put_object(std::move(name), std::move(bufs), {}, abort_source());
+    }
+    future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes) const {
+        return _client->put_object(std::move(name), std::move(bufs), std::move(attributes), abort_source());
     }
     future<> copy_object(object_name src, object_name dst) const {
-        return _client->copy_object(std::move(src), std::move(dst), abort_source());
+        return _client->copy_object(std::move(src), std::move(dst), {}, abort_source());
+    }
+    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes) const {
+        return _client->copy_object(std::move(src), std::move(dst), std::move(attributes), abort_source());
     }
     future<> delete_object(object_name name) const {
         return _client->delete_object(std::move(name), abort_source());
@@ -747,12 +753,19 @@ public:
         return _client->make_readable_file(std::move(name), abort_source());
     }
     data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece) {
-        return _client->make_data_upload_sink(std::move(name), max_parts_per_piece, abort_source());
+        return _client->make_data_upload_sink(std::move(name), max_parts_per_piece, {}, abort_source());
     }
-    data_sink make_upload_sink(object_name name) {
-        return _client->make_upload_sink(std::move(name), abort_source());
+    data_sink make_upload_sink(object_name name, object_storage_attributes attributes = {}) {
+        return _client->make_upload_sink(std::move(name), std::move(attributes), abort_source());
     }
 };
+
+static object_storage_attributes make_sstable_object_attributes(const sstable& sst) {
+    return {
+        {sstring(object_storage_sstable_version_attribute), fmt::format("{}", sst.get_version())},
+        {sstring(object_storage_sstable_format_attribute), fmt::format("{}", sst.get_format())},
+    };
+}
 
 class s3_storage : public object_storage_base {
 public:
@@ -844,14 +857,14 @@ void object_storage_base::open(sstable& sst) {
     sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
 
     auto ref_name = make_ref_object_name(sid, sst.generation(), host_id);
-    put_object(ref_name, memory_data_sink_buffers()).get();
+    _client->put_object(ref_name, memory_data_sink_buffers(), {}, abort_source()).get();
 
     memory_data_sink_buffers bufs;
     auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
     auto w = std::make_unique<crc32_digest_file_writer>(std::move(out), sst.sstable_buffer_size, component_name(sst, component_type::TOC));
 
     sst.write_toc(std::move(w));
-    put_object(make_object_name(sst, component_type::TOC), std::move(bufs)).get();
+    put_object(make_object_name(sst, component_type::TOC), std::move(bufs), make_sstable_object_attributes(sst)).get();
     sstlog.debug("Created reference {}: {}", sst.get_filename(), ref_name);
 }
 
@@ -938,7 +951,7 @@ s3_storage::make_source(sstable& sst, component_type type, file f, uint64_t offs
 }
 
 future<data_sink> object_storage_base::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
-    return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type)));
+    return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type), type == component_type::TOC ? make_sstable_object_attributes(sst) : object_storage_attributes{}));
 }
 
 future<> object_storage_base::seal(const sstable& sst) {
@@ -1094,14 +1107,15 @@ future<> object_storage_base::link_with_excluded_components(const sstable& sst, 
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
     auto ref_name = make_ref_object_name(sid, new_gen, node_owner);
-    co_await put_object(ref_name, memory_data_sink_buffers());
+    co_await _client->put_object(ref_name, memory_data_sink_buffers(), {}, abort_source());
 
     auto prefix = this->prefix();
     co_await coroutine::parallel_for_each(sst.all_components(), [this, &sst, sid, &excluded_components, &prefix] (const std::pair<component_type, sstring>& p) -> future<> {
         if (excluded_components.contains(p.first)) {
             co_return;
         }
-        co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second));
+        co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second),
+                p.first == component_type::TOC ? make_sstable_object_attributes(sst) : object_storage_attributes{});
     });
 }
 
@@ -1120,10 +1134,11 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
         auto scylla_metadata = co_await sst.copy_scylla_metadata();
         scylla_metadata->set_sstable_identifier(sid);
         auto scylla_metadata_bufs = co_await sst.serialize_scylla_metadata(std::move(*scylla_metadata));
-        co_await put_object(object_name(_bucket, prefix(), sid, sstable_version_constants::get_component_map(sst.get_version()).at(component_type::Scylla)), std::move(*scylla_metadata_bufs));
+        co_await put_object(object_name(_bucket, prefix(), sid, sstable_version_constants::get_component_map(sst.get_version()).at(component_type::Scylla)),
+                std::move(*scylla_metadata_bufs));
     } else {
         auto ref_name = make_ref_object_name(sid, gen, node_owner);
-        co_await _client->put_object(ref_name, memory_data_sink_buffers(), abort_source());
+        co_await _client->put_object(ref_name, memory_data_sink_buffers(), {}, abort_source());
         co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
     }
 

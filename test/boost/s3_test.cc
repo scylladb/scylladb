@@ -761,7 +761,7 @@ void test_object_copy(const client_maker_function& client_maker, size_t chunk_si
 
     out.flush().get();
     out.close().get();
-    cln->copy_object(name, name_copy, 5_MiB).get();
+    cln->copy_object(name, name_copy, {}, 5_MiB).get();
 
     auto sz = cln->get_object_size(name_copy).get();
     BOOST_REQUIRE_EQUAL(sz, chunk_size * chunks);

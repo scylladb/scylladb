@@ -71,6 +71,7 @@ struct storage_options {
 
 storage_options make_local_options(std::filesystem::path dir);
 storage_options make_object_storage_options(const std::string& endpoint, const std::string& fqn, abort_source* = nullptr);
+storage_options make_live_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, abort_source* = nullptr);
 storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, const std::string& prefix, abort_source* = nullptr);
 
 bool is_object_storage_fqn(const std::filesystem::path& fqn, std::string_view type);
