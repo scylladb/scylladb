@@ -190,7 +190,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
 
     static thread_local std::unordered_set<auth::resource> readable_system_resources = [] {
         std::unordered_set<auth::resource> tmp;
-        for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
+        for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS, db::system_keyspace::ONE_ROW }) {
             tmp.insert(auth::make_data_resource(db::system_keyspace::NAME, cf));
         }
         for (const auto& cf : db::schema_tables::all_table_infos(db::schema_features::full())) {

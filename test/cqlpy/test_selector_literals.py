@@ -9,18 +9,19 @@
 # collections/tuples/UDTs of literals) only in the WHERE clause. This test suite
 # tests literals in the SELECT clause, which were added later [1].
 #
-# The simplest example, "SELECT 1" actually doesn't work since its type cannot
-# be inferred (is it a tinyint, int, or bigint?), so we use UDFs and other functions
-# that accept known types instead. We do test that "SELECT 1" and similar fail
-# in the expected way due to type inference failure.
+# The simplest example, "SELECT 1", evaluates an untyped literal: 1 could be
+# a tinyint, int, or bigint, and type inference defaults it to int. Many tests
+# here use UDFs and other functions that accept known types, exercising each
+# type explicitly regardless of inference. Both type inference and SELECT
+# without a FROM clause are tested here as well.
 #
 # [1]: https://scylladb.atlassian.net/browse/SCYLLADB-296
 
 from contextlib import contextmanager
 import pytest
-from .util import unique_name, new_function, new_test_table
+from .util import unique_name, new_cql, new_function, new_test_table
 from .conftest import scylla_only
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, SyntaxException
 
 want_lua = scylla_only
 
@@ -138,3 +139,153 @@ def test_count_function_with_nulls(cql, test_keyspace, scylla_only):
             ksfn = f"{test_keyspace}.{fn}"
             row = cql.execute(f"SELECT count({ksfn}(v)) AS cnt FROM {table}").one()
             assert row.cnt == 12
+
+# Test SELECT without a FROM clause. Cassandra does not support this syntax.
+def test_select_without_from(cql, scylla_only):
+    # Constants
+    assert cql.execute("SELECT 1 AS one").one().one == 1
+    assert cql.execute("SELECT 'hello' AS greeting").one().greeting == 'hello'
+    assert cql.execute("SELECT true AS b").one().b == True
+    # Function calls
+    rows = cql.execute("SELECT now() AS t")
+    assert rows.one().t is not None
+    rows = cql.execute("SELECT toTimestamp(now()) AS ts")
+    assert rows.one().ts is not None
+    # Multiple selectors
+    rows = cql.execute("SELECT 1 AS one, 'hi' AS greeting")
+    row = rows.one()
+    assert row.one == 1
+    assert row.greeting == 'hi'
+    # Collections and tuples
+    assert cql.execute("SELECT [1, 2, 3] AS lst").one().lst == [1, 2, 3]
+    assert cql.execute("SELECT {1, 2, 3} AS st").one().st == {1, 2, 3}
+    assert cql.execute("SELECT {'a': 1, 'b': 2} AS mp").one().mp == {'a': 1, 'b': 2}
+    assert cql.execute("SELECT (1, 'hello', true) AS tpl").one().tpl == (1, 'hello', True)
+    # CAST
+    assert cql.execute("SELECT CAST(1 AS bigint) AS v").one().v == 1
+    # AS aliases are optional — results can be accessed by position
+    assert cql.execute("SELECT 1").one()[0] == 1
+    assert cql.execute("SELECT 'hello', 42").one()[0] == 'hello'
+    assert cql.execute("SELECT 'hello', 42").one()[1] == 42
+    assert cql.execute("SELECT now()").one()[0] is not None
+    # Failure cases
+    with pytest.raises(InvalidRequest, match="FROM"):
+        cql.execute("SELECT *")
+    with pytest.raises(InvalidRequest, match="FROM"):
+        cql.execute("SELECT JSON *")
+    with pytest.raises(InvalidRequest, match="col"):
+        cql.execute("SELECT col")
+    with pytest.raises(InvalidRequest, match="col"):
+        cql.execute("SELECT col, 1")
+    # A top-level bind marker cannot self-type, without FROM as with it
+    with pytest.raises(InvalidRequest, match="infer type"):
+        cql.execute("SELECT ? AS qm")
+    # WHERE, GROUP BY, and ORDER BY behave as in a select over the
+    # backing table: no user columns are in scope, so column
+    # references fail as unknown names.
+    with pytest.raises(InvalidRequest, match="x"):
+        cql.execute("SELECT 1 WHERE x = 1")
+    with pytest.raises(InvalidRequest, match="x"):
+        cql.execute("SELECT 1 GROUP BY x")
+    with pytest.raises(InvalidRequest, match="ORDER BY"):
+        cql.execute("SELECT 1 ORDER BY x")
+    with pytest.raises(InvalidRequest, match="x"):
+        cql.execute("SELECT 1 WHERE x = 1 LIMIT 5")
+    # The backing table's own column is referencable when spelled
+    # quoted, exactly like in the equivalent statement with
+    # FROM system.one_row. Its name contains a '$', so it cannot
+    # clash with an unquoted user identifier.
+    assert cql.execute("SELECT \"system$dummy\"").one()[0] == ''
+    assert cql.execute("SELECT 1 WHERE \"system$dummy\" = ''").one()[0] == 1
+    assert len(list(cql.execute("SELECT 1 WHERE \"system$dummy\" = 'no'"))) == 0
+    assert cql.execute("SELECT 1 GROUP BY \"system$dummy\"").one()[0] == 1
+    with pytest.raises(InvalidRequest, match="ORDER BY"):
+        cql.execute("SELECT 1 ORDER BY \"system$dummy\"")
+    # Clauses that don't reference columns work as in any select:
+    assert cql.execute("SELECT 1 LIMIT 5").one()[0] == 1
+    assert cql.execute("SELECT 1 PER PARTITION LIMIT 1").one()[0] == 1
+    assert cql.execute("SELECT 1 ALLOW FILTERING").one()[0] == 1
+    assert cql.execute("SELECT 1 BYPASS CACHE").one()[0] == 1
+    assert cql.execute("SELECT 1 USING TIMEOUT 50ms").one()[0] == 1
+    assert cql.execute("SELECT 1 PER PARTITION LIMIT 1 LIMIT 5 ALLOW FILTERING BYPASS CACHE USING TIMEOUT 50ms").one()[0] == 1
+    # A bind marker in LIMIT is typed by the limit receiver, like with FROM
+    stmt = cql.prepare("SELECT 1 LIMIT ?")
+    assert cql.execute(stmt, (5,)).one()[0] == 1
+    # LIMIT 0 is rejected at execution, like with FROM
+    with pytest.raises(InvalidRequest, match="positive"):
+        cql.execute("SELECT 1 LIMIT 0")
+    # DISTINCT means partition-key deduplication, which needs a table
+    with pytest.raises(SyntaxException):
+        cql.execute("SELECT DISTINCT 1")
+    with pytest.raises(SyntaxException):
+        cql.execute("SELECT JSON DISTINCT 1")
+
+# Test aggregate functions in SELECT without FROM.
+# Without a FROM clause, aggregates run over the single row of the backing
+# system.one_row table:
+#   count(5) -> 1, sum(5) -> 5, min(5) -> 5, etc.
+def test_select_aggregates_without_from(cql, scylla_only):
+    assert cql.execute("SELECT count(1) AS cnt").one().cnt == 1
+    assert cql.execute("SELECT count(0) AS cnt").one().cnt == 1
+    assert cql.execute("SELECT count('abc') AS cnt").one().cnt == 1
+    assert cql.execute("SELECT count(*) AS cnt").one().cnt == 1
+    assert cql.execute("SELECT min(5) AS v").one().v == 5
+    assert cql.execute("SELECT max(5) AS v").one().v == 5
+    assert cql.execute("SELECT sum(5) AS v").one().v == 5
+    assert cql.execute("SELECT avg(5) AS v").one().v == 5
+    assert cql.execute("SELECT min('hello') AS v").one().v == 'hello'
+    assert cql.execute("SELECT max('hello') AS v").one().v == 'hello'
+    # AS aliases are optional - results can be accessed by position
+    assert cql.execute("SELECT count(1)").one()[0] == 1
+    # Mixed aggregates and scalar expressions
+    row = cql.execute("SELECT count(1) AS cnt, 42 AS num, min(10) AS mn").one()
+    assert row.cnt == 1
+    assert row.num == 42
+    assert row.mn == 10
+
+# Test that user-defined functions can be called in SELECT without FROM,
+# both with a keyspace-qualified name and with an unqualified name
+# (resolved against the session keyspace).
+def test_udf_without_from(cql, test_keyspace, scylla_only):
+    body = "(i int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE lua AS 'return i + 100;'"
+    with new_function(cql, test_keyspace, body) as fun:
+        # Keyspace-qualified call
+        assert cql.execute(f"SELECT {test_keyspace}.{fun}(1) AS v").one().v == 101
+        # A bind marker typed by the UDF's parameter works via prepare
+        stmt = cql.prepare(f"SELECT {test_keyspace}.{fun}(?) AS v")
+        assert cql.execute(stmt, (1,)).one().v == 101
+        # Unqualified call (resolved against session keyspace).
+        # Use a separate connection so that USE doesn't affect other tests.
+        with new_cql(cql) as ncql:
+            ncql.execute(f"USE {test_keyspace}")
+            assert ncql.execute(f"SELECT {fun}(1) AS v").one().v == 101
+        # With no session keyspace at all, an unqualified UDF cannot resolve
+        # and fails cleanly; only native functions work without a keyspace.
+        with new_cql(cql) as ncql:
+            with pytest.raises(InvalidRequest, match="Unknown function"):
+                ncql.execute(f"SELECT {fun}(1)")
+
+# Test SELECT JSON without FROM. The row is encoded into a single column
+# named '[json]', like SELECT JSON with a FROM clause.
+def test_select_json_without_from(cql, scylla_only):
+    assert cql.execute("SELECT JSON 1 AS one").one()[0] == '{"one": 1}'
+    # Without an alias, the expression text is the JSON key.
+    assert cql.execute("SELECT JSON 1").one()[0] == '{"1": 1}'
+    # JSON composes with the clauses allowed without FROM.
+    assert cql.execute("SELECT JSON 1 LIMIT 5").one()[0] == '{"1": 1}'
+    assert cql.execute("SELECT JSON 'hello' AS greeting, 42 AS num").one()[0] == '{"greeting": "hello", "num": 42}'
+    # JSON composes with aggregates: the row is evaluated first, then encoded.
+    assert cql.execute("SELECT JSON count(1) AS cnt").one()[0] == '{"cnt": 1}'
+
+# Test that a column named "json" is not mistaken for the JSON keyword:
+# SELECT json FROM ... must reach the regular SELECT statement, also when
+# the column is aliased or part of a multi-selector clause.
+def test_select_column_named_json(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, json int") as table:
+        cql.execute(f"INSERT INTO {table} (p, json) VALUES (1, 7)")
+        assert cql.execute(f"SELECT json FROM {table} WHERE p = 1").one().json == 7
+        assert cql.execute(f"SELECT JSON json FROM {table} WHERE p = 1").one()[0] == '{"json": 7}'
+        assert cql.execute(f"SELECT json AS x FROM {table} WHERE p = 1").one().x == 7
+        row = cql.execute(f"SELECT json, p FROM {table} WHERE p = 1").one()
+        assert row.json == 7
+        assert row.p == 1

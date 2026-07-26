@@ -98,8 +98,13 @@ private:
     std::optional<expr::expression> _per_partition_limit;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _group_by_columns;
     std::unique_ptr<cql3::attributes::raw> _attrs;
+    // SELECT without FROM runs on the system.one_row table; unqualified
+    // function names are resolved against the session keyspace,
+    // captured in prepare_keyspace().
+    bool _no_from = false;
+    sstring _session_keyspace;
 public:
-    select_statement(cf_name cf_name,
+    select_statement(std::optional<cf_name> cf_name,
             lw_shared_ptr<const parameters> parameters,
             std::vector<::shared_ptr<selection::raw_selector>> select_clause,
             expr::expression where_clause,
@@ -107,6 +112,9 @@ public:
             std::optional<expr::expression> per_partition_limit,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
             std::unique_ptr<cql3::attributes::raw> attrs);
+
+    virtual void prepare_keyspace(const service::client_state& state) override;
+    using cf_statement::prepare_keyspace;
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override {
         return prepare(db, stats, cfg, false);

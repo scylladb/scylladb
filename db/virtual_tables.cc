@@ -637,6 +637,31 @@ public:
     }
 };
 
+class one_row_table : public memtable_filling_virtual_table {
+public:
+    explicit one_row_table()
+        : memtable_filling_virtual_table(build_schema()) {
+        _shard_aware = false;
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::ONE_ROW);
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, system_keyspace::ONE_ROW, std::make_optional(id))
+            .with_column("system$dummy", utf8_type, column_kind::partition_key)
+            .set_comment("A table with exactly one row, backing SELECT statements without a FROM clause.")
+            .with_hash_version()
+            .build();
+    }
+
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
+        mutation m(schema(), partition_key::from_single_value(*schema(), data_value("").serialize_nonnull()));
+        // The row has no cells; an explicit row marker makes it live.
+        m.partition().clustered_row(*schema(), clustering_key::make_empty()).apply(row_marker(api::new_timestamp()));
+        mutation_sink(std::move(m));
+        return make_ready_future<>();
+    }
+};
+
 class db_config_table final : public streaming_virtual_table {
     db::config& _cfg;
 
@@ -2077,6 +2102,7 @@ future<> initialize_virtual_tables(
         co_await add_table(std::make_unique<protocol_servers_table>(dist_ss.local()));
         co_await add_table(std::make_unique<runtime_info_table>(dist_db, dist_ss.local()));
         co_await add_table(std::make_unique<versions_table>());
+        co_await add_table(std::make_unique<one_row_table>());
         co_await add_table(std::make_unique<db_config_table>(cfg));
         co_await add_table(std::make_unique<clients_table>(dist_ss.local()));
         co_await add_table(std::make_unique<raft_state_table>(dist_raft_gr));

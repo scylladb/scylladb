@@ -6,6 +6,7 @@
 from typing import Tuple
 
 import pytest
+from cassandra import WriteFailure
 from . import nodetool
 from . import util
 import json
@@ -217,3 +218,14 @@ def test_token_ring_tablets(scylla_only, cql, test_keyspace_tablets):
         for row in rows:
             assert row.keyspace_name == test_keyspace_tablets
             assert row.table_name == table
+
+def test_one_row(scylla_only, cql):
+    # The single column is named "system$dummy" — '$' is not a legal
+    # character in an unquoted identifier, so user columns cannot clash
+    # with it. The driver replaces the '$' with '_' when building the
+    # row's attribute names.
+    row = cql.execute("SELECT * FROM system.one_row").one()
+    assert row.system_dummy == ''
+    assert cql.execute("SELECT count(*) FROM system.one_row").one()[0] == 1
+    with pytest.raises(WriteFailure, match="virtual table"):
+        cql.execute("INSERT INTO system.one_row (\"system$dummy\") VALUES ('Y')")
