@@ -114,6 +114,7 @@ public:
     // and use their natural clone method.
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const = 0;
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
+    virtual void use_live_object_storage_prefix() {}
     // runs in async context
     virtual void open(sstable& sst) = 0;
     // Must never return an exceptional future: implementations are expected

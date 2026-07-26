@@ -461,7 +461,7 @@ storage_options make_object_storage_options(const std::string& endpoint, const s
     return make_object_storage_options(endpoint, type, bucket, object, as);
 }
 
-storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, const std::string& prefix, abort_source* as) {
+static storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, std::optional<sstring> prefix, abort_source* as) {
     storage_options so;
     storage_options::object_storage os{
         .bucket = std::move(bucket), .endpoint = endpoint, .location = std::move(prefix),
@@ -470,6 +470,10 @@ storage_options make_object_storage_options(const std::string& endpoint, const s
     };
     so.value = std::move(os);
     return so;
+}
+
+storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, const std::string& prefix, abort_source* as) {
+    return make_object_storage_options(endpoint, type, bucket, std::optional<sstring>(prefix), as);
 }
 
 namespace fs = std::filesystem;
