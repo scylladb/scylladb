@@ -1696,8 +1696,12 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
     return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_id] {
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
+        auto sid = this->sstable_identifier();
+        if (update_id) {
+            sid = new_sst->emplace_sstable_identifier();
+        }
 
-        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}, {}).get();
+        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}, sid).get();
         new_sst->copy_components(*this).get();
 
         modifier(*new_sst);
@@ -1707,7 +1711,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         scylla_metadata metadata;
         read_simple<component_type::Scylla>(metadata).get();
         if (update_id) {
-            metadata.set_sstable_identifier();
+            metadata.set_sstable_identifier(*sid);
         }
 
         new_sst->write_component_with_metadata(component, std::move(metadata));
@@ -1742,6 +1746,7 @@ void sstable::write_component_with_metadata(component_type type, scylla_metadata
     write_simple<component_type::Scylla>(metadata);
 
     _components->scylla_metadata = std::move(metadata);
+    _sstable_identifier = _components->scylla_metadata->get_optional_sstable_identifier();
     // Keep the cached _features in sync with the metadata we just wrote,
     // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
     // report zeroed features (e.g. losing ShadowableTombstones).
