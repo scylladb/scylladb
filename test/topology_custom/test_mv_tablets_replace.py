@@ -9,7 +9,7 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.scylla_cluster import ReplaceConfig
+from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from test.pylib.internal_types import HostID
 
 import pytest
@@ -83,7 +83,7 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
             "rack": server_to_replace.rack
         }))
 
-        await coord_log.wait_for('tablet_transition_updates: waiting', from_mark=coord_mark)
+        await coord_log.wait_for('tablet_transition_updates: waiting', from_mark=coord_mark, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
 
         if server_to_down.server_id != server_to_replace.server_id:
             await manager.server_stop(server_to_down.server_id)
