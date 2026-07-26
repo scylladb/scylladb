@@ -18,6 +18,9 @@
 #include <cstdint>
 #include <random>
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 using namespace seastar;
 
 namespace {
@@ -136,4 +139,36 @@ BOOST_AUTO_TEST_CASE(sanity_signed_examples) {
 
 BOOST_AUTO_TEST_CASE(sanity_signed_sweep) {
     check_roundtrip_sweep<signed_vint>(100'000, random_engine());
+}
+
+// Regression test for the case where a 1-byte vint sits at the very end of a
+// mapped page and the following page is unmapped (as it would be for the last
+// page of shard memory). deserialize() reads 8 bytes past the first byte as an
+// optimization; the page-crossing guard must be anchored on the first byte (which
+// is guaranteed mapped) rather than on the byte after it. If it is anchored wrong,
+// this reads into the unmapped page and crashes with SIGSEGV.
+BOOST_AUTO_TEST_CASE(deserialize_at_end_of_mapped_page) {
+    const size_t page_size = ::sysconf(_SC_PAGESIZE);
+
+    // Map two pages worth of address space, then unmap the second page so that
+    // any access past the end of the first page faults.
+    void* base = ::mmap(nullptr, 2 * page_size, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    BOOST_REQUIRE(base != MAP_FAILED);
+    auto* bytes_ptr = static_cast<int8_t*>(base);
+
+    BOOST_REQUIRE_EQUAL(::munmap(bytes_ptr + page_size, page_size), 0);
+
+    // Place a 1-byte vint (any value in [0, 127] encodes to a single byte) at the
+    // last byte of the first, still-mapped, page. src+1 then points at the first
+    // byte of the unmapped page.
+    int8_t* last_byte = bytes_ptr + page_size - 1;
+    const uint64_t expected = 0x42;
+    const auto size = unsigned_vint::serialize(expected, last_byte);
+    BOOST_REQUIRE_EQUAL(size, 1u);
+
+    const auto deserialized = unsigned_vint::deserialize(bytes_view(last_byte, size));
+    BOOST_REQUIRE_EQUAL(deserialized, expected);
+
+    BOOST_REQUIRE_EQUAL(::munmap(base, page_size), 0);
 }
