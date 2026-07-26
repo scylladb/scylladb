@@ -55,6 +55,7 @@ class TestCounters(Tester):
             r"Startup failed: seastar::rpc::closed_error",
             r"raft::transport_error.*connection is closed",
             r"CDC generation publisher fiber got error",
+            r"raft - apply_snapshot\[[0-9a-f-]+\] failed with std::runtime_error \(Snapshot application aborted\)",
         ]
 
     def test_simple_increment(self):
@@ -614,7 +615,7 @@ class TestCounters(Tester):
                 "enable_create_table_with_compact_storage": True,
             }
         )
-        cluster.populate(3).start()
+        cluster.populate(3).start(wait_for_binary_proto=True)
         node1 = cluster.nodelist()[0]
         session = self.patient_cql_connection(node1)
         create_ks(session, "counter_tests", 1)
