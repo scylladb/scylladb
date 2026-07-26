@@ -116,7 +116,6 @@ future<> view_update_generator::start() {
                     _sstables_to_move.size(), _sstables_with_tables.size());
             _sstables_to_move.clear();
             _sstables_with_tables.clear();
-            _progress_tracker = {};
         });
         while (!_as.abort_requested()) {
             if (_sstables_with_tables.empty()) {
@@ -291,9 +290,19 @@ future<> view_update_generator::drain() {
 future<> view_update_generator::stop() {
     _db.unplug_view_update_generator();
     do_abort();
+<<<<<<< HEAD
     return std::move(_started).then([this] {
         _registration_sem.broken();
     });
+||||||| parent of 28d92d3b62 (view_update_generator: fix drain and destruction order)
+    co_await std::exchange(_started, make_ready_future<>());
+    _registration_sem.broken();
+=======
+    co_await drain();
+    co_await std::exchange(_started, make_ready_future<>());
+    _progress_tracker = {};
+    _registration_sem.broken();
+>>>>>>> 28d92d3b62 (view_update_generator: fix drain and destruction order)
 }
 
 bool view_update_generator::should_throttle() const {
