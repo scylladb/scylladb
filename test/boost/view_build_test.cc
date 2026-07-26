@@ -733,9 +733,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_stop_during_process_staging_
             return utils::get_local_injector().waiters(injection) > 0;
         });
 
-        auto stop = view_update_generator.drain().then([&] {
-            return view_update_generator.stop();
-        });
+        auto stop = view_update_generator.stop();
         utils::get_local_injector().receive_message(injection);
 
         stop.get();
