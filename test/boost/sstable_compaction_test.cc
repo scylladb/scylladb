@@ -7616,6 +7616,45 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_without_backup) 
     return test_perform_component_rewrite_single_sstable(sstables::update_sstable_id::no);
 }
 
+static void object_storage_perform_component_rewrite_single_sstable_fn(test_env& env) {
+    simple_schema ss;
+    auto s = ss.schema();
+    auto pk = tests::generate_partition_key(s).key();
+
+    auto mut1 = mutation(s, pk);
+    mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+    auto original_sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
+    BOOST_REQUIRE(original_sst->sstable_identifier());
+
+    uint32_t new_level = 5;
+    auto modifier = [new_level] (sstable& sst) {
+        sst.mutate_sstable_level(new_level);
+    };
+
+    auto creator = [&env] (shared_sstable sst) {
+        return env.make_sstable(sst->get_schema());
+    };
+    auto new_sst = original_sst->link_with_rewritten_component(std::move(creator),
+            component_type::Statistics,
+            std::move(modifier),
+            sstables::update_sstable_id::yes).get();
+
+    BOOST_REQUIRE(new_sst->sstable_identifier());
+    BOOST_REQUIRE(new_sst->sstable_identifier() != original_sst->sstable_identifier());
+    BOOST_REQUIRE(new_sst->get_sstable_level() == new_level);
+    BOOST_REQUIRE(new_sst->generation() != original_sst->generation());
+}
+
+SEASTAR_TEST_CASE(test_object_storage_perform_component_rewrite_single_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    return test_env::do_with_async([] (test_env& env) { object_storage_perform_component_rewrite_single_sstable_fn(env); },
+            test_env_config{.storage = make_test_object_storage_options("S3")});
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_object_storage_perform_component_rewrite_single_sstable_gcs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_env::do_with_async([] (test_env& env) { object_storage_perform_component_rewrite_single_sstable_fn(env); },
+            test_env_config{.storage = make_test_object_storage_options("GS")});
+}
+
 SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;

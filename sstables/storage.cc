@@ -1088,6 +1088,14 @@ future<> object_storage_base::link_with_excluded_components(const sstable& sst, 
         const std::unordered_set<component_type>& excluded_components,
         optimized_optional<sstable_id> new_sid) const {
     auto sid = new_sid ? *new_sid : sstable_id(new_gen.as_uuid());
+    entry_descriptor desc(new_gen, sid, sst.get_version(), sst.get_format(), component_type::TOC);
+    desc.state = sst.state();
+    auto node_owner = sst.manager().get_local_host_id();
+    co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
+
+    auto ref_name = make_ref_object_name(sid, new_gen, node_owner);
+    co_await put_object(ref_name, memory_data_sink_buffers());
+
     auto prefix = this->prefix();
     co_await coroutine::parallel_for_each(sst.all_components(), [this, &sst, sid, &excluded_components, &prefix] (const std::pair<component_type, sstring>& p) -> future<> {
         if (excluded_components.contains(p.first)) {
@@ -1106,12 +1114,6 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     entry_descriptor desc(gen, sid, sst.get_version(), sst.get_format(), component_type::TOC);
     desc.state = sst.state();
     auto node_owner = sst.manager().get_local_host_id();
-    co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
-
-    auto ref_name = make_ref_object_name(sid, gen, node_owner);
-    co_await _client->put_object(ref_name, memory_data_sink_buffers(), abort_source());
-    auto refs = co_await num_references(sid);
-    sstlog.debug("Cloned {} reference {} num_references={}", sst.get_filename(), ref_name, refs);
 
     if (!may_use_reference_sharing) {
         co_await link_with_excluded_components(sst, gen, {component_type::Scylla}, sid);
@@ -1119,7 +1121,14 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
         scylla_metadata->set_sstable_identifier(sid);
         auto scylla_metadata_bufs = co_await sst.serialize_scylla_metadata(std::move(*scylla_metadata));
         co_await put_object(object_name(_bucket, prefix(), sid, sstable_version_constants::get_component_map(sst.get_version()).at(component_type::Scylla)), std::move(*scylla_metadata_bufs));
+    } else {
+        auto ref_name = make_ref_object_name(sid, gen, node_owner);
+        co_await _client->put_object(ref_name, memory_data_sink_buffers(), abort_source());
+        co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
     }
+
+    auto refs = co_await num_references(sid);
+    sstlog.debug("Cloned {} sstable_id={} num_references={}", sst.get_filename(), sid, refs);
 
     if (!leave_unsealed) {
         // Mark the cloned sstable as sealed in the registry

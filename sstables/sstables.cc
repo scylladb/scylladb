@@ -1707,7 +1707,11 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         scylla_metadata metadata;
         read_simple<component_type::Scylla>(metadata).get();
         if (update_id) {
-            metadata.set_sstable_identifier();
+            if (auto sid = new_sst->sstable_identifier()) {
+                metadata.set_sstable_identifier(*sid);
+            } else {
+                metadata.set_sstable_identifier();
+            }
         }
 
         new_sst->write_component_with_metadata(component, std::move(metadata));
@@ -1742,6 +1746,7 @@ void sstable::write_component_with_metadata(component_type type, scylla_metadata
     write_simple<component_type::Scylla>(metadata);
 
     _components->scylla_metadata = std::move(metadata);
+    _sstable_identifier = _components->scylla_metadata->get_optional_sstable_identifier();
     // Keep the cached _features in sync with the metadata we just wrote,
     // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
     // report zeroed features (e.g. losing ShadowableTombstones).
