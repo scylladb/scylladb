@@ -80,12 +80,18 @@ std::optional<aws_error> aws_error::parse(seastar::sstring&& body) {
         }
         ret_val._message = message_node->value();
     } else {
+        std::string code_value = "missing Code node";
+        std::string message_value = "missing Message node";
+
         if (code_node) {
-            ::s3::s3l.warn("Malformed S3 error response: missing Message node, Code: {}", code_node->value());
-        } else if (message_node) {
-            ::s3::s3l.warn("Malformed S3 error response: missing Code node, Message: {}", message_node->value());
+            code_value = code_node->value();
         }
+        if (message_node) {
+            message_value = message_node->value();
+        }
+        ret_val._message = seastar::format("Malformed S3 error response. Code: {}, Message: {}", code_value, message_value);
         ret_val._type = aws_error_type::UNKNOWN;
+        ::s3::s3l.warn("{}", ret_val._message);
     }
     return ret_val;
 }
@@ -133,9 +139,12 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
     case seastar::http::reply::status_type::network_read_timeout:
         ret_val = all_errors.at("HTTP_NETWORK_READ_TIMEOUT");
         break;
+    case seastar::http::reply::status_type::not_implemented:
+        ret_val = all_errors.at("HTTP_NOT_IMPLEMENTED");
+        break;
     default:
         ret_val = {aws_error_type::UNKNOWN,
-                   "Unknown server error has been encountered.",
+                   seastar::format("Erroneous HTTP code has been encountered. Reason: {}", http_code),
                    retryable{seastar::http::reply::classify_status(http_code) == seastar::http::reply::status_class::server_error}};
     }
     ret_val._message = seastar::format("{} HTTP code: {}", ret_val._message, http_code);
