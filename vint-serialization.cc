@@ -107,7 +107,15 @@ uint64_t unsigned_vint::deserialize(bytes_view v) {
     uint64_t value;
     // If we can overread do that. It is cheaper to have a single 64-bit read and
     // then mask out the unneeded part than to do 8x 1 byte reads.
-    bool can_overread = (reinterpret_cast<uintptr_t>(src+1) ^ reinterpret_cast<uintptr_t>(src+1+sizeof(uint64_t))) < 4096;
+    //
+    // The overread reads 8 bytes starting at src+1, i.e. it touches src+1 .. src+8.
+    // Only src itself is guaranteed to point at valid (mapped) memory, so the whole
+    // read is safe only if it stays within src's page. We therefore anchor the page
+    // check on src (not src+1): if the last byte read, src+sizeof(uint64_t), shares a
+    // page with src, then src+1 .. src+8 all lie in src's (mapped) page. Anchoring on
+    // src+1 would be wrong when src is the last byte of its page, since then src+1 lies
+    // in the following page, which may be unmapped (e.g. the last page of shard memory).
+    bool can_overread = (reinterpret_cast<uintptr_t>(src) ^ reinterpret_cast<uintptr_t>(src+sizeof(uint64_t))) < 4096;
 #ifdef SEASTAR_ASAN_ENABLED
     can_overread = false;
 #endif
