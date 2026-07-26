@@ -94,6 +94,7 @@ public:
     };
     struct split {
         mutation_writer::classify_by_token_group classifier;
+        std::unordered_map<mutation_writer::token_group_id, sstables::run_id> run_identifier_for_token_group;
     };
     struct component_rewrite {
         sstables::component_type component_to_rewrite;
@@ -144,8 +145,9 @@ public:
         return compaction_type_options(component_rewrite{.component_to_rewrite = component, .modifier = std::move(modifier), .update_id = update_id});
     }
 
-    static compaction_type_options make_split(mutation_writer::classify_by_token_group classifier) {
-        return compaction_type_options(split{std::move(classifier)});
+    static compaction_type_options make_split(mutation_writer::classify_by_token_group classifier,
+            std::unordered_map<mutation_writer::token_group_id, sstables::run_id> run_identifier_for_token_group = {}) {
+        return compaction_type_options(split{std::move(classifier), std::move(run_identifier_for_token_group)});
     }
 
     template <typename... Visitor>

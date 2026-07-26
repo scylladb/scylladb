@@ -1552,6 +1552,9 @@ public:
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
         sstables::sstable_writer_config cfg = make_sstable_writer_config(_type);
         cfg.monitor = monitor.get();
+        if (auto it = _options.run_identifier_for_token_group.find(_options.classifier(dk.token())); it != _options.run_identifier_for_token_group.end()) {
+            cfg.run_identifier = it->second;
+        }
 
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, estimated_keys, cfg, get_encoding_stats()), sst};
     }

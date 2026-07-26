@@ -6941,6 +6941,116 @@ SEASTAR_FIXTURE_TEST_CASE(offstrategy_incremental_compaction_gcs_test, gcs_fixtu
         test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+SEASTAR_TEST_CASE(split_compaction_preserves_incremental_run_sides_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        struct test_case {
+            sstring name;
+            std::vector<unsigned> mutations_per_sstable;
+            size_t split_sstable_idx;
+            size_t expected_left_sstables;
+            size_t expected_right_sstables;
+        };
+
+        auto run_test_case = [&env] (const test_case& tc) {
+            auto builder = schema_builder(this_smp_shard_count(), "tests", format("split_compaction_{}", tc.name))
+                    .with_column("id", utf8_type, column_kind::partition_key)
+                    .with_column("value", int32_type);
+            builder.set_compaction_strategy(compaction::compaction_strategy_type::incremental);
+            builder.set_compaction_strategy_options({{"sstable_size_in_mb", "0"}});
+            auto s = builder.build();
+            auto sst_gen = env.make_sst_factory(s);
+
+            auto make_insert = [&] (partition_key key) {
+                mutation m(s, key);
+                m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), api::new_timestamp());
+                return m;
+            };
+
+            auto mutation_count = std::accumulate(tc.mutations_per_sstable.begin(), tc.mutations_per_sstable.end(), 0u);
+            std::set<mutation, mutation_decorated_key_less_comparator> mutations;
+            for (unsigned i = 0; i < mutation_count; i++) {
+                mutations.insert(make_insert(partition_key::from_exploded(*s, {to_bytes(to_sstring(i))})));
+            }
+
+            std::vector<shared_sstable> ssts;
+            ssts.reserve(tc.mutations_per_sstable.size());
+            auto run_identifier = run_id::create_random_id();
+            auto it = mutations.begin();
+            for (auto mutations_in_sstable : tc.mutations_per_sstable) {
+                utils::chunked_vector<mutation> sst_mutations;
+                for (unsigned i = 0; i < mutations_in_sstable; i++) {
+                    sst_mutations.push_back(std::move(*it++));
+                }
+                auto sst = make_sstable_containing(sst_gen, std::move(sst_mutations)).get();
+                sstables::test(sst).set_run_identifier(run_identifier);
+                ssts.push_back(std::move(sst));
+            }
+
+            std::ranges::sort(ssts, [&s] (const shared_sstable& a, const shared_sstable& b) {
+                return a->get_first_decorated_key().tri_compare(*s, b->get_first_decorated_key()) < 0;
+            });
+
+            BOOST_REQUIRE_LT(tc.split_sstable_idx, ssts.size());
+            auto split_sst = ssts[tc.split_sstable_idx];
+            BOOST_REQUIRE(split_sst->get_first_decorated_key().tri_compare(*s, split_sst->get_last_decorated_key()) < 0);
+            auto split_token = split_sst->get_first_decorated_key().token();
+            auto classifier = [split_token] (dht::token token) -> mutation_writer::token_group_id {
+                return token <= split_token ? 0 : 1;
+            };
+
+            auto table = env.make_table_for_tests(s);
+            auto close_table = deferred_stop(table);
+            table->disable_auto_compaction().get();
+            for (auto& sst : ssts) {
+                table->add_sstable_and_update_cache(sst).get();
+            }
+
+            auto& cm = table->get_compaction_manager();
+            auto& cg_view = table->try_get_compaction_group_view_with_static_sharding();
+            auto ret = cm.perform_split_compaction(cg_view, compaction::compaction_type_options::split{classifier}, tasks::task_info{}).get();
+            BOOST_REQUIRE(ret);
+
+            auto main_set = cg_view.main_sstable_set().get();
+            BOOST_REQUIRE_EQUAL(main_set->size(), tc.mutations_per_sstable.size() + 1);
+
+            std::unordered_map<mutation_writer::token_group_id, frozen_sstable_run> runs_by_side;
+            auto runs = main_set->all_sstable_runs();
+            BOOST_REQUIRE_EQUAL(runs.size(), 2);
+            for (const auto& run : runs) {
+                BOOST_REQUIRE(!run->all().empty());
+                std::optional<mutation_writer::token_group_id> side;
+                for (const auto& sst : run->all()) {
+                    auto first_side = classifier(sst->get_first_decorated_key().token());
+                    auto last_side = classifier(sst->get_last_decorated_key().token());
+                    BOOST_REQUIRE_EQUAL(first_side, last_side);
+                    if (!side) {
+                        side = first_side;
+                    } else {
+                        BOOST_REQUIRE_EQUAL(*side, first_side);
+                    }
+                }
+                BOOST_REQUIRE(side);
+                BOOST_REQUIRE(runs_by_side.emplace(*side, run).second);
+            }
+
+            BOOST_REQUIRE(runs_by_side.contains(0));
+            BOOST_REQUIRE(runs_by_side.contains(1));
+            BOOST_REQUIRE_EQUAL(runs_by_side.at(0)->all().size(), tc.expected_left_sstables);
+            BOOST_REQUIRE_EQUAL(runs_by_side.at(1)->all().size(), tc.expected_right_sstables);
+            BOOST_REQUIRE(runs_by_side.at(0)->run_identifier() != runs_by_side.at(1)->run_identifier());
+        };
+
+        for (const auto& tc : std::vector<test_case>{
+                {"single_sstable", {2}, 0, 1, 1},
+                {"first_sstable_split", {2, 2}, 0, 1, 2},
+                {"last_sstable_split", {2, 2}, 1, 2, 1},
+                {"middle_sstable_split", {2, 2, 2, 2, 2}, 2, 3, 3},
+        }) {
+            run_test_case(tc);
+        }
+    });
+}
+
 void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
     auto builder = schema_builder(this_smp_shard_count(), "tests", "test")
             .with_column("id", utf8_type, column_kind::partition_key)

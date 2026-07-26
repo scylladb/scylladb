@@ -1758,7 +1758,9 @@ future<bool> compaction_manager::perform_offstrategy(compaction_group_view& t, t
 class rewrite_sstables_compaction_task_executor : public sstables_task_executor {
     compaction_type_options _options;
     owned_ranges_ptr _owned_ranges_ptr;
+protected:
     compacting_sstable_registration _compacting;
+private:
     compaction_manager::can_purge_tombstones _can_purge;
 
 public:
@@ -1876,6 +1878,12 @@ protected:
 
 class split_compaction_task_executor final : public rewrite_sstables_compaction_task_executor {
     compaction_type_options::split _opt;
+    // For each SSTable whose original run is split across token groups,
+    // _split_run_info stores token-group-specific run IDs used by split writers.
+    // output_run_id_group is reserved as a sentinel key for the run ID assigned to
+    // this SSTable itself when it is moved with component rewrite instead of split.
+    static constexpr auto output_run_id_group = std::numeric_limits<mutation_writer::token_group_id>::max();
+    std::unordered_map<sstables::shared_sstable, std::unordered_map<mutation_writer::token_group_id, sstables::run_id>> _split_run_info;
 public:
     split_compaction_task_executor(compaction_manager& mgr,
                                        throw_if_stopping do_throw_if_stopping,
@@ -1892,6 +1900,33 @@ public:
         if (utils::get_local_injector().is_enabled("split_sstable_rewrite")) {
             _do_throw_if_stopping = throw_if_stopping::yes;
         }
+        std::unordered_map<sstables::run_id, std::unordered_set<mutation_writer::token_group_id>> run_token_groups;
+        std::unordered_map<sstables::run_id, std::unordered_map<mutation_writer::token_group_id, sstables::run_id>> split_run_ids;
+        for (const auto& sst : _sstables) {
+            auto& token_groups = run_token_groups[sst->run_identifier()];
+            auto first_group = _opt.classifier(sst->get_first_decorated_key().token());
+            auto last_group = _opt.classifier(sst->get_last_decorated_key().token());
+            throwing_assert(last_group != output_run_id_group);
+            for (auto group = first_group; group <= last_group; ++group) {
+                token_groups.insert(group);
+            }
+        }
+        for (const auto& [run_id, token_groups] : run_token_groups) {
+            if (token_groups.size() < 2) {
+                continue;
+            }
+            auto& run_split_run_ids = split_run_ids[run_id];
+            for (auto token_group : token_groups) {
+                run_split_run_ids.emplace(token_group, split_run_identifier(run_id, token_group));
+            }
+        }
+        for (const auto& sst : _sstables) {
+            if (auto run_it = split_run_ids.find(sst->run_identifier()); run_it != split_run_ids.end()) {
+                auto [info_it, inserted] = _split_run_info.emplace(sst, run_it->second);
+                info_it->second.emplace(output_run_id_group,
+                        run_it->second.at(_opt.classifier(sst->get_first_decorated_key().token())));
+            }
+        }
     }
 
     static bool sstable_needs_split(const sstables::shared_sstable& sst, const compaction_type_options::split& opt) {
@@ -1900,21 +1935,80 @@ public:
 
     static compaction_descriptor
     make_descriptor(const sstables::shared_sstable& sst, const compaction_type_options::split& split_opt) {
-        auto opt = compaction_type_options::make_split(split_opt.classifier);
+        auto opt = compaction_type_options::make_split(split_opt.classifier, split_opt.run_identifier_for_token_group);
         return rewrite_sstables_compaction_task_executor::make_descriptor(sst, std::move(opt));
     }
 private:
+    static sstables::run_id split_run_identifier(sstables::run_id original_run_id, mutation_writer::token_group_id token_group) {
+        return sstables::run_id(utils::UUID_gen::get_name_UUID(fmt::format("split-run:{}:{}", original_run_id, token_group)));
+    }
+
     bool sstable_needs_split(const sstables::shared_sstable& sst) const {
         return sstable_needs_split(sst, _opt);
     }
+
+    sstables::run_id output_run_identifier(const sstables::shared_sstable& sst) const {
+        auto info_it = _split_run_info.find(sst);
+        if (info_it == _split_run_info.end()) {
+            return sst->run_identifier();
+        }
+        return info_it->second.at(output_run_id_group);
+    }
+
+    compaction_type_options::split make_split_options(const sstables::shared_sstable& sst) const {
+        std::unordered_map<mutation_writer::token_group_id, sstables::run_id> run_identifier_for_token_group;
+        if (auto info_it = _split_run_info.find(sst); info_it != _split_run_info.end()) {
+            run_identifier_for_token_group = info_it->second;
+            run_identifier_for_token_group.erase(output_run_id_group);
+        }
+        return compaction_type_options::split{
+            .classifier = _opt.classifier,
+            .run_identifier_for_token_group = std::move(run_identifier_for_token_group),
+        };
+    }
+
+    future<compaction_result> rewrite_sstable_run_identifier(sstables::shared_sstable sst) {
+        co_await coroutine::switch_to(_cm.maintenance_sg());
+
+        for (;;) {
+            auto output_run_id = output_run_identifier(sst);
+            auto opt = compaction_type_options::make_component_rewrite(sstables::component_type::Scylla,
+                    [output_run_id] (sstables::sstable& new_sst) {
+                new_sst.mutate_sstable_run_identifier(output_run_id);
+            });
+            auto descriptor = rewrite_sstables_compaction_task_executor::make_descriptor(sst, std::move(opt));
+            auto on_replace = _compacting.update_on_sstable_replacement();
+            setup_new_compaction(output_run_id);
+
+            std::exception_ptr ex;
+            try {
+                compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace, compaction_manager::can_purge_tombstones::no);
+                finish_compaction();
+                _cm.reevaluate_postponed_compactions();
+                co_return res;
+            } catch (...) {
+                ex = std::current_exception();
+            }
+
+            finish_compaction(state::failed);
+            if ((co_await maybe_retry(std::move(ex), true)) == stop_iteration::yes) {
+                co_return compaction_result{};
+            }
+        }
+    }
 protected:
     compaction_descriptor make_descriptor(const sstables::shared_sstable& sst) const override {
-        return make_descriptor(sst, _opt);
+        auto split_options = make_split_options(sst);
+        auto opt = compaction_type_options::make_split(std::move(split_options.classifier), std::move(split_options.run_identifier_for_token_group));
+        return rewrite_sstables_compaction_task_executor::make_descriptor(sst, std::move(opt), {});
     }
 
     future<compaction_result> do_rewrite_sstable(const sstables::shared_sstable sst) {
         if (sstable_needs_split(sst)) {
             co_return co_await rewrite_sstables_compaction_task_executor::rewrite_sstable(std::move(sst));
+        }
+        if (sst->run_identifier() != output_run_identifier(sst)) {
+            co_return co_await rewrite_sstable_run_identifier(std::move(sst));
         }
         // SSTable that doesn't require split can bypass compaction and the table will be able to place
         // it into the correct compaction group. Similar approach is done in off-strategy compaction for
@@ -2431,7 +2525,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
         return get_candidates(t);
     };
     owned_ranges_ptr owned_ranges_ptr = {};
-    auto options = compaction_type_options::make_split(std::move(opt.classifier));
+    auto options = compaction_type_options::make_split(std::move(opt.classifier), std::move(opt.run_identifier_for_token_group));
 
     return perform_task_on_all_files<split_compaction_task_executor>("split", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_sstables), throw_if_stopping::no);
 }
