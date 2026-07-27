@@ -52,6 +52,8 @@ public:
     tablet_mutation_builder& set_base_table(table_id base_table);
     tablet_mutation_builder& set_snapshot_name(dht::token last_token, sstring snapshot_name);
     tablet_mutation_builder& del_snapshot_name(dht::token last_token);
+    tablet_mutation_builder& set_raft_resize_info(dht::token last_token, const locator::raft_resize_info& raft_resize);
+    tablet_mutation_builder& del_raft_resize_info(dht::token last_token);
 
 
     mutation build() {
