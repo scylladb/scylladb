@@ -24,6 +24,8 @@ namespace service::strong_consistency {
 // markers persisted in the parent's own system.raft_groups row, and advanced as those markers are
 // applied from the parent's Raft log. See resize_marker_kind for the terminology.
 //
+// A replica has sealed the parent once it applied end_resize.
+//
 // The state exists on a replica from the moment it learns that the parent is being resized -
 // whichever comes first out of observing the resize in the tablet metadata, starting one of its
 // children, or reloading the markers after a restart. Every entry point which may be the first
@@ -95,6 +97,10 @@ public:
 
     // Returns the parent of `child_gid`, or nullopt if it is not a child of a resize.
     std::optional<raft::group_id> get_parent_group(raft::group_id child_gid) const;
+
+    // Returns true once the parent's writes are handed off to its children. False if the group
+    // is not being resized at all.
+    bool should_handoff_writes(raft::group_id parent_gid) const;
 
     // Resolves once the parent of the given group has applied end_resize, or nullopt if the group
     // is not a child of a resize.

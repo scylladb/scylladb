@@ -173,6 +173,12 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
     return ok{};
 }
 
+void raft_server::advance_leader_timestamp(api::timestamp_type ts) {
+    if (_state.leader_info) {
+        _state.leader_info->last_timestamp = std::max(_state.leader_info->last_timestamp, ts);
+    }
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
@@ -648,6 +654,36 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
         return raft_server(state, std::move(h));
     });
+}
+
+bool groups_manager::should_handoff_writes(raft::group_id group_id) const {
+    return _resize_coordinator.should_handoff_writes(group_id);
+}
+
+raft::group_id groups_manager::group_for_handoff(schema_ptr s, const dht::token& token) const {
+    const auto& tablet_map = s->table().get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(s->id());
+    if (!tablet_map.has_raft_info()) {
+        on_internal_error(logger, format("group_for_handoff: table {} does not have raft info", s->id()));
+    }
+    const auto tablet_id = tablet_map.get_tablet_id(token);
+    if (!tablet_map.is_resizing(tablet_id)) {
+        on_internal_error(logger, format("group_for_handoff: tablet {} is not resizing", tablet_id));
+    }
+    // The kind of the resize in progress is the kind of the resize decision, and the accessors
+    // below only answer for the kind they are named after.
+    const auto& decision = tablet_map.resize_decision();
+    if (decision.is_split()) {
+        // The left child owns the tokens up to and including the split token, the right one the
+        // rest, as in stable_token_of_group().
+        const auto [left, right] = tablet_map.get_split_child_gids(tablet_id);
+        return token <= tablet_map.get_split_token(tablet_id) ? left : right;
+    }
+    if (decision.is_merge()) {
+        // A merge produces a single child, which owns every token of each of its parents.
+        return tablet_map.get_merge_target_gid(tablet_id);
+    }
+    on_internal_error(logger, format("group_for_handoff: tablet {} is being resized without a "
+            "resize decision", tablet_id));
 }
 
 void groups_manager::start() {

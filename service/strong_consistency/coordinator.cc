@@ -163,7 +163,10 @@ struct coordinator::operation_ctx {
     locator::effective_replication_map_ptr erm;
     raft_server raft_server;
     locator::tablet_id tablet_id;
-    const locator::tablet_raft_info& raft_info;
+    // By value: during a resize this does not name the tablet map's own group but the child the
+    // request was handed off to, so there is nothing in the map to point at. `tablet_info` below
+    // is a reference because it does point into the map, which `erm` keeps alive.
+    locator::tablet_raft_info raft_info;
     const locator::tablet_info& tablet_info;
 };
 
@@ -214,7 +217,7 @@ static need_redirect redirect_to_replica(locator::tablet_replica target) {
     return { .target = target };
 }
 
-auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool use_leader_cache)
+auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool use_leader_cache, std::optional<raft::group_id> handoff_group)
     -> future<value_or_redirect<operation_ctx>>
 {
     auto erm = schema.table().get_effective_replication_map();
@@ -237,7 +240,9 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(schema.id());
     const auto tablet_id = tablet_map.get_tablet_id(token);
     const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
-    const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
+    const auto raft_info = handoff_group
+        ? locator::tablet_raft_info{.group_id = *handoff_group}
+        : tablet_map.get_tablet_raft_info(tablet_id);
 
     if (!contains(tablet_info.replicas, this_replica)) {
         // For writes, check the leader cache to avoid an extra roundtrip.
@@ -263,9 +268,9 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
 
     return utils::get_local_injector().inject(
         "sc_coordinator_wait_before_acquire_server", utils::wait_for_message(5min)
-    ).then([this, tid = schema.id(), &raft_info, &as] {
+    ).then([this, tid = schema.id(), raft_info, &as] {
         return _groups_manager.acquire_server(tid, raft_info.group_id, as);
-    }).then([erm = std::move(erm), tablet_id, &raft_info, &tablet_info] (raft_server server) mutable {
+    }).then([erm = std::move(erm), tablet_id, raft_info, &tablet_info] (raft_server server) mutable {
         return make_ready_future<value_or_redirect<operation_ctx>>(operation_ctx {
             .erm = std::move(erm),
             .raft_server = std::move(server),
@@ -283,6 +288,54 @@ coordinator::coordinator(groups_manager& groups_manager, replica::database& db, 
 {
     _stats.register_stats();
 }
+
+// Tracks a request moving between a parent being resized and the child which covers its token.
+//
+// A request starts out against the parent. Once the parent's writes are handed off it is retried
+// against the child, and if their leaders are not co-located yet the child bounces it back, because
+// only a leader co-located with the parent's can serve it. That can repeat, so the hop count is
+// kept to report a request which is not getting through.
+class handoff_state {
+    std::optional<raft::group_id> _group;
+    // The timestamp the write got from the parent, carried over so that the child hands out a
+    // higher one. Reads have no timestamp to carry, so they leave this unset.
+    std::optional<api::timestamp_type> _parent_timestamp;
+    unsigned _hops = 0;
+
+public:
+    // The child the request is currently addressed to, or nullopt while it is addressed to the
+    // parent.
+    std::optional<raft::group_id> group() const { return _group; }
+    std::optional<api::timestamp_type> parent_timestamp() const { return _parent_timestamp; }
+
+    // Parent -> child. `ts` is the timestamp the parent handed out, for a write.
+    void take_over(raft::group_id child, std::optional<api::timestamp_type> ts = std::nullopt) {
+        _group = child;
+        _parent_timestamp = ts;
+        ++_hops;
+    }
+
+    // Child -> parent. Retrying against the parent is what finds the node leading both, so the
+    // request goes back there rather than being forwarded to either leader.
+    void bounce_back() {
+        _group = std::nullopt;
+        _parent_timestamp = std::nullopt;
+        ++_hops;
+    }
+
+    // Reports a request which keeps bouncing. Not an error: the leaders are being brought together
+    // concurrently and the request has nowhere else to go until they are.
+    void warn_if_stuck(std::string_view op, const schema& s, locator::tablet_id tid) const {
+        if (_hops % 32 != 0) {
+            return;
+        }
+        static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
+        logger.log(log_level::warn, rate_limit,
+            "{}: request to table {}.{}, tablet {} has bounced between the parent and child "
+            "raft groups {} times during a tablet resize",
+            op, s.ks_name(), s.cf_name(), tid, _hops);
+    }
+};
 
 future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         const dht::token& token,
@@ -340,75 +393,112 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         }
     };
 
-    auto op_result_future = co_await coroutine::as_future(
-            create_operation_ctx(*schema, token, aoe.abort_source(), true));
-
-    if (op_result_future.failed()) {
-        co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
-    }
-
-    auto op_result = std::move(op_result_future).get();
-
-    if (auto* redirect = get_if<need_redirect>(&op_result)) {
-        co_return std::move(*redirect);
-    }
-    auto& op = get<operation_ctx>(op_result);
+    // While the tablet this token belongs to is being resized, the write may have to move to the
+    // child covering its token and, if the leaders are not co-located yet, back again.
+    handoff_state handoff;
 
     while (true) {
-        co_await utils::get_local_injector().inject("sc_coordinator_wait_before_begin_mutate",
-            utils::wait_for_message(5min));
+        auto op_result_future = co_await coroutine::as_future(
+                create_operation_ctx(*schema, token, aoe.abort_source(), true, handoff.group()));
 
-        auto disposition = op.raft_server.begin_mutate(aoe.abort_source());
-        if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
-            const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
-            const auto* target = find_replica(op.tablet_info, leader_host_id);
-            if (!target) {
-                on_internal_error(logger,
-                    ::format("table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
-                        schema->ks_name(), schema->cf_name(), op.tablet_id,
-                        leader_host_id, op.tablet_info.replicas));
+        if (op_result_future.failed()) {
+            co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+        }
+
+        auto op_result = std::move(op_result_future).get();
+
+        if (auto* redirect = get_if<need_redirect>(&op_result)) {
+            co_return std::move(*redirect);
+        }
+        auto& op = get<operation_ctx>(op_result);
+
+        while (true) {
+            co_await utils::get_local_injector().inject("sc_coordinator_wait_before_begin_mutate",
+                utils::wait_for_message(5min));
+
+            if (const auto parent_timestamp = handoff.parent_timestamp()) {
+                // Lift this child's clock above the timestamp the write got from its parent, so
+                // that begin_mutate() below hands out a higher one and the write stays ordered
+                // after everything committed there. A no-op if we don't lead this group, in which
+                // case begin_mutate() doesn't hand out a timestamp either.
+                op.raft_server.advance_leader_timestamp(*parent_timestamp);
             }
-            co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
-        }
-        if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
-            auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
-            if (f.failed()) {
-                co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+            auto disposition = op.raft_server.begin_mutate(aoe.abort_source());
+            if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
+                if (handoff.group()) {
+                    // A handed-off write has to be timestamped by the clock of the node which led
+                    // the parent, so it must not be forwarded to a leader sitting elsewhere. Retry
+                    // against the parent instead: if the leadership of both has moved to another
+                    // node, that is the group whose leader we can forward to.
+                    logger.debug("mutate(): add_entry, got not_a_leader {}, table {}.{}, tablet {}, term {}, handoff_group {}",
+                        *not_a_leader, schema->ks_name(), schema->cf_name(), op.tablet_id, term, *handoff.group());
+                    // The re-election may take a while, so delay the next retry to avoid busy-looping.
+                    co_await seastar::sleep_abortable(10ms, aoe.abort_source());
+                    handoff.bounce_back();
+                    break;
+                }
+                const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
+                const auto* target = find_replica(op.tablet_info, leader_host_id);
+                if (!target) {
+                    on_internal_error(logger,
+                        ::format("table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
+                            schema->ks_name(), schema->cf_name(), op.tablet_id,
+                            leader_host_id, op.tablet_info.replicas));
+                }
+                co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
             }
-            continue;
+            if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+                auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
+                if (f.failed()) {
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+                }
+                continue;
+            }
+
+            api::timestamp_type ts;
+            auto disposition_result = get<raft_server::timestamp_with_term>(disposition);
+            std::tie(ts, term) = {disposition_result.timestamp, disposition_result.term};
+
+            const write_mutation write {
+                .mutation{mutation_gen(ts)}
+            };
+            raft::command raft_cmd;
+            ser::serialize(raft_cmd, raft_command{.change = write});
+
+            logger.debug("mutate(): add_entry({}), term {}",
+                write.mutation.pretty_printer(schema), term);
+
+            // No suspension point between this check and add_entry() below: a write which observed
+            // !start_resize has to be appended to the parent's log ahead of
+            // its end_resize marker, which is appended once start_resize is already set.
+            if (_groups_manager.should_handoff_writes(op.raft_info.group_id)) {
+                const auto child = _groups_manager.group_for_handoff(schema, token);
+                logger.debug("mutate(): handing off the write to table {}.{}, tablet {} from parent {} to child {}",
+                    schema->ks_name(), schema->cf_name(), op.tablet_id, op.raft_info.group_id, child);
+                handoff.take_over(child, ts);
+                break;
+            }
+            future<> add_entry_result = co_await coroutine::as_future(
+                op.raft_server.server().add_entry(std::move(raft_cmd),
+                    raft::wait_type::committed,
+                    &aoe.abort_source()));
+
+            if (!add_entry_result.failed()) {
+                co_return std::monostate{};
+            }
+
+            auto ex = std::move(add_entry_result).get_exception();
+            if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
+                logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, tablet {}, term {}",
+                    ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
+
+                continue;
+            }
+
+            co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
         }
 
-        api::timestamp_type ts;
-        auto disposition_result = get<raft_server::timestamp_with_term>(disposition);
-        std::tie(ts, term) = {disposition_result.timestamp, disposition_result.term};
-
-        const write_mutation write {
-            .mutation{mutation_gen(ts)}
-        };
-        raft::command raft_cmd;
-        ser::serialize(raft_cmd, raft_command{.change = write});
-
-        logger.debug("mutate(): add_entry({}), term {}",
-            write.mutation.pretty_printer(schema), term);
-
-        future<> add_entry_result = co_await coroutine::as_future(
-            op.raft_server.server().add_entry(std::move(raft_cmd),
-                raft::wait_type::committed,
-                &aoe.abort_source()));
-
-        if (!add_entry_result.failed()) {
-            co_return std::monostate{};
-        }
-
-        auto ex = std::move(add_entry_result).get_exception();
-        if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
-            logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, tablet {}, term {}",
-                ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
-
-            continue;
-        }
-
-        co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
+        handoff.warn_if_stuck("mutate()", *schema, op.tablet_id);
     }
 }
 
@@ -462,66 +552,108 @@ auto coordinator::query(schema_ptr schema,
         }
     };
 
-    auto op_result_future = co_await coroutine::as_future(create_operation_ctx(
-        *schema,
-        ranges[0].start()->value().token(),
-        aoe.abort_source(),
-        rtype == read_type::linearizable));
+    // See the comment in mutate(): during a tablet resize the read may have to move to a child
+    // raft group.
+    handoff_state handoff;
+    const auto token = ranges[0].start()->value().token();
 
-    if (op_result_future.failed()) {
-        co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
-    }
+    while (true) {
 
-    auto op_result = std::move(op_result_future).get();
+        auto op_result_future = co_await coroutine::as_future(create_operation_ctx(
+            *schema,
+            token,
+            aoe.abort_source(),
+            rtype == read_type::linearizable,
+            handoff.group()));
 
-    if (auto* redirect = get_if<need_redirect>(&op_result)) {
-        co_return std::move(*redirect);
-    }
-    auto& op = get<operation_ctx>(op_result);
+        if (op_result_future.failed()) {
+            co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+        }
 
-    if (rtype == read_type::linearizable) {
-        // For linearizable reads we may need to forward to the raft leader.
-        while (true) {
-            auto disposition = op.raft_server.begin_read(aoe.abort_source());
-            if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
-                const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
-                const auto* target = find_replica(op.tablet_info, leader_host_id);
-                if (!target) {
-                    on_internal_error(logger,
-                        ::format("query(): table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
-                            schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.tablet_info.replicas));
+        auto op_result = std::move(op_result_future).get();
+
+        if (auto* redirect = get_if<need_redirect>(&op_result)) {
+            co_return std::move(*redirect);
+        }
+        auto& op = get<operation_ctx>(op_result);
+
+        if (rtype == read_type::linearizable) {
+            // For linearizable reads we may need to forward to the raft leader.
+            while (true) {
+                auto disposition = op.raft_server.begin_read(aoe.abort_source());
+                if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
+                    if (handoff.group()) {
+                        // As in mutate(): the hand-off is local to this replica, so the read is
+                        // retried here until the parent and the child are led by the same node,
+                        // rather than forwarded to either leader.
+                        logger.debug("query(): got not_a_leader {}, table {}.{}, tablet {}, handoff_group {}",
+                            *not_a_leader, schema->ks_name(), schema->cf_name(), op.tablet_id, *handoff.group());
+                        // The re-election may take a while, so delay the next retry to avoid busy-looping.
+                        co_await seastar::sleep_abortable(10ms, aoe.abort_source());
+                        handoff.bounce_back();
+                        break;
+                    }
+                    const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
+                    const auto* target = find_replica(op.tablet_info, leader_host_id);
+                    if (!target) {
+                        on_internal_error(logger,
+                            ::format("query(): table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
+                                schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.tablet_info.replicas));
+                    }
+                    co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
                 }
-                co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
+                if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+                    future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
+                    if (f.failed()) {
+                        co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+                    }
+                    continue;
+                }
+                break;
             }
-            if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
-                future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
-                if (f.failed()) {
-                    co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+
+            co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
+                utils::wait_for_message(5min));
+
+            auto maybe_handoff = [&] {
+                if (handoff.group() || !_groups_manager.should_handoff_writes(op.raft_info.group_id)) {
+                    return false;
                 }
+                const auto child = _groups_manager.group_for_handoff(schema, token);
+                logger.debug("query(): handing off the read of table {}.{}, tablet {} from parent {} to child {}",
+                    schema->ks_name(), schema->cf_name(), op.tablet_id, op.raft_info.group_id, child);
+                handoff.take_over(child);
+                handoff.warn_if_stuck("query()", *schema, op.tablet_id);
+                return true;
+            };
+            // Once the parent's writes are handed off, its reads have to follow, or the read could
+            // miss a write already committed in the child.
+            if (maybe_handoff()) {
                 continue;
             }
-            break;
+
+            future<> f = co_await coroutine::as_future(op.raft_server.server().read_barrier(&aoe.abort_source()));
+            if (f.failed()) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+            }
+            // start_resize may have been applied by the barrier we just ran, in which case the
+            // writes are already handed off and the barrier has to be run in the child instead.
+            if (maybe_handoff()) {
+                continue;
+            }
         }
 
-        co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
-            utils::wait_for_message(5min));
+        // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
+        auto query_future = co_await coroutine::as_future(_db.query(schema, cmd,
+            query::result_options::only_result(), ranges, trace_state, timeout));
 
-        future<> f = co_await coroutine::as_future(op.raft_server.server().read_barrier(&aoe.abort_source()));
-        if (f.failed()) {
-            co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+        if (query_future.failed()) {
+            co_await coroutine::return_exception_ptr(filter_error(std::move(query_future).get_exception()));
         }
+
+        auto [result, cache_temp] = std::move(query_future).get();
+        co_return std::move(result);
     }
-
-    // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
-    auto query_future = co_await coroutine::as_future(_db.query(schema, cmd,
-        query::result_options::only_result(), ranges, trace_state, timeout));
-
-    if (query_future.failed()) {
-        co_await coroutine::return_exception_ptr(filter_error(std::move(query_future).get_exception()));
-    }
-
-    auto [result, cache_temp] = std::move(query_future).get();
-    co_return std::move(result);
 }
 
 future<> coordinator::wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout) {

@@ -182,6 +182,11 @@ public:
     // The raft_server instance is used to submit write commands and perform read_barrier() before reads.
     future<raft_server> acquire_server(table_id table_id, raft::group_id group_id, abort_source& as);
 
+    // Whether the requests of the given group are handed off to its children during a resize,
+    // and which of those children covers a given token.
+    bool should_handoff_writes(raft::group_id group_id) const;
+    raft::group_id group_for_handoff(schema_ptr schema, const dht::token& token) const;
+
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
     void start();
@@ -245,6 +250,7 @@ public:
     struct ok {};
     using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader>;
     begin_read_result begin_read(abort_source&);
+    void advance_leader_timestamp(api::timestamp_type ts);
 };
 
 } // namespace service::strong_consistency
