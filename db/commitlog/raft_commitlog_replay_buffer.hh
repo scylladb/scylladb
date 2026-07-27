@@ -10,10 +10,15 @@
 
 #include <unordered_map>
 #include <seastar/core/future.hh>
+#include <seastar/util/noncopyable_function.hh>
 #include "utils/chunked_vector.hh"
 #include "raft/raft.hh"
 #include "db/commitlog/replay_position.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+
+namespace service::strong_consistency {
+class raft_resize_tracker;
+}
 
 namespace db {
 class system_keyspace;
@@ -167,6 +172,24 @@ public:
     //      already applied (snapshot.idx is advanced to commit_idx after replay).
     //   6. Non-command entries (configuration, dummy) are kept in the raft log but
     //      don't need mutation application or commitlog rewrite.
-    future<> process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks);
+    //   7. Groups replacing another one during a tablet resize are processed in a second pass,
+    //      after every other group. Step 3 must not run for them while the group they replace is
+    //      unsealed; their persisted commit_idx is dropped instead, so the regular processing only
+    //      rewrites their entries and their raft server can still finish starting.
+    future<> process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks, service::strong_consistency::raft_resize_tracker& resize_tracker);
+
+private:
+    // Replays one group: applies its committed entries and rewrites the rest, as steps 3-6 above.
+    using process_group_fn = noncopyable_function<future<>(raft::group_id, utils::chunked_vector<raft::log_entry_ptr>&, table_id)>;
+
+    // Step 7: replays the groups created by a resize, once every other group has been replayed.
+    // Kept apart from the main pass because it is the one place where the replay has to know
+    // about resizes: whether a child may apply depends on the state its parent's replay left in
+    // `resize_tracker`. `child_to_parent` names the children, and `group_to_table` the table of
+    // each parent.
+    future<> process_resize_children(cql3::query_processor& qp, service::strong_consistency::raft_resize_tracker& resize_tracker,
+            const std::unordered_map<raft::group_id, raft::group_id>& child_to_parent,
+            const std::unordered_map<raft::group_id, table_id>& group_to_table,
+            const process_group_fn& process_group);
 };
 } // namespace db

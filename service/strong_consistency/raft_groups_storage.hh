@@ -73,8 +73,8 @@ public:
     // To be called before start for the new group.
     future<> bootstrap(raft::configuration initial_configuation, bool nontrivial_snapshot);
 
-    // Static version that doesn't require constructing a full raft_groups_storage object.
-    // Useful during commitlog replay when only read access to metadata is needed.
+    // Static versions that don't require constructing a full raft_groups_storage object.
+    // Useful during commitlog replay when only the metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
 
     // The persisted commit index, or nullopt when this shard persists nothing about the
@@ -97,6 +97,8 @@ public:
     // is the absence of the state this erases - see raft_commitlog_replay_buffer and
     // groups_manager::start_raft_group().
     static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+
+    static future<> store_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t idx);
     // Store snapshot idx and term without updating the configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new
