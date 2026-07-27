@@ -194,6 +194,13 @@ std::pair<stop_iteration, uint64_t> view_update_generator::generate_updates_from
     schema_ptr s = table->schema();
     uint64_t input_size = 0;
 
+    // Pause before generating (and dispatching) any view update. This is the single
+    // point covering both the legacy generator fiber (which calls this directly) and
+    // the view_building_worker path (via process_staging_sstables), both of which run
+    // us in a seastar thread.
+    utils::get_local_injector().inject("view_update_generator_pause_before_processing",
+            utils::wait_for_message(std::chrono::minutes(5))).get();
+
     // Exploit the fact that sstables in the staging directory
     // are usually non-overlapping and use a partitioned set for
     // the read.
@@ -245,9 +252,6 @@ future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::
     auto deregister_sstables = defer([this, &sstables] noexcept {
         _progress_tracker->on_sstables_deregistration(sstables);
     });
-
-    co_await utils::get_local_injector().inject("view_update_generator_pause_before_processing",
-            utils::wait_for_message(std::chrono::minutes(5)));
 
     // Generate view updates from staging sstables
     auto start_time = db_clock::now();
