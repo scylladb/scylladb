@@ -983,8 +983,7 @@ async def test_timed_out_queries(manager: ManagerClient):
             # Case 2: Writes.
             write_error_injections = [
                 "sc_coordinator_wait_before_acquire_server",
-                "sc_coordinator_wait_before_begin_mutate",
-                "sc_coordinator_wait_before_add_entry"
+                "sc_coordinator_wait_before_begin_mutate"
             ]
             for error_injection_name in write_error_injections:
                 await try_write(error_injection_name)
@@ -1052,7 +1051,7 @@ async def test_queries_while_dropping_table(manager: ManagerClient):
             manager.api.enable_injection(leader_server.ip_addr,
                 "sc_coordinator_wait_before_query_read_barrier", one_shot=True),
             manager.api.enable_injection(leader_server.ip_addr,
-                "sc_coordinator_wait_before_add_entry", one_shot=True))
+                "sc_coordinator_wait_before_begin_mutate", one_shot=True))
 
         read_fut = asyncio.ensure_future(
             cql.run_async(f"SELECT * FROM {table} WHERE pk = 0", host=leader_host))
@@ -1063,7 +1062,7 @@ async def test_queries_while_dropping_table(manager: ManagerClient):
         await asyncio.gather(
             leader_log.wait_for("sc_coordinator_wait_before_query_read_barrier: waiting",
                 from_mark=mark_leader, timeout=30),
-            leader_log.wait_for("sc_coordinator_wait_before_add_entry: waiting",
+            leader_log.wait_for("sc_coordinator_wait_before_begin_mutate: waiting",
                 from_mark=mark_leader, timeout=30))
 
         mark_leader = await leader_log.mark()
@@ -1087,7 +1086,7 @@ async def test_queries_while_dropping_table(manager: ManagerClient):
             manager.api.message_injection(leader_server.ip_addr,
                 "sc_coordinator_wait_before_query_read_barrier"),
             manager.api.message_injection(leader_server.ip_addr,
-                "sc_coordinator_wait_before_add_entry"))
+                "sc_coordinator_wait_before_begin_mutate"))
 
         # Both should fail with "no such column family" / "unconfigured table".
         # The raft server is aborted as part of group deletion, causing
