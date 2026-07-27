@@ -109,6 +109,9 @@ struct leader {
     // If timeout_now was already sent to one of the followers contains the id of the follower
     // it was sent to
     std::optional<server_id> timeout_now_sent;
+    // If set, leadership transfer must select this voting follower once it has
+    // caught up with the leader's log.
+    std::optional<server_id> leadership_transfer_target;
     // A source of read ids - a monotonically growing (in single term) identifiers of
     // reads issued by the state machine. Using monotonic ids allows the leader to
     // resolve all preceding read requests when a quorum of acks from followers arrive
@@ -478,7 +481,8 @@ public:
     // sends timeout_now rpc to it and makes it initiate new election.
     // Can be used for leader stepdown if new configuration does not contain
     // current leader.
-    void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0));
+    // If a target is selected, the leadership transfer will be attempted to that target only.
+    void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0), server_id target = {});
 
     void stop();
 
