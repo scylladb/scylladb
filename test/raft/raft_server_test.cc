@@ -4,6 +4,7 @@
 #include "utils/error_injection.hh"
 #include "test/lib/error_injection.hh"
 #include <seastar/util/defer.hh>
+#include <seastar/core/when_all.hh>
 
 #ifdef SEASTAR_DEBUG
 // Increase tick time to allow debug to process messages
@@ -526,4 +527,66 @@ SEASTAR_THREAD_TEST_CASE(test_commit_waiter_dropped_before_notifying_above_snaps
     // included in the snapshot.
     BOOST_CHECK_NO_THROW(fut.get());
 #endif
+}
+
+// Concurrent add_entry() calls on a leader must be appended to the log - and
+// therefore applied - in the order in which the calls entered add_entry().
+//
+// This discriminates only where the reactor shuffles its task queue: Debug, Sanitize and Fuzz
+// builds. That shuffling is what lets the submissions below reach the memory permit out of order.
+// Elsewhere they reach it in order anyway, a seastar semaphore handing its units out strictly
+// first-come-first-served, so the test passes with or without the admission.
+SEASTAR_THREAD_TEST_CASE(test_add_entry_preserves_submission_order) {
+    constexpr int n = 100;
+    const size_t command_size = sizeof(size_t);
+    auto applied = make_lw_shared<std::vector<int>>();
+    test_case test_config {
+        .nodes = 1,
+        .config = std::vector<raft::server::configuration>({
+            raft::server::configuration {
+                // Room for a couple of entries at a time - the commands are serialized ints, so
+                // two of them fit in max_log_size - with a snapshot after every entry so that the
+                // room comes back. Without this the limiter has 4MB and every one of the hundred
+                // submissions gets its memory permit synchronously, which orders the appends by
+                // construction and leaves the admission below untested.
+                .snapshot_threshold = 1,
+                .snapshot_threshold_log_size = 1,
+                .snapshot_trailing = 0,
+                .snapshot_trailing_size = 0,
+                .max_log_size = command_size,
+                // The path strongly consistent tables take, and the only one the ordering is
+                // kept on.
+                .enable_forwarding = false,
+                .max_command_size = command_size
+            }
+        })
+    };
+    raft_cluster<std::chrono::steady_clock> cluster(
+            std::move(test_config),
+            [applied](raft::server_id id, const raft::log_entry_ptr_list& commands, lw_shared_ptr<hasher_int> hasher) {
+                for (auto&& entry : commands) {
+                    auto&& d = std::get<raft::command>(entry->data);
+                    auto is = ser::as_input_stream(d);
+                    applied->push_back(ser::deserialize(is, std::type_identity<int>()));
+                }
+                return commands.size();
+            },
+            n, 0, 0, false, tick_delay, rpc_config{});
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    // Submitted without awaiting in between, so that the submission order is the order
+    // of the loop. Waited for as applied, since the check below reads what was applied.
+    auto& server = cluster.get_server(0);
+    std::vector<future<>> futures;
+    futures.reserve(n);
+    for (int v = 0; v < n; ++v) {
+        futures.push_back(server.add_entry(create_command(v), raft::wait_type::applied, nullptr));
+    }
+    seastar::when_all_succeed(futures.begin(), futures.end()).get();
+
+    BOOST_REQUIRE_EQUAL(applied->size(), size_t(n));
+    for (int v = 0; v < n; ++v) {
+        BOOST_REQUIRE_EQUAL((*applied)[v], v);
+    }
 }
