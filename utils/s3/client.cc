@@ -76,7 +76,7 @@ inline size_t iovec_len(const std::vector<iovec>& iov)
 
 namespace s3 {
 
-static logging::logger s3l("s3");
+logging::logger s3l("s3");
 
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     auto in = std::move(in_);
@@ -334,8 +334,21 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
         std::optional<aws_error> possible_error;
         if (status_class != seastar::http::reply::status_class::informational && status_class != seastar::http::reply::status_class::success) {
             possible_error = aws_error::parse(co_await seastar::util::read_entire_stream_contiguous(_in));
-            if (!possible_error) {
-                possible_error = aws_error::from_http_code(rep._status);
+            if (!possible_error || possible_error->get_error_type() == aws_error_type::UNKNOWN) {
+                // The parsed error carries no useful classification. Adopt the HTTP-derived error
+                // unconditionally: even when it too is UNKNOWN it may carry a more accurate
+                // retryability (e.g. 502 → retryable::yes) than the parsed UNKNOWN default, and
+                // adopting it also ensures possible_error stays populated so the failure path
+                // below produces an aws_exception rather than an unexpected_status_error.
+                auto another_error = aws_error::from_http_code(rep._status);
+                // Preserve the server's original <Message> (if any) so diagnostics are not lost
+                // when the HTTP-derived error replaces the parsed one.
+                if (possible_error && !possible_error->get_error_message().empty()) {
+                    another_error = aws_error(another_error.get_error_type(),
+                                              seastar::format("{} ({})", possible_error->get_error_message(), another_error.get_error_message()),
+                                              another_error.is_retryable());
+                }
+                possible_error = another_error;
             }
         }
 

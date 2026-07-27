@@ -110,12 +110,134 @@ BOOST_AUTO_TEST_CASE(TestErrorsWithoutPrefixParse) {
     BOOST_REQUIRE_EQUAL(error.is_retryable(), utils::http::retryable::no);
 }
 
+BOOST_AUTO_TEST_CASE(TestAwsS3ModeledErrors) {
+    static const std::unordered_map<std::string_view, aws::aws_error_type> expected_errors{
+        {"AnnotationLimitExceeded", aws::aws_error_type::ANNOTATION_LIMIT_EXCEEDED},
+        {"AnnotationNameTooLong", aws::aws_error_type::ANNOTATION_NAME_TOO_LONG},
+        {"EncryptionTypeMismatch", aws::aws_error_type::ENCRYPTION_TYPE_MISMATCH},
+        {"IdempotencyParameterMismatch", aws::aws_error_type::IDEMPOTENCY_PARAMETER_MISMATCH},
+        {"InvalidAnnotationName", aws::aws_error_type::INVALID_ANNOTATION_NAME},
+        {"InvalidPrefix", aws::aws_error_type::INVALID_PREFIX},
+        {"InvalidRequest", aws::aws_error_type::INVALID_REQUEST},
+        {"InvalidWriteOffset", aws::aws_error_type::INVALID_WRITE_OFFSET},
+        {"NoSuchAnnotation", aws::aws_error_type::NO_SUCH_ANNOTATION},
+        {"TooManyParts", aws::aws_error_type::TOO_MANY_PARTS},
+        {"UnsupportedMediaType", aws::aws_error_type::UNSUPPORTED_MEDIA_TYPE},
+    };
+
+    std::string message = "Test Message";
+    std::string requestId = "Request Id";
+    for (const auto& [exception, error_type] : expected_errors) {
+        auto error = aws::aws_error::parse(build_xml_response(std::string(exception), message, requestId)).value();
+        BOOST_REQUIRE_EQUAL(error_type, error.get_error_type());
+        BOOST_REQUIRE_EQUAL(message, error.get_error_message());
+        BOOST_REQUIRE_EQUAL(error.is_retryable(), utils::http::retryable::no);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(TestOciObjectStorageErrors) {
+    // Common OCI API errors as documented at
+    //   https://docs.oracle.com/en-us/iaas/Content/API/References/apierrors.htm
+    // (retrieved 2026-07-12).
+    //
+    // OCI-specific error codes are deliberately not carried in
+    // aws_error_definitions any more, because Oracle's retryability rules
+    // for those codes conflict with S3 semantics (e.g. IncorrectState on
+    // 409 is marked retryable). Consequently, parse() must:
+    //   - fall through to aws_error_type::UNKNOWN (not retryable) for
+    //     OCI-only error names, and
+    //   - preserve any AWS-native mapping for names that overlap with AWS
+    //     (e.g. MissingParameter, InternalServerError, ServiceUnavailable).
+    //
+    // The table below lists every documented OCI error name, sorted by
+    // documented HTTP status, together with the aws_error_type that
+    // parse() must return today. Names that overlap with AWS state that
+    // explicitly; all others are UNKNOWN.
+    struct expected_error {
+        aws::aws_error_type parsed_type;
+        utils::http::retryable parsed_retryable;
+    };
+    // "InvalidParameter" is documented at both 400 and 404 with identical
+    // semantics; the map is keyed by name so only one entry can exist.
+    static const std::unordered_map<std::string_view, expected_error> expected_errors{
+        // 400
+        {"CannotParseRequest",                     {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"InvalidParameter",                       {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"LimitExceeded",                          {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"MissingParameter",                       {aws::aws_error_type::MISSING_PARAMETER,   utils::http::retryable::no}},
+        {"QuotaExceeded",                          {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"RelatedResourceNotAuthorizedOrNotFound", {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"InvalidStorageTier",                     {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 401
+        {"NotAuthenticated",                       {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 403
+        {"NotAllowed",                             {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"NotAuthorized",                          {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"SignUpRequired",                         {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 404
+        {"NotAuthorizedOrNotFound",                {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"NotFound",                               {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"NamespaceNotFound",                      {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 405
+        {"MethodNotAllowed",                       {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 409
+        {"Conflict",                               {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"ExternalServerIncorrectState",           {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"IncorrectState",                         {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"InvalidatedRetryToken",                  {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"ResourceLocked",                         {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"NotAuthorizedOrResourceAlreadyExists",   {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 412
+        {"NoEtagMatch",                            {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 413
+        {"PayloadTooLarge",                        {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 422
+        {"UnprocessableEntity",                    {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 429
+        {"TooManyRequests",                        {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 431
+        {"RequestHeaderFieldsTooLarge",            {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 500
+        {"InternalServerError",                    {aws::aws_error_type::INTERNAL_FAILURE,    utils::http::retryable::yes}},
+        // 501
+        {"MethodNotImplemented",                   {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        // 503
+        {"ExternalServerUnreachable",              {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"ExternalServerTimeout",                  {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"ExternalServerInvalidResponse",          {aws::aws_error_type::UNKNOWN,             utils::http::retryable::no}},
+        {"ServiceUnavailable",                     {aws::aws_error_type::SERVICE_UNAVAILABLE, utils::http::retryable::yes}},
+    };
+
+    const std::string message = "Test Message";
+    const std::string requestId = "Request Id";
+    for (const auto& [exception, expected] : expected_errors) {
+        BOOST_TEST_CONTEXT("OCI error name: " << exception) {
+            auto error = aws::aws_error::parse(build_xml_response(std::string(exception), message, requestId)).value();
+            BOOST_REQUIRE_EQUAL(expected.parsed_type, error.get_error_type());
+            BOOST_REQUIRE_EQUAL(message, error.get_error_message());
+            BOOST_REQUIRE_EQUAL(expected.parsed_retryable, error.is_retryable());
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(TestHelperFunctions) {
     BOOST_REQUIRE_EQUAL(utils::http::from_http_code(seastar::http::reply::status_type::service_unavailable), utils::http::retryable::yes);
     BOOST_REQUIRE_EQUAL(utils::http::from_http_code(seastar::http::reply::status_type::unauthorized), utils::http::retryable::no);
 
     BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(ECONNRESET, std::system_category())), utils::http::retryable::yes);
     BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(EADDRINUSE, std::system_category())), utils::http::retryable::no);
+
+    // aws_error::from_http_code classifies retryability per HTTP status. All 5xx
+    // are retryable except 501 Not Implemented, which reflects a permanent lack
+    // of support and must never be retried.
+    BOOST_REQUIRE_EQUAL(aws::aws_error::from_http_code(seastar::http::reply::status_type::internal_server_error).is_retryable(),
+                        utils::http::retryable::yes);
+    BOOST_REQUIRE_EQUAL(aws::aws_error::from_http_code(seastar::http::reply::status_type::bad_gateway).is_retryable(),
+                        utils::http::retryable::yes);
+    BOOST_REQUIRE_EQUAL(aws::aws_error::from_http_code(seastar::http::reply::status_type::service_unavailable).is_retryable(),
+                        utils::http::retryable::yes);
+    BOOST_REQUIRE_EQUAL(aws::aws_error::from_http_code(seastar::http::reply::status_type::not_implemented).is_retryable(),
+                        utils::http::retryable::no);
 }
 
 BOOST_AUTO_TEST_CASE(TestNestedException) {
