@@ -1554,6 +1554,14 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
     }
 
     return seastar::async([this, creator = std::move(sstable_creator), component, modifier = std::move(modifier), update_sstable_id] {
+        // Serialize with the other on-disk mutations of this sstable (change_state(),
+        // snapshot(), pick_up_from_upload(), unlink()), which all take _mutate_sem too.
+        // Without this lock a concurrent change_state() -- e.g. the view update generator
+        // moving a staging sstable to the base directory -- can relocate this sstable's
+        // component files while we resolve their paths, hard-link them and read the Scylla
+        // component below, causing a file-not-found abort. See SCYLLADB-3263.
+        auto lock = get_units(_mutate_sem, 1).get();
+
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
 
