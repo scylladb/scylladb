@@ -130,6 +130,14 @@ bool raft_resize_tracker::should_handoff_writes(raft::group_id parent_gid) const
     return it != _resize_states.end() && it->second.start_resize;
 }
 
+future<> raft_resize_tracker::wait_for_end_resize(raft::group_id parent_gid, abort_source& as) {
+    auto it = _resize_states.find(parent_gid);
+    if (it == _resize_states.end()) {
+        on_internal_error(logger, format("no resize state for group {}", parent_gid));
+    }
+    return it->second.end_resize.get_shared_future(as);
+}
+
 std::optional<shared_future<>> raft_resize_tracker::get_parent_finished_future(raft::group_id child_gid) const {
     auto parent_gid = get_parent_group(child_gid);
     if (!parent_gid) {

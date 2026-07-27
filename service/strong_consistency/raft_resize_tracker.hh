@@ -9,6 +9,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_future.hh>
 #include "raft/raft.hh"
 #include "schema/schema_fwd.hh"
@@ -86,7 +87,11 @@ public:
     // this is the first time we hear about the resize - a replica may learn that a group is
     // being resized by applying a marker before it observes the resize in the tablet metadata.
     //
-    // Called by the applier fiber once the corresponding marker has been applied.
+    // Called by the applier fiber once the corresponding marker has been applied, and by
+    // groups_manager to fast-forward start_resize ahead of its own apply. The latter is safe
+    // because the marker is already committed in the parent's log by then, so it can never be
+    // rolled back: we apply all committed entries on restart and no operation removes a marker
+    // from the log.
     void mark_resize_phase(raft::group_id parent_gid, resize_marker_kind kind);
 
     // Drops the state of `parent_gid`. The caller must ensure that the resize is over.
@@ -107,6 +112,10 @@ public:
     // Returns true once the parent's writes are handed off to its children. False if the group
     // is not being resized at all.
     bool should_handoff_writes(raft::group_id parent_gid) const;
+
+    // Resolves once the parent has been sealed on this replica. It is an internal error to call
+    // this for a group which is_resizing() doesn't hold for.
+    future<> wait_for_end_resize(raft::group_id parent_gid, abort_source& as);
 
     // Resolves once the parent of the given group has applied end_resize, or nullopt if the group
     // is not a child of a resize.

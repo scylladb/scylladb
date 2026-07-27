@@ -254,6 +254,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     void init_messaging_service();
     future<> uninit_messaging_service();
 
+    // Returns the shard hosting the raft server of the given tablet, or nullopt if this node does
+    // not own a replica of it, or if the tablet is not served by `expected_gid` here - which is
+    // how a tablet id coming from a replica with a different tablet map is rejected.
+    std::optional<shard_id> find_shard_for_tablet(locator::global_tablet_id tablet, raft::group_id expected_gid) const;
+
     // A non-blocking, non-throwing variant of acquire_server(): returns nullopt if the group
     // is not hosted here, hasn't started yet or is being stopped.
     std::optional<raft_server> try_acquire_server(raft::group_id group_id);
@@ -280,6 +285,15 @@ public:
     // and which of those children covers a given token.
     bool should_handoff_writes(raft::group_id group_id) const;
     raft::group_id group_for_handoff(schema_ptr schema, const dht::token& token) const;
+
+    // Seals the raft group `parent_gid`, which is being replaced by the groups `new_gids`.
+    // Returns true once start_resize and end_resize have been committed in the parent group, or,
+    // if wait_only is true, once end_resize has been applied on this replica.
+    // Returns false if the call has to be retried, which covers every case where this replica
+    // cannot make progress yet: it has not observed the resize, does not host the groups involved
+    // yet, is not the leader of the parent group, or the leaders are not co-located yet.
+    future<bool> handle_process_raft_resize(raft::group_id parent_gid,
+        const std::vector<raft::group_id>& new_gids, bool wait_only, abort_source& as);
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
