@@ -2282,9 +2282,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
 
     r.insert(r.end(), {tablets()});
 
-    if (cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
-        r.insert(r.end(), {sstables_registry()});
-    }
+    r.insert(r.end(), {sstables_registry()});
 
     if (cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
         r.insert(r.end(), {raft_groups(), raft_groups_snapshots(), raft_groups_snapshot_config()});

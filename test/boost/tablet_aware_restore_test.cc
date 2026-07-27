@@ -346,7 +346,6 @@ SEASTAR_TEST_CASE(test_populate_snapshot_sstables_from_manifests, *boost::unit_t
 
     auto db_cfg_ptr = make_shared<db::config>();
     db_cfg_ptr->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
-    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
     auto storage_options = make_test_object_storage_options("S3");
     db_cfg_ptr->object_storage_endpoints(make_storage_options_config(storage_options));
 

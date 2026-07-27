@@ -368,7 +368,6 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
     tests::adjust_rlimit();
     if (!cfg.storage.is_local_type()) {
         auto db_cfg = make_shared<db::config>();
-        db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
         db_cfg->object_storage_endpoints(make_storage_options_config(cfg.storage));
         return seastar::async([func = std::move(func), cfg = std::move(cfg), db_cfg = std::move(db_cfg)] () mutable {
             sharded<sstables::storage_manager> sstm;

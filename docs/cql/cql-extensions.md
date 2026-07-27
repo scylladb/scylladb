@@ -103,6 +103,36 @@ and to the TRUNCATE data definition query.
 
 In addition, the timeout parameter can be applied to SELECT queries as well.
 
+(cql-keyspace-storage-options)=
+## Keyspace storage options
+
+To store your keyspaces on Amazon S3 or another S3-compatible object store, you need to configure your storage endpoints.
+See {ref}`Configuring Object Storage <object-storage-configuration>` for instructions.
+
+After your storage endpoints are configured, you can configure your object storage when creating a keyspace:
+
+```cql
+CREATE KEYSPACE with STORAGE = { 'type': 'S3', 'endpoint': '$endpoint_name', 'bucket': '$bucket' } 
+```
+
+**Example**
+
+```cql
+CREATE KEYSPACE ks
+    WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }
+    AND STORAGE = { 'type' : 'S3', 'bucket' : '/tmp/b1', 'endpoint' : 'localhost' } ;
+```
+
+Storage options can be inspected by checking the new system schema table: `system_schema.scylla_keyspaces`:
+
+```cql
+    cassandra@cqlsh> select * from system_schema.scylla_keyspaces;
+    
+     keyspace_name | storage_options                                | storage_type
+    ---------------+------------------------------------------------+--------------
+               ksx | {'bucket': '/tmp/xx', 'endpoint': 'localhost'} |           S3
+```
+
 ## PRUNE MATERIALIZED VIEW statements
 
 A special statement is dedicated for pruning ghost rows from materialized views.
