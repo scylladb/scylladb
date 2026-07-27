@@ -25,6 +25,11 @@
 #include "db/config.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
+#include <algorithm>
+#include <seastar/core/sleep.hh>
+#include <seastar/coroutine/as_future.hh>
+#include <seastar/util/later.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -118,7 +123,7 @@ raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder h
 // conditional_variable::wait doesn't have an overload taking an abort_source.
 // This is a temporary workaround until we extend the interface.
 // See: scylladb/seastar#3292.
-static future<> wait_with_abort_source(condition_variable& cv, abort_source& as) {
+future<> wait_with_abort_source(condition_variable& cv, abort_source& as) {
     if (as.abort_requested()) {
         return make_exception_future<>(as.abort_requested_exception_ptr());
     }
@@ -199,12 +204,15 @@ groups_manager::groups_manager(netw::messaging_service& ms,
 
 future<> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
-        token_metadata_ptr tm)
+        token_metadata_ptr tm,
+        std::optional<raft::group_id> parent_gid)
 {
     const auto my_id = to_server_id(tm->get_my_id());
 
     // Restore the persisted resize state before the raft server is created, i.e. before this
     // group can serve any request. Which markers a role needs to observe:
+    //  * the parent must observe start_resize, otherwise after a restart it would accept writes
+    //    into a log which is already sealed by end_resize,
     //  * the children must observe end_resize, otherwise their appliers would block forever
     //    (the parent's committed entries are applied during commitlog replay, bypassing
     //    state_machine::apply(), so nothing would ever fulfil the promise again).
@@ -252,6 +260,38 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     }
 
     auto& persistence_ref = *storage;
+
+    // A group created to replace another one starts with its leader on the node leading the group
+    // it replaces, which is what lets writes be redirected to it (see
+    // raft_resize_tracker::colocate_leaders()). Fast bootstrap elects the voter at rank
+    // (seed % num_voters) in ascending server id order, so deriving the seed from the rank of the
+    // parent leader - which every replica knows - makes them all elect the same node.
+    //
+    // If the parent leader is not known yet, because its election is still in progress, keep the
+    // default seed below and leave it to the colocator to move the leadership afterwards.
+    uint64_t fast_bootstrap_seed = std::hash<raft::group_id>()(group_id);
+    if (parent_gid) {
+        const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
+        const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
+        const auto parent_it = _raft_groups.find(*parent_gid);
+        if (parent_it != _raft_groups.end() && parent_it->second.server) {
+            const auto parent_leader = parent_it->second.server->current_leader();
+            if (parent_leader != raft::server_id{}) {
+                std::vector<raft::server_id> voters;
+                voters.reserve(tablet_info.replicas.size());
+                for (const auto& r : tablet_info.replicas) {
+                    voters.push_back(to_server_id(r.host));
+                }
+                std::ranges::sort(voters);
+                const auto it = std::ranges::find(voters, parent_leader);
+                if (it != voters.end()) {
+                    fast_bootstrap_seed = static_cast<uint64_t>(it - voters.begin());
+                    logger.debug("start_raft_group: co-locating child {} initial leader with parent {} leader {} (rank {})",
+                        group_id, *parent_gid, parent_leader, fast_bootstrap_seed);
+                }
+            }
+        }
+    }
     auto config = raft::server::configuration {
         // Snapshotting is not implemented yet for strong consistency,
         // so effectively disable periodic snapshotting.
@@ -271,7 +311,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // groups pick different replicas instead of all electing the
         // smallest-id node (which would concentrate load on one node when a
         // table starts with many tablets).
-        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
+        .fast_bootstrap_seed = fast_bootstrap_seed
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
@@ -327,6 +367,16 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
 
         co_await std::move(state.leader_info_updater);
+
+        // Stopped and joined here, next to the fiber above, so it never outlives the raft servers
+        // it drives. A child's teardown reaches the parent's colocator through get_parent_group()
+        // below, which is why this looks the state up rather than using `state`.
+        if (auto& parent_state = _raft_groups[_resize_tracker.get_parent_group(id).value_or(id)];
+                parent_state.resize_colocation) {
+            parent_state.resize_colocation->as.request_abort();
+            co_await std::exchange(parent_state.resize_colocation->colocator, make_ready_future<>());
+            parent_state.resize_colocation.reset();
+        }
 
         // Tearing down any group taking part in a resize ends the resize on this replica, whether
         // it is the parent or one of its children.
@@ -430,6 +480,11 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
         while (true) {
             const auto current_term = state.server->get_current_term();
             const auto current_leader = state.server->current_leader();
+
+            // Reported before the read_barrier() below, which blocks for as long as this group's
+            // applier is held back by an ongoing resize - exactly the window in which
+            // leader_colocator() has to learn that the leadership moved.
+            notify_leader_change(gid);
 
             if (current_leader == server_id) {
                 logger.debug("leader_info_updater({}-{}): current term {}, running read_barrier()",
@@ -543,12 +598,15 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             auto& state = _raft_groups[id];
             state.has_tablet = true;
 
-            // Recorded before the check below: unlike its children, the parent is normally
-            // already running by the time the resize is recorded, so it would `continue` there
-            // and never be recorded at all.
+            // A parent being replaced by its children needs a fiber which keeps their leaders
+            // co-located with its own. Recorded before the check below: unlike its children, the
+            // parent is normally already running by the time the resize is recorded, so it would
+            // `continue` there and never be recorded at all. Both calls are idempotent, so
+            // re-recording on every token metadata change does nothing.
             if (!parent_id && tablet_map.is_resizing(tid)) {
                 const auto& new_gids = tablet_map.get_raft_resize_info(tid).new_gids;
                 _resize_tracker.set_replacement_groups(id, {new_gids.begin(), new_gids.end()});
+                start_leader_colocator(state, tablet, id, {new_gids.begin(), new_gids.end()});
             }
 
             // Set from the tablet metadata on every token metadata change rather than toggled when
@@ -566,15 +624,14 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             state.gate = make_lw_shared<gate>();
             _starting_groups.push_back(state);
             const auto token = stable_token_of_group(tablet_map, tid, id);
-            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm, token,
-                    is_child = parent_id.has_value()](this auto) -> future<> {
+            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm, parent_id, token](this auto) -> future<> {
                 co_await state.server_control_op.get_future();
-                co_await start_raft_group(tablet, id, std::move(new_tm));
+                co_await start_raft_group(tablet, id, std::move(new_tm), parent_id);
                 state.server = &_raft_gr.get_server(id);
                 // The update() which started this group could not do it - the server did not exist
                 // yet. A stale limit is corrected by the next update(), which finalizing or rolling
                 // back the resize triggers.
-                apply_applier_queue_max_size(state.server, is_child);
+                apply_applier_queue_max_size(state.server, parent_id.has_value());
                 state.leader_info_updater = leader_info_updater(state, tablet.table, id, token);
 
                 // We want to make sure the server is ready to serve requests before
@@ -656,8 +713,26 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     });
 }
 
+std::optional<raft_server> groups_manager::try_acquire_server(raft::group_id group_id) {
+    const auto it = _raft_groups.find(group_id);
+    if (it == _raft_groups.end()) {
+        return std::nullopt;
+    }
+    auto& state = it->second;
+    // server_control_op is not awaited here, so the server may still be starting.
+    if (!state.server || !state.gate) {
+        return std::nullopt;
+    }
+    auto h = state.gate->try_hold();
+    if (!h) {
+        // The group is being stopped.
+        return std::nullopt;
+    }
+    return raft_server(state, std::move(*h));
+}
+
 bool groups_manager::should_handoff_writes(raft::group_id group_id) const {
-    return _resize_coordinator.should_handoff_writes(group_id);
+    return _resize_tracker.should_handoff_writes(group_id);
 }
 
 raft::group_id groups_manager::group_for_handoff(schema_ptr s, const dht::token& token) const {
@@ -684,6 +759,195 @@ raft::group_id groups_manager::group_for_handoff(schema_ptr s, const dht::token&
     }
     on_internal_error(logger, format("group_for_handoff: tablet {} is being resized without a "
             "resize decision", tablet_id));
+}
+
+void groups_manager::notify_leader_change(raft::group_id gid) {
+    // A child is watched through its parent, so that a single colocation state covers a whole
+    // resize.
+    const auto parent_gid = _resize_tracker.get_parent_group(gid).value_or(gid);
+    auto it = _raft_groups.find(parent_gid);
+    if (it == _raft_groups.end() || !it->second.resize_colocation) {
+        return;
+    }
+    auto& colocation = *it->second.resize_colocation;
+    ++colocation.leader_change_seq;
+    colocation.leader_changed.broadcast();
+}
+
+future<groups_manager::colocation_status> groups_manager::colocate_leaders(
+        raft_server& parent, raft::group_id parent_gid, const std::vector<raft::group_id>& new_gids) {
+    // The initial leader of a child is chosen to be co-located with the parent's leader (see
+    // the fast bootstrap seed in groups_manager::start_raft_group()), but either side may hold an
+    // election at any point during the resize. Until the leaders are brought back together,
+    // writes to the affected token range cannot make progress: coordinator::mutate() keeps
+    // bouncing them between the two groups rather than committing them on a leader whose clock
+    // did not produce the timestamps already in the parent's log.
+    const auto parent_leader = parent.server().current_leader();
+    if (!parent_leader) {
+        // There is nothing to co-locate with yet. The election has to complete before writes
+        // can be served by the parent anyway.
+        co_return colocation_status::parent_leader_unknown;
+    }
+
+    auto status = colocation_status::colocated;
+    for (const auto new_gid : new_gids) {
+        auto child = try_acquire_server(new_gid);
+        if (!child) {
+            // The child isn't running here yet. Its leader_info_updater signals us as soon as
+            // it starts.
+            status = colocation_status::awaiting_leader_change;
+            continue;
+        }
+        const auto child_leader = child->server().current_leader();
+        if (child_leader == parent_leader) {
+            continue;
+        }
+        if (!child_leader) {
+            // An election is in progress in the child, it may still elect the co-located
+            // replica on its own.
+            status = colocation_status::awaiting_leader_change;
+            continue;
+        }
+        // Only the current leader of a child can hand its leadership over. Every replica of the
+        // parent watches this, so the transfer is performed by whichever of them leads the child.
+        if (child_leader != child->server().id()) {
+            status = colocation_status::awaiting_leader_change;
+            continue;
+        }
+
+        logger.debug("colocate_leaders: group {} is led by this node while its parent {} is led by {}, "
+            "transferring the leadership", new_gid, parent_gid, parent_leader);
+        constexpr auto transfer_timeout = raft::logical_clock::duration(std::chrono::seconds(5) / raft_tick_interval);
+        auto result = co_await coroutine::as_future(
+            child->server().stepdown(transfer_timeout, parent_leader));
+        if (result.failed()) {
+            auto ex = result.get_exception();
+            if (try_catch<raft::no_other_voting_member>(ex)) {
+                // Single-voter group: leadership cannot be transferred and the leaders cannot be
+                // co-located any other way. Unreachable in practice, because with a single voter
+                // the parent and the children all share it.
+                on_internal_error(logger, format("colocate_leaders: cannot co-locate group {} "
+                    "with parent {} leader {}: {}", new_gid, parent_gid, parent_leader, ex));
+            }
+            if (try_catch<std::invalid_argument>(ex)) {
+                // The parent's leader is not a voter in the child, which cannot happen while both
+                // are configured from the same tablet replica set: raft::server::stepdown() checks
+                // the target against the child's own configuration. Not fatal - this file
+                // deliberately does not bring the node down over a stalled resize - but it is a
+                // broken assumption rather than something a retry fixes, so say so loudly.
+                logger.error("colocate_leaders: group {} rejected its parent {} leader {} as a "
+                    "leadership transfer target: {}", new_gid, parent_gid, parent_leader, ex);
+                co_return colocation_status::transfer_failed;
+            }
+            // Transient: the transfer times out if the target doesn't catch up with the log in
+            // time, and fails outright if a stepdown is already in progress. Logged at debug
+            // because the caller retries every 10ms for as long as it takes.
+            logger.debug("colocate_leaders: leadership transfer of group {} to parent {} leader {} failed: {}",
+                new_gid, parent_gid, parent_leader, ex);
+            co_return colocation_status::transfer_failed;
+        }
+        // Don't transfer the remaining children in the same round: each transfer may take up to
+        // transfer_timeout, and the leadership picture can change while it runs. The caller
+        // re-checks anyway, so the next round picks the remaining ones up.
+        co_return colocation_status::transfer_done;
+    }
+    co_return status;
+}
+
+future<> groups_manager::leader_colocator(raft_group_state& state, raft::group_id parent_gid) {
+    // Owned by the state this fiber is stored in, so both outlive it: the fiber is joined while
+    // the group is torn down, before the state is dropped.
+    auto& colocation = *state.resize_colocation;
+    auto& as = colocation.as;
+    const auto tablet = colocation.tablet;
+    try {
+        // groups_manager::update() starts this fiber synchronously, in the middle of committing
+        // a token metadata change. Get off its stack before touching any raft server - the
+        // first round may already transfer a leadership.
+        co_await yield();
+
+        logger.debug("leader_colocator({}-{}): maintaining co-location with {}",
+            tablet, parent_gid, colocation.new_gids);
+
+        // Runs until aborted, which happens when one of the groups taking part in the resize is
+        // torn down - be the resize finalized, rolled back, or moved away from this replica.
+        while (true) {
+            // Sampled before the check at the end, so that a leadership change which happens while
+            // we are checking is not slept through.
+            const auto seq = colocation.leader_change_seq;
+
+            auto parent = try_acquire_server(parent_gid);
+            if (!parent) {
+                // Transient while the raft server is (re)starting. It also fails permanently
+                // once the group is scheduled for deletion, but that aborts `as` too.
+                co_await sleep_abortable(10ms, as);
+                continue;
+            }
+
+            const auto status = co_await colocate_leaders(*parent, parent_gid, colocation.new_gids);
+            switch (status) {
+            case colocation_status::transfer_done:
+                continue;
+            case colocation_status::transfer_failed:
+                co_await sleep_abortable(10ms, as);
+                continue;
+            case colocation_status::parent_leader_unknown:
+                // A follower learning about a new leader is not a raft state change, so it does
+                // not signal leader_changed. Wait for the election to conclude instead.
+                co_await parent->server().wait_for_leader(&as);
+                continue;
+            case colocation_status::colocated:
+            case colocation_status::awaiting_leader_change:
+                break;
+            }
+
+            // Nothing to do until some leadership moves. Note that this covers both a child
+            // electing us as its leader and this node losing the leadership of the parent -
+            // leader_info_updater() of every group taking part in the resize signals
+            // leader_changed.
+            // Released before sleeping, so that the group can be stopped while we wait.
+            parent.reset();
+            while (colocation.leader_change_seq == seq) {
+                co_await wait_with_abort_source(colocation.leader_changed, as);
+            }
+        }
+    } catch (...) {
+        if (as.abort_requested()) {
+            // The resize is over, or the group is being stopped.
+            logger.debug("leader_colocator({}-{}): stopping", tablet, parent_gid);
+            co_return;
+        }
+        // Losing this fiber only means that the writes of this group may stall until the resize
+        // completes, so don't bring the node down over it.
+        logger.warn("leader_colocator({}-{}): stopped with an error: {}",
+            tablet, parent_gid, std::current_exception());
+    }
+}
+
+void groups_manager::start_leader_colocator(raft_group_state& state, locator::global_tablet_id tablet,
+        raft::group_id parent_gid, std::vector<raft::group_id> new_gids) {
+    if (state.resize_colocation) {
+        // Already running, which is the common case: update() runs on every token metadata change
+        // and re-records every resize which is still in the tablet metadata. The colocator holds a
+        // reference to this state and iterates its new_gids across preemption points, so replacing
+        // either here would pull the ground from under it.
+        if (!std::ranges::equal(state.resize_colocation->new_gids, new_gids)) {
+            // The state of an earlier resize of this parent is still around: it is only dropped
+            // once the groups which took part in it are torn down, which a rollback does
+            // asynchronously. Leave it alone and let the next token metadata change pick this
+            // resize up.
+            logger.error("start_leader_colocator: group {} is already being replaced by {}, "
+                "ignoring {}", parent_gid, state.resize_colocation->new_gids, new_gids);
+        } else {
+            logger.debug("start_leader_colocator: group {} is already being replaced by {}, "
+                "nothing to do", parent_gid, state.resize_colocation->new_gids);
+        }
+        return;
+    }
+    // Built in place: the abort source and the condition variable it holds cannot be moved, so
+    // the state cannot be constructed as a temporary and handed over.
+    state.resize_colocation = std::make_unique<resize_colocation_state>(tablet, std::move(new_gids));
+    state.resize_colocation->colocator = leader_colocator(state, parent_gid);
 }
 
 void groups_manager::start() {

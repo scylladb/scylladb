@@ -11,7 +11,6 @@
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
 #include "db/system_keyspace.hh"
-
 #include <seastar/core/on_internal_error.hh>
 
 namespace service::strong_consistency {
@@ -97,8 +96,10 @@ void raft_resize_tracker::erase_resize_state(raft::group_id parent_gid) {
 
     if (!state.end_resize.get_shared_future().available()) {
         // The resize ended before the parent was sealed, i.e. it was rolled back or moved away
-        // from this replica. Break the promise rather than drop it silently, so that a waiter we
-        // did not think of fails loudly instead of hanging.
+        // from this replica. Nothing can be waiting on the promise: the children only get entries
+        // to apply while the parent is being sealed, and neither a rollback nor a move interrupts
+        // the sealing. Break the promise rather than drop it silently, so that a waiter we did not
+        // think of fails loudly instead of hanging.
         state.end_resize.set_exception(std::runtime_error(
                 format("resize of group {} ended before end_resize was applied", parent_gid)));
     }

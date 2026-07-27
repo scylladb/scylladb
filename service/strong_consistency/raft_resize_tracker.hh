@@ -46,6 +46,7 @@ struct raft_resize_state {
     // children block on this promise until it is set, at which point every entry the parent
     // committed is known to be applied and the children may start applying their own.
     shared_promise<> end_resize;
+
 };
 
 // Owns the state of every tablet resize the groups hosted on this shard take part in (see
@@ -63,6 +64,7 @@ class raft_resize_tracker {
     // of the entry points below may be the first to learn about it, in any order, so each of them
     // goes through here rather than assuming the state is already there.
     raft_resize_state& state_for(raft::group_id parent_gid);
+
 
 public:
     raft_resize_tracker(db::system_keyspace& sys_ks)
@@ -107,6 +109,7 @@ public:
     // FIXME: a tablet merge has two parents per child, so this will have to return a future
     // which resolves once *all* parents applied end_resize.
     std::optional<shared_future<>> get_parent_finished_future(raft::group_id child_gid) const;
+
 };
 
 } // namespace service::strong_consistency
