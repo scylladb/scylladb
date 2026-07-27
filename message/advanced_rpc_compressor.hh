@@ -8,8 +8,12 @@
 
 #pragma once
 
+#include <array>
+#include <optional>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include <span>
+#include <string_view>
 #include <utility>
 #include "utils/refcounted.hh"
 #include "utils/updateable_value.hh"
@@ -235,6 +239,19 @@ struct per_algorithm_stats {
     uint64_t compressed_bytes_received = 0;
     uint64_t messages_received = 0;
     uint64_t decompression_cpu_nanos = 0;
+};
+
+struct rpc_compression_fingerprint {
+    static constexpr size_t serialized_size = sizeof(uint32_t) + sizeof(uint64_t);
+
+    uint32_t crc;
+    uint64_t compressed_xxh64;
+
+    std::array<std::byte, serialized_size> serialize() const noexcept;
+    static std::optional<rpc_compression_fingerprint> deserialize(std::span<const std::byte> bytes) noexcept;
+    static std::optional<rpc_compression_fingerprint> deserialize(std::string_view hex_string) noexcept;
+
+    bool operator==(const rpc_compression_fingerprint&) const = default;
 };
 
 // The tracker contains everything which is shared between compressor instances:

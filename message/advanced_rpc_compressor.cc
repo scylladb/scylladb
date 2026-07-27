@@ -10,6 +10,9 @@
 #include <seastar/util/defer.hh>
 #include <numeric>
 #include "utils/log.hh"
+#include "utils/hashers.hh"
+#include "utils/xx_hasher.hh"
+#include "bytes.hh"
 #include "advanced_rpc_compressor.hh"
 #include "advanced_rpc_compressor_protocol.hh"
 #include "stream_compressor.hh"
@@ -21,6 +24,34 @@ namespace netw {
 logging::logger arc_logger("advanced_rpc_compressor");
 
 static const shared_dict null_dict;
+
+std::array<std::byte, rpc_compression_fingerprint::serialized_size> rpc_compression_fingerprint::serialize() const noexcept {
+    std::array<std::byte, serialized_size> out;
+    auto* out_data = reinterpret_cast<char*>(out.data());
+    seastar::write_be<uint32_t>(out_data, crc);
+    seastar::write_be<uint64_t>(out_data + sizeof(uint32_t), compressed_xxh64);
+    return out;
+}
+
+std::optional<rpc_compression_fingerprint> rpc_compression_fingerprint::deserialize(std::span<const std::byte> bytes) noexcept {
+    if (bytes.size() != serialized_size) {
+        return std::nullopt;
+    }
+    const auto* data = reinterpret_cast<const char*>(bytes.data());
+    return rpc_compression_fingerprint{
+        .crc = seastar::read_be<uint32_t>(data),
+        .compressed_xxh64 = seastar::read_be<uint64_t>(data + sizeof(uint32_t)),
+    };
+}
+
+std::optional<rpc_compression_fingerprint> rpc_compression_fingerprint::deserialize(std::string_view hex_string) noexcept {
+    try {
+        auto bytes = from_hex(hex_string);
+        return deserialize(std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
 
 control_protocol::control_protocol(condition_variable& cv)
     : _needs_progress(cv)
@@ -353,6 +384,54 @@ stream_decompressor& advanced_rpc_compressor::get_decompressor(compression_algor
     }
 }
 
+template<class T>
+concept RpcBuf = std::same_as<T, rpc::rcv_buf> || std::same_as<T, rpc::snd_buf>;
+
+template <RpcBuf Buf, std::invocable<std::span<const std::byte>> Func>
+static void for_each_rpc_buf_fragment(const Buf& data, size_t offset, Func&& func) {
+    if (offset > data.size) {
+        throw std::invalid_argument("RPC buffer fragment offset is past the end of the buffer");
+    }
+    auto payload_size = data.size - offset;
+    auto it = std::get_if<temporary_buffer<char>>(&data.bufs);
+    if (!it) {
+        it = std::get<std::vector<temporary_buffer<char>>>(data.bufs).data();
+    }
+
+    while (payload_size > 0) {
+        const auto fragment_size = it->size();
+        if (offset > fragment_size) {
+            offset -= fragment_size;
+            ++it;
+            continue;
+        }
+        const auto n = std::min<size_t>(fragment_size - offset, payload_size);
+        std::invoke(func, std::as_bytes(std::span(it->get() + offset, n)));
+        offset = 0;
+        payload_size -= n;
+        ++it;
+    }
+}
+
+template <RpcBuf Buf>
+static uint64_t xxh64_impl(const Buf& data, size_t offset = 0) noexcept {
+    xx_hasher hasher;
+    for_each_rpc_buf_fragment(data, offset, [&hasher] (std::span<const std::byte> fragment) {
+        if (!fragment.empty()) {
+            hasher.update(reinterpret_cast<const char*>(fragment.data()), fragment.size());
+        }
+    });
+    return hasher.finalize_uint64();
+}
+
+template <RpcBuf Buf>
+static rpc_compression_fingerprint get_compression_fingerprint(uint32_t crc, const Buf& compressed, size_t offset = 0) noexcept {
+    return rpc_compression_fingerprint{
+        .crc = crc,
+        .compressed_xxh64 = xxh64_impl(compressed, offset),
+    };
+}
+
 rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf data) {
     const size_t checksum_size = _tracker->_cfg.checksumming.get() ? sizeof(uint32_t) : 0;
     const uint32_t crc = checksum_size ? crc_impl(data) : -1;
@@ -433,6 +512,34 @@ T read_from_rcv_buf(rpc::rcv_buf& data) {
     return out[0];
 }
 
+static std::string format_dict_id(const shared_dict::dict_id& id) {
+    return fmt::format("{{timestamp={}, origin_node={}, content_sha256={}}}", id.timestamp, id.origin_node, fmt_hex(id.content_sha256));
+}
+
+static std::string format_dict_ptr(const dict_ptr& d) {
+    if (!d) {
+        return "null";
+    }
+    const auto& id = (**d).id;
+    return format_dict_id(id);
+}
+
+static std::string format_control_protocol(const control_protocol& cp) {
+    return fmt::format(
+        "{{sender_protocol_epoch={}, receiver_protocol_epoch={}"
+        ", sender_has_update={}, sender_has_commit={}"
+        ", receiver_has_update={}, receiver_has_commit={}"
+        ", sender_recent_dict={}, sender_committed_dict={}, sender_current_dict={}"
+        ", receiver_recent_dict={}, receiver_committed_dict={}, receiver_current_dict={}"
+        ", sender_current_algo={}, sender_committed_algo={}, algos={:#04x}}}",
+        cp._sender_protocol_epoch, cp._receiver_protocol_epoch,
+        cp._sender_has_update, cp._sender_has_commit,
+        cp._receiver_has_update, cp._receiver_has_commit,
+        format_dict_ptr(cp._sender_recent_dict), format_dict_ptr(cp._sender_committed_dict), format_dict_ptr(cp._sender_current_dict),
+        format_dict_ptr(cp._receiver_recent_dict), format_dict_ptr(cp._receiver_committed_dict), format_dict_ptr(cp._receiver_current_dict),
+        cp._sender_current_algo.name(), cp._sender_committed_algo.name(), cp._algos.value());
+}
+
 rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     const uint8_t header_byte = read_from_rcv_buf<uint8_t>(data);
     const bool has_checksum = header_byte & 0x40;
@@ -466,7 +573,26 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     });
     if (has_checksum) {
         const uint32_t actual_crc = crc_impl(decompressed);
-        if (expected_crc != actual_crc) {
+        if (expected_crc != actual_crc) [[unlikely]] {
+            const auto fingerprint = get_compression_fingerprint(expected_crc, data);
+            // Gathering the details below (in particular hashing the dictionary) isn't free,
+            // so we query the rate limit ourselves instead of passing it to the logger.
+            arc_logger.error(
+                "RPC compression checksum error details:"
+                " expected_crc={:#010x}, actual_crc={:#010x}"
+                ", header_byte={:#04x}"
+                ", fingerprint={}"
+                ", control_protocol={}"
+                ", compressed_size={}, decompressed_size={}",
+                expected_crc, actual_crc,
+                header_byte,
+                fmt_hex(fingerprint.serialize()),
+                format_control_protocol(_control),
+                compressed_size, decompressed.size);
+            static thread_local logging::logger::rate_limit dump_rate_limit(std::chrono::minutes(1));
+            if (!dump_rate_limit.rate_limited()) {
+                arc_logger.error("sha256 recomputed from the contents of the dictionary used for decompression: {}", fmt_hex(get_sha256(_control.receiver_current_dict().data)));
+            }
             seastar::on_internal_error(arc_logger, fmt::format("RPC compression checksum error (expected: {:x}, got: {:x}). This indicates a bug. Set `internode_compression: none` and restart the nodes to regain stability, then report the bug.", expected_crc, actual_crc));
         }
     }
