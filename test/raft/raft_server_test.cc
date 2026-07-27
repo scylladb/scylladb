@@ -24,6 +24,31 @@ static raft_cluster<clock_type> get_default_cluster(test_case test_config) {
     };
 }
 
+// Builds a state machine apply function which resolves `applied` as soon as
+// node 0 (the leader in the tests using this) applies the entry carrying
+// `value`. Entries added on a follower are forwarded to the leader
+// asynchronously, so a test that must act only after the leader applied such
+// an entry needs an explicit signal like this one.
+//
+// The value is expected to be added exactly once, so seeing it applied more
+// than once means the test does something it didn't intend to and the check
+// below fails it.
+static auto signal_when_leader_applies(int value, seastar::promise<>& applied) {
+    return [value, &applied, signalled = false] (raft::server_id id, const raft::log_entry_ptr_list& commands,
+            lw_shared_ptr<hasher_int> hasher) mutable {
+        if (id == to_raft_id(0)) {
+            for (auto& entry : commands) {
+                auto is = ser::as_input_stream(std::get<raft::command>(entry->data));
+                if (ser::deserialize(is, std::type_identity<int>()) == value) {
+                    BOOST_REQUIRE(!std::exchange(signalled, true));
+                    applied.set_value();
+                }
+            }
+        }
+        return apply_changes(id, commands, hasher);
+    };
+}
+
 SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {
     raft_cluster<std::chrono::steady_clock> cluster(
             test_case { .nodes = 1 },
@@ -381,4 +406,109 @@ SEASTAR_THREAD_TEST_CASE(test_add_entry_applied_wait_resolved_via_drop_waiters) 
 
 SEASTAR_THREAD_TEST_CASE(test_add_entry_committed_wait_resolved_via_drop_waiters) {
     test_add_entry_wait_resolved_via_drop_waiters_aux(raft::wait_type::committed);
+}
+
+// Reproducer of the race originally fixed by 88a6e2446d: commit waiters must be
+// resolved in index order, otherwise the ordering assert in notify_waiters()
+// (entry_idx >= first_idx) trips. A waiter covered by a snapshot received from
+// the leader must therefore be dropped before the entries committed above that
+// snapshot's index are notified.
+//
+// Setup: 3-node cluster. Node 1 (follower) is blocked from receiving messages
+// from the leader (node 0), but can still send to it, so its add_entry is
+// forwarded to the leader and a commit waiter is registered locally, while the
+// entry itself never arrives via append entries. The leader commits the entry
+// (with node 2), applies it and takes a snapshot; trigger_snapshot leaves no
+// trailing entries, so once node 1 is reconnected the only way for it to catch
+// up is a snapshot transfer.
+//
+// Node 1's applier fiber is then held before load_snapshot() and another entry,
+// whose index is above the snapshot index, is committed. Node 1's io_fiber
+// notifies the commit waiters for that entry while the snapshot is still not
+// applied. If the waiter for the first entry were dropped only by the applier
+// fiber (as it used to be, when the snapshot was processed), it would still sit
+// in _awaited_commits below the first index of the committed batch and trip the
+// assert. io_fiber drops it when it processes the snapshot, so the order holds.
+SEASTAR_THREAD_TEST_CASE(test_commit_waiter_dropped_before_notifying_above_snapshot) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+    return;
+#else
+    // The default snapshot thresholds are high enough that no snapshot is taken
+    // automatically during the test: the only snapshot is the one triggered
+    // explicitly below.
+    // Resolved when node 0 (the leader) applies the entry with command 42
+    // added below.
+    seastar::promise<> leader_applied_42;
+    // apply_entries must be greater than the number of entries added during the
+    // test, otherwise the state machine's done promise fires prematurely.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        test_case { .nodes = 3 },
+        signal_when_leader_applies(42, leader_applied_42),
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    auto& follower = cluster.get_server(1);
+
+    // A server learns who the leader is from the messages the leader sends it,
+    // so node 1 must observe the leader before it stops receiving from node 0.
+    // Otherwise the forwarding below has nowhere to forward the entry to and
+    // blocks until node 1 is reconnected.
+    follower.wait_for_leader(nullptr).get();
+
+    // Block node 1 from receiving messages from node 0 (leader).
+    // Node 1 can still send to node 0 (forwarding works).
+    cluster.block_receive(1, 0);
+
+    // Node 1 forwards the entry to node 0, which commits it with node 2.
+    // Node 1 registers a commit waiter but never receives the entry via
+    // append entries.
+    auto fut = follower.add_entry(create_command(42), raft::wait_type::committed, nullptr);
+
+    // The snapshot must cover the entry, otherwise node 1, once reconnected,
+    // catches up by append entries instead of a snapshot transfer. As in
+    // test_add_entry_wait_resolved_via_drop_waiters_aux, the signal fires inside
+    // apply(), before the applied index the snapshot is taken at is assigned, so
+    // the barrier is what puts the entry under that index. The thresholds here
+    // are the default ones, so nothing snapshots automatically and
+    // trigger_snapshot() must take the snapshot itself.
+    leader_applied_42.get_future().get();
+    leader.read_barrier(nullptr).get();
+    BOOST_REQUIRE(leader.trigger_snapshot(nullptr).get());
+
+    // Hold the applier fiber before it loads the snapshot node 1 is about to
+    // receive. Node 1 is the only server that can reach this injection point:
+    // it only fires for snapshots received from the leader, node 0 is the
+    // leader and node 2 is up to date. The injection is not one-shot, so it is
+    // not consumed by a single server: whoever reaches it waits for the message
+    // sent below. It is disabled when this scope ends, which both releases
+    // anything still waiting and keeps a later snapshot transfer, if any,
+    // from stalling the cluster shutdown.
+    constexpr auto block_applier = "block_raft_applier_fiber_before_load_snapshot";
+    scoped_error_injection blocked_applier{block_applier};
+
+    // Reconnect node 1. The leader sends a snapshot since the entry is no
+    // longer in its log.
+    cluster.connect_all();
+    wait_for_injection_enter(block_applier).get();
+
+    // Commit an entry above the snapshot index while node 1 still hasn't
+    // applied the snapshot. Waiting for it on node 1 guarantees that node 1's
+    // io_fiber notified the commit waiters for a batch starting above the
+    // snapshot index, which is the notification that used to trip the assert.
+    follower.add_entry(create_command(43), raft::wait_type::committed, nullptr).get();
+
+    // Let the applier fiber load the snapshot.
+    utils::get_local_injector().receive_message(block_applier);
+
+    // The waiter for the first entry is resolved successfully: the snapshot's
+    // term matches the entry's term, which proves the entry was committed and
+    // included in the snapshot.
+    BOOST_CHECK_NO_THROW(fut.get());
+#endif
 }
