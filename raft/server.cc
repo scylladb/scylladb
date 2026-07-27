@@ -1231,13 +1231,18 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
                 }
             }
         }
-        co_await _persistence->store_commit_idx(batch.committed.back()->idx);
         // Notify commit waiters here rather than in the applier fiber: an entry
         // is committed once a quorum of servers has it in their logs, regardless
         // of how far the local state machine got with applying entries, so the
         // notification must not depend on the applier fiber's progress (which
         // may lag behind, e.g. when its queue backs up on a slow state machine).
         notify_waiters(_awaited_commits, batch.committed);
+        // Persisting the commit index is optional (see
+        // persistence::store_commit_idx): a restarted server re-learns it from
+        // the leader or, after a full cluster restart, the new leader recomputes
+        // it from a quorum. So the commit notification above does not need to
+        // wait for this write.
+        co_await _persistence->store_commit_idx(batch.committed.back()->idx);
         _stats.queue_entries_for_apply += batch.committed.size();
         co_await _apply_entries.push_eventually(std::move(batch.committed));
     }
