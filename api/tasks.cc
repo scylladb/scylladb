@@ -38,8 +38,7 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     };
 }
 
-static future<shared_ptr<compaction::major_keyspace_compaction_task_impl>> force_keyspace_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-    auto& db = ctx.db;
+static future<shared_ptr<compaction::major_keyspace_compaction_task_impl>> force_keyspace_compaction(http_context& ctx, sharded<replica::database>& db, std::unique_ptr<http::request> req) {
     auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
     auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
     auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
@@ -53,8 +52,7 @@ static future<shared_ptr<compaction::major_keyspace_compaction_task_impl>> force
     return compaction_module.make_and_start_task<compaction::major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
 }
 
-static future<shared_ptr<compaction::upgrade_sstables_compaction_task_impl>> upgrade_sstables(http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) {
-    auto& db = ctx.db;
+static future<shared_ptr<compaction::upgrade_sstables_compaction_task_impl>> upgrade_sstables(sharded<replica::database>& db, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) {
     bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
     apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
@@ -63,14 +61,14 @@ static future<shared_ptr<compaction::upgrade_sstables_compaction_task_impl>> upg
     return compaction_module.make_and_start_task<compaction::upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, table_infos, exclude_current_version);
 }
 
-void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& snap_ctl) {
+void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl) {
     t::force_keyspace_compaction_async.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto task = co_await force_keyspace_compaction(ctx, std::move(req));
+        auto task = co_await force_keyspace_compaction(ctx, ctx.db, std::move(req));
         co_return json::json_return_type(task->get_status().id.to_sstring());
     });
 
     ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto task = co_await force_keyspace_compaction(ctx, std::move(req));
+        auto task = co_await force_keyspace_compaction(ctx, ctx.db, std::move(req));
         co_await task->done();
         co_return json_void();
     });
@@ -93,12 +91,12 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
     }));
 
     t::upgrade_sstables_async.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
-        auto task = co_await upgrade_sstables(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
+        auto task = co_await upgrade_sstables(ctx.db, std::move(req), std::move(keyspace), std::move(table_infos));
         co_return json::json_return_type(task->get_status().id.to_sstring());
     }));
 
     ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
-        auto task = co_await upgrade_sstables(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
+        auto task = co_await upgrade_sstables(ctx.db, std::move(req), std::move(keyspace), std::move(table_infos));
         co_await task->done();
         co_return json::json_return_type(0);
     }));
