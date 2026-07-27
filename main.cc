@@ -2214,9 +2214,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     // and deleting old segments (committed mutations need to be flushed,
                     // uncommitted entries are now in new segments).
                     supervisor::notify("processing raft replay buffer");
-                    raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
+                    raft_replay_buffer.invoke_on_all([&db, &qp, &raft_resize_coordinator](db::raft_commitlog_replay_buffer& buffer) mutable {
                         if (buffer.remaining_groups()) {
-                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
+                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local(), raft_resize_coordinator.local());
                         }
                         return make_ready_future<>();
                     }).get();

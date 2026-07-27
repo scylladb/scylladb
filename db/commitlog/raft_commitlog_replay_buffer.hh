@@ -15,6 +15,10 @@
 #include "db/commitlog/replay_position.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
 
+namespace service::strong_consistency {
+class raft_resize_coordinator;
+}
+
 namespace db {
 class system_keyspace;
 namespace raft_buffer_detail {
@@ -167,6 +171,6 @@ public:
     //      already applied (snapshot.idx is advanced to commit_idx after replay).
     //   6. Non-command entries (configuration, dummy) are kept in the raft log but
     //      don't need mutation application or commitlog rewrite.
-    future<> process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks);
+    future<> process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks, service::strong_consistency::raft_resize_coordinator& resize_coordinator);
 };
 } // namespace db
