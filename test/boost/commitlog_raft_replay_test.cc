@@ -30,6 +30,7 @@
 #include "idl/commitlog.dist.impl.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
 #include "service/strong_consistency/state_machine.hh"
@@ -376,7 +377,9 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_unknown_groups) {
                 BOOST_CHECK_EQUAL(buffer.total_entries(), 2);
 
                 // Process — group_id has no matching tablet metadata, so entries should be discarded.
-                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+                service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local(), resize_tracker);
+                co_await resize_tracker.stop();
 
                 // After processing, old entries are cleared.
                 BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
@@ -644,7 +647,9 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_out_of_order_same_term_stops_processin
                 // Process — group_id has no matching tablet metadata, so entries are discarded
                 // before the ordering check. The filter_entries logic is tested directly
                 // in the simulation tests below.
-                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+                service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local(), resize_tracker);
+                co_await resize_tracker.stop();
 
                 BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
             },
