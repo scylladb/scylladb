@@ -23,6 +23,7 @@
 #include "utils/error_injection.hh"
 #include "schema/schema_registry.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 
 using namespace std::chrono_literals;
 
@@ -49,6 +50,7 @@ class state_machine : public raft_state_machine {
     service::migration_manager& _mm;
     db::system_keyspace& _sys_ks;
     raft_groups_storage& _persistence;
+    raft_resize_tracker& _resize_tracker;
 
     abort_source _as;
 
@@ -58,19 +60,27 @@ public:
         replica::database& db,
         service::migration_manager& mm,
         db::system_keyspace& sys_ks,
-        raft_groups_storage& persistence)
+        raft_groups_storage& persistence,
+        raft_resize_tracker& resize_tracker)
         : _tablet(tablet)
         , _group_id(gid)
         , _db(db)
         , _mm(mm)
         , _sys_ks(sys_ks)
         , _persistence(persistence)
+        , _resize_tracker(resize_tracker)
     {
     }
 
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
         try {
+            if (auto fut = _resize_tracker.get_parent_finished_future(_group_id)) {
+                logger.debug("apply(): waiting for parent group to finish resizing before applying mutations for group {}", _group_id);
+                co_await fut->get_future(_as);
+                logger.debug("apply(): parent group finished resizing, continuing to apply mutations for group {}", _group_id);
+            }
+
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
             // Collect the commands from the log entry list. Only a write carries a mutation; a
             // resize marker describes a change which every replica turns into a mutation of its
@@ -114,6 +124,7 @@ public:
                     auto m = make_resize_marker_mutation(_group_id, this_shard_id(), marker->kind);
                     co_await _db.apply_in_memory(m, _db.find_column_family(m.schema()),
                             std::move(replay_positions[i].replay_position_handle), db::no_timeout);
+                    _resize_tracker.mark_resize_phase(_group_id, marker->kind);
                     continue;
                 }
                 // Concurrent apply_in_memory() calls can complete out of order under memory pressure
@@ -291,9 +302,10 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     replica::database& db,
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
-    raft_groups_storage& persistence)
+    raft_groups_storage& persistence,
+    raft_resize_tracker& resize_tracker)
 {
-    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence);
+    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker);
 }
 
 namespace detail {
