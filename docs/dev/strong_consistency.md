@@ -314,3 +314,23 @@ just after its own. Every other suspension in `apply()` completes on its own.
 A child group must not apply anything until the parent has applied everything it committed;
 otherwise a read served by the child could observe a state older than a write already
 committed in the parent. The child's applier therefore blocks on `end_resize`.
+
+## Recovery
+
+Commitlog replay writes to the memtables directly, bypassing `state_machine::apply()` and
+therefore the wait above, so it has to reproduce the ordering itself. It replays in two passes:
+first every group which is not replacing another one, which puts the whole log of a parent in
+place, then the children. For each child, the persisted resize state of its parent is loaded -
+correct by then, since the first pass has already applied the parent's own `end_resize`, if
+any - and:
+
+- if the parent has finished resizing, the child's entries are applied normally,
+- if it has not, they must not be applied at all, since more entries may still arrive in the
+  parent and would have to go first. They are only rewritten to the new commitlog, to get
+  fresh `rp_handle`s, and left in the Raft log to be applied once the parent is sealed. The
+  snapshot index is not advanced, which is correct because such a group had not applied
+  anything before the restart either. The persisted commit index of such a group is dropped
+  as well: its Raft server would otherwise not finish starting until everything it believes
+  to be committed has been applied, which cannot happen until the parent is sealed, while the
+  sealing itself needs the server to be up. The index is re-established from the leader, or
+  recomputed by the next one from a quorum, once the group is running again.

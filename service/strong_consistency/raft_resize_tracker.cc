@@ -41,6 +41,12 @@ future<> raft_resize_tracker::restore_applied_markers(raft::group_id parent_gid)
     // The caller has already established that the parent is being resized, from the tablet
     // metadata or from the children found in the commitlog. Create the state if this is the first
     // we hear of the resize, which after a restart it is.
+    //
+    // Called from the commitlog replay, this runs before update() has observed anything. A parent
+    // whose group is then never started here leaves the entry behind until stop(), which breaks the
+    // promise cleanly. That happens when the table is dropped, or the tablet is gone from the
+    // metadata by the time update() first runs. Memory only, and bounded by the number of groups
+    // the replay found.
     _resize_states.try_emplace(parent_gid);
 
     // The markers live in the parent's own row, which is on the shard hosting it - this one.
@@ -124,6 +130,11 @@ void raft_resize_tracker::erase_group(raft::group_id gid) {
 
 bool raft_resize_tracker::is_resizing(raft::group_id parent_gid) const {
     return _resize_states.contains(parent_gid);
+}
+
+bool raft_resize_tracker::has_applied_end_resize(raft::group_id parent_gid) const {
+    auto it = _resize_states.find(parent_gid);
+    return it != _resize_states.end() && it->second.end_resize.available();
 }
 
 std::optional<raft::group_id> raft_resize_tracker::get_parent_group(raft::group_id child_gid) const {

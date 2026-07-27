@@ -66,13 +66,17 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
     return execute_with_linearization_point([this, idx] {
-        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
-            db::system_keyspace::RAFT_GROUPS);
-        return _qp.execute_internal(
-            store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(idx.value())},
-            cql3::query_processor::cache_internal::yes).discard_result();
+        return store_commit_idx(_qp, _group_id, _shard, idx);
     });
+}
+
+future<> raft_groups_storage::store_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t idx) {
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
+    return qp.execute_internal(
+        store_cql,
+        {int16_t(shard), gid.id, int64_t(idx.value())},
+        cql3::query_processor::cache_internal::yes).discard_result();
 }
 
 future<raft::index_t> raft_groups_storage::load_commit_idx() {
