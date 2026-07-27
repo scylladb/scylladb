@@ -74,7 +74,7 @@ raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder h
 // conditional_variable::wait doesn't have an overload taking an abort_source.
 // This is a temporary workaround until we extend the interface.
 // See: scylladb/seastar#3292.
-static future<> wait_with_abort_source(condition_variable& cv, abort_source& as) {
+future<> wait_with_abort_source(condition_variable& cv, abort_source& as) {
     if (as.abort_requested()) {
         return make_exception_future<>(as.abort_requested_exception_ptr());
     }
@@ -155,22 +155,25 @@ groups_manager::groups_manager(netw::messaging_service& ms,
 
 future<> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
-        token_metadata_ptr tm)
+        token_metadata_ptr tm,
+        std::optional<raft::group_id> parent_gid)
 {
     const auto my_id = to_server_id(tm->get_my_id());
 
     // Restore the persisted resize state before the raft server is created, i.e. before this
-    // group can serve any request. The groups replacing a resized one must observe
-    // groups_resized, otherwise their appliers would block forever: the committed entries of
-    // the group being replaced are applied during commitlog replay, bypassing
-    // state_machine::apply(), so nothing would ever fulfil the promise again.
+    // group can serve any request. Both roles need it:
+    //  * the parent must observe redirect_writes, otherwise after a restart it would accept
+    //    writes into a log which is already sealed by groups_resized,
+    //  * the children must observe groups_resized, otherwise their appliers would block forever
+    //    (the parent's committed entries are applied during commitlog replay, bypassing
+    //    state_machine::apply(), so nothing would ever fulfil the promise again).
     //
     // The load has to happen in the group's own fiber rather than as a side effect of starting
-    // a group replacing it: update() starts them concurrently, so the load must not be tied to
-    // the start of any single one of them.
+    // a child: update() starts the parent and its children concurrently, so the parent could
+    // otherwise start accepting writes before a child's fiber loaded redirect_writes.
     //
-    // For a group replacing another one the tablet still points at the tablet being resized, so
-    // get_tablet_raft_info() yields the group being replaced in both cases.
+    // For a child group the tablet still points at the parent tablet, so
+    // get_tablet_raft_info() yields the parent group id in both cases.
     {
         const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
         if (tablet_map.is_resizing(tablet.tablet)) {
@@ -208,6 +211,40 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     }
 
     auto& persistence_ref = *storage;
+
+    // Choose the fast-bootstrap seed. For a fresh non-child group we derive it
+    // from the group id so that leadership is spread across nodes. For a child
+    // group created during a split we co-locate the initial child leader with the
+    // parent leader: pick the seed so that the parent-leader replica is chosen
+    // (fast bootstrap elects the voter at rank (seed % num_voters) in ascending
+    // server-id order). Every replica derives the same rank from the (globally
+    // known) parent leader id, so they all elect the same child leader.
+    //
+    // If there is no parent leader (election is still in progress), we'll need
+    // to elect the child leader independently, after the parent election completes.
+    uint64_t fast_bootstrap_seed = std::hash<raft::group_id>()(group_id);
+    if (parent_gid) {
+        const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
+        const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
+        const auto parent_it = _raft_groups.find(*parent_gid);
+        if (parent_it != _raft_groups.end() && parent_it->second.server) {
+            const auto parent_leader = parent_it->second.server->current_leader();
+            if (parent_leader != raft::server_id{}) {
+                std::vector<raft::server_id> voters;
+                voters.reserve(tablet_info.replicas.size());
+                for (const auto& r : tablet_info.replicas) {
+                    voters.push_back(to_server_id(r.host));
+                }
+                std::ranges::sort(voters);
+                const auto it = std::ranges::find(voters, parent_leader);
+                if (it != voters.end()) {
+                    fast_bootstrap_seed = static_cast<uint64_t>(it - voters.begin());
+                    logger.debug("start_raft_group: co-locating child {} initial leader with parent {} leader {} (rank {})",
+                        group_id, *parent_gid, parent_leader, fast_bootstrap_seed);
+                }
+            }
+        }
+    }
     auto config = raft::server::configuration {
         // Snapshotting is not implemented yet for strong consistency,
         // so effectively disable periodic snapshotting.
@@ -227,7 +264,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // groups pick different replicas instead of all electing the
         // smallest-id node (which would concentrate load on one node when a
         // table starts with many tablets).
-        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
+        .fast_bootstrap_seed = fast_bootstrap_seed
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
@@ -286,7 +323,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
 
         // The end of this group may be what makes the resize it took part in droppable, whether
         // it is the group being resized or one of the groups replacing it.
-        _resize_coordinator.erase_resize_state(_resize_coordinator.get_parent_group(id).value_or(id));
+        co_await _resize_coordinator.erase_resize_state(_resize_coordinator.get_parent_group(id).value_or(id));
 
         _raft_gr.destroy_server(id);
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
@@ -330,6 +367,7 @@ void groups_manager::init_messaging_service() {
             });
         }
     );
+
 }
 
 future<> groups_manager::uninit_messaging_service() {
@@ -385,6 +423,11 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
         while (true) {
             const auto current_term = state.server->get_current_term();
             const auto current_leader = state.server->current_leader();
+
+            // Report the change before the read_barrier() below, which blocks for as long as
+            // this group's applier is blocked by an ongoing resize -- exactly the window in
+            // which leader_colocator() needs to learn that the leadership moved.
+            _resize_coordinator.notify_leader_change(gid);
 
             if (current_leader == server_id) {
                 logger.debug("leader_info_updater({}-{}): current term {}, running read_barrier()",
@@ -473,8 +516,8 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             tablet_groups.push_back(tablet_group_info{tid, id, std::nullopt});
             if (tablet_map.is_resizing(tid)) {
                 for (const auto new_gid : tablet_map.get_raft_resize_info(tid).new_gids) {
-                    // Groups replacing another one are added after it, so when we iterate over
-                    // tablet_groups below, its state is initialized before they are started.
+                    // Child groups are added after the parent group, so when we iterate over tablet_groups below,
+                    // the parent group's state will be initialized before child groups are started.
                     tablet_groups.push_back(tablet_group_info{tid, new_gid, id});
                 }
             }
@@ -490,12 +533,14 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             auto& state = _raft_groups[id];
             state.has_tablet = true;
 
-            // Register the resize before the check below: unlike the groups replacing it, the
-            // group being resized is normally already running by the time the resize is
-            // announced, so it would never get here otherwise.
+            // A group being replaced by other groups needs a fiber which keeps their leaders
+            // co-located with its own. Note that this has to be done before the check below:
+            // unlike the new groups, the group being resized is normally already running by
+            // the time the resize is announced. The fiber is owned by the resize state, which
+            // also makes it a no-op if one is already running for this resize.
             if (!parent_id && tablet_map.is_resizing(tid)) {
                 const auto& new_gids = tablet_map.get_raft_resize_info(tid).new_gids;
-                _resize_coordinator.announce_resize(id, {new_gids.begin(), new_gids.end()});
+                _resize_coordinator.announce_resize(tablet, id, {new_gids.begin(), new_gids.end()}, *this);
             }
 
             // Don't start the raft server if it is already (started or starting) and not stopping.
@@ -506,9 +551,9 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
             state.gate = make_lw_shared<gate>();
             _starting_groups.push_back(state);
-            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm](this auto) -> future<> {
+            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm, parent_id](this auto) -> future<> {
                 co_await state.server_control_op.get_future();
-                co_await start_raft_group(tablet, id, std::move(new_tm));
+                co_await start_raft_group(tablet, id, std::move(new_tm), parent_id);
                 state.server = &_raft_gr.get_server(id);
                 state.leader_info_updater = leader_info_updater(state, tablet, id);
 
@@ -589,6 +634,24 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
         return raft_server(state, std::move(h));
     });
+}
+
+std::optional<raft_server> groups_manager::try_acquire_server(raft::group_id group_id) {
+    const auto it = _raft_groups.find(group_id);
+    if (it == _raft_groups.end()) {
+        return std::nullopt;
+    }
+    auto& state = it->second;
+    // server_control_op is not awaited here, so the server may still be starting.
+    if (!state.server || !state.gate) {
+        return std::nullopt;
+    }
+    auto h = state.gate->try_hold();
+    if (!h) {
+        // The group is being stopped.
+        return std::nullopt;
+    }
+    return raft_server(state, std::move(*h));
 }
 
 bool groups_manager::should_redirect_writes(raft::group_id group_id) const {

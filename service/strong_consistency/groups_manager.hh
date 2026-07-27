@@ -33,6 +33,11 @@ namespace service::strong_consistency {
 class raft_server;
 class raft_resize_coordinator;
 
+// conditional_variable::wait doesn't have an overload taking an abort_source.
+// This is a temporary workaround until we extend the interface.
+// See: scylladb/seastar#3292.
+future<> wait_with_abort_source(condition_variable& cv, abort_source& as);
+
 /// A cache of leader locations for raft groups where this node is not a replica.
 /// Populated by the CQL transport layer after a redirect reveals the actual leader.
 ///
@@ -103,6 +108,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     class rpc_impl;
 
     friend class raft_server;
+    // Its colocator fibers reach for the raft servers owned here through
+    // try_acquire_server(); see raft_resize_coordinator::leader_colocator().
+    friend class raft_resize_coordinator;
 
     struct leader_info {
         // The Raft term this structure describes.
@@ -148,9 +156,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     tablet_group_leader_cache _leader_cache;
 
     // Should be called on the shard that hosts the Raft group
+    // If the group is created as a result of a resize, the parent id is the group_id
+    // of the original tablet.
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
-        locator::token_metadata_ptr tm);
+        locator::token_metadata_ptr tm,
+        std::optional<raft::group_id> parent_gid = std::nullopt);
 
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
@@ -160,6 +171,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     void init_messaging_service();
     future<> uninit_messaging_service();
+
+    // A non-blocking, non-throwing variant of acquire_server(): returns nullopt if the group
+    // is not hosted here, hasn't started yet or is being stopped.
+    std::optional<raft_server> try_acquire_server(raft::group_id group_id);
 
 public:
     groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
