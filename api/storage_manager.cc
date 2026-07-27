@@ -7,7 +7,6 @@
  */
 
 #include <seastar/core/coroutine.hh>
-#include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
 #include <fmt/ranges.h>
 
@@ -26,20 +25,7 @@ namespace ss = httpd::storage_service_json;
 using namespace json;
 using namespace seastar::httpd;
 
-static sstring require_query_param(const http::request& req, std::string_view name) {
-    auto value = req.get_query_param(std::string(name));
-    if (value.empty()) {
-        throw bad_param_exception(fmt::format("Missing required query parameter '{}'", name));
-    }
-    return value;
-}
-
 static const sstring object_storage_prefix = "sstables";
-
-static sstables::object_storage_client& get_object_storage_client(sharded<sstables::storage_manager>& sstm, const http::request& req) {
-    auto endpoint = require_query_param(req, "endpoint");
-    return *sstm.local().get_endpoint_client(std::move(endpoint));
-}
 
 static future<> collect_object_storage_entries(abstract_lister& lister, std::vector<sstring>& entries) {
     while (auto entry = co_await lister.get()) {
@@ -67,8 +53,9 @@ static std::optional<sstring> first_path_component(std::string_view path) {
 static
 future<json::json_return_type>
 rest_object_storage_sstables(sharded<sstables::storage_manager>& sstm, std::unique_ptr<http::request> req) {
-    auto bucket = require_query_param(*req, "bucket");
-    auto& client = get_object_storage_client(sstm, *req);
+    auto bucket = req->get_query_param("bucket");
+    auto endpoint = req->get_query_param("endpoint");
+    auto& client = *sstm.local().get_endpoint_client(std::move(endpoint));
     auto table_entries = co_await list_object_storage_entries(client, bucket, fmt::format("{}/", object_storage_prefix));
     std::map<sstring, ss::object_storage_sstable> sstables;
     for (const auto& entry : table_entries) {
