@@ -22,6 +22,7 @@
 #include "db/config.hh"
 #include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
+#include "service/migration_manager.hh"
 #include "types/list.hh"
 #include "utils/throttle.hh"
 #include "test/lib/cql_test_env.hh"
@@ -40,6 +41,18 @@ static schema_ptr random_schema() {
            .with_column("pk", bytes_type, column_kind::partition_key)
            .with_column(random_column_name(), bytes_type)
            .build();
+}
+
+static void apply_schema_change(cql_test_env& e, utils::chunked_vector<mutation> muts) {
+    utils::chunked_vector<canonical_mutation> cmuts;
+    cmuts.reserve(muts.size());
+    for (auto&& m : muts) {
+        cmuts.emplace_back(std::move(m));
+    }
+
+    auto& mm = e.migration_manager().local();
+    auto applier = mm.prepare_schema_change(e.local_db().get_token_metadata().get_my_id(), std::move(cmuts)).get();
+    mm.complete_schema_change(std::move(applier)).get();
 }
 
 struct dummy_init {
@@ -172,8 +185,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
             auto sm0 = db::schema_tables::make_schema_mutations(s0, api::new_timestamp(), true);
             utils::chunked_vector<mutation> muts;
             sm0.copy_to(muts);
-            db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(),
-                                            muts).get();
+            apply_schema_change(e, std::move(muts));
         }
 
         // This should attach the table
@@ -305,8 +317,7 @@ SEASTAR_THREAD_TEST_CASE(test_merge_schema_with_large_collection_of_mutations) {
 
         BOOST_REQUIRE(seastar::memory::stats().large_allocations() == 0);
         seastar::memory::scoped_large_allocation_warning_threshold guard((size_t(128) << 10)+1); // 128 KiB + 1 byte
-        db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(),
-                                        mutations).get();
+        apply_schema_change(e, std::move(mutations));
         BOOST_REQUIRE(seastar::memory::stats().large_allocations() == 0);
 
     }).get();
