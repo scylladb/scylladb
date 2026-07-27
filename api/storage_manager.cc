@@ -17,7 +17,6 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/object_storage_client.hh"
 #include "sstables/storage.hh"
-#include "replica/database.hh"
 #include "utils/lister.hh"
 #include "utils/UUID.hh"
 
@@ -37,9 +36,9 @@ static sstring require_query_param(const http::request& req, std::string_view na
 
 static const sstring object_storage_prefix = "sstables";
 
-static sstables::object_storage_client& get_object_storage_client(http_context& ctx, const http::request& req) {
+static sstables::object_storage_client& get_object_storage_client(sharded<sstables::storage_manager>& sstm, const http::request& req) {
     auto endpoint = require_query_param(req, "endpoint");
-    return *ctx.db.local().get_user_sstables_manager().get_endpoint_client(std::move(endpoint));
+    return *sstm.local().get_endpoint_client(std::move(endpoint));
 }
 
 static future<> collect_object_storage_entries(abstract_lister& lister, std::vector<sstring>& entries) {
@@ -67,9 +66,9 @@ static std::optional<sstring> first_path_component(std::string_view path) {
 
 static
 future<json::json_return_type>
-rest_object_storage_sstables(http_context& ctx, std::unique_ptr<http::request> req) {
+rest_object_storage_sstables(sharded<sstables::storage_manager>& sstm, std::unique_ptr<http::request> req) {
     auto bucket = require_query_param(*req, "bucket");
-    auto& client = get_object_storage_client(ctx, *req);
+    auto& client = get_object_storage_client(sstm, *req);
     auto table_entries = co_await list_object_storage_entries(client, bucket, fmt::format("{}/", object_storage_prefix));
     std::map<sstring, ss::object_storage_sstable> sstables;
     for (const auto& entry : table_entries) {
@@ -96,8 +95,8 @@ rest_object_storage_sstables(http_context& ctx, std::unique_ptr<http::request> r
 }
 
 void set_storage_manager(http_context& ctx, routes& r, sharded<sstables::storage_manager>& sstm) {
-    ss::object_storage_sstables.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        co_return co_await rest_object_storage_sstables(ctx, std::move(req));
+    ss::object_storage_sstables.set(r, [&sstm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_return co_await rest_object_storage_sstables(sstm, std::move(req));
     });
 }
 
