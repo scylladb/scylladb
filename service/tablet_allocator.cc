@@ -4934,6 +4934,21 @@ private:
 
             new_tablets.emplace_tablet(new_left_tid, tablets.get_split_token(tid), tablet_info);
             new_tablets.emplace_tablet(new_right_tid, tablets.get_last_token(tid), tablet_info);
+
+            // The children of a strongly consistent tablet take the group ids generated with
+            // the split decision, which the replicas have already created the groups for.
+            if (tablets.has_raft_info()) {
+                if (!tablets.is_resizing(tid)) {
+                    on_internal_error(lblogger, format("Strongly consistent tablet {} of table {} "
+                            "is being resized without child Raft group ids", tid, table));
+                }
+                // The number of ids was checked against the resize decision when they were
+                // recorded, and get_split_child_gids() checks that the decision is a split, so
+                // there is nothing left to validate here.
+                const auto [left_gid, right_gid] = tablets.get_split_child_gids(tid);
+                new_tablets.set_tablet_raft_info(new_left_tid, locator::tablet_raft_info{.group_id = left_gid});
+                new_tablets.set_tablet_raft_info(new_right_tid, locator::tablet_raft_info{.group_id = right_gid});
+            }
         }
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
@@ -4948,6 +4963,12 @@ private:
         size_t new_count = merge_plan.selected_left_tablets.empty()
             ? div_ceil(tablets.tablet_count(), 2)
             : tablets.tablet_count() - merge_plan.selected_left_tablets.size();
+
+        // FIXME: strongly consistent tablet merge is not implemented yet.
+        if (tablets.has_raft_info()) {
+            on_internal_error(lblogger, format("Tablet merge is not supported for strongly "
+                    "consistent table {}", table));
+        }
 
         tablet_map new_tablets(new_count, tablets.has_raft_info(), tablet_map::initialized_later());
 
