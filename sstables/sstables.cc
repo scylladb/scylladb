@@ -1697,7 +1697,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         auto new_sst = creator(shared_from_this());
         auto generation = new_sst->generation();
 
-        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}).get();
+        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}, {}).get();
         new_sst->copy_components(*this).get();
 
         modifier(*new_sst);
