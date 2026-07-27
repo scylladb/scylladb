@@ -50,13 +50,14 @@ service::pager::paging_state::paging_state(partition_key pk,
         query_id query_uuid,
         replicas_per_token_range last_replicas,
         std::optional<db::read_repair_decision> query_read_repair_decision,
-        uint64_t rows_fetched_for_last_partition)
+        uint64_t rows_fetched_for_last_partition,
+        std::optional<table_id> query_plan_id)
     : paging_state(std::move(pk), pos.has_key() ? std::optional(pos.key()) : std::nullopt, static_cast<uint32_t>(rem), query_uuid, std::move(last_replicas), query_read_repair_decision,
             static_cast<uint32_t>(rows_fetched_for_last_partition), static_cast<uint32_t>(rem >> 32),
             static_cast<uint32_t>(rows_fetched_for_last_partition >> 32),
             pos.get_bound_weight(),
             pos.region(),
-            std::nullopt)
+            std::move(query_plan_id))
 { }
 
 lw_shared_ptr<const service::pager::paging_state> service::pager::paging_state::deserialize(

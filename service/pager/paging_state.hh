@@ -68,7 +68,8 @@ public:
             query_id reader_recall_uuid,
             replicas_per_token_range last_replicas,
             std::optional<db::read_repair_decision> query_read_repair_decision,
-            uint64_t rows_fetched_for_last_partition);
+            uint64_t rows_fetched_for_last_partition,
+            std::optional<table_id> query_plan_id);
 
     void set_partition_key(partition_key pk) {
         _partition_key = std::move(pk);
