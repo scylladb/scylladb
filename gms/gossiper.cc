@@ -603,6 +603,11 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<T> epset) {
 
 future<> gossiper::do_apply_state_locally(locator::host_id node, endpoint_state remote_state, bool shadow_round) {
 
+    // share_messages: a single message_injection() releases every stalled
+    // applier, so the test can unstick them all when it is done.
+    co_await utils::get_local_injector().inject("gossiper_stall_apply_state_locally",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
     co_await utils::get_local_injector().inject("delay_gossiper_apply", [&node, &remote_state](auto& handler) -> future<> {
         const auto gossip_delay_node = handler.template get<std::string_view>("delay_node");
         if (gossip_delay_node && !remote_state.get_host_id() && inet_address(sstring(gossip_delay_node.value())) == remote_state.get_ip()) {
@@ -670,6 +675,10 @@ future<> gossiper::apply_state_locally_in_shadow_round(std::unordered_map<inet_a
 
 future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> map) {
     auto start = std::chrono::steady_clock::now();
+    // Received states are applied with limited concurrency; the rest queue up
+    // as semaphore waiters. Log the backlog so that a node falling behind on
+    // applying gossip states is observable.
+    logger.debug("gossip state-apply backlog: {}", _apply_state_locally_semaphore.waiters());
     auto endpoints = map | std::views::keys | std::ranges::to<utils::chunked_vector<inet_address>>();
     std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);
     auto node_is_seed = [this] (gms::inet_address ip) { return is_seed(ip); };
