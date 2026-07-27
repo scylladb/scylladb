@@ -4479,6 +4479,20 @@ future<> table::flush(std::optional<db::replay_position> pos) {
     co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush(pos); });
 }
 
+future<> table::flush_tablet(locator::tablet_id tid) {
+    // There is nothing to flush if the table was stopped.
+    if (_pending_flushes_phaser.is_closed()) {
+        co_return;
+    }
+    auto op = _pending_flushes_phaser.start();
+    auto sgp = _sg_manager->maybe_storage_group_for_id(_schema, tid.value());
+    if (!sgp) {
+        tlogger.debug("Storage group for tablet {} is deallocated. Nothing to flush.", tid);
+        co_return;
+    }
+    co_await flush_compaction_groups(*sgp);
+}
+
 bool storage_group::can_flush() const {
     return std::ranges::any_of(compaction_groups_immediate(), std::mem_fn(&compaction_group::can_flush));
 }

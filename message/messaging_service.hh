@@ -220,8 +220,9 @@ enum class messaging_verb : int32_t {
     FETCH_COLUMN_MAPPINGS = 91,
     REPAIR_GET_TABLE_SIZE = 92,
     BACKUP_SNAPSHOT_SSTABLES = 93,
+    PROCESS_RAFT_RESIZE = 94,
 
-    LAST = 94,
+    LAST = 95,
 };
 
 } // namespace netw

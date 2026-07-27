@@ -1124,6 +1124,12 @@ public:
     void start();
     future<> stop() noexcept;
     future<> flush(std::optional<db::replay_position> = {});
+    // Flushes the memtables of a single tablet, i.e. of the storage group which owns it, rather
+    // than of every storage group of this table on this shard as flush() does.
+    // A no-op if this shard does not hold the tablet. The caller holds the tablet for as long as it
+    // needs the flush, so a missing storage group means the table is being stopped and there is
+    // nothing left here to flush.
+    future<> flush_tablet(locator::tablet_id);
     bool needs_flush() const;
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);

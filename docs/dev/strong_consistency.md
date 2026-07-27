@@ -262,6 +262,27 @@ Two different components are called a coordinator here. The **topology coordinat
 coordinator** (`service::strong_consistency::coordinator`) is the per-request, replica-side one
 which serves a read or a write. Both are named explicitly wherever the difference matters.
 
+## Sealing the parent
+
+Sealing is driven from outside the group, by the topology coordinator, over the
+`process_raft_resize` verb: the markers have to be committed in the parent's log, which only
+its current leader can do, and every replica has to have applied the second one before the
+tablet map is replaced. It commits two markers:
+
+- `start_resize` - from here on the parent no longer accepts writes, and the request
+  coordinator hands the writes of its token range off to the child covering the token,
+- `end_resize` - from here on the parent's log is final, and the appliers of the children
+  are released.
+
+The verb has no cluster feature of its own, which holds only while strongly consistent tables
+stay experimental. A node advertises `STRONGLY_CONSISTENT_TABLES` only if it was started with
+the experimental flag (`init.cc`), and the cluster feature is enabled only once every node
+advertises it, so no cluster which upgrades into this version has it on and no table whose
+split could send the verb can exist next to a node predating this series. That argument expires
+when the feature ships: the verb has to be gated by a cluster feature of its own before
+strongly consistent tablets are supported, or a mixed cluster would fail the seal with an
+unknown verb and never finish the finalization.
+
 The markers are ordinary entries in the parent's log, so they are replicated and applied in
 log order like any write. They are *not* carried as mutations, though: each marker is recorded
 as a static column of the group's own row in `system.raft_groups`, whose partition key contains

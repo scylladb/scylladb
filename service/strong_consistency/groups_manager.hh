@@ -166,6 +166,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
 
+        // Set on a parent once its data has been flushed for the seal, so that the rounds of
+        // process_raft_resize which follow do not flush again. See handle_process_raft_resize().
+        bool seal_flushed = false;
+
         // Set on a parent for as long as it is being resized on this replica.
         std::unique_ptr<resize_colocation_state> resize_colocation;
     };
@@ -259,6 +263,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     void init_messaging_service();
     future<> uninit_messaging_service();
 
+    // Returns the shard hosting the raft server of the given tablet. Nullopt if this node owns no
+    // replica of the tablet, or if `expected_gid` does not serve it here. The latter rejects a
+    // tablet id which came from a replica with a different tablet map.
+    std::optional<shard_id> find_shard_for_tablet(locator::global_tablet_id tablet, raft::group_id expected_gid) const;
+
     // A non-blocking, non-throwing variant of acquire_server(): returns nullopt if the group
     // is not hosted here, hasn't started yet or is being stopped.
     std::optional<raft_server> try_acquire_server(raft::group_id group_id);
@@ -289,6 +298,17 @@ public:
     // caller must then retry against the current map rather than hand the request anywhere.
     bool should_handoff_writes(raft::group_id group_id) const;
     std::optional<raft::group_id> group_for_handoff(schema_ptr schema, const dht::token& token) const;
+
+    // Seals the raft group `parent_gid` of `tablet`, which is being replaced by the groups
+    // `new_gids`.
+    // Returns true once start_resize and end_resize have been committed in the parent group. With
+    // wait_only, returns true once end_resize has been applied on this replica and the tablet's
+    // data has been flushed.
+    // Returns false if the call has to be retried, which covers every case where this replica
+    // cannot make progress yet. It has not observed the resize, does not host the groups involved,
+    // does not lead the parent, or the leaders are not co-located.
+    future<bool> handle_process_raft_resize(locator::global_tablet_id tablet, raft::group_id parent_gid,
+        const std::vector<raft::group_id>& new_gids, bool wait_only, abort_source& as);
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
@@ -354,6 +374,11 @@ public:
     using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader>;
     begin_read_result begin_read(abort_source&);
     void advance_leader_timestamp(api::timestamp_type ts);
+
+    // The largest timestamp any leader of this group has handed out. Nullopt if this replica does
+    // not lead the group, or is not ready to hand timestamps out yet - the same conditions under
+    // which begin_mutate() would hand none out either.
+    std::optional<api::timestamp_type> leader_timestamp() const;
 };
 
 } // namespace service::strong_consistency

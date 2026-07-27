@@ -9,6 +9,7 @@
 #include "groups_manager.hh"
 
 #include "locator/tablets.hh"
+#include "locator/tablet_sharder.hh"
 #include "raft/raft.hh"
 #include "raft/server.hh"
 #include "service/migration_manager.hh"
@@ -23,6 +24,8 @@
 #include "service/storage_proxy.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "idl/strong_consistency/state_machine.dist.hh"
+#include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
 #include "utils/error_injection.hh"
 #include "utils/exceptions.hh"
@@ -157,6 +160,13 @@ void raft_server::advance_leader_timestamp(api::timestamp_type ts) {
     if (_state.leader_info) {
         _state.leader_info->last_timestamp = std::max(_state.leader_info->last_timestamp, ts);
     }
+}
+
+std::optional<api::timestamp_type> raft_server::leader_timestamp() const {
+    if (_state.leader_info && _state.leader_info->term == _state.server->get_current_term()) {
+        return _state.leader_info->last_timestamp;
+    }
+    return std::nullopt;
 }
 
 groups_manager::groups_manager(netw::messaging_service& ms, 
@@ -385,6 +395,47 @@ void groups_manager::init_messaging_service() {
             });
         }
     );
+
+    ser::groups_manager_rpc_verbs::register_process_raft_resize(&_ms,
+        [this] (rpc::opt_time_point timeout, raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id parent_gid,
+                std::vector<raft::group_id> new_gids, bool wait_only) -> future<bool> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            const auto shard = find_shard_for_tablet(tablet, parent_gid);
+            if (!shard) {
+                logger.debug("process_raft_resize: no local shard hosts group {} of tablet {}", parent_gid, tablet);
+                co_return false;
+            }
+            co_return co_await container().invoke_on(*shard,
+                    [timeout, tablet, parent_gid, new_gids = std::move(new_gids), wait_only] (groups_manager& gm) -> future<bool> {
+                // The verb is declared with_timeout, so the caller always sets a deadline.
+                abort_on_expiry aoe(*timeout);
+                co_return co_await gm.handle_process_raft_resize(tablet, parent_gid, new_gids, wait_only,
+                        aoe.abort_source());
+            });
+        }
+    );
+}
+
+std::optional<shard_id> groups_manager::find_shard_for_tablet(locator::global_tablet_id tablet, raft::group_id expected_gid) const {
+    if (!_db.column_family_exists(tablet.table)) {
+        return std::nullopt;
+    }
+    auto erm = _db.find_column_family(tablet.table).get_effective_replication_map();
+    const auto& tm = erm->get_token_metadata();
+    const auto& tablet_map = tm.tablets().get_tablet_map(tablet.table);
+    if (!tablet_map.has_raft_info()) {
+        return std::nullopt;
+    }
+    // A tablet id is an index into the tablet map, so it only names the tablet the caller meant
+    // as long as this replica sees the same map. Comparing the group id catches the case where it
+    // does not - the caller retries until this replica catches up.
+    if (tablet.tablet.value() >= tablet_map.tablet_count()
+            || tablet_map.get_tablet_raft_info(tablet.tablet).group_id != expected_gid) {
+        return std::nullopt;
+    }
+    return locator::get_shard_for_reads(tablet_map, tablet.tablet, tm.get_my_id());
 }
 
 future<> groups_manager::uninit_messaging_service() {
@@ -914,6 +965,188 @@ void groups_manager::start_leader_colocator(raft_group_state& state, locator::gl
     // the state cannot be constructed as a temporary and handed over.
     state.resize_colocation = std::make_unique<resize_colocation_state>(tablet, std::move(new_gids));
     state.resize_colocation->colocator = leader_colocator(*state.resize_colocation, parent_gid);
+}
+
+future<bool> groups_manager::handle_process_raft_resize(locator::global_tablet_id tablet, raft::group_id parent_gid,
+        const std::vector<raft::group_id>& new_gids, bool wait_only, abort_source& as) {
+    // Anything this verb needs may not be here yet, or may be on its way out. Every such case
+    // resolves on its own, so we report failure and let the topology coordinator retry instead of
+    // erroring out. The parent's raft server in particular is registered only once update() has
+    // run on this shard, which a replica which has just restarted may not have done.
+    auto parent = try_acquire_server(parent_gid);
+    if (!parent) {
+        logger.debug("process_raft_resize: the raft server of group {} is not available here", parent_gid);
+        co_return false;
+    }
+    // update() records the resize in the same pass in which it starts the children, so a missing
+    // state means this replica has not observed the new tablet metadata yet.
+    if (!_resize_tracker.is_resizing(parent_gid)) {
+        logger.debug("process_raft_resize: group {} is not known to be resizing here yet", parent_gid);
+        co_return false;
+    }
+    if (wait_only) {
+        if (new_gids.empty()) {
+            // The caller records the replacement group ids before it drives anything, and never
+            // records an empty set, so this only answers a peer which does not agree with us on
+            // what it is asking for.
+            logger.debug("process_raft_resize: no replacement groups given for {}", parent_gid);
+            co_return false;
+        }
+        const auto finished = _resize_tracker.get_parent_finished_future(new_gids.front());
+        if (!finished) {
+            logger.debug("process_raft_resize: group {} is not known here as a child of {}",
+                new_gids.front(), parent_gid);
+            co_return false;
+        }
+        // We drop the group's gate holder for the wait and the flush below. Holding it across
+        // the wait would deadlock: the teardown is what breaks the promise we wait on.
+        parent.reset();
+        // Reported rather than thrown, like every other way this verb fails to get what it was
+        // asked for. The wait ends with an exception when the deadline passes, and when the parent
+        // is torn down under us by a node shutdown or a table drop. The caller answers both by
+        // retrying, or by giving the attempt up.
+        if (auto f = co_await coroutine::as_future(finished->get_future(as)); f.failed()) {
+            logger.debug("process_raft_resize: waiting for group {} to finish resizing failed: {}",
+                parent_gid, f.get_exception());
+            co_return false;
+        }
+
+        // Finalization takes the parent out of the tablet map, after which a replay discards the
+        // parent's entries, so we get what it applied onto disk first. Once per resize: the
+        // parent's log is final by now, so nothing more can arrive.
+        if (const auto it = _raft_groups.find(parent_gid);
+                it != _raft_groups.end() && it->second.seal_flushed) {
+            co_return true;
+        }
+        if (!_db.column_family_exists(tablet.table)) {
+            // Dropped while we were waiting.
+            logger.debug("process_raft_resize: table {} of tablet {} no longer exists here",
+                tablet.table, tablet);
+            co_return false;
+        }
+        co_await _db.find_column_family(tablet.table).flush_tablet(tablet.tablet);
+        co_await _db.find_column_family(db::system_keyspace::raft_groups()->id()).flush();
+        // FIXME: take a snapshot of the parent here, to release the replay position handles of
+        // the entries its applier never sees. acquire_replay_position_handles_for() takes over
+        // those of command entries alone, so the configuration and dummy ones stay in
+        // raft_commitlog's map until truncate_log_tail(), which only a snapshot drives. The
+        // segments holding them stay dirty until the node restarts. This is also the one point
+        // where such a snapshot would be sound: take_snapshot() captures no state, so its
+        // descriptor asserts nothing beyond "the entries below me need not be replayed", and the
+        // flushes above are what makes that true. It cannot be taken yet: truncating the log
+        // leaves a replica which was down for part of the resize behind the snapshot index, and
+        // catching one up needs transfer_snapshot(), which is not implemented for these groups.
+        if (const auto it = _raft_groups.find(parent_gid); it != _raft_groups.end()) {
+            it->second.seal_flushed = true;
+        }
+        co_return true;
+    }
+
+    // The children's leaders have to be co-located with the parent's before the no_op entries go
+    // into them. Otherwise the read barriers their leader_info_updater() runs cannot finish, even
+    // once the leaders do come together, and no handed-off write can be committed. The colocator
+    // fiber is normally already maintaining this, so it usually holds on the first try.
+    const auto resize_started = _resize_tracker.should_handoff_writes(parent_gid);
+    if (!resize_started) {
+        // An unknown parent leader is not a co-location: there would be nothing to co-locate the
+        // children with, and the caller retries until the election concludes.
+        const auto parent_leader = parent->server().current_leader();
+        if (!parent_leader || co_await colocate_leaders(parent_leader, parent_gid, new_gids)
+                != colocation_status::colocated) {
+            co_return false;
+        }
+    }
+
+    auto to_raft_command = [](raft_command command) {
+        raft::command raft_cmd;
+        ser::serialize(raft_cmd, command);
+        return raft_cmd;
+    };
+
+    auto make_resize_cmd = [&to_raft_command] (resize_marker_kind kind) {
+        return to_raft_command(raft_command{.change = resize_marker{.kind = kind}});
+    };
+
+    if (!resize_started) {
+        // We put a no_op entry into each child so that its applier has something to block on.
+        // From now on a read barrier in those groups blocks too, released when the parent applies
+        // end_resize. That is what makes their linearizable reads wait for the parent's log to be
+        // applied in full.
+        for (const auto new_gid : new_gids) {
+            auto child = try_acquire_server(new_gid);
+            if (!child) {
+                logger.debug("process_raft_resize: the raft server of group {}, a child of {}, is not available here",
+                    new_gid, parent_gid);
+                co_return false;
+            }
+            auto res = co_await coroutine::as_future(child->server().add_entry(
+                to_raft_command(raft_command{.change = no_op{}}), raft::wait_type::committed, &as));
+            if (res.failed()) {
+                logger.debug("process_raft_resize: the no_op entry for group {} failed: {}", new_gid, res.get_exception());
+                co_return false;
+            }
+        }
+
+        // The first irreversible step of the seal: from here on the parent's writes are handed off
+        // to its children, and no marker is ever cleared.
+        auto res = co_await coroutine::as_future(parent->server().add_entry(
+            make_resize_cmd(resize_marker_kind::start_resize), raft::wait_type::committed, &as));
+        if (res.failed()) {
+            logger.debug("process_raft_resize: start_resize commit for {} failed: {}", parent_gid, res.get_exception());
+            co_return false;
+        }
+        // add_entry() only succeeds on the leader, so we are the leader and every write of this
+        // group is handled here. We fast-forward the in-memory flag rather than wait for the entry
+        // to be applied, which lets us commit end_resize immediately. Writes check the flag
+        // synchronously with entering add_entry(), which appends in admission order, so every write
+        // which observed !start_resize is appended before the end_resize marker below.
+        _resize_tracker.mark_resize_phase(parent_gid, resize_marker_kind::start_resize);
+    }
+
+    if (!_resize_tracker.has_applied_end_resize(parent_gid)) {
+        // Before the children take over for good, we lift their clocks above the parent's. The
+        // per-write advance in coordinator::mutate() covers only handed-off writes and writes made
+        // before start_resize was committed; entries added between the two markers can carry higher
+        // timestamps than the child would calculate, and by this point we know all of them.
+        //
+        // We re-check the co-location even though the start of the resize did too: this may be a
+        // retry which skipped that check.
+        if (resize_started) {
+            const auto parent_leader = parent->server().current_leader();
+            if (!parent_leader || co_await colocate_leaders(parent_leader, parent_gid, new_gids)
+                    != colocation_status::colocated) {
+                co_return false;
+            }
+        }
+        const auto parent_ts = parent->leader_timestamp();
+        if (!parent_ts) {
+            // This replica does not lead the parent, or its leader_info has not caught up with
+            // the current term yet. Either resolves on its own - the parent's applier is never
+            // held back - so let the caller retry.
+            logger.debug("process_raft_resize: the leader clock of group {} is not known here yet", parent_gid);
+            co_return false;
+        }
+        // The advance only reaches the child leaders hosted here whose leader_info is already
+        // populated. Skipping the rest is safe, with one bounded exception: a read barrier which
+        // captured the commit index before the no_op went in completes on its read quorum alone,
+        // and can seed from stored data sitting below the parent's clock. That window is two
+        // commits wide and opens only where the co-location above has just moved a child's
+        // leadership here. Nothing here can tell such a barrier from a child held back in the
+        // ordinary way, and waiting for either would be waiting for the seal this call is running.
+        for (const auto new_gid : new_gids) {
+            if (auto child = try_acquire_server(new_gid)) {
+                child->advance_leader_timestamp(*parent_ts);
+            }
+        }
+        auto res = co_await coroutine::as_future(parent->server().add_entry(
+            make_resize_cmd(resize_marker_kind::end_resize), raft::wait_type::committed, &as));
+        if (res.failed()) {
+            logger.debug("process_raft_resize: end_resize commit for {} failed: {}", parent_gid, res.get_exception());
+            co_return false;
+        }
+    }
+
+    co_return true;
 }
 
 void groups_manager::start() {
