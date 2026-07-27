@@ -572,6 +572,7 @@ class ManagerClient:
                                 replace_cfg: Optional[ReplaceConfig],
                                 cmdline: Optional[List[str]],
                                 config: Optional[dict[str, Any]],
+                                append_env: Optional[dict[str, str]],
                                 version: Optional[ScyllaVersionDescription],
                                 property_file: Union[List[dict[str, Any]], dict[str, Any], None],
                                 start: bool,
@@ -586,6 +587,8 @@ class ManagerClient:
             data['cmdline'] = cmdline
         if config:
             data['config'] = config
+        if append_env:
+            data['append_env'] = append_env
         if version:
             data['version'] = version._asdict()
         if property_file:
@@ -604,6 +607,7 @@ class ManagerClient:
                          replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
+                         append_env: Optional[dict[str, str]] = None,
                          version: Optional[ScyllaVersionDescription] = None,
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
@@ -632,6 +636,7 @@ class ManagerClient:
                 replace_cfg,
                 cmdline,
                 config,
+                append_env,
                 version,
                 property_file,
                 start,
@@ -670,6 +675,7 @@ class ManagerClient:
     async def servers_add(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
                           config: Optional[dict[str, Any]] = None,
+                          append_env: Optional[dict[str, str]] = None,
                           version: Optional[ScyllaVersionDescription] = None,
                           property_file: Union[List[dict[str, Any]], dict[str, Any], None] = None,
                           start: bool = True,
@@ -698,7 +704,7 @@ class ManagerClient:
             property_file = [{"dc":auto_rack_dc, "rack":f"rack{i+1}"} for i in range(servers_num)]
 
         try:
-            data = self._create_server_add_data(None, cmdline, config, version, property_file, start, seeds, expected_error, server_encryption, None)
+            data = self._create_server_add_data(None, cmdline, config, append_env, version, property_file, start, seeds, expected_error, server_encryption, None)
             data['servers_num'] = servers_num
             server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
                                                       timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)

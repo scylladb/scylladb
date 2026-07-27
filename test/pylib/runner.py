@@ -837,7 +837,7 @@ def create_suite_pool(suite_config: TestSuiteConfig,
             cmdline_options=cmdline_options,
             config_options=config_options,
             property_file=create_cfg.property_file,
-            append_env=base_env,
+            append_env={**base_env, **(create_cfg.append_env_from_test or {})},
             server_encryption=create_cfg.server_encryption)
 
         return server
