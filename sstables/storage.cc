@@ -73,7 +73,7 @@ private:
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
     future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
             const std::unordered_set<component_type>& excluded_components,
-            optimized_optional<sstable_id> new_sid = {}) const override;
+            optimized_optional<sstable_id> new_sid) const override;
 
     future<> change_dir(sstring new_dir) {
         auto old_dir = std::exchange(_dir, opened_directory(new_dir));
@@ -726,7 +726,7 @@ public:
     }
     future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
             const std::unordered_set<component_type>& excluded_components,
-            optimized_optional<sstable_id> new_sid = {}) const override;
+            optimized_optional<sstable_id> new_sid) const override;
     future<> unlink_component(const sstable& sst, component_type) noexcept override;
     future<size_t> num_references(const sstable& sst) const override;
 
