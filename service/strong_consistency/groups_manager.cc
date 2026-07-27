@@ -805,6 +805,14 @@ future<bool> groups_manager::handle_process_raft_resize(table_id table_id, raft:
         _resize_coordinator.fast_forward_redirect_writes(parent_gid);
     }
 
+    // Holds the resize in the window where the parent group no longer accepts writes but the
+    // groups replacing it have not been released yet, which is otherwise too short to aim at.
+    // The topology coordinator retries the verb on a timeout, and the retry commits
+    // groups_resized without pausing, so the window closes on its own even if nobody messages
+    // the injection.
+    co_await utils::get_local_injector().inject("sc_pause_before_groups_resized",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
     if (!resize_state.groups_resized.get_shared_future().available()) {
         auto res = co_await coroutine::as_future(parent.server().add_entry(
             make_resize_cmd(parent_gid, true), raft::wait_type::committed, &as));

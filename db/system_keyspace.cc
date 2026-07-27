@@ -3126,7 +3126,9 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         co_return ret;
     }
 
-    const bool tablet_balancing_not_supported = _db.features().strongly_consistent_tables;
+    const bool tablet_balancing_not_supported =
+            _db.features().strongly_consistent_tables
+            && !utils::get_local_injector().enter("allow_sc_tablet_balancing");
 
     for (auto& row : *rs) {
         if (!row.has("host_id")) {

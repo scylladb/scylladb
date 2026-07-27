@@ -428,6 +428,8 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
             if (_groups_manager.should_redirect_writes(op.raft_info.group_id)) {
                 redirect_group = _groups_manager.group_for_redirect(schema, token);
                 parent_timestamp = ts;
+                logger.debug("mutate(): redirecting write to table {}.{}, tablet {} from resized group {} to group {}",
+                    schema->ks_name(), schema->cf_name(), op.tablet_id, op.raft_info.group_id, *redirect_group);
                 break;
             }
             future<> add_entry_result = co_await coroutine::as_future(
@@ -577,6 +579,8 @@ auto coordinator::query(schema_ptr schema,
             auto maybe_redirect = [&] {
                 if (!redirect_group && _groups_manager.should_redirect_writes(op.raft_info.group_id)) {
                     redirect_group = _groups_manager.group_for_redirect(schema, ranges[0].start()->value().token());
+                    logger.debug("query(): redirecting read of table {}.{}, tablet {} from resized group {} to group {}",
+                        schema->ks_name(), schema->cf_name(), op.tablet_id, op.raft_info.group_id, *redirect_group);
                     if (++redirect_hops % 32 == 0) {
                         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
                         logger.log(log_level::warn, rate_limit,
