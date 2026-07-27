@@ -4934,6 +4934,23 @@ private:
 
             new_tablets.emplace_tablet(new_left_tid, tablets.get_split_token(tid), tablet_info);
             new_tablets.emplace_tablet(new_right_tid, tablets.get_last_token(tid), tablet_info);
+
+            // For strongly consistent tables the child tablets become their own
+            // Raft groups using the child ids generated with the split decision.
+            if (tablets.has_raft_info()) {
+                if (!tablets.is_resizing(tid)) {
+                    on_internal_error(lblogger, format("Strongly consistent tablet {} of table {} "
+                            "is being resized without child Raft group ids", tid, table));
+                }
+                const auto& raft_resize = tablets.get_raft_resize_info(tid);
+                if (raft_resize.kind != locator::raft_resize_kind::split) {
+                    on_internal_error(lblogger, format("Strongly consistent tablet {} of table {} "
+                            "is being split but carries {} resize info", tid, table,
+                            locator::raft_resize_kind_to_name(raft_resize.kind)));
+                }
+                new_tablets.set_tablet_raft_info(new_left_tid, locator::tablet_raft_info{.group_id = raft_resize.left_gid()});
+                new_tablets.set_tablet_raft_info(new_right_tid, locator::tablet_raft_info{.group_id = raft_resize.right_gid()});
+            }
         }
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
@@ -4948,6 +4965,12 @@ private:
         size_t new_count = merge_plan.selected_left_tablets.empty()
             ? div_ceil(tablets.tablet_count(), 2)
             : tablets.tablet_count() - merge_plan.selected_left_tablets.size();
+
+        // FIXME: strongly consistent tablet merge is not implemented yet.
+        if (tablets.has_raft_info()) {
+            on_internal_error(lblogger, format("Tablet merge is not supported for strongly "
+                    "consistent table {}", table));
+        }
 
         tablet_map new_tablets(new_count, tablets.has_raft_info(), tablet_map::initialized_later());
 

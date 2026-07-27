@@ -1781,10 +1781,45 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             resize_decision.sequence_number = tmap.resize_decision().next_sequence_number();
             rtlogger.debug("Generating resize decision for table {} of type {} and sequence number {}",
                            table_id, resize_decision.type_name(), resize_decision.sequence_number);
-            out.emplace_back(
-                replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
-                    .set_resize_decision(std::move(resize_decision), _feature_service)
-                    .build());
+            const bool is_split = resize_decision.is_split();
+            const bool is_none = resize_decision.is_none();
+            replica::tablet_mutation_builder builder(guard.write_timestamp(), table_id);
+            builder.set_resize_decision(std::move(resize_decision), _feature_service);
+
+            // For strongly consistent tables, a split needs a pair of child Raft
+            // group ids per splitting tablet so that every replica can create the
+            // child groups. Generate them together with the split decision and
+            // clear them when the decision is revoked (rolled back).
+            if (tmap.has_raft_info()) {
+                if (is_split) {
+                    for (auto tid : tmap.tablet_ids()) {
+                        // Idempotency guard: don't regenerate ids if the tablet
+                        // already carries resize info (should not happen, as
+                        // a split decision is emitted once, but be defensive).
+                        if (tmap.is_resizing(tid)) {
+                            continue;
+                        }
+                        locator::raft_resize_info raft_resize {
+                            .kind = locator::raft_resize_kind::split,
+                            .new_gids = {
+                                raft::group_id(utils::UUID_gen::get_time_UUID()),
+                                raft::group_id(utils::UUID_gen::get_time_UUID()),
+                            },
+                        };
+                        builder.set_raft_resize_info(tmap.get_last_token(tid), raft_resize);
+                    }
+                } else if (is_none) {
+                    // Rollback before finalization: clear any replacement group ids.
+                    for (auto tid : tmap.tablet_ids()) {
+                        if (tmap.is_resizing(tid)) {
+                            builder.del_raft_resize_info(tmap.get_last_token(tid));
+                        }
+                    }
+                }
+                // FIXME: tablet merge for strongly consistent tables is not implemented yet,
+                // see the check in tablet_allocator_impl::merge_tablets().
+            }
+            out.emplace_back(builder.build());
     }
 
     void generate_rf_change_resume_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, utils::UUID request_to_resume) {
