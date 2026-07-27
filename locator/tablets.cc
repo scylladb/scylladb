@@ -628,7 +628,7 @@ tablet_layout tablet_map::get_layout() const {
 
 tablet_map tablet_map::clone() const {
     return tablet_map(_tablet_ids, _tablets, _transitions, _resize_decision, _resize_task_info,
-                      _repair_scheduler_config, _raft_info, _target_pow2_tablet_count);
+                      _repair_scheduler_config, _raft_info, _raft_resizes, _target_pow2_tablet_count);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
@@ -655,8 +655,16 @@ future<tablet_map> tablet_map::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
 
+    raft_resize_map raft_resizes;
+    raft_resizes.reserve(_raft_resizes.size());
+    for (const auto& [id, resize] : _raft_resizes) {
+        raft_resizes.emplace(id, resize);
+        co_await coroutine::maybe_yield();
+    }
+
     co_return tablet_map(std::move(ids), std::move(tablets), std::move(transitions),
                          _resize_decision, _resize_task_info, _repair_scheduler_config, std::move(raft_info),
+                         std::move(raft_resizes),
                          _target_pow2_tablet_count);
 }
 
@@ -944,6 +952,67 @@ void tablet_map::set_tablet_raft_info(tablet_id id, tablet_raft_info raft_info) 
                 id, raft_info.group_id));
     }
     _raft_info[size_t(id)] = std::move(raft_info);
+}
+
+// The names are persisted in system tables so should not be changed.
+static const std::unordered_map<raft_resize_kind, sstring> raft_resize_kind_to_name_map = {
+    {raft_resize_kind::split, "split"},
+    {raft_resize_kind::merge, "merge"},
+};
+
+sstring raft_resize_kind_to_name(raft_resize_kind kind) {
+    auto it = raft_resize_kind_to_name_map.find(kind);
+    if (it == raft_resize_kind_to_name_map.end()) {
+        on_internal_error(tablet_logger, format("Invalid raft resize kind: {}", static_cast<int>(kind)));
+    }
+    return it->second;
+}
+
+raft_resize_kind raft_resize_kind_from_name(std::string_view name) {
+    for (const auto& [kind, kind_name] : raft_resize_kind_to_name_map) {
+        if (kind_name == name) {
+            return kind;
+        }
+    }
+    on_internal_error(tablet_logger, format("Invalid raft resize kind name: {}", name));
+}
+
+bool tablet_map::is_resizing(tablet_id id) const {
+    check_tablet_id(id);
+    return _raft_resizes.contains(id);
+}
+
+const raft_resize_info& tablet_map::get_raft_resize_info(tablet_id id) const {
+    check_tablet_id(id);
+    auto it = _raft_resizes.find(id);
+    if (it == _raft_resizes.end()) {
+        on_internal_error(tablet_logger,
+            format("Tablet map has no raft resize info for tablet_id {}", id));
+    }
+    return it->second;
+}
+
+void tablet_map::set_raft_resize_info(tablet_id id, raft_resize_info raft_resize) {
+    check_tablet_id(id);
+    if (_raft_info.empty()) {
+        on_internal_error(tablet_logger,
+            format("Tablet map has no raft info, cannot set raft resize info for tablet_id {}", id));
+    }
+    if (raft_resize.new_gids.empty()) {
+        on_internal_error(tablet_logger,
+            format("Raft resize info for tablet_id {} has no replacement group ids", id));
+    }
+    if (raft_resize.kind == raft_resize_kind::split && raft_resize.new_gids.size() != 2) {
+        on_internal_error(tablet_logger,
+            format("Raft resize info for split of tablet_id {} must have exactly 2 replacement "
+                   "group ids, got {}", id, raft_resize.new_gids.size()));
+    }
+    _raft_resizes[id] = std::move(raft_resize);
+}
+
+void tablet_map::clear_raft_resize_info(tablet_id id) {
+    check_tablet_id(id);
+    _raft_resizes.erase(id);
 }
 
 // The names are persisted in system tables so should not be changed.
@@ -2169,6 +2238,11 @@ auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, f
             if (raft_info.group_id) {
                 out = fmt::format_to(out, ", group_id={}", raft_info.group_id);
             }
+        }
+        if (r.is_resizing(tid)) {
+            const auto& raft_resize = r.get_raft_resize_info(tid);
+            out = fmt::format_to(out, ", resize={}, new_gids={}",
+                    locator::raft_resize_kind_to_name(raft_resize.kind), raft_resize.new_gids);
         }
         first = false;
         tid = *r.next_tablet(tid);

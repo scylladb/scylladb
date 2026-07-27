@@ -1124,6 +1124,81 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     /// End test
 }
 
+// transfer_leadership() with a target picks that target even though every voter
+// is equally up to date and another one would be picked otherwise.
+BOOST_AUTO_TEST_CASE(test_leader_transfer_to_target) {
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0},
+        .config = config_from_ids({A_id, B_id, C_id})});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_REQUIRE(A.is_leader());
+
+    A.transfer_leadership(raft::logical_clock::duration(5), C_id);
+
+    auto output = A.get_output();
+    BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK_EQUAL(output.messages.front().first, C_id);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.front().second));
+}
+
+// A targeted transfer_leadership() waits for the target to catch up with the leader's
+// log instead of handing the leadership over to a follower which is already up to date.
+BOOST_AUTO_TEST_CASE(test_leader_transfer_to_target_waits_for_target) {
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0},
+        .config = config_from_ids({A_id, B_id, C_id})});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_REQUIRE(A.is_leader());
+
+    auto output = A.get_output();
+    BOOST_CHECK(output.messages.empty());
+
+    A.add_entry(raft::log_entry::dummy());
+    const auto idx = A.get_log().last_idx();
+    (void) A.get_output();
+
+    A.transfer_leadership(raft::logical_clock::duration(5), C_id);
+    output = A.get_output();
+    BOOST_CHECK(output.messages.empty());
+
+    A.step(C_id, raft::append_reply{A.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    output = A.get_output();
+    BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK_EQUAL(output.messages.front().first, C_id);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.front().second));
+}
+
+// A target which cannot become the leader is rejected outright, leaving the leader
+// in place rather than starting a transfer which could never complete.
+BOOST_AUTO_TEST_CASE(test_leader_transfer_to_target_rejects_non_voter) {
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+    raft::configuration cfg({
+        {server_addr_from_id(A_id), is_voter::yes},
+        {server_addr_from_id(B_id), is_voter::yes},
+        {server_addr_from_id(C_id), is_voter::no},
+    });
+    raft::log log(raft::snapshot_descriptor{.idx = raft::index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_REQUIRE(A.is_leader());
+
+    BOOST_CHECK_THROW(A.transfer_leadership(raft::logical_clock::duration(5), C_id), std::invalid_argument);
+    BOOST_CHECK(!A.leadership_transfer_active());
+}
+
 BOOST_AUTO_TEST_CASE(test_empty_configuration) {
     // When a server is joining an existing cluster, its configuration is empty.
     // The leader sends its configuration over in AppendEntries or

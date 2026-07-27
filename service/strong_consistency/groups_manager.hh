@@ -31,6 +31,12 @@ class migration_manager;
 namespace service::strong_consistency {
 
 class raft_server;
+class raft_resize_coordinator;
+
+// conditional_variable::wait doesn't have an overload taking an abort_source.
+// This is a temporary workaround until we extend the interface.
+// See: scylladb/seastar#3292.
+future<> wait_with_abort_source(condition_variable& cv, abort_source& as);
 
 /// A cache of leader locations for raft groups where this node is not a replica.
 /// Populated by the CQL transport layer after a redirect reveals the actual leader.
@@ -102,6 +108,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     class rpc_impl;
 
     friend class raft_server;
+    // Its colocator fibers reach for the raft servers owned here through
+    // try_acquire_server(); see raft_resize_coordinator::leader_colocator().
+    friend class raft_resize_coordinator;
 
     struct leader_info {
         // The Raft term this structure describes.
@@ -138,6 +147,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     gms::feature_service& _features;
     gms::gossiper& _gossiper;
     db::raft_commitlog_replay_buffer& _raft_replay_buffer;
+    raft_resize_coordinator& _resize_coordinator;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
     boost::intrusive::list<raft_group_state, boost::intrusive::constant_time_size<false>> _starting_groups;
     locator::token_metadata_ptr _pending_tm = nullptr;
@@ -146,9 +156,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     tablet_group_leader_cache _leader_cache;
 
     // Should be called on the shard that hosts the Raft group
+    // If the group is created as a result of a resize, the parent id is the group_id
+    // of the original tablet.
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
-        locator::token_metadata_ptr tm);
+        locator::token_metadata_ptr tm,
+        std::optional<raft::group_id> parent_gid = std::nullopt);
 
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
@@ -159,10 +172,19 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     void init_messaging_service();
     future<> uninit_messaging_service();
 
+    // Returns the shard hosting the raft server of the given group, or nullopt if this node
+    // does not own a replica of the corresponding tablet.
+    std::optional<shard_id> find_shard_for_group(table_id table, raft::group_id group_id) const;
+
+    // A non-blocking, non-throwing variant of acquire_server(): returns nullopt if the group
+    // is not hosted here, hasn't started yet or is being stopped.
+    std::optional<raft_server> try_acquire_server(raft::group_id group_id);
+
 public:
     groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
         cql3::query_processor& qp, replica::database& _db, service::migration_manager& mm, db::system_keyspace& sys_ks,
-        gms::feature_service& features, gms::gossiper& gossiper, db::raft_commitlog_replay_buffer& raft_replay_buffer);
+        gms::feature_service& features, gms::gossiper& gossiper, db::raft_commitlog_replay_buffer& raft_replay_buffer,
+        sharded<raft_resize_coordinator>& resize_coordinator);
 
     // Called whenever a new token_metadata is published on this shard.
     // Starts raft::server instances for all strongly consistent tablets now
@@ -175,6 +197,16 @@ public:
 
     // The raft_server instance is used to submit write commands and perform read_barrier() before reads.
     future<raft_server> acquire_server(table_id table_id, raft::group_id group_id, abort_source& as);
+
+    bool should_redirect_writes(raft::group_id group_id) const;
+    raft::group_id group_for_redirect(schema_ptr schema, const dht::token& token) const;
+
+    // Seals the raft group `parent_gid`, which is being replaced by the groups `new_gids`.
+    // Returns true once redirect_writes and groups_resized have been committed in the parent
+    // group, or, if wait_only is true, once groups_resized has been applied on this replica.
+    // Returns false if the call has to be retried.
+    future<bool> handle_process_raft_resize(table_id table_id, raft::group_id parent_gid,
+        const std::vector<raft::group_id>& new_gids, bool wait_only, abort_source& as);
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
@@ -239,6 +271,7 @@ public:
     struct ok {};
     using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader>;
     begin_read_result begin_read(abort_source&);
+    void advance_leader_timestamp(api::timestamp_type ts);
 };
 
 } // namespace service::strong_consistency

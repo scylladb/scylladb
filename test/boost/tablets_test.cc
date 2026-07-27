@@ -7794,6 +7794,105 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_block_matches) {
     BOOST_REQUIRE(!compare_tablet_version_block(version, wrong_block_0));
 }
 
+// Verifies that resize metadata (the replacement Raft group ids in raft_resize_info)
+// round-trips through system.tablets serialization for strongly consistent
+// tables, and that the in-memory tablet_map API for resizing tablets works.
+// Part of the "Strongly Consistent Tablet Split" feature (SCYLLADB-30).
+SEASTAR_THREAD_TEST_CASE(test_sc_tablet_resize_metadata_persistence) {
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = add_table(e).get();
+        auto ts = current_timestamp(e);
+
+        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+
+        // Build a strongly-consistent tablet map (with_raft_info = true) with 2
+        // tablets, each carrying a Raft group id.
+        {
+            tablet_map tmap(2, /* with_raft_info = */ true);
+            auto tb0 = tmap.first_tablet();
+            tmap.set_tablet(tb0, tablet_info {
+                tablet_replica_set { {h1, 0}, {h2, 0}, {h3, 0} },
+            });
+            tmap.set_tablet_raft_info(tb0, locator::tablet_raft_info {
+                .group_id = raft::group_id(utils::UUID_gen::get_time_UUID())
+            });
+            auto tb1 = *tmap.next_tablet(tb0);
+            tmap.set_tablet(tb1, tablet_info {
+                tablet_replica_set { {h1, 0}, {h2, 0}, {h3, 0} },
+            });
+            tmap.set_tablet_raft_info(tb1, locator::tablet_raft_info {
+                .group_id = raft::group_id(utils::UUID_gen::get_time_UUID())
+            });
+            tm.set_tablet_map(table1, std::move(tmap));
+        }
+
+        // Round-trip without any resize fields set.
+        {
+            auto& tmap = tm.get_tablet_map(table1);
+            BOOST_REQUIRE(tmap.has_raft_info());
+            BOOST_REQUIRE(!tmap.is_resizing(tmap.first_tablet()));
+        }
+        verify_tablet_metadata_persistence(e, tm, ts);
+
+        // Now mark the first tablet as splitting and round-trip again.
+        auto left_gid = raft::group_id(utils::UUID_gen::get_time_UUID());
+        auto right_gid = raft::group_id(utils::UUID_gen::get_time_UUID());
+        tm.mutate_tablet_map_async(table1, [&] (tablet_map& tmap) {
+            tmap.set_raft_resize_info(tmap.first_tablet(), locator::raft_resize_info {
+                .kind = locator::raft_resize_kind::split,
+                .new_gids = {left_gid, right_gid},
+            });
+            return make_ready_future();
+        }).get();
+
+        const auto check_split_info = [&] (const tablet_map& tmap) {
+            BOOST_REQUIRE(tmap.is_resizing(tmap.first_tablet()));
+            const auto& ri = tmap.get_raft_resize_info(tmap.first_tablet());
+            BOOST_REQUIRE(ri.kind == locator::raft_resize_kind::split);
+            BOOST_REQUIRE_EQUAL(ri.new_gids.size(), 2u);
+            BOOST_REQUIRE_EQUAL(ri.left_gid(), left_gid);
+            BOOST_REQUIRE_EQUAL(ri.right_gid(), right_gid);
+            // The second tablet is not resizing.
+            BOOST_REQUIRE(!tmap.is_resizing(*tmap.next_tablet(tmap.first_tablet())));
+        };
+
+        check_split_info(tm.get_tablet_map(table1));
+        check_split_info(verify_tablet_metadata_persistence(e, tm, ts).get_tablet_map(table1));
+
+        // Clear the resize info and round-trip: the resizing flag must be gone, both in memory
+        // and after reloading from system.tablets.
+        tm.mutate_tablet_map_async(table1, [&] (tablet_map& tmap) {
+            for (auto t : tmap.tablet_ids()) {
+                tmap.clear_raft_resize_info(t);
+            }
+            return make_ready_future();
+        }).get();
+
+        {
+            auto tm_reloaded = verify_tablet_metadata_persistence(e, tm, ts);
+            auto& tmap = tm_reloaded.get_tablet_map(table1);
+            BOOST_REQUIRE(tmap.has_raft_info());
+            for (auto t : tmap.tablet_ids()) {
+                BOOST_REQUIRE(!tmap.is_resizing(t));
+            }
+        }
+
+        // The raft_groups_metadata system table must exist under the SC feature.
+        auto& db = e.local_db();
+        BOOST_REQUIRE(db.has_schema(db::system_keyspace::NAME, db::system_keyspace::RAFT_GROUPS_METADATA));
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_tablet_version_changes_after_tablet_migration) {
     cql_test_config cfg = tablet_cql_test_config();
     cfg.db_config->experimental_features(

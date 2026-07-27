@@ -99,12 +99,28 @@ schema_ptr make_tablets_schema() {
 
     if (strongly_consistent_tables_enabled) {
         builder
-            .with_column("raft_group_id", uuid_type);
+            .with_column("raft_group_id", uuid_type)
+            // Set only while the tablet is being resized (split or merge): the kind of the
+            // resize and the ids of the Raft groups which will replace this tablet's group.
+            .with_column("transition_resize_kind", utf8_type)
+            .with_column("transition_raft_group_ids", list_type_impl::get_instance(uuid_type, false));
     }
 
     return builder
             .with_hash_version()
             .build();
+}
+
+// Serializes the replacement Raft group ids of a resizing tablet into the frozen list stored in
+// the `transition_raft_group_ids` column.
+static data_value make_raft_group_id_list_value(const utils::small_vector<raft::group_id, 2>& gids) {
+    auto list_type = list_type_impl::get_instance(uuid_type, false);
+    std::vector<data_value> values;
+    values.reserve(gids.size());
+    for (const auto& gid : gids) {
+        values.emplace_back(gid.uuid());
+    }
+    return make_list_value(list_type, std::move(values));
 }
 
 schema_ptr make_raft_schema(sstring name, bool is_group0) {
@@ -341,6 +357,14 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             m.set_clustered_cell(ck, "raft_group_id", raft_info.group_id.uuid(), ts);
         }
 
+        if (tablets.is_resizing(tid)) {
+            const auto& raft_resize = tablets.get_raft_resize_info(tid);
+            m.set_clustered_cell(ck, "transition_resize_kind",
+                    data_value(locator::raft_resize_kind_to_name(raft_resize.kind)), ts);
+            m.set_clustered_cell(ck, "transition_raft_group_ids",
+                    make_raft_group_id_list_value(raft_resize.new_gids), ts);
+        }
+
         tid = *tablets.next_tablet(tid);
     }
     co_await process_mutation(std::move(m));
@@ -541,6 +565,26 @@ tablet_mutation_builder::del_resize_task_info(const gms::feature_service& featur
 tablet_mutation_builder&
 tablet_mutation_builder::set_base_table(table_id base_table) {
     _m.set_static_cell("base_table", data_value(base_table.uuid()), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_raft_resize_info(dht::token last_token, const locator::raft_resize_info& raft_resize) {
+    auto ck = get_ck(last_token);
+    _m.set_clustered_cell(ck, "transition_resize_kind",
+            data_value(locator::raft_resize_kind_to_name(raft_resize.kind)), _ts);
+    _m.set_clustered_cell(ck, "transition_raft_group_ids",
+            make_raft_group_id_list_value(raft_resize.new_gids), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::del_raft_resize_info(dht::token last_token) {
+    auto ck = get_ck(last_token);
+    auto kind_col = _s->get_column_definition("transition_resize_kind");
+    _m.set_clustered_cell(ck, *kind_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    auto gids_col = _s->get_column_definition("transition_raft_group_ids");
+    _m.set_clustered_cell(ck, *gids_col, atomic_cell::make_dead(_ts, gc_clock::now()));
     return *this;
 }
 
@@ -869,6 +913,24 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
             format("Raft group id is not set for tablet {} of table {}", tid, table));
     }
 
+    // Replacement Raft group ids are present only while the tablet is being resized.
+    // Absence of these columns means the tablet is not resizing.
+    if (row.has("transition_resize_kind") && row.has("transition_raft_group_ids")) {
+        if (!map.has_raft_info()) {
+            on_internal_error(tablet_logger,
+                format("Unexpected raft resize info for tablet {} of table {}", tid, table));
+        }
+        locator::raft_resize_info raft_resize {
+            .kind = locator::raft_resize_kind_from_name(row.get_as<sstring>("transition_resize_kind")),
+        };
+        auto list_type = list_type_impl::get_instance(uuid_type, false);
+        for (const auto& v : value_cast<list_type_impl::native_type>(
+                    list_type->deserialize(row.get_blob_unfragmented("transition_raft_group_ids")))) {
+            raft_resize.new_gids.push_back(raft::group_id(value_cast<utils::UUID>(v)));
+        }
+        map.set_raft_resize_info(tid, std::move(raft_resize));
+    }
+
     if (update_repair_time && db) {
         auto myid = db->get_token_metadata().get_my_id();
         auto range = map.get_token_range(tid);
@@ -1078,6 +1140,7 @@ do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp,
             throw std::runtime_error("Failed to update tablet metadata: updated row is empty");
         } else {
             tmap.clear_tablet_transition_info(tid);
+            tmap.clear_raft_resize_info(tid);
             process_one_row(&db, hint.table_id, tmap, tid, res->one(), updating::yes);
         }
     }
