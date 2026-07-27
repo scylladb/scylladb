@@ -7,11 +7,19 @@
  */
 
 #include <seastar/core/manual_clock.hh>
+#include <seastar/net/byteorder.hh>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <seastar/util/tmp_file.hh>
 #include <seastar/util/closeable.hh>
 #include "test/lib/random_utils.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "message/advanced_rpc_compressor.hh"
 #include "message/advanced_rpc_compressor_protocol.hh"
+#include "message/stream_compressor.hh"
+#include "utils/crc.hh"
+#include "utils/xx_hasher.hh"
 
 using namespace seastar;
 using namespace std::chrono_literals;
@@ -97,6 +105,144 @@ class tracker_without_clock final : public netw::advanced_rpc_compressor::tracke
 public:
     using tracker::tracker;
 };
+
+static uint32_t crc32(bytes_view data) {
+    utils::crc32 crc;
+    crc.process(reinterpret_cast<const uint8_t*>(data.data()), data.size());
+    return crc.get();
+}
+
+static uint64_t xxh64(bytes_view data) {
+    xx_hasher hasher;
+    hasher.update(reinterpret_cast<const char*>(data.data()), data.size());
+    return hasher.finalize_uint64();
+}
+
+static std::filesystem::path fingerprint_match_dump_path() {
+    return seastar::default_tmpdir() / fmt::format("scylladb_rpc_fingerprint_match_dump.shard_{}.bin", this_shard_id());
+}
+
+static std::vector<std::byte> read_file(std::filesystem::path path) {
+    std::ifstream in(path, std::ios::binary);
+    std::vector<char> data{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::vector<std::byte> out(data.size());
+    std::memcpy(out.data(), data.data(), data.size());
+    return out;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_rpc_compression_fingerprint_serialization) {
+    const auto fingerprint = netw::rpc_compression_fingerprint{
+        .crc = 0x01020304,
+        .compressed_xxh64 = 0x05060708090a0b0c,
+    };
+    const auto serialized = fingerprint.serialize();
+    BOOST_REQUIRE_EQUAL(fmt::format("{}", fmt_hex(serialized)), "0102030405060708090a0b0c");
+
+    auto parsed_from_bytes = netw::rpc_compression_fingerprint::deserialize(serialized);
+    BOOST_REQUIRE(parsed_from_bytes);
+    BOOST_REQUIRE(*parsed_from_bytes == fingerprint);
+
+    auto parsed_from_string = netw::rpc_compression_fingerprint::deserialize("0102030405060708090a0b0c");
+    BOOST_REQUIRE(parsed_from_string);
+    BOOST_REQUIRE(*parsed_from_string == fingerprint);
+
+    BOOST_REQUIRE(!netw::rpc_compression_fingerprint::deserialize(""));
+    BOOST_REQUIRE(!netw::rpc_compression_fingerprint::deserialize("01020304"));
+    BOOST_REQUIRE(!netw::rpc_compression_fingerprint::deserialize("not a fingerprint"));
+}
+
+// Test the effect of the dump_message_on_fingerprint option.
+static void run_dump_message_on_fingerprint_test(bool live_update) {
+    bytes message;
+    for (int i = 0; i < 100; ++i) {
+        const auto chunk = fmt::format("rpc compression fingerprint dump payload {}\n", i);
+        message.append(reinterpret_cast<const int8_t*>(chunk.data()), chunk.size());
+    }
+
+    netw::lz4_cstream cstream;
+    const auto compressed_message = rpc_buf_to_bytes(
+        netw::compress_impl(0, rpc::snd_buf{bytes_view_to_temporary_buffer(message)}, cstream, true, rpc::snd_buf::chunk_size));
+    BOOST_REQUIRE_NE(compressed_message, message);
+
+    const auto fingerprint = netw::rpc_compression_fingerprint{
+        .crc = crc32(bytes_view(message)),
+        .compressed_xxh64 = xxh64(bytes_view(compressed_message)),
+    };
+    const auto fingerprint_string = sstring(fmt::format("{}", fmt_hex(fingerprint.serialize())));
+
+    const auto path = fingerprint_match_dump_path();
+    std::filesystem::remove(path);
+    auto cleanup = defer([&path] {
+        std::filesystem::remove(path);
+    });
+
+    utils::updateable_value_source<sstring> dump_message_on_fingerprint(live_update ? sstring() : fingerprint_string);
+    auto cfg = netw::advanced_rpc_compressor::tracker::config{
+        .algo_config = utils::updateable_value<netw::algo_config>{
+            {netw::compression_algorithm::type::LZ4},
+        },
+        .checksumming = utils::updateable_value<bool>{true},
+        .dump_message_on_fingerprint = utils::updateable_value<sstring>{dump_message_on_fingerprint},
+    };
+    tracker_without_clock tracker{cfg};
+    auto sender = tracker.negotiate(tracker.supported(), true, [] { return make_ready_future<>(); });
+    auto close_sender = deferred_close(*sender);
+    auto receiver = tracker.negotiate(sender->name(), false, [] { return make_ready_future<>(); });
+    auto close_receiver = deferred_close(*receiver);
+
+    // Settle the algorithm negotiation, so that the message below is compressed with LZ4
+    // rather than with the initial RAW.
+    for (int i = 0; i < 5; ++i) {
+        receiver->decompress(convert_rpc_buf<rpc::rcv_buf>(sender->compress(0, rpc::snd_buf{0})));
+        sender->decompress(convert_rpc_buf<rpc::rcv_buf>(receiver->compress(0, rpc::snd_buf{0})));
+    }
+
+    constexpr int head_space = 4;
+
+    if (live_update) {
+        auto compressed = sender->compress(head_space, rpc::snd_buf{bytes_view_to_temporary_buffer(message)});
+        dump_message_on_fingerprint.set(fingerprint_string);
+    }
+
+    BOOST_REQUIRE(!std::filesystem::exists(path));
+    auto compressed = sender->compress(head_space, rpc::snd_buf{bytes_view_to_temporary_buffer(message)});
+    BOOST_REQUIRE(std::filesystem::exists(path));
+
+    auto dump = read_file(path);
+    size_t pos = 0;
+    BOOST_REQUIRE_GT(dump.size(), 1 + sizeof(uint32_t) + sizeof(uint32_t) + 32 + sizeof(uint64_t));
+    BOOST_REQUIRE_EQUAL(uint8_t(dump[pos++]), uint8_t(compressed.front().get()[head_space]));
+    BOOST_REQUIRE_EQUAL(seastar::read_be<uint32_t>(reinterpret_cast<const char*>(dump.data() + pos)), fingerprint.crc);
+    pos += sizeof(uint32_t);
+    BOOST_REQUIRE_EQUAL(seastar::read_be<uint32_t>(reinterpret_cast<const char*>(dump.data() + pos)), fingerprint.crc);
+    pos += sizeof(uint32_t);
+    pos += 32;
+    const auto dict_size = seastar::read_be<uint64_t>(reinterpret_cast<const char*>(dump.data() + pos));
+    pos += sizeof(uint64_t);
+    BOOST_REQUIRE_EQUAL(dict_size, 0);
+
+    bytes dumped_payload;
+    while (pos < dump.size()) {
+        BOOST_REQUIRE_GE(dump.size() - pos, sizeof(uint64_t));
+        const auto fragment_size = seastar::read_be<uint64_t>(reinterpret_cast<const char*>(dump.data() + pos));
+        pos += sizeof(uint64_t);
+        BOOST_REQUIRE_GE(dump.size() - pos, fragment_size);
+        dumped_payload.append(reinterpret_cast<const int8_t*>(dump.data() + pos), fragment_size);
+        pos += fragment_size;
+    }
+    BOOST_REQUIRE_EQUAL(dumped_payload, message);
+}
+
+// Note: the dump is rate-limited to one per minute, so at most one dump can be observed
+// in a single process. Hence the two variants below have to live in separate test cases
+// (the test runner runs each Boost test case in its own process), rather than in a loop.
+SEASTAR_THREAD_TEST_CASE(test_dump_message_on_fingerprint_from_initial_config) {
+    run_dump_message_on_fingerprint_test(false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dump_message_on_fingerprint_after_live_update) {
+    run_dump_message_on_fingerprint_test(true);
+}
 
 SEASTAR_THREAD_TEST_CASE(test_tracker_basic_sanity) {
     for (const bool checksumming : {false, true})

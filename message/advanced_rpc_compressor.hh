@@ -280,12 +280,15 @@ public:
         // so that compression bugs can be investigated offline.
         // Currently, this only covers frames which fail checksum validation.
         utils::updateable_value<bool> dump_message_on_checksum_error{false};
+        utils::updateable_value<sstring> dump_message_on_fingerprint{""};
     };
 private:
     friend advanced_rpc_compressor;
     
     config _cfg;
     utils::observer<algo_config> _algo_config_observer;
+    std::optional<rpc_compression_fingerprint> _dump_message_on_fingerprint;
+    utils::observer<sstring> _dump_message_on_fingerprint_observer;
 
     std::array<per_algorithm_stats, compression_algorithm::count()> _stats;
     metrics::metric_groups _metrics;

@@ -341,6 +341,7 @@ public:
     named_value<uint32_t> internode_compression_zstd_max_message_size;
     named_value<bool> internode_compression_checksumming;
     named_value<bool> internode_compression_dump_message_on_checksum_error;
+    named_value<sstring> internode_compression_dump_message_on_fingerprint;
     named_value<netw::advanced_rpc_compressor::tracker::algo_config> internode_compression_algorithms;
     named_value<bool> internode_compression_enable_advanced;
     named_value<enum_option<netw::dict_training_loop::when>> rpc_dict_training_when;

@@ -61,6 +61,17 @@ std::optional<rpc_compression_fingerprint> rpc_compression_fingerprint::deserial
     }
 }
 
+static std::optional<rpc_compression_fingerprint> parse_dump_message_on_fingerprint(const sstring& value) {
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    auto fingerprint = rpc_compression_fingerprint::deserialize(value);
+    if (!fingerprint) {
+        arc_logger.warn("Ignoring invalid internode_compression_dump_message_on_fingerprint value '{}'", value);
+    }
+    return fingerprint;
+}
+
 control_protocol::control_protocol(condition_variable& cv)
     : _needs_progress(cv)
 {
@@ -291,6 +302,10 @@ advanced_rpc_compressor::tracker::tracker(config cfg)
     , _algo_config_observer(_cfg.algo_config.observe([this] (const auto& x) {
         set_supported_algos(algo_list_to_set(x));
     }))
+    , _dump_message_on_fingerprint(parse_dump_message_on_fingerprint(_cfg.dump_message_on_fingerprint.get()))
+    , _dump_message_on_fingerprint_observer(_cfg.dump_message_on_fingerprint.observe([this] (const auto& x) {
+        _dump_message_on_fingerprint = parse_dump_message_on_fingerprint(x);
+    }))
 {
     if (_cfg.register_metrics) {
         register_metrics();
@@ -440,6 +455,10 @@ static rpc_compression_fingerprint get_compression_fingerprint(uint32_t crc, con
     };
 }
 
+static rpc_compression_fingerprint get_compression_fingerprint(uint32_t crc, const rpc::snd_buf& compressed, size_t offset) noexcept {
+    return get_compression_fingerprint<rpc::snd_buf>(crc, compressed, offset);
+}
+
 static void write_all(int fd, std::span<const std::byte> data) {
     while (!data.empty()) {
         const ssize_t n = ::write(fd, data.data(), data.size());
@@ -538,7 +557,7 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
     auto uncompressed_size = data.size;
     auto compressed = std::invoke([&] {
         try {
-            return compress_impl(head_space + 1 + checksum_size + protocol_header_size, std::move(data), get_compressor(algo), true, rpc::snd_buf::chunk_size);
+            return compress_impl(head_space + 1 + checksum_size + protocol_header_size, data, get_compressor(algo), true, rpc::snd_buf::chunk_size);
         } catch (...) {
             arc_logger.error("Error during compression with algorithm {}: {}. ", algo.name(), std::current_exception());
             throw;
@@ -553,7 +572,8 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
         dst = std::get<std::vector<temporary_buffer<char>>>(compressed.bufs).data();
     }
     static_assert(compression_algorithm::count() <= 0x3f); // We have 6 bits for algorithm ID, 2 bits for flags.
-    dst->get_write()[head_space] = (algo.idx() & 0x3f) | (protocol_header ? 0x80 : 0x00) | (checksum_size ? 0x40 : 0x00);
+    const uint8_t header_byte = (algo.idx() & 0x3f) | (protocol_header ? 0x80 : 0x00) | (checksum_size ? 0x40 : 0x00);
+    dst->get_write()[head_space] = header_byte;
     if (checksum_size) {
         write_le<uint32_t>(&dst->get_write()[head_space + 1], crc);
         dst->get_write()[head_space + 1 + sizeof(uint32_t)] = static_cast<char>(dict_id);
@@ -585,6 +605,29 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
             auto& last = frags[n_frags - 1];
             last.get_write()[last.size() - 1] ^= 0xff;
         });
+    }
+
+    const auto& dump_message_on_fingerprint = _tracker->_dump_message_on_fingerprint;
+    if (checksum_size && dump_message_on_fingerprint) {
+        if (dump_message_on_fingerprint->crc == crc) [[unlikely]] {
+            const size_t payload_offset = head_space + 1 + checksum_size + protocol_header_size;
+            auto fingerprint = get_compression_fingerprint(crc, compressed, payload_offset);
+            if (fingerprint == dump_message_on_fingerprint) {
+                arc_logger.warn("Sender matched fingerprint {}", fmt_hex(fingerprint.serialize()));
+                static thread_local logging::logger::rate_limit dump_rate_limit(std::chrono::minutes(1));
+                if (!dump_rate_limit.rate_limited()) {
+                    dump_message(
+                        "scylladb_rpc_fingerprint_match_dump",
+                        "the pre-compression message matching fingerprint",
+                        header_byte,
+                        crc,
+                        crc,
+                        _control.sender_current_dict(),
+                        data,
+                        0);
+                }
+            }
+        }
     }
 
     stats.bytes_sent += uncompressed_size;
