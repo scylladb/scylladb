@@ -719,6 +719,7 @@ private:
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
                                std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
+    sstable_id emplace_sstable_identifier() noexcept;
 
     future<> read_filter(sstable_open_config cfg = {});
 
