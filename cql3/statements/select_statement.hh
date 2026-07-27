@@ -163,6 +163,10 @@ public:
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
+    // The plan this statement scans, recorded in the paging state it hands out
+    // so that a later page keeps reading the same thing. See #18992.
+    virtual service::pager::query_plan scanned_plan() const;
+
     uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
 
@@ -228,6 +232,9 @@ public:
                                    const secondary_index::index& index,
                                    schema_ptr view_schema,
                                    std::unique_ptr<cql3::attributes> attrs);
+
+protected:
+    virtual service::pager::query_plan scanned_plan() const override;
 
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,

@@ -60,7 +60,7 @@ public:
             uint32_t rows_fetched_for_last_partition_high_bits,
             bound_weight ck_weight,
             partition_region region,
-            std::optional<query_plan> plan = std::nullopt);
+            std::optional<query_plan> plan);
 
     paging_state(partition_key pk,
             position_in_partition_view pos,
@@ -68,7 +68,8 @@ public:
             query_id reader_recall_uuid,
             replicas_per_token_range last_replicas,
             std::optional<db::read_repair_decision> query_read_repair_decision,
-            uint64_t rows_fetched_for_last_partition);
+            uint64_t rows_fetched_for_last_partition,
+            std::optional<query_plan> plan);
 
     void set_partition_key(partition_key pk) {
         _partition_key = std::move(pk);

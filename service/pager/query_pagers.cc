@@ -445,8 +445,8 @@ void query_pager::handle_result(
     }
 }
 
-lw_shared_ptr<const paging_state> query_pager::state() const {
-    return make_lw_shared<paging_state>(_last_pkey.value_or(partition_key::make_empty()), _last_pos, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision, _rows_fetched_for_last_partition);
+lw_shared_ptr<const paging_state> query_pager::state(std::optional<query_plan> plan) const {
+    return make_lw_shared<paging_state>(_last_pkey.value_or(partition_key::make_empty()), _last_pos, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision, _rows_fetched_for_last_partition, std::move(plan));
 }
 
 }
