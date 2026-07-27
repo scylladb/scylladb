@@ -309,6 +309,22 @@ metadata, and the write which clears it takes the parent's tablet away in the sa
 child being torn down always has its wait ended by its parent's teardown, either just before or
 just after its own. Every other suspension in `apply()` completes on its own.
 
+## Handing the token range over without a gap
+
+Two things have to hold for the hand-over to be seamless.
+
+**A write must either land in the parent's log or be handed off, with nothing in between.**
+The request coordinator checks the `start_resize` flag immediately before entering `add_entry()`,
+without suspending in between, so a write which saw the flag unset is submitted before the
+flag was set. That is only enough because `add_entry()` appends entries in the order in which
+callers entered it, rather than in the order in which they happen to win the memory permit -
+which is why the FIFO admission in `raft::server_impl` exists. A write which observed
+`!start_resize` is therefore appended ahead of the `end_resize` marker, and so ends up in the
+final log of the parent.
+
+A linearizable read checks the flag before *and* after its read barrier, since the barrier may
+be what applies the marker.
+
 ## Reads on a child before the parent is done
 
 A child group must not apply anything until the parent has applied everything it committed;
