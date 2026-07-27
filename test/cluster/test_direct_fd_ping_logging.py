@@ -34,8 +34,6 @@ logger = logging.getLogger(__name__)
 PING_SPAM = "unexpected exception when pinging"
 
 
-@pytest.mark.xfail(reason="SCYLLADB-3432: every failed direct FD ping is logged at WARN level "
-                          "with no rate limiting")
 @pytest.mark.skip_mode(mode='release', reason='the test relies on debug-level absence checks '
                                               'that are only meaningful with default log levels')
 @pytest.mark.asyncio
