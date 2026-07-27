@@ -648,7 +648,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         if (table_schema->clustering_key_size() > 0) {
             pos = pos_from_json(*exclusive_start_key, table_schema);
         }
-        old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+        old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0, std::nullopt);
     }
 
     co_await verify_permission(enforce_authorization, warn_authorization, client_state, table_schema, auth::permission::SELECT, stats);
@@ -678,7 +678,9 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
 
     std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
     if (!p->is_exhausted()) {
-        rs->get_metadata().set_paging_state(p->state());
+        // No plan to record: this pager was pointed at the table or index to scan
+        // here, rather than by a CQL plan a resumed page could pick differently.
+        rs->get_metadata().set_paging_state(p->state(std::nullopt));
     }
     auto paging_state = rs->get_metadata().paging_state();
     bool has_filter = filter;

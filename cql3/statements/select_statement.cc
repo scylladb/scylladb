@@ -601,7 +601,7 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
         auto meta = [&] () -> shared_ptr<const cql3::metadata> {
             if (!p->is_exhausted()) {
                 auto meta = make_shared<metadata>(*_selection->get_result_metadata());
-                meta->set_paging_state(p->state());
+                meta->set_paging_state(p->state(scanned_plan()));
                 return meta;
             } else {
                 return _selection->get_result_metadata();
@@ -619,7 +619,7 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
     }
     std::unique_ptr<cql3::result_set>&& rs = std::move(result_rs).assume_value();
     if (!p->is_exhausted()) {
-        rs->get_metadata().set_paging_state(p->state());
+        rs->get_metadata().set_paging_state(p->state(scanned_plan()));
     }
 
     if (needs_post_filtering()) {
@@ -954,6 +954,8 @@ view_indexed_table_select_statement::process_base_query_results(
         uint32_t internal_page_size) const
 {
     if (paging_state) {
+        // The plan was recorded where the state was built, by the scan of the
+        // index view, and survives the rewriting below. See #18992.
         paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
         _selection->get_result_metadata()->maybe_set_paging_state(std::move(paging_state));
     }
@@ -1011,6 +1013,10 @@ select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::resul
 
 const ::shared_ptr<const restrictions::statement_restrictions> select_statement::get_restrictions() const {
     return _restrictions;
+}
+
+service::pager::query_plan select_statement::scanned_plan() const {
+    return service::pager::primary_index_plan{};
 }
 
 primary_key_select_statement::primary_key_select_statement(schema_ptr schema, uint32_t bound_terms,
@@ -1109,6 +1115,10 @@ view_indexed_table_select_statement::view_indexed_table_select_statement(schema_
         _get_partition_ranges_for_posting_list = [this] (const query_options& options) { return get_partition_ranges_for_global_index_posting_list(options); };
         _get_partition_slice_for_posting_list = [this] (const query_options& options) { return get_partition_slice_for_global_index_posting_list(options); };
     }
+}
+
+service::pager::query_plan view_indexed_table_select_statement::scanned_plan() const {
+    return service::pager::index_plan{_view_schema->id()};
 }
 
 template<typename KeyType>
@@ -1456,9 +1466,11 @@ view_indexed_table_select_statement::read_posting_list(query_processor& qp,
 
     auto p = service::pager::query_pagers::pager(qp.proxy(), _view_schema, selection,
             state, options, cmd, std::move(partition_ranges), nullptr);
-    return p->fetch_page_result(options.get_page_size(), now, timeout).then(utils::result_wrap([p = std::move(p)] (std::unique_ptr<cql3::result_set> rs)
+    return p->fetch_page_result(options.get_page_size(), now, timeout).then(utils::result_wrap([this, p = std::move(p)] (std::unique_ptr<cql3::result_set> rs)
             -> coordinator_result<::shared_ptr<cql_transport::messages::result_message::rows>> {
-        rs->get_metadata().set_paging_state(p->state());
+        // This pager scans the index view, which is the plan a page of this query
+        // is served by, so record it here rather than stamping it on later. #18992
+        rs->get_metadata().set_paging_state(p->state(scanned_plan()));
         return ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
     }));
 }
@@ -1943,7 +1955,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
                 if (!p->is_exhausted()) {
                     auto meta = make_shared<metadata>(*_selection->get_result_metadata());
-                    meta->set_paging_state(p->state());
+                    meta->set_paging_state(p->state(scanned_plan()));
                     return meta;
                 } else {
                     return _selection->get_result_metadata();
@@ -1959,7 +1971,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     return p->fetch_page_result(page_size, now, timeout).then(wrap_result_to_error_message(
             [this, p = std::move(p)](std::unique_ptr<cql3::result_set>&& rs) {
                 if (!p->is_exhausted()) {
-                    rs->get_metadata().set_paging_state(p->state());
+                    rs->get_metadata().set_paging_state(p->state(scanned_plan()));
                 }
 
                 if (needs_post_filtering()) {
