@@ -2466,16 +2466,7 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         _components->scylla_metadata->data.set<scylla_metadata_type::ExtTimestampStats>(std::move(*ts_stats));
     }
 
-    sstable_id sid;
-    if (_sstable_identifier) {
-        sid = *_sstable_identifier;
-    } else if (generation().is_uuid_based()) {
-        sid = sstable_id(generation().as_uuid());
-    } else {
-        sid = sstable_id(utils::UUID_gen::get_time_UUID());
-        sstlog.info("SSTable {} has numerical generation. SSTable identifier in scylla_metadata set to {}", get_filename(), sid);
-    }
-    _components->scylla_metadata->set_sstable_identifier(sid);
+    _components->scylla_metadata->set_sstable_identifier(ensure_sstable_identifier());
 
     sstable_schema_type sstable_schema;
     sstable_schema.id = _schema->id();
@@ -2491,6 +2482,19 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
+}
+
+sstable_id sstable::ensure_sstable_identifier() {
+    sstable_id sid;
+    if (_sstable_identifier) {
+        sid = *_sstable_identifier;
+    } else if (generation().is_uuid_based()) {
+        sid = sstable_id(generation().as_uuid());
+    } else {
+        sid = sstable_id(utils::UUID_gen::get_time_UUID());
+        sstlog.info("SSTable {} has numerical generation. SSTable identifier in scylla_metadata set to {}", get_filename(), sid);
+    }
+    return sid;
 }
 
 bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {
