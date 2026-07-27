@@ -184,6 +184,7 @@ public:
     gms::feature size_based_load_balancing { *this, "SIZE_BASED_LOAD_BALANCING"sv };
     gms::feature topology_noop_request { *this, "TOPOLOGY_NOOP_REQUEST"sv };
     gms::feature batchlog_v2 { *this, "BATCHLOG_V2"sv };
+    gms::feature fetch_column_mappings_on_tablet_migration { *this, "FETCH_COLUMN_MAPPINGS_ON_TABLET_MIGRATION"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

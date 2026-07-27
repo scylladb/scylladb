@@ -219,6 +219,13 @@ public:
     // Intended to be used in the write path, which relies on synchronized schema.
     future<schema_ptr> get_schema_for_write(table_schema_version, locator::host_id from, unsigned shard, netw::messaging_service& ms, abort_source& as);
 
+    // Fetches the column mappings (system.scylla_table_schema_history entries) for table
+    // `cf_id` that are missing on this node from the other replicas.
+    future<> fetch_column_mappings(table_id cf_id,
+        host_id_vector_replica_set replicas,
+        bool ignore_down_replicas,
+        abort_source& as);
+
 private:
     virtual future<> on_join(gms::inet_address endpoint,locator::host_id id,  gms::endpoint_state_ptr ep_state, gms::permit_id) override;
     virtual future<> on_change(gms::inet_address endpoint, locator::host_id id, const gms::application_state_map& states, gms::permit_id) override;
@@ -238,9 +245,6 @@ extern template
 future<> migration_manager::announce<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
 extern template
 future<> migration_manager::announce<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
-
-
-future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id, table_schema_version v);
 
 utils::chunked_vector<mutation> prepare_keyspace_update_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts);
 

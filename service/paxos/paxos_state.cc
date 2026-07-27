@@ -26,6 +26,7 @@
 #include "db/schema_tables.hh"
 #include "service/migration_manager.hh"
 #include "gms/feature_service.hh"
+#include "schema/schema_registry.hh"
 
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
@@ -33,26 +34,55 @@
 namespace service::paxos {
 
 logging::logger paxos_state::logger("paxos");
-thread_local paxos_state::key_lock_map paxos_state::_paxos_table_lock;
-thread_local paxos_state::key_lock_map paxos_state::_coordinator_lock;
+thread_local token_lock_map paxos_state::_paxos_table_lock(true);
+thread_local token_lock_map paxos_state::_coordinator_lock(true);
 
-paxos_state::key_lock_map::key_lock_map() {
-    // preallocate 8K pointers and set max_load_factor to 8 to support around 1M outstanding requests
-    // without re-allocations
-    _locks.reserve(8 * 1024);
-    _locks.max_load_factor(8);
-}
-
-paxos_state::key_lock_map::semaphore& paxos_state::key_lock_map::get_semaphore_for_key(const dht::token& key) {
-    return _locks.try_emplace(key, 1).first->second;
-}
-
-void paxos_state::key_lock_map::release_semaphore_for_key(const dht::token& key) {
-    auto it = _locks.find(key);
-    if (it != _locks.end() && (*it).second.current() == 1) {
-        _locks.erase(it);
+template <typename Key>
+key_lock_map<Key>::key_lock_map(bool preallocate) {
+    if (preallocate) {
+        // preallocate 8K pointers and set max_load_factor to 8 to support around 1M outstanding requests
+        // without re-allocations
+        _locks.reserve(8 * 1024);
+        _locks.max_load_factor(8);
     }
 }
+
+template <typename Key>
+key_lock_map<Key>::guard::guard(key_lock_map<Key>& map, const Key& key)
+    : _map(map._locks)
+    , _entry(&*_map.try_emplace(key).first)
+    , _locked(false)
+{
+    ++_entry->second.refs;
+}
+
+template <typename Key>
+key_lock_map<Key>::guard::guard(guard&& o) noexcept
+    : _map(o._map)
+    , _entry(std::exchange(o._entry, nullptr))
+    , _locked(std::exchange(o._locked, false))
+{
+}
+
+template <typename Key>
+key_lock_map<Key>::guard::~guard() {
+    if (!_entry) {
+        return;
+    }
+    if (_locked) {
+        sem().signal(1);
+    }
+    if (--_entry->second.refs == 0) {
+        _map.erase(key());
+    }
+}
+
+template <typename Key>
+future<> key_lock_map<Key>::guard::lock(clock_type::time_point timeout) {
+    return sem().wait(timeout, 1).then([this] { _locked = true; });
+}
+
+template class key_lock_map<dht::token>;
 
 future<paxos_state::replica_guard> paxos_state::get_replica_lock(const schema& s, const dht::token& token,
         clock_type::time_point timeout)
@@ -71,18 +101,18 @@ future<paxos_state::replica_guard> paxos_state::get_replica_lock(const schema& s
     replica_guard replica_guard;
     replica_guard.resize(shards.size());
     for (size_t i = 0; i < shards.size(); ++i) {
-        replica_guard[i] = co_await smp::submit_to(shards[i], [token, timeout] {
-            auto g = make_lw_shared<guard>(_paxos_table_lock, token, timeout);
-            return g->lock().then([g]{ return make_foreign(std::move(g)); });
+        replica_guard[i] = co_await smp::submit_to(shards[i], [token, timeout] -> future<token_guard_foreign_ptr> {
+            auto g = make_lw_shared<token_guard>(_paxos_table_lock, token);
+            return g->lock(timeout).then([g]{ return make_foreign(std::move(g)); });
         });
     }
     co_return replica_guard;
 }
 
-future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, clock_type::time_point timeout) {
-    guard m(_coordinator_lock, key, timeout);
-    co_await m.lock();
-    co_return m;
+future<token_guard> paxos_state::get_cas_lock(const dht::token& key, clock_type::time_point timeout) {
+    token_guard m(_coordinator_lock, key);
+    co_await m.lock(timeout);
+    co_return std::move(m);
 }
 
 future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
@@ -147,7 +177,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
             co_await coroutine::return_exception(utils::injected_error("injected_error_after_save_promise"));
         }
 
-        auto upgrade_if_needed = [schema = std::move(schema), &paxos_store] (std::optional<proposal> p) -> future<std::optional<proposal>> {
+        auto upgrade_if_needed = [schema = std::move(schema), token, &paxos_store, timeout] (std::optional<proposal> p) -> future<std::optional<proposal>> {
             if (!p || p->update.schema_version() == schema->version()) {
                 co_return std::move(p);
             }
@@ -159,7 +189,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
             // for that version and upgrade the mutation with it.
             logger.debug("Stored mutation references outdated schema version. "
                 "Trying to upgrade the accepted proposal mutation to the most recent schema version.");
-            const column_mapping& cm = co_await paxos_store.get_column_mapping(p->update.column_family_id(), p->update.schema_version());
+            const column_mapping& cm = co_await paxos_store.get_column_mapping(*schema, token, p->update.schema_version(), timeout);
 
             co_return std::make_optional(proposal(p->ballot, freeze(p->update.unfreeze_upgrading(schema, cm))));
         };
@@ -479,8 +509,36 @@ future<cql3::untyped_result_set> paxos_store::execute_cql_with_timeout(sstring r
     );
 }
 
-future<column_mapping> paxos_store::get_column_mapping(table_id table_id, table_schema_version version) {
-    return service::get_column_mapping(_sys_ks, table_id, version);
+future<column_mapping> paxos_store::get_column_mapping(const schema& query_schema,
+        dht::token token, table_schema_version version, clock_type::time_point timeout)
+{
+    if (const auto s = local_schema_registry().get_or_null(version); s) {
+        co_return s->get_column_mapping();
+    }
+
+    if (auto cm = co_await db::schema_tables::get_column_mapping_if_exists(_sys_ks, query_schema.id(), version)) {
+        co_return std::move(*cm);
+    }
+
+    // The mapping is missing locally. This happens on a pending tablet replica that
+    // received migrated paxos state referencing an old schema version before the
+    // schema history for that version was synced to this node. Auto-heal by fetching
+    // the missing mappings from the tablet's other replicas, then retry the lookup
+    // (which now throws if the version is genuinely gone, e.g. cleaned up as too old).
+    if (const auto& t = query_schema.table(); t.uses_tablets()) {
+        key_lock_map<table_id>::guard g(_table_lock_map, query_schema.id());
+        const auto skip_fetch = g.sem().current() == 0;
+        co_await g.lock(timeout);
+        if (!skip_fetch) {
+            abort_on_expiry aoe(timeout);
+            co_await _mm.fetch_column_mappings(query_schema.id(),
+                t.get_effective_replication_map()->get_natural_replicas(token),
+                true /* ignore_down_replicas */,
+                aoe.abort_source());
+        }
+    }
+
+    co_return co_await db::schema_tables::get_column_mapping(_sys_ks, query_schema.id(), version);
 }
 
 future<schema_ptr> paxos_store::get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const {
