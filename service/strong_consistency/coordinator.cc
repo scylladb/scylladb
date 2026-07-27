@@ -391,9 +391,6 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         logger.debug("mutate(): add_entry({}), term {}",
             command.mutation.pretty_printer(schema), term);
 
-        co_await utils::get_local_injector().inject("sc_coordinator_wait_before_add_entry",
-            utils::wait_for_message(5min));
-
         future<> add_entry_result = co_await coroutine::as_future(
             op.raft_server.server().add_entry(std::move(raft_cmd),
                 raft::wait_type::committed,
