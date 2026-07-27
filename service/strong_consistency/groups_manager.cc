@@ -49,11 +49,40 @@ static std::optional<locator::tablet_replica_set> prepare_replicas_for_sc_tablet
     const auto leader_host_id = locator::host_id{group_leader.uuid()};
     auto leader_it = std::ranges::find(replicas, leader_host_id, &tablet_replica::host);
     if (leader_it == replicas.end()) [[unlikely]] {
-        on_internal_error(logger, seastar::format("Leader ({}) is not among the replicas: {}",
-                leader_host_id, replicas));
+        return std::nullopt;
     }
     std::ranges::rotate(replicas, leader_it);
     return std::make_optional(std::move(replicas));
+}
+
+static locator::tablet_replica_set get_replicas_for_sc_tablet_version(
+        const locator::tablet_info& tablet_info,
+        const locator::tablet_transition_info* trinfo) {
+    if (!trinfo) {
+        return tablet_info.replicas;
+    }
+
+    switch (trinfo->stage) {
+        case tablet_transition_stage::start_migration:
+        case tablet_transition_stage::sc_add_nonvoter:
+        case tablet_transition_stage::sc_snapshot_transfer:
+            return tablet_info.replicas;
+        case tablet_transition_stage::sc_become_voter:
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::end_migration:
+            return trinfo->next;
+        case tablet_transition_stage::sc_rollback:
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+            return tablet_info.replicas;
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
+        case tablet_transition_stage::rebuild_repair:
+        case tablet_transition_stage::repair:
+        case tablet_transition_stage::end_repair:
+        case tablet_transition_stage::restore:
+            return tablet_info.replicas;
+    }
 }
 
 class groups_manager::rpc_impl: public service::raft_rpc {
@@ -888,7 +917,9 @@ std::optional<locator::tablet_routing_info_v2> groups_manager::check_tablet_vers
     }
 
     const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
-    auto maybe_replicas = prepare_replicas_for_sc_tablet_version(tablet_info.replicas, group_leader);
+    const auto* trinfo = tablet_map.get_tablet_transition_info(tablet_id);
+    auto maybe_replicas = prepare_replicas_for_sc_tablet_version(
+            get_replicas_for_sc_tablet_version(tablet_info, trinfo), group_leader);
 
     if (!maybe_replicas) [[unlikely]] {
         // The leader is not present in the replica set.
