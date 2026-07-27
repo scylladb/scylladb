@@ -40,7 +40,8 @@ We introduce a separate set of Raft system tables for strongly consistent tablet
 - `system.raft_groups_snapshots`
 - `system.raft_groups_snapshot_config`
 
-`system.raft_groups` stores only non-log Raft metadata (term, vote, commit_idx) — unlike
+`system.raft_groups` stores only non-log Raft metadata (term, vote, commit_idx, and the resize
+markers of a parent group being replaced by a tablet split or merge) — unlike
 `system.raft`, it does not contain log entries (those are stored in the commitlog).
 `system.raft_groups_snapshots` and `system.raft_groups_snapshot_config` mirror the logical
 contents of `system.raft_snapshots` and `system.raft_snapshot_config` respectively.

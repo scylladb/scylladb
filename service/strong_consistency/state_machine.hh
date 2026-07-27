@@ -11,6 +11,7 @@
 #include "service/raft/raft_state_machine.hh"
 #include "mutation/frozen_mutation.hh"
 #include <functional>
+#include <variant>
 #include "locator/tablets.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 
@@ -24,9 +25,44 @@ class migration_manager;
 
 namespace service::strong_consistency {
 
-struct raft_command {
+// A write to the table of the tablet this Raft group serves.
+struct write_mutation {
     frozen_mutation mutation;
 };
+
+// The phase of a tablet resize a resize_marker entry announces.
+//
+// Terminology, used here and throughout the strongly consistent resize code: the group being
+// replaced by a tablet split or merge is the *parent*, and the groups replacing it are its
+// *children*. Committing both markers below is what *sealing* the parent means. A merge gives a
+// child several parents, hence the neutral *resize* in the identifiers; merging is not
+// implemented yet.
+enum class resize_marker_kind : uint8_t {
+    // The parent's writes are from now on served by its children.
+    start_resize = 0,
+    // The parent's log is final, so its children may start applying their own entries.
+    end_resize = 1,
+};
+
+// Marks a phase of the resize of the Raft group the entry is appended to.
+//
+// Needs to be converted into a mutation to system.raft_groups when applying
+struct resize_marker {
+    resize_marker_kind kind;
+};
+
+// An entry which carries no state change. Appended to a child so that its applier fiber has
+// something to block on until its parent is sealed.
+struct no_op {};
+
+struct raft_command {
+    // Note: needs to be default-constructible to use with ser::deserialize
+    std::variant<no_op, write_mutation, resize_marker> change;
+};
+
+// Builds the mutation which records `kind` in the system.raft_groups row of the group `gid`
+// hosted on `shard`. Only the presence of a marker is ever read back.
+mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, resize_marker_kind kind);
 
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
     raft::group_id gid,
@@ -52,8 +88,8 @@ future<std::vector<schema_ptr>> resolve_and_upgrade_mutations(
     std::function<future<>()> barrier_trigger = nullptr);
 
 namespace detail {
-// Deserialize a frozen_mutation from a raft::log_entry_ptr.
+// Deserialize a raft_command from a raft::log_entry_ptr.
 // The log entry must contain a raft::command in its data variant.
-frozen_mutation deserialize_to_frozen_mutation(const raft::log_entry_ptr& entry);
+raft_command deserialize_raft_command(const raft::log_entry_ptr& entry);
 } // namespace detail
 } // namespace service::strong_consistency

@@ -382,14 +382,14 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         auto disposition_result = get<raft_server::timestamp_with_term>(disposition);
         std::tie(ts, term) = {disposition_result.timestamp, disposition_result.term};
 
-        const raft_command command {
+        const write_mutation write {
             .mutation{mutation_gen(ts)}
         };
         raft::command raft_cmd;
-        ser::serialize(raft_cmd, command);
+        ser::serialize(raft_cmd, raft_command{.change = write});
 
         logger.debug("mutate(): add_entry({}), term {}",
-            command.mutation.pretty_printer(schema), term);
+            write.mutation.pretty_printer(schema), term);
 
         future<> add_entry_result = co_await coroutine::as_future(
             op.raft_server.server().add_entry(std::move(raft_cmd),
