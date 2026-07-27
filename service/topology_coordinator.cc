@@ -74,6 +74,7 @@
 #include "repair/repair.hh"
 #include "idl/repair.dist.hh"
 #include "idl/sstables_loader.dist.hh"
+#include "idl/strong_consistency/groups_manager.dist.hh"
 
 #include "service/topology_coordinator.hh"
 
@@ -2781,6 +2782,117 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
+    // Seals the parent Raft group of every resizing strongly consistent tablet among the
+    // tables being finalized, i.e. makes each of them stop accepting writes and finish its
+    // log on every replica, so that its children can take over.
+    //
+    // Every replica is driven until it reports success. The loop is unbounded: a failure only
+    // ever means that the replica cannot make progress yet, which resolves on its own, so the
+    // only way out other than success is _as being aborted.
+    future<> run_sc_tablet_resize(const locator::token_metadata_ptr& tm,
+            const std::unordered_set<table_id>& finalize_resize) {
+        // Describes a strongly consistent tablet whose Raft group must be replaced by the
+        // group(s) of the tablets it is resized into.
+        struct sc_resize_tablet {
+            locator::global_tablet_id tablet;
+            raft::group_id parent_gid;
+            std::vector<raft::group_id> new_gids;
+            const locator::tablet_replica_set& replicas;
+        };
+
+        std::vector<sc_resize_tablet> sc_tablets;
+        for (const auto& table_id : finalize_resize) {
+            const auto& tmap = tm->tablets().get_tablet_map(table_id);
+            if (!tmap.has_raft_info() || !tmap.needs_split()) {
+                continue;
+            }
+            for (auto tid : tmap.tablet_ids()) {
+                if (!tmap.is_resizing(tid)) {
+                    continue;
+                }
+                const auto& raft_resize = tmap.get_raft_resize_info(tid);
+                sc_resize_tablet t {
+                    .tablet = locator::global_tablet_id{table_id, tid},
+                    .parent_gid = tmap.get_tablet_raft_info(tid).group_id,
+                    .new_gids{raft_resize.new_gids.begin(), raft_resize.new_gids.end()},
+                    .replicas = tmap.get_tablet_info(tid).replicas
+                };
+                sc_tablets.push_back(std::move(t));
+            }
+        }
+        if (sc_tablets.empty()) {
+            co_return;
+        }
+        rtlogger.info("Running strongly consistent tablet resize for {} tablet(s)", sc_tablets.size());
+
+        auto rpc_timeout = [] { return lowres_clock::now() + std::chrono::seconds(10); };
+
+        co_await coroutine::parallel_for_each(sc_tablets, [&] (const sc_resize_tablet& t) -> future<> {
+            // Once any replica reports success, end_resize is committed in the parent group
+            // and the remaining replicas only have to be waited for, rather than driven. The
+            // rounds which drive it only establish that it is committed, so the last round is
+            // always a wait_only one, which every replica answers by waiting for the marker to be
+            // applied locally.
+            bool committed = false;
+            while (true) {
+                const bool wait_only = committed;
+                _as.check();
+
+                // Excluded nodes are on their way out of the cluster and are not driven.
+                locator::tablet_replica_set replicas;
+                for (const auto& replica : t.replicas) {
+                    if (is_excluded(raft::server_id(replica.host.uuid()))) {
+                        rtlogger.debug("process_raft_resize to {} for parent {} skipped because node is excluded", replica, t.parent_gid);
+                        continue;
+                    }
+                    replicas.push_back(replica);
+                }
+                // If that leaves nobody to drive the resize, there is nothing to do but wait for
+                // the exclusions to resolve.
+                bool all_finished = !replicas.empty();
+
+                co_await coroutine::parallel_for_each(replicas, [&] (const locator::tablet_replica& replica) -> future<> {
+                    try {
+                        auto host = replica.host;
+                        auto success = co_await ser::groups_manager_rpc_verbs::send_process_raft_resize(
+                            &_messaging, host, rpc_timeout(), raft::server_id(host.uuid()),
+                            t.tablet, t.parent_gid, t.new_gids, wait_only);
+                        if (success) {
+                            committed = true;
+                        } else {
+                            all_finished = false;
+                        }
+                    } catch (...) {
+                        rtlogger.debug("process_raft_resize to {} for parent {} failed: {}",
+                            replica, t.parent_gid, std::current_exception());
+                        all_finished = false;
+                    }
+                });
+                if (all_finished && wait_only) {
+                    co_return;
+                }
+                if (all_finished || wait_only != committed) {
+                    // Every replica is done, but this round was allowed to commit the markers, so
+                    // the replica which committed end_resize only knows that it is committed
+                    // there, not that it has been applied. Run one more round, in wait_only mode,
+                    // so that every replica is confirmed to have applied it before the tablet map
+                    // is replaced - a parent group whose raft server is torn down before it
+                    // applied the marker never releases the appliers of its children.
+                    //
+                    // Likewise, don't delay waiting on the application of a marker we have just
+                    // committed.
+                    continue;
+                }
+                // A failed process_raft_resize commonly means that a Raft election or a
+                // leadership transfer is in progress, or that a replica is down. Avoid retrying
+                // in a tight loop while the groups make progress.
+                co_await sleep_abortable(std::chrono::milliseconds(100), _as);
+            }
+        });
+
+        rtlogger.info("Sealed the parent Raft group of {} strongly consistent tablet(s)", sc_tablets.size());
+    }
+
     future<> handle_tablet_resize_finalization(group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
@@ -2840,6 +2952,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
             }
         }
+
+        // Strongly consistent tablet resize: seal the parent Raft groups before replacing
+        // the tablet map. Tablet migrations are not scheduled while a resize is being
+        // finalized (see generate_migration_updates()), so the replica set and Raft
+        // membership stay fixed here. The new tablet map computed above already
+        // assigns the replacement Raft group ids as the new tablets' group ids.
+        co_await run_sc_tablet_resize(tm, plan.resize_plan().finalize_resize);
 
         updates.emplace_back(
             topology_mutation_builder(guard.write_timestamp())
