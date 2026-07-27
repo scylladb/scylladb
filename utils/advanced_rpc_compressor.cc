@@ -9,7 +9,8 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
 #include <numeric>
-#include "log.hh"
+#include "utils/log.hh"
+#include "bytes.hh"
 #include "utils/advanced_rpc_compressor.hh"
 #include "utils/advanced_rpc_compressor_protocol.hh"
 #include "stream_compressor.hh"
@@ -433,6 +434,34 @@ T read_from_rcv_buf(rpc::rcv_buf& data) {
     return out[0];
 }
 
+static std::string format_dict_id(const shared_dict::dict_id& id) {
+    return fmt::format("{{timestamp={}, origin_node={}, content_sha256={}}}", id.timestamp, id.origin_node, fmt_hex(id.content_sha256));
+}
+
+static std::string format_dict_ptr(const dict_ptr& d) {
+    if (!d) {
+        return "null";
+    }
+    const auto& id = (**d).id;
+    return format_dict_id(id);
+}
+
+static std::string format_control_protocol(const control_protocol& cp) {
+    return fmt::format(
+        "{{sender_protocol_epoch={}, receiver_protocol_epoch={}"
+        ", sender_has_update={}, sender_has_commit={}"
+        ", receiver_has_update={}, receiver_has_commit={}"
+        ", sender_recent_dict={}, sender_committed_dict={}, sender_current_dict={}"
+        ", receiver_recent_dict={}, receiver_committed_dict={}, receiver_current_dict={}"
+        ", sender_current_algo={}, sender_committed_algo={}, algos={:#04x}}}",
+        cp._sender_protocol_epoch, cp._receiver_protocol_epoch,
+        cp._sender_has_update, cp._sender_has_commit,
+        cp._receiver_has_update, cp._receiver_has_commit,
+        format_dict_ptr(cp._sender_recent_dict), format_dict_ptr(cp._sender_committed_dict), format_dict_ptr(cp._sender_current_dict),
+        format_dict_ptr(cp._receiver_recent_dict), format_dict_ptr(cp._receiver_committed_dict), format_dict_ptr(cp._receiver_current_dict),
+        cp._sender_current_algo.name(), cp._sender_committed_algo.name(), cp._algos.value());
+}
+
 rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     const uint8_t header_byte = read_from_rcv_buf<uint8_t>(data);
     const bool has_checksum = header_byte & 0x40;
@@ -466,7 +495,17 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     });
     if (has_checksum) {
         const uint32_t actual_crc = crc_impl(decompressed);
-        if (expected_crc != actual_crc) {
+        if (expected_crc != actual_crc) [[unlikely]] {
+            arc_logger.error(
+                "RPC compression checksum error details:"
+                " expected_crc={:#010x}, actual_crc={:#010x}"
+                ", header_byte={:#04x}"
+                ", control_protocol={}"
+                ", compressed_size={}, decompressed_size={}",
+                expected_crc, actual_crc,
+                header_byte,
+                format_control_protocol(_control),
+                compressed_size, decompressed.size);
             seastar::on_internal_error(arc_logger, fmt::format("RPC compression checksum error (expected: {:x}, got: {:x}). This indicates a bug. Set `internode_compression: none` and restart the nodes to regain stability, then report the bug.", expected_crc, actual_crc));
         }
     }
