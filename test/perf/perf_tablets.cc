@@ -65,16 +65,8 @@ cql_test_config tablet_cql_test_config(unsigned schema_commitlog_segment_size_mb
 static
 future<table_id> add_table(cql_test_env& e, int tablet_count) {
     auto id = table_id(utils::UUID_gen::get_time_UUID());
-<<<<<<< HEAD
-    co_await e.create_table([id] (std::string_view ks_name) {
-        return *schema_builder(ks_name, id.to_sstring(), id)
-||||||| parent of b1d1ff4504 (test: perf: perf_tablets: Measure group0_update_collector effect and group0 application time)
-    co_await e.create_table([id] (std::string_view ks_name) {
-        return *schema_builder(this_smp_shard_count(), ks_name, id.to_sstring(), id)
-=======
     co_await e.create_table([id, tablet_count] (std::string_view ks_name) {
         return *schema_builder(this_smp_shard_count(), ks_name, id.to_sstring(), id)
->>>>>>> b1d1ff4504 (test: perf: perf_tablets: Measure group0_update_collector effect and group0 application time)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("r1", int32_type)
                 // Create the table with exactly `tablet_count` tablets so that the
