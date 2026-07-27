@@ -213,6 +213,9 @@ private:
         optimized_optional<seastar::abort_source::subscription> abort; // abort subscription
     };
 
+    // Waiters for entry commit/apply status, keyed by entry index.
+    using waiters_map = std::map<index_t, op_status>;
+
     // Entries that have a waiter that needs to be notified when the
     // respective entry is known to be committed.
     // Waiters are inserted by wait_for_entry() and dropped by io_fiber as soon
@@ -220,13 +223,13 @@ private:
     // fiber's progress (abort() fails whatever is left). Dropping the waiters
     // in a single fiber, in commit order, is what maintains the ordering
     // invariant asserted in notify_waiters().
-    std::map<index_t, op_status> _awaited_commits;
+    waiters_map _awaited_commits;
 
     // Entries that have a waiter that needs to be notified after
     // the respective entry is applied.
     // Waiters are inserted by wait_for_entry() and dropped by the applier
     // fiber, in apply order (abort() fails whatever is left).
-    std::map<index_t, op_status> _awaited_applies;
+    waiters_map _awaited_applies;
 
     // Maps each destination to the abort_source of the currently active
     // snapshot transfer.  The abort_source itself lives on the coroutine
@@ -261,7 +264,7 @@ private:
     server_requests _new_server_requests;
 
     // Called to commit entries (on a leader or otherwise).
-    void notify_waiters(std::map<index_t, op_status>& waiters, const log_entry_ptr_list& entries);
+    void notify_waiters(waiters_map& waiters, const log_entry_ptr_list& entries);
 
     // Drop waiters that we lost track of, can happen due to a snapshot transfer,
     // or a leader removed from cluster while some entries added on it are uncommitted.
@@ -269,7 +272,7 @@ private:
     // snapshot index are dropped, and those whose term matches the snapshot term
     // are resolved successfully, since the snapshot-term match proves they were
     // committed and included in the snapshot (by the Log Matching Property).
-    void drop_waiters(std::map<index_t, op_status>& waiters, const snapshot_descriptor* snp = nullptr);
+    void drop_waiters(waiters_map& waiters, const snapshot_descriptor* snp = nullptr);
 
     // Wake up all waiter that wait for entries with idx smaller of equal to the one provided
     // to be applied.
@@ -963,7 +966,7 @@ void server_impl::read_quorum_reply(server_id from, struct read_quorum_reply rea
     _fsm->step(from, std::move(read_quorum_reply));
 }
 
-void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
+void server_impl::notify_waiters(waiters_map& waiters,
         const log_entry_ptr_list& entries) {
     index_t commit_idx = entries.back()->idx;
     index_t first_idx = entries.front()->idx;
@@ -1006,7 +1009,7 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
     }
 }
 
-void server_impl::drop_waiters(std::map<index_t, op_status>& waiters, const snapshot_descriptor* snp) {
+void server_impl::drop_waiters(waiters_map& waiters, const snapshot_descriptor* snp) {
     while (waiters.size() != 0) {
         auto it = waiters.begin();
         if (snp && it->first > snp->idx) {
