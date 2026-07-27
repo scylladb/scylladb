@@ -172,6 +172,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     void init_messaging_service();
     future<> uninit_messaging_service();
 
+    // Returns the shard hosting the raft server of the given group, or nullopt if this node
+    // does not own a replica of the corresponding tablet.
+    std::optional<shard_id> find_shard_for_group(table_id table, raft::group_id group_id) const;
+
     // A non-blocking, non-throwing variant of acquire_server(): returns nullopt if the group
     // is not hosted here, hasn't started yet or is being stopped.
     std::optional<raft_server> try_acquire_server(raft::group_id group_id);
@@ -196,6 +200,13 @@ public:
 
     bool should_redirect_writes(raft::group_id group_id) const;
     raft::group_id group_for_redirect(schema_ptr schema, const dht::token& token) const;
+
+    // Seals the raft group `parent_gid`, which is being replaced by the groups `new_gids`.
+    // Returns true once redirect_writes and groups_resized have been committed in the parent
+    // group, or, if wait_only is true, once groups_resized has been applied on this replica.
+    // Returns false if the call has to be retried.
+    future<bool> handle_process_raft_resize(table_id table_id, raft::group_id parent_gid,
+        const std::vector<raft::group_id>& new_gids, bool wait_only, abort_source& as);
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
