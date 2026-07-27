@@ -21,10 +21,6 @@
 #include <unordered_map>
 #include <memory>
 
-namespace replica {
-class database;
-}
-
 namespace gms { class gossiper; }
 namespace locator { class topology; }
 
@@ -76,12 +72,12 @@ public:
         }
     };
 
-    range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
+    range_streamer(sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
             locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
             service::frozen_topology_guard topo_guard,
+            bool consistent_rangemovement, double stream_plan_ranges_fraction,
             std::vector<sstring> tables = {})
-        : _db(db)
-        , _stream_manager(sm)
+        : _stream_manager(sm)
         , _token_metadata_ptr(std::move(tmptr))
         , _abort_source(abort_source)
         , _tokens(std::move(tokens))
@@ -91,13 +87,18 @@ public:
         , _reason(reason)
         , _tables(std::move(tables))
         , _topo_guard(topo_guard)
+        , _consistent_rangemovement(consistent_rangemovement)
+        , _stream_plan_ranges_fraction(stream_plan_ranges_fraction)
     {
         _abort_source.check();
     }
 
-    range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
-            locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, service::frozen_topology_guard topo_guard, std::vector<sstring> tables = {})
-        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), std::move(tables)) {
+    range_streamer(sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
+            locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
+            service::frozen_topology_guard topo_guard,
+            bool consistent_rangemovement, double stream_plan_ranges_fraction,
+            std::vector<sstring> tables = {})
+        : range_streamer(sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), consistent_rangemovement, stream_plan_ranges_fraction, std::move(tables)) {
     }
 
     void add_source_filter(std::unique_ptr<i_source_filter> filter) {
@@ -132,7 +133,8 @@ private:
     std::unordered_map<locator::host_id, dht::token_range_vector>
     get_range_fetch_map(const std::unordered_map<dht::token_range, std::vector<locator::host_id>>& ranges_with_sources,
                         const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
-                        const sstring& keyspace);
+                        const sstring& keyspace,
+                        const locator::vnode_effective_replication_map* erm);
 
 #if 0
 
@@ -151,7 +153,6 @@ public:
     future<> stream_async();
     size_t nr_ranges_to_stream();
 private:
-    sharded<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
     token_metadata_ptr _token_metadata_ptr;
     abort_source& _abort_source;
@@ -162,6 +163,8 @@ private:
     streaming::stream_reason _reason;
     std::vector<sstring> _tables;
     service::frozen_topology_guard _topo_guard;
+    bool _consistent_rangemovement;
+    double _stream_plan_ranges_fraction;
     std::unordered_multimap<sstring, std::unordered_map<locator::host_id, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
     // Number of tx and rx ranges added
