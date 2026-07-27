@@ -190,6 +190,11 @@ void set_system(http_context& ctx, routes& r) {
             return make_ready_future<json::json_return_type>(seastar::to_sstring(format));
         });
     });
+
+    hs::get_shard_to_numa_node_mapping.set(r, [](const_req req) {
+        auto mapping = local_engine->smp().shard_to_numa_node_mapping();
+        return std::vector<unsigned>(mapping.begin(), mapping.end());
+    });
 }
 
 }
