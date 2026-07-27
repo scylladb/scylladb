@@ -22,6 +22,10 @@ namespace compaction {
 class compaction_manager;
 }
 
+namespace sstables {
+class storage_manager;
+}
+
 namespace service {
 
 class load_meter;
@@ -132,6 +136,8 @@ future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& 
 future<> unset_hinted_handoff(http_context& ctx);
 future<> set_server_compaction_manager(http_context& ctx, sharded<compaction::compaction_manager>& cm);
 future<> unset_server_compaction_manager(http_context& ctx);
+future<> set_server_storage_manager(http_context& ctx, sharded<sstables::storage_manager>& sstm);
+future<> unset_server_storage_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);
 future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg, sharded<gms::gossiper>& gossiper);
 future<> unset_server_task_manager(http_context& ctx);
