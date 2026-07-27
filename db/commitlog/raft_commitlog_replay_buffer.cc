@@ -17,6 +17,7 @@
 #include "schema/schema_registry.hh"
 #include "db/system_keyspace.hh"
 #include "service/strong_consistency/state_machine.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "serializer_impl.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
@@ -47,6 +48,31 @@ std::unordered_map<raft::group_id, table_id> build_group_to_table_map(const loca
         for (const auto& tablet_id : tablet_map.tablet_ids()) {
             const auto gid = tablet_map.get_tablet_raft_info(tablet_id).group_id;
             result.emplace(gid, tid);
+        }
+    }
+    return result;
+}
+
+// Maps the raft group of every tablet created by an in-progress resize back to the group being
+// replaced. Those groups must not apply their entries until the group they replace has applied
+// all of its own.
+// FIXME: a tablet merge has two parents per new group.
+std::unordered_map<raft::group_id, raft::group_id> build_child_to_parent_map(const locator::token_metadata& tm) {
+    std::unordered_map<raft::group_id, raft::group_id> result;
+    const auto& tablets = tm.tablets();
+    for (const auto& [tid, _] : tablets.all_table_groups()) {
+        const auto& tablet_map = tablets.get_tablet_map(tid);
+        if (!tablet_map.has_raft_info()) {
+            continue;
+        }
+        for (const auto& tablet_id : tablet_map.tablet_ids()) {
+            if (!tablet_map.is_resizing(tablet_id)) {
+                continue;
+            }
+            const auto gid = tablet_map.get_tablet_raft_info(tablet_id).group_id;
+            for (const auto new_gid : tablet_map.get_raft_resize_info(tablet_id).new_gids) {
+                result.emplace(new_gid, gid);
+            }
         }
     }
     return result;
@@ -125,7 +151,7 @@ filter_entries_result filter_entries(utils::chunked_vector<raft::log_entry_ptr>&
 
 } // anonymous namespace
 
-future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks) {
+future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks, service::strong_consistency::raft_resize_tracker& resize_tracker) {
     if (remaining_groups() == 0) {
         co_return;
     }
@@ -138,9 +164,9 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
     logger.info("processing {} raft groups with {} total entries from commitlog replay", remaining_groups(), total_entries());
 
-    for (auto& [group_id, entries_list] : _replayed_commitlog_entries_by_group) {
+    auto get_table = [&] (raft::group_id group_id, utils::chunked_vector<raft::log_entry_ptr>& entries_list) -> std::optional<table_id> {
         if (entries_list.empty()) {
-            continue;
+            return {};
         }
 
         // Look up table_id for this group.
@@ -149,10 +175,12 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
             // Group not found in tablet metadata — the tablet may have been moved away.
             // Discard these entries since this shard no longer owns the tablet.
             logger.debug("group {} not found in tablet metadata, discarding {} entries", group_id, entries_list.size());
-            continue;
+            return {};
         }
-        const auto table_id = table_it->second;
+        return table_it->second;
+    };
 
+    auto process_group = [&] (raft::group_id group_id, utils::chunked_vector<raft::log_entry_ptr>& entries_list, table_id table_id) -> future<> {
         // Query commit_idx from raft system tables. We treat commit_idx as
         // the effective snapshot index: all entries up to commit_idx are committed
         // and will be applied to memtables during replay.
@@ -241,6 +269,58 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
 
         logger.debug("group {}: discarded_leader_change={}, applied={}, rewritten={}, total_in_log={}", group_id, filtered.discarded_leader_change, applied,
                 rewritten, group_data.entries.size());
+    };
+
+    const auto child_to_parent = build_child_to_parent_map(*token_metadata);
+
+    for (auto& [group_id, entries_list] : _replayed_commitlog_entries_by_group) {
+        auto table_id = get_table(group_id, entries_list);
+        if (table_id && !child_to_parent.contains(group_id)) {
+            co_await process_group(group_id, entries_list, *table_id);
+        }
+    }
+
+    for (auto& [group_id, entries_list] : _replayed_commitlog_entries_by_group) {
+        if (!child_to_parent.contains(group_id)) {
+            continue;
+        }
+        auto parent_gid = child_to_parent.at(group_id);
+        // Load the persisted resize state of the parent group. This is correct here because the
+        // loop above already processed every non-child group, i.e. the parent's committed entries
+        // (including the end_resize update, if any) have already been applied to the memtables.
+        co_await resize_tracker.restore_applied_markers(parent_gid);
+        // Child group ids are not present in the group -> table map (it is built from the tablet
+        // map, which still points at the parent tablets), so look the table up via the parent.
+        auto table_id = get_table(parent_gid, entries_list);
+        if (!table_id) {
+            continue;
+        }
+        if (resize_tracker.has_applied_end_resize(parent_gid)) {
+            // The parent has already finished resizing, so the child group can be processed regularly.
+            co_await process_group(group_id, entries_list, *table_id);
+            continue;
+        }
+        // The entries must not be applied yet: more entries may still arrive in the parent and
+        // would have to be applied first. Only rewrite them to the new commitlog and
+        // leave them in the raft log. The snapshot index is not advanced either, which is correct
+        // because this group had not applied anything before the restart.
+        auto filtered = filter_entries(entries_list, group_id);
+        auto& group_data = _per_group_data[group_id];
+
+        for (auto& entry : filtered.entries) {
+            commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = group_id, .entry = entry});
+            const auto write_fn = [&writer](auto& out) {
+                return writer.write(out);
+            };
+            const auto target_size = writer.size();
+            auto handle = co_await new_commitlog_ptr->add(*table_id, target_size, db::no_timeout, db::commitlog_force_sync::yes, write_fn);
+            group_data.replay_positions.push_back(service::strong_consistency::index_and_replay_position{.index = entry->idx, .replay_position_handle = std::move(handle)});
+            group_data.entries.push_back(std::move(entry));
+
+            co_await seastar::coroutine::maybe_yield();
+        }
+
+        logger.debug("group {} (created by a resize in progress): discarded_leader_change={}, rewritten={}, total_in_log={}", group_id, filtered.discarded_leader_change, filtered.entries.size(), group_data.entries.size());
     }
 
     // The old items are not needed anymore.

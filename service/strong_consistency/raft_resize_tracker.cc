@@ -112,6 +112,11 @@ bool raft_resize_tracker::is_resizing(raft::group_id parent_gid) const {
     return _resize_states.contains(parent_gid);
 }
 
+bool raft_resize_tracker::has_applied_end_resize(raft::group_id parent_gid) const {
+    auto it = _resize_states.find(parent_gid);
+    return it != _resize_states.end() && it->second.end_resize.get_shared_future().available();
+}
+
 std::optional<raft::group_id> raft_resize_tracker::get_parent_group(raft::group_id child_gid) const {
     auto it = _child_to_parent.find(child_gid);
     if (it != _child_to_parent.end()) {

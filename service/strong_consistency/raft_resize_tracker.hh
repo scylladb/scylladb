@@ -92,6 +92,10 @@ public:
     // Drops the state of `parent_gid`. The caller must ensure that the resize is over.
     void erase_resize_state(raft::group_id parent_gid);
 
+    // Returns true once the parent has been sealed on this replica, i.e. once it applied
+    // end_resize. False if the group is not being resized at all.
+    bool has_applied_end_resize(raft::group_id parent_gid) const;
+
     // Returns true if this replica knows that the given group is being resized. False either
     // because the group is not being resized, or because this replica hasn't learnt about the
     // resize yet - the caller cannot tell the two apart and must treat both as "not ready".
