@@ -4,6 +4,7 @@
 #include "utils/error_injection.hh"
 #include "test/lib/error_injection.hh"
 #include <seastar/util/defer.hh>
+#include <seastar/core/when_all.hh>
 
 #ifdef SEASTAR_DEBUG
 // Increase tick time to allow debug to process messages
@@ -22,6 +23,46 @@ static raft_cluster<clock_type> get_default_cluster(test_case test_config) {
         0,
         0, false, tick_delay, rpc_config{}
     };
+}
+
+// Concurrent add_entry() calls on a leader must be appended to the log - and
+// therefore applied - in the order in which the calls entered add_entry().
+// This ordering is guaranteed by the _add_entry_admission semaphore in
+// server_impl.
+SEASTAR_THREAD_TEST_CASE(test_add_entry_preserves_submission_order) {
+    constexpr int n = 100;
+    auto applied = make_lw_shared<std::vector<int>>();
+    raft_cluster<std::chrono::steady_clock> cluster(
+            test_case { .nodes = 1 },
+            [applied](raft::server_id id, const raft::log_entry_ptr_list& commands, lw_shared_ptr<hasher_int> hasher) {
+                for (auto&& entry : commands) {
+                    auto&& d = std::get<raft::command>(entry->data);
+                    auto is = ser::as_input_stream(d);
+                    int n = ser::deserialize(is, std::type_identity<int>());
+                    applied->push_back(n);
+                }
+                return commands.size();
+            },
+            n, 0, 0, false, tick_delay, rpc_config{});
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    // Submit the entries in a tight loop without awaiting between calls. On the
+    // non-forwarding leader path there is no await before acquiring
+    // _add_entry_admission, so admission order equals submission order, and the
+    // FIFO semaphore preserves that order for the append.
+    auto& server = cluster.get_server(0);
+    std::vector<future<>> futures;
+    futures.reserve(n);
+    for (int v = 0; v < n; ++v) {
+        futures.push_back(server.add_entry(create_command(v), raft::wait_type::committed, nullptr));
+    }
+    seastar::when_all_succeed(futures.begin(), futures.end()).get();
+
+    BOOST_REQUIRE_EQUAL(applied->size(), size_t(n));
+    for (int v = 0; v < n; ++v) {
+        BOOST_REQUIRE_EQUAL((*applied)[v], v);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {

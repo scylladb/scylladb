@@ -353,6 +353,14 @@ private:
     template <LeaderAction AsyncAction>
     future<> do_on_leader_with_retries(seastar::abort_source* as, AsyncAction&& action);
 
+    // Serializes the append order of concurrent add_entry_on_leader() calls, so that
+    // the order in which callers enter add_entry_on_leader() is the order in which
+    // their entries are appended to the log. Without it the appends are ordered by
+    // whichever caller happens to reach the log first, which a caller that has to
+    // order its entry against a decision taken just before submitting it has no
+    // way to control.
+    seastar::semaphore _add_entry_admission{1};
+
     future<> override_snapshot_thresholds();
 
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
@@ -663,6 +671,15 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 }
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
+    // Acquire admission before the first await that can reorder callers, so that
+    // entries are appended in the same order callers entered this function.
+    // There must be no awaits in add_entry() before this add_entry_on_leader()
+    // call on the non-forwarding path, so that admission order equals submission
+    // order. See _add_entry_admission for the rationale.
+    auto admission = as
+            ? co_await get_units(_add_entry_admission, 1, *as)
+            : co_await get_units(_add_entry_admission, 1);
+
     // Wait for sufficient memory to become available
     semaphore_units<> memory_permit;
     while (true) {
