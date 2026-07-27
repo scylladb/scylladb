@@ -23,6 +23,7 @@
 #include "utils/error_injection.hh"
 #include "schema/schema_registry.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+#include "service/strong_consistency/raft_resize_coordinator.hh"
 
 using namespace std::chrono_literals;
 
@@ -37,6 +38,7 @@ class state_machine : public raft_state_machine {
     service::migration_manager& _mm;
     db::system_keyspace& _sys_ks;
     raft_groups_storage& _persistence;
+    raft_resize_coordinator& _resize_coordinator;
 
     abort_source _as;
 
@@ -46,19 +48,28 @@ public:
         replica::database& db,
         service::migration_manager& mm,
         db::system_keyspace& sys_ks,
-        raft_groups_storage& persistence)
+        raft_groups_storage& persistence,
+        raft_resize_coordinator& resize_coordinator)
         : _tablet(tablet)
         , _group_id(gid)
         , _db(db)
         , _mm(mm)
         , _sys_ks(sys_ks)
         , _persistence(persistence)
+        , _resize_coordinator(resize_coordinator)
     {
     }
 
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
+        bool reload_resize_state = false;
         try {
+            if (auto fut = _resize_coordinator.get_parent_finished_future(_group_id)) {
+                logger.debug("apply(): waiting for parent group to finish resizing before applying mutations for group {}", _group_id);
+                co_await fut->get_future(_as);
+                logger.debug("apply(): parent group finished resizing, continuing to apply mutations for group {}", _group_id);
+            }
+
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
             // Collect mutations from the command list.
             utils::chunked_vector<frozen_mutation> muts;
@@ -84,6 +95,17 @@ public:
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
                 throwing_assert(replay_positions[i].index == command[i]->idx);
+                if (is_resize_mutation(*schemas[i])) {
+                    logger.debug("apply(): detected a resize mutation for group {}, will reload resize state after applying all mutations", _group_id);
+                    reload_resize_state = true;
+                    // Resize progress does not live in the tablet's table, so it has to be
+                    // applied on the shard which owns it according to that table's sharder.
+                    // The raft commitlog handle cannot travel across shards, so it is dropped
+                    // here (see apply_resize_mutation()).
+                    replay_positions[i].replay_position_handle = db::rp_handle();
+                    co_await apply_resize_mutation(_db, muts[i], schemas[i]);
+                    continue;
+                }
                 // Concurrent apply_in_memory() calls can complete out of order under memory pressure
                 // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
                 // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
@@ -135,6 +157,10 @@ public:
             throw std::runtime_error(::format(
                 "tablet {}, group id {}: error while applying mutations {}",
                 _tablet, _group_id, std::current_exception()));
+        }
+        if (reload_resize_state) {
+            logger.debug("apply(): reloading resize state for group {} after applying all mutations", _group_id);
+            co_await _resize_coordinator.reload_group_resize_state(_group_id);
         }
     }
 
@@ -258,9 +284,10 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     replica::database& db,
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
-    raft_groups_storage& persistence)
+    raft_groups_storage& persistence,
+    raft_resize_coordinator& resize_coordinator)
 {
-    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence);
+    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_coordinator);
 }
 
 namespace detail {

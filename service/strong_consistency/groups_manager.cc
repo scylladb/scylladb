@@ -13,6 +13,7 @@
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
+#include "service/strong_consistency/raft_resize_coordinator.hh"
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "service/raft/raft_rpc.hh"
@@ -131,7 +132,7 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
-        gms::gossiper& gossiper, db::raft_commitlog_replay_buffer& raft_replay_buffer)
+        gms::gossiper& gossiper, db::raft_commitlog_replay_buffer& raft_replay_buffer, sharded<raft_resize_coordinator>& resize_coordinator)
     : _ms(ms)
     , _raft_gr(raft_gr)
     , _qp(qp)
@@ -141,6 +142,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _features(features)
     , _gossiper(gossiper)
     , _raft_replay_buffer(raft_replay_buffer)
+    , _resize_coordinator(resize_coordinator.local())
 {
     init_messaging_service();
 }
@@ -151,13 +153,32 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 {
     const auto my_id = to_server_id(tm->get_my_id());
 
+    // Restore the persisted resize state before the raft server is created, i.e. before this
+    // group can serve any request. The groups replacing a resized one must observe
+    // groups_resized, otherwise their appliers would block forever: the committed entries of
+    // the group being replaced are applied during commitlog replay, bypassing
+    // state_machine::apply(), so nothing would ever fulfil the promise again.
+    //
+    // The load has to happen in the group's own fiber rather than as a side effect of starting
+    // a group replacing it: update() starts them concurrently, so the load must not be tied to
+    // the start of any single one of them.
+    //
+    // For a group replacing another one the tablet still points at the tablet being resized, so
+    // get_tablet_raft_info() yields the group being replaced in both cases.
+    {
+        const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
+        if (tablet_map.is_resizing(tablet.tablet)) {
+            co_await _resize_coordinator.reload_group_resize_state(
+                    tablet_map.get_tablet_raft_info(tablet.tablet).group_id);
+        }
+    }
 
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
     auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
         *commitlog, tablet.table, _raft_replay_buffer.take_replayed_group_entries(group_id));
 
-    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
+    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage, _resize_coordinator);
 
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
@@ -256,6 +277,10 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
 
         co_await std::move(state.leader_info_updater);
+
+        // The end of this group may be what makes the resize it took part in droppable, whether
+        // it is the group being resized or one of the groups replacing it.
+        _resize_coordinator.erase_resize_state(_resize_coordinator.get_parent_group(id).value_or(id));
 
         _raft_gr.destroy_server(id);
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
@@ -430,8 +455,26 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         if (!tablet_map.has_raft_info()) {
             continue;
         }
-        for (const auto& tid: tablet_map.tablet_ids()) {
+        struct tablet_group_info {
+            tablet_id tid;
+            raft::group_id id;
+            std::optional<raft::group_id> parent_id;
+        };
+        std::vector<tablet_group_info> tablet_groups;
+        tablet_groups.reserve(tablet_map.tablet_ids().size());
+        for (const auto tid: tablet_map.tablet_ids()) {
             const auto id = tablet_map.get_tablet_raft_info(tid).group_id;
+            tablet_groups.push_back(tablet_group_info{tid, id, std::nullopt});
+            if (tablet_map.is_resizing(tid)) {
+                for (const auto new_gid : tablet_map.get_raft_resize_info(tid).new_gids) {
+                    // Groups replacing another one are added after it, so when we iterate over
+                    // tablet_groups below, its state is initialized before they are started.
+                    tablet_groups.push_back(tablet_group_info{tid, new_gid, id});
+                }
+            }
+        }
+
+        for (const auto& [tid, id, parent_id]: tablet_groups) {
             const auto tablet = global_tablet_id{table_id, tid};
 
             _leader_cache.mark_seen(id);
@@ -440,6 +483,14 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             }
             auto& state = _raft_groups[id];
             state.has_tablet = true;
+
+            // Register the resize before the check below: unlike the groups replacing it, the
+            // group being resized is normally already running by the time the resize is
+            // announced, so it would never get here otherwise.
+            if (!parent_id && tablet_map.is_resizing(tid)) {
+                const auto& new_gids = tablet_map.get_raft_resize_info(tid).new_gids;
+                _resize_coordinator.announce_resize(id, {new_gids.begin(), new_gids.end()});
+            }
 
             // Don't start the raft server if it is already (started or starting) and not stopping.
             if (state.gate && !state.gate->is_closed()) {

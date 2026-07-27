@@ -121,6 +121,7 @@
 #include "db/virtual_tables.hh"
 
 #include "service/strong_consistency/groups_manager.hh"
+#include "service/strong_consistency/raft_resize_coordinator.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "service/raft/raft_group_registry.hh"
@@ -2017,6 +2018,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 client_routes.stop().get();
             });
 
+            checkpoint(stop_signal, "initializing Raft resize coordinator");
+            sharded<service::strong_consistency::raft_resize_coordinator> raft_resize_coordinator;
+            raft_resize_coordinator.start(std::ref(sys_ks)).get();
+            auto stop_raft_resize_coordinator = defer_verbose_shutdown("Raft resize coordinator", [&] {
+                raft_resize_coordinator.stop().get();
+            });
+
             // Create per-shard buffer to collect raft log entries during commitlog replay.
             // These entries are later consumed by tablet raft groups when they start.
             static seastar::sharded<db::raft_commitlog_replay_buffer> raft_replay_buffer;
@@ -2029,7 +2037,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sharded<service::strong_consistency::groups_manager> groups_manager;
             groups_manager.start(std::ref(messaging), std::ref(raft_gr), std::ref(qp), 
                 std::ref(db), std::ref(mm), std::ref(sys_ks), std::ref(feature_service), std::ref(gossiper),
-                std::ref(raft_replay_buffer)).get();
+                std::ref(raft_replay_buffer), std::ref(raft_resize_coordinator)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
                 groups_manager.stop().get();
             });
