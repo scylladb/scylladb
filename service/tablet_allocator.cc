@@ -2837,7 +2837,13 @@ public:
     future<table_resize_plan> make_resize_plan(const migration_plan& plan) {
         table_resize_plan resize_plan;
 
-        if (!_tm->tablets().balancing_enabled()) {
+        if (!_tm->tablets().balancing_enabled()
+                // Balancing is disabled cluster-wide while strongly consistent tables are
+                // enabled, because migrating one is not implemented yet - which also stops such a
+                // table from being split. The injection plans resize decisions anyway, so that a
+                // split can be exercised without letting a migration through: every path which
+                // emits one is guarded by balancing_enabled() as well.
+                && !utils::get_local_injector().enter("allow_tablet_resize_without_balancing")) {
             co_return std::move(resize_plan);
         }
 

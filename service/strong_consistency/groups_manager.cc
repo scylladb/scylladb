@@ -1077,6 +1077,13 @@ future<bool> groups_manager::handle_process_raft_resize(raft::group_id parent_gi
         _resize_tracker.mark_resize_phase(parent_gid, resize_marker_kind::start_resize);
     }
 
+    // Holds the resize in the window where the parent no longer accepts writes but its children
+    // have not been released yet, which is otherwise too short to aim at. The topology coordinator
+    // retries the verb on a timeout, and the retry commits end_resize without pausing, so the
+    // window closes on its own even if nobody messages the injection.
+    co_await utils::get_local_injector().inject("sc_pause_before_end_resize",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
     if (!_resize_tracker.has_applied_end_resize(parent_gid)) {
         auto res = co_await coroutine::as_future(parent->server().add_entry(
             make_resize_cmd(resize_marker_kind::end_resize), raft::wait_type::committed, &as));

@@ -17,7 +17,7 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement, BoundStatement
-from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replicas
+from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replicas, get_tablet_count
 from test.pylib.rest_client import read_barrier
 
 import asyncio
@@ -1607,3 +1607,653 @@ async def test_write_from_non_replica_after_leader_down(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 2", host=non_replica_host)
             assert len(rows) == 1
             assert rows[0].c == 2
+
+
+# Strongly consistent tablet split (SCYLLADB-15).
+#
+# The split is driven by the load balancer, which is disabled cluster-wide once strongly
+# consistent tables are enabled, because migrating one is not implemented yet. The
+# allow_tablet_resize_without_balancing injection in SC_SPLIT_CONFIG lets it plan resize
+# decisions anyway, which is all a split needs, and with balancing still disabled no migration
+# is ever emitted: the tablets stay on the shards they were allocated on, which the default
+# shard count makes likely to differ from the shard the sealing RPC lands on, so the tests also
+# cover forwarding it to the shard owning the replica.
+SC_SPLIT_CMDLINE = DEFAULT_CMDLINE + ['--logger-log-level', 'load_balancer=debug',
+                                      '--logger-log-level', 'raft_topology=debug',
+                                      '--logger-log-level', 'raft_resize_tracker=debug',
+                                      '--logger-log-level', 'sc_state_machine=debug',
+                                      '--logger-log-level', 'raft_commitlog_replay=debug',
+                                      '--logger-log-level', 'system_keyspace=debug']
+SC_SPLIT_CONFIG = DEFAULT_CONFIG | {
+    'tablet_load_stats_refresh_interval_in_seconds': 1,
+    'error_injections_at_startup': ['allow_tablet_resize_without_balancing'],
+}
+
+
+async def sc_insert(cql, table: str, keys):
+    """Write `c = pk` for every key with a linearizable (QUORUM) write."""
+    await asyncio.gather(*[
+        cql.run_async(SimpleStatement(
+            f"INSERT INTO {table} (pk, c) VALUES ({k}, {k});",
+            consistency_level=ConsistencyLevel.QUORUM))
+        for k in keys])
+
+
+async def sc_check(cql, table: str, keys):
+    """Read every key back with a linearizable (QUORUM) read and verify `c == pk`."""
+    # Strongly consistent tables only allow single-partition reads, so read
+    # each key individually.
+    async def check_one(k):
+        rows = await cql.run_async(SimpleStatement(
+            f"SELECT c FROM {table} WHERE pk = {k};",
+            consistency_level=ConsistencyLevel.QUORUM))
+        assert len(rows) == 1, f"key {k} missing (got {len(rows)} rows)"
+        assert rows[0].c == k, f"key {k} has wrong value {rows[0].c}"
+    await asyncio.gather(*[check_one(k) for k in keys])
+
+
+async def get_tablet_raft_rows(manager: ManagerClient, ks: str, table: str):
+    """The raft group id and the in-progress resize info of every tablet of the table."""
+    table_id = await manager.get_table_id(ks, table)
+    rows = await manager.get_cql().run_async(
+        "SELECT raft_group_id, transition_raft_group_ids"
+        f" FROM system.tablets WHERE table_id = {table_id}")
+    return [r for r in rows if r.raft_group_id is not None]
+
+
+async def split_sc_tablet(manager: ManagerClient, server: ServerInfo, cql, ks: str, table: str):
+    """Force the single tablet of the table to split and wait until it does."""
+    assert await get_tablet_count(manager, server, ks, table) == 1
+
+    logger.info("Altering the table to require at least 2 tablets")
+    await cql.run_async(f"ALTER TABLE {ks}.{table} WITH tablets = {{'min_tablet_count': 2}}")
+
+    # The load balancer emits the split decision on its own once the load stats say the table
+    # is below the tablet count it now requires.
+    async def split_done():
+        count = await get_tablet_count(manager, server, ks, table)
+        return True if count > 1 else None
+    await wait_for(split_done, time.time() + 180)
+    logger.info("Tablet split completed")
+
+
+# End-to-end strongly consistent tablet split.
+#
+# With RF=1 the whole resize runs on a single replica; with RF=3 the topology
+# coordinator has to drive it on all three, and the leaders of the child groups
+# have to be brought to the node leading the parent group.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("rf", [1, 3])
+async def test_sc_tablet_split(manager: ManagerClient, rf: int):
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(rf, config=SC_SPLIT_CONFIG, cmdline=SC_SPLIT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    cql, _ = await manager.get_ready_cql(servers)
+    logger.info("Creating a strongly consistent keyspace and table")
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': "
+            f"{rf}}} AND tablets = {{'initial': 1}} AND consistency = 'global'") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int);")
+
+        keys = list(range(256))
+
+        logger.info("Writing initial data")
+        await sc_insert(cql, table, keys)
+        await sc_check(cql, table, keys)
+
+        parent_rows = await get_tablet_raft_rows(manager, ks, 'test')
+        assert len(parent_rows) == 1
+        parent_gid = str(parent_rows[0].raft_group_id)
+        assert parent_rows[0].transition_raft_group_ids is None
+
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+
+        await split_sc_tablet(manager, servers[0], cql, ks, 'test')
+
+        # The strongly-consistent split finalization must have run.
+        assert any([await log.grep("Running strongly consistent tablet resize", from_mark=mark)
+                    for log, mark in zip(logs, marks)])
+
+        # The parent group must have been sealed on every replica, i.e. every
+        # replica applied the end_resize marker, which is what releases the
+        # appliers of the groups replacing it.
+        for server, log, mark in zip(servers, logs, marks):
+            assert await log.grep(f"group {parent_gid}: end_resize applied", from_mark=mark), \
+                f"the parent group was not sealed on {server.server_id}"
+
+        # The child tablets took over with the group ids generated with the split
+        # decision, and the resize info is no longer part of the tablet metadata.
+        child_rows = await get_tablet_raft_rows(manager, ks, 'test')
+        assert len(child_rows) == 2
+        child_gids = {str(r.raft_group_id) for r in child_rows}
+        assert len(child_gids) == 2, f"both child tablets use the same raft group: {child_gids}"
+        assert parent_gid not in child_gids, "a child tablet kept the parent's raft group"
+        for r in child_rows:
+            assert r.transition_raft_group_ids is None
+
+        # All previously acknowledged writes must survive the split.
+        await sc_check(cql, table, keys)
+
+        # Writes and reads on both sides of the split point must keep working
+        # after the parent group is replaced by the child groups.
+        logger.info("Writing more data after the split")
+        more_keys = list(range(256, 512))
+        await sc_insert(cql, table, more_keys)
+        await sc_check(cql, table, keys + more_keys)
+
+
+# Writes issued while a strongly consistent tablet is being split must not be
+# lost: a write either lands in the parent group before it stops accepting them
+# or is handed off to the child group covering its token. Keep writing for the
+# whole duration of the split and verify afterwards that every acknowledged
+# write is readable, i.e. that there is no gap between the parent giving up the
+# token range and the children taking it over.
+#
+# The window in which the parent no longer accepts writes is short, so rather
+# than hoping that a write lands in it, hold the resize there and wait until one
+# provably does.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_sc_tablet_split_with_concurrent_writes(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(3, config=SC_SPLIT_CONFIG, cmdline=SC_SPLIT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    injection = 'sc_pause_before_end_resize'
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int);")
+
+        keys = list(range(256))
+        logger.info("Writing initial data")
+        await sc_insert(cql, table, keys)
+
+        # Writes keys from both sides of the split point, one batch at a time,
+        # and records the ones which were acknowledged.
+        acked: list[int] = []
+        stop = asyncio.Event()
+
+        async def writer():
+            next_key = 1000
+            while not stop.is_set():
+                batch = list(range(next_key, next_key + 8))
+                next_key += 8
+                await sc_insert(cql, table, batch)
+                acked.extend(batch)
+
+        # The resize is driven on, and the writes are handed off by, the leader of the parent
+        # group: no other replica can commit the markers, so no other reaches the injection.
+        parent_rows = await get_tablet_raft_rows(manager, ks, 'test')
+        assert len(parent_rows) == 1
+        parent_gid = str(parent_rows[0].raft_group_id)
+        leader_host_id = await wait_for_leader(manager, servers[0], parent_gid)
+        leader_server = [s for s, hid in zip(servers, host_ids) if str(hid) == str(leader_host_id)][0]
+        logger.info(f"Parent group {parent_gid} is led by {leader_host_id}")
+
+        leader_log = await manager.server_open_log(leader_server.server_id)
+        mark = await leader_log.mark()
+
+        await manager.api.enable_injection(leader_server.ip_addr, injection, one_shot=True)
+        writer_task = asyncio.create_task(writer())
+        split_task = None
+        try:
+            # Make sure the writer is running before the split starts.
+            async def writes_started():
+                return True if acked else None
+            await wait_for(writes_started, time.time() + 60)
+            acked_before_split = len(acked)
+
+            split_task = asyncio.create_task(split_sc_tablet(manager, servers[0], cql, ks, 'test'))
+
+            await manager.api.wait_for_injection_enter(leader_server.ip_addr, injection)
+            await leader_log.wait_for("mutate\\(\\): handing off the write to table", from_mark=mark)
+        finally:
+            await manager.api.message_injection(leader_server.ip_addr, injection)
+            if split_task:
+                await split_task
+            stop.set()
+            await writer_task
+
+        assert len(acked) > acked_before_split, \
+            "no write was acknowledged while the tablet was being split"
+        logger.info(f"{len(acked) - acked_before_split} writes were acknowledged during the split")
+
+        await sc_check(cql, table, keys + acked)
+
+
+# A child's applier is held back for the whole window between the two markers, so every write
+# handed off to it in the meantime is committed but not applied, and piles up in its raft server's
+# applier queue. That queue is deliberately small by default - it is what bounds the memory of
+# committed but unapplied entries on a follower - so unless the limit is lifted for the duration of
+# the resize, a child fills it, its io_fiber blocks on the push, and the group stops making
+# progress: no further entry is persisted and no ack is sent, which hangs every write after that
+# until the parent is sealed.
+#
+# Hold the window open and keep writing well past the default limit, checking that writes are still
+# being acknowledged by the time it is released rather than all of them piling up at the end.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_sc_tablet_split_writes_past_applier_queue_limit(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(3, config=SC_SPLIT_CONFIG, cmdline=SC_SPLIT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    injection = 'sc_pause_before_end_resize'
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int);")
+
+        keys = list(range(256))
+        await sc_insert(cql, table, keys)
+
+        acked: list[int] = []
+        stop = asyncio.Event()
+
+        async def writer():
+            next_key = 1000
+            while not stop.is_set():
+                batch = list(range(next_key, next_key + 8))
+                next_key += 8
+                await sc_insert(cql, table, batch)
+                acked.extend(batch)
+
+        parent_rows = await get_tablet_raft_rows(manager, ks, 'test')
+        assert len(parent_rows) == 1
+        parent_gid = str(parent_rows[0].raft_group_id)
+        leader_host_id = await wait_for_leader(manager, servers[0], parent_gid)
+        leader_server = [s for s, hid in zip(servers, host_ids) if str(hid) == str(leader_host_id)][0]
+        logger.info(f"Parent group {parent_gid} is led by {leader_host_id}")
+
+        leader_log = await manager.server_open_log(leader_server.server_id)
+        mark = await leader_log.mark()
+
+        await manager.api.enable_injection(leader_server.ip_addr, injection, one_shot=True)
+        writer_task = asyncio.create_task(writer())
+        split_task = None
+        try:
+            async def writes_started():
+                return True if acked else None
+            await wait_for(writes_started, time.time() + 60)
+
+            split_task = asyncio.create_task(split_sc_tablet(manager, servers[0], cql, ks, 'test'))
+            await manager.api.wait_for_injection_enter(leader_server.ip_addr, injection)
+            await leader_log.wait_for("mutate\\(\\): handing off the write to table", from_mark=mark)
+
+            # Comfortably more than the default queue limit of 10 messages, so that a child which
+            # did not have its limit lifted would have blocked its io_fiber by now.
+            acked_at_handoff = len(acked)
+
+            async def wrote_past_the_limit():
+                return True if len(acked) - acked_at_handoff > 64 else None
+            await wait_for(wrote_past_the_limit, time.time() + 120)
+            logger.info(f"{len(acked) - acked_at_handoff} writes were acknowledged while the "
+                        "resize was held between the markers")
+        finally:
+            await manager.api.message_injection(leader_server.ip_addr, injection)
+            if split_task:
+                await split_task
+            stop.set()
+            await writer_task
+
+        await sc_check(cql, table, keys + acked)
+
+
+# Holds the resize in the same window as the test above, but instead of checking that a
+# continuous stream of writes survives it, follows a single write and a single linearizable read
+# which land in it.
+#
+# Both a write and a linearizable read of the resized token range are handed off
+# to a group replacing the parent, and neither may be lost or failed. They are
+# not affected in the same way though:
+#
+#  - the write is acknowledged as soon as the group replacing the parent commits
+#    it, without waiting for the parent. It does not have to wait: it carries a
+#    timestamp above every one the parent handed out, and the applier of the new
+#    group is held back until the parent is done, so the write cannot be applied
+#    or observed out of order,
+#  - the linearizable read cannot be answered until the group it was sent to has
+#    applied its entries, which is exactly what the parent being done releases.
+#    Answering it earlier could expose a state older than a write already
+#    committed in the group being replaced.
+#
+# Once the resize completes, both are visible: the read sees the pre-resize state
+# and the value written in the window is readable.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_sc_tablet_split_read_write_in_handoff_window(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    server = await manager.server_add(config=SC_SPLIT_CONFIG, cmdline=SC_SPLIT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+    injection = 'sc_pause_before_end_resize'
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int);")
+
+        keys = list(range(256))
+        await sc_insert(cql, table, keys)
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        await manager.api.enable_injection(server.ip_addr, injection, one_shot=True)
+        split_task = asyncio.create_task(split_sc_tablet(manager, server, cql, ks, 'test'))
+        written_key, read_key = keys[0], keys[1]
+        new_value = written_key + 100000
+
+        async def write_in_window():
+            await cql.run_async(SimpleStatement(
+                f"UPDATE {table} SET c = {new_value} WHERE pk = {written_key};",
+                consistency_level=ConsistencyLevel.QUORUM))
+
+        async def read_in_window():
+            return await cql.run_async(SimpleStatement(
+                f"SELECT c FROM {table} WHERE pk = {read_key};",
+                consistency_level=ConsistencyLevel.QUORUM))
+
+        write_task = read_task = None
+        try:
+            await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+            write_task = asyncio.create_task(write_in_window())
+            read_task = asyncio.create_task(read_in_window())
+
+            # Both requests have to reach the group being resized and be handed off to the
+            # group replacing it.
+            await log.wait_for("mutate\\(\\): handing off the write to table", from_mark=mark)
+            await log.wait_for("query\\(\\): handing off the read of table", from_mark=mark)
+
+            # The write is committed by the group replacing the parent and answered
+            # from there, while the resize is still held in this window.
+            await asyncio.wait_for(asyncio.shield(write_task), timeout=60)
+
+            # The read cannot be answered while we hold the resize here, so there is
+            # no window to hit and nothing to wait for: whenever we look, it is still
+            # pending. It is released by the same thing which releases the applier of
+            # the group it was sent to, checked after the injection is messaged below.
+            assert not read_task.done(), (
+                "a linearizable read was answered by a new group before the group it replaces "
+                f"was done: {read_task.exception() or read_task.result()}")
+        finally:
+            await manager.api.message_injection(server.ip_addr, injection)
+            await split_task
+
+        # Neither request was lost: the write is acknowledged and the read is
+        # answered once the groups replacing the parent are released.
+        await write_task
+        rows = await read_task
+        assert len(rows) == 1 and rows[0].c == read_key, \
+            f"read issued during the resize returned {rows}, expected c={read_key}"
+
+        # The write which was handed off to a child group is not lost either.
+        rows = await cql.run_async(SimpleStatement(
+            f"SELECT c FROM {table} WHERE pk = {written_key};",
+            consistency_level=ConsistencyLevel.QUORUM))
+        assert len(rows) == 1 and rows[0].c == new_value, \
+            f"read after the split returned {rows}, expected c={new_value}"
+
+        # Everything but written_key, whose value the write above replaced.
+        await sc_check(cql, table, keys[1:])
+
+
+# The parent group of a tablet being split can change its leader in the middle
+# of the resize, which invalidates the co-location of the leaders of the groups
+# replacing it and makes the sealing RPC fail on the old leader. Force such a
+# change while the resize is paused between the two markers and verify that the
+# split still completes and that nothing is lost.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_sc_tablet_split_with_leader_change(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(3, config=SC_SPLIT_CONFIG, cmdline=SC_SPLIT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    injection = 'sc_pause_before_end_resize'
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int);")
+
+        keys = list(range(256))
+        await sc_insert(cql, table, keys)
+
+        parent_rows = await get_tablet_raft_rows(manager, ks, 'test')
+        assert len(parent_rows) == 1
+        parent_gid = str(parent_rows[0].raft_group_id)
+
+        # The resize is driven on the leader of the parent group: no other replica can commit
+        # the markers, so no other reaches the injection.
+        leader_host_id = await wait_for_leader(manager, servers[0], parent_gid)
+        leader_server = [s for s, hid in zip(servers, host_ids) if str(hid) == str(leader_host_id)][0]
+        logger.info(f"Parent group {parent_gid} is led by {leader_host_id}")
+
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+
+        await manager.api.enable_injection(leader_server.ip_addr, injection, one_shot=True)
+        split_task = asyncio.create_task(split_sc_tablet(manager, servers[0], cql, ks, 'test'))
+        try:
+            await manager.api.wait_for_injection_enter(leader_server.ip_addr, injection)
+
+            logger.info("Making the parent group leader step down mid-resize")
+            await manager.api.client.post("/raft/trigger_stepdown", host=leader_server.ip_addr,
+                                          params={"group_id": parent_gid})
+
+            # The leaders of the child groups are now on a node which no longer
+            # leads the parent group, so they have to be moved before the resize
+            # can be finished.
+            other_server = [s for s in servers if s.server_id != leader_server.server_id][0]
+            async def leader_changed():
+                new_leader = await manager.api.get_raft_leader(other_server.ip_addr, parent_gid)
+                return new_leader if str(new_leader) not in (str(leader_host_id), str(uuid.UUID(int=0))) else None
+            new_leader_host_id = await wait_for(leader_changed, time.time() + 60)
+            logger.info(f"Parent group {parent_gid} is now led by {new_leader_host_id}")
+        finally:
+            await manager.api.message_injection(leader_server.ip_addr, injection)
+            await split_task
+
+        # A child group leader had to be handed over to the node which now leads the parent
+        # group before the resize could be finished. That the transfers did complete is implied
+        # by the split having finished at all.
+        assert any([await log.grep("colocate_leaders: group", from_mark=mark)
+                    for log, mark in zip(logs, marks)]), \
+            "no child group leadership was transferred to the new parent leader"
+
+        # Nothing was lost and both child groups are usable.
+        await sc_check(cql, table, keys)
+        more_keys = list(range(256, 512))
+        await sc_insert(cql, table, more_keys)
+        await sc_check(cql, table, keys + more_keys)
+
+
+# A replica which crashes after a split has the entries of the child groups in
+# its commitlog only, so they are applied by commitlog replay rather than by the
+# state machine. Verify that nothing is lost and that the child groups keep
+# working after the restart.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_sc_tablet_split_survives_crash(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    server = await manager.server_add(config=SC_SPLIT_CONFIG, cmdline=SC_SPLIT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int);")
+
+        keys = list(range(256))
+        await sc_insert(cql, table, keys)
+
+        await split_sc_tablet(manager, server, cql, ks, 'test')
+
+        # Written to the child groups only, after the parent group was sealed.
+        more_keys = list(range(256, 512))
+        await sc_insert(cql, table, more_keys)
+
+        logger.info("Crashing the node")
+        await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql = manager.get_cql()
+
+        # The split is not undone by the restart and no write is lost.
+        assert await get_tablet_count(manager, server, ks, 'test') == 2
+        await sc_check(cql, table, keys + more_keys)
+
+        # The child groups are usable after being recovered from the commitlog.
+        even_more_keys = list(range(512, 768))
+        await sc_insert(cql, table, even_more_keys)
+        await sc_check(cql, table, keys + more_keys + even_more_keys)
+
+
+# A replica which crashes while a split is in progress, in the window where the
+# parent group has stopped accepting writes but has not been sealed yet, has the
+# entries of the child groups in its commitlog while the parent's log is not final.
+# Those entries must not be applied during the replay: more entries may still
+# arrive in the parent group and have to be applied first, so the child groups are
+# only rewritten to the new commitlog and left in the raft log, to be applied once
+# the parent is sealed. Verify that a write acknowledged in that window survives the
+# crash and that the split completes afterwards.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_sc_tablet_split_crash_in_handoff_window(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    server = await manager.server_add(config=SC_SPLIT_CONFIG, cmdline=SC_SPLIT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+    injection = 'sc_pause_before_end_resize'
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int);")
+
+        keys = list(range(256))
+        await sc_insert(cql, table, keys)
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        await manager.api.enable_injection(server.ip_addr, injection, one_shot=True)
+        split_task = asyncio.create_task(split_sc_tablet(manager, server, cql, ks, 'test'))
+        try:
+            await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+
+            # Acknowledged by a child group while the parent is not sealed yet, so it
+            # is committed in the child's log and not applied anywhere.
+            written_key = keys[0]
+            new_value = written_key + 100000
+            await cql.run_async(SimpleStatement(
+                f"UPDATE {table} SET c = {new_value} WHERE pk = {written_key};",
+                consistency_level=ConsistencyLevel.QUORUM))
+            await log.wait_for("mutate\\(\\): handing off the write to table", from_mark=mark)
+        finally:
+            # The node is about to be killed with the resize still held, so there is
+            # nothing left to wait for here.
+            split_task.cancel()
+            try:
+                await split_task
+            except asyncio.CancelledError:
+                pass
+
+        logger.info("Crashing the node inside the resize window")
+        await manager.server_stop(server.server_id, convict=False)
+        mark = await log.mark()
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql = manager.get_cql()
+
+        # The child groups were replayed as groups whose parent is not done, i.e. their
+        # entries were rewritten to the new commitlog rather than applied.
+        assert await log.grep("created by a resize in progress", from_mark=mark), \
+            "the child groups were not replayed as groups replacing an unsealed one"
+
+        # The resize is resumed after the restart: the injection is gone, so the retried
+        # sealing commits end_resize, which releases the child appliers.
+        async def split_done():
+            return True if await get_tablet_count(manager, server, ks, 'test') == 2 else None
+        await wait_for(split_done, time.time() + 180)
+
+        # The write which was acknowledged in the window is applied, not lost, and both
+        # child groups work.
+        rows = await cql.run_async(SimpleStatement(
+            f"SELECT c FROM {table} WHERE pk = {written_key};",
+            consistency_level=ConsistencyLevel.QUORUM))
+        assert len(rows) == 1 and rows[0].c == new_value, \
+            f"write acknowledged before the crash returned {rows}, expected c={new_value}"
+        # Everything but written_key, whose value the write above replaced.
+        await sc_check(cql, table, keys[1:])
+
+        more_keys = list(range(256, 512))
+        await sc_insert(cql, table, more_keys)
+        await sc_check(cql, table, more_keys)
+
+
+# The resize of a tablet stays in the tablet metadata across many token metadata
+# changes, and every one of them re-announces it to the replicas. A repeated
+# announcement must not disturb the state of a resize which is already running -
+# in particular it must not start a second fiber keeping the leaders of the groups
+# replacing the parent co-located with its own, or swap out what the running one
+# refers to. Hold the split before finalization, force such changes, and check that
+# the split still completes.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_sc_tablet_split_with_repeated_announcements(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(3, config=SC_SPLIT_CONFIG, cmdline=SC_SPLIT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    cql, _ = await manager.get_ready_cql(servers)
+    # Keeps the load balancer from emitting the finalize decision, so the resize stays
+    # in the tablet metadata, with the child groups running, for as long as we want.
+    injection = 'tablet_resize_finalization_postpone'
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int);")
+
+        keys = list(range(256))
+        await sc_insert(cql, table, keys)
+
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+
+        for s in servers:
+            await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
+        split_task = asyncio.create_task(split_sc_tablet(manager, servers[0], cql, ks, 'test'))
+        try:
+            # Wait until the resize is announced, i.e. the child groups are created and the
+            # fiber keeping their leaders co-located with the parent's is running.
+            await gather_safely(*[log.wait_for("maintaining co-location with", from_mark=mark)
+                                  for log, mark in zip(logs, marks)])
+
+            # Every one of these is a group0 write which republishes token metadata on
+            # every node, which re-announces the resize still recorded in it.
+            for i in range(3):
+                async with new_test_keyspace(manager, "WITH replication = {'class': "
+                        "'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = "
+                        "{'initial': 2}") as other_ks:
+                    await cql.run_async(f"CREATE TABLE {other_ks}.t{i} (pk int PRIMARY KEY);")
+
+            # The resize was re-announced, and each replica still runs exactly one colocator
+            # for it - every colocator logs the line waited for above when it starts.
+            for server, log, mark in zip(servers, logs, marks):
+                assert await log.grep("start_leader_colocator: group .* nothing to do", from_mark=mark), \
+                    f"the resize was never re-announced on {server.server_id}"
+                started = await log.grep("maintaining co-location with", from_mark=mark)
+                assert len(started) == 1, \
+                    f"{len(started)} leader colocators were started on {server.server_id}, expected 1"
+        finally:
+            for s in servers:
+                await manager.api.disable_injection(s.ip_addr, injection)
+            await split_task
+
+        # The split completed and the table is usable on both sides of the split point.
+        assert await get_tablet_count(manager, servers[0], ks, 'test') == 2
+        await sc_check(cql, table, keys)
+        more_keys = list(range(256, 512))
+        await sc_insert(cql, table, more_keys)
+        await sc_check(cql, table, keys + more_keys)
