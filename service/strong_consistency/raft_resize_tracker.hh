@@ -9,6 +9,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_future.hh>
 #include "raft/raft.hh"
 #include "schema/schema_fwd.hh"
@@ -81,7 +82,10 @@ public:
     // with no state here is ignored rather than creating one. The state is absent only once the
     // resize has ended on this replica, and resurrecting it would leave an entry nothing removes.
     //
-    // Called by the applier fiber once the corresponding marker has been applied.
+    // Called by the applier fiber once the marker has been applied, and by groups_manager to
+    // fast-forward start_resize ahead of that apply. The fast-forward is safe: the marker is
+    // already committed in the parent's log, so it is certain to be applied - all committed entries
+    // are applied on restart, and no operation removes a marker from the log.
     void mark_resize_phase(raft::group_id parent_gid, resize_marker_kind kind);
 
     // Drops the record that `gid` - a parent, or a child of one - has in the resize it took part
