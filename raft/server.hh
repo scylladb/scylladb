@@ -229,6 +229,7 @@ public:
     virtual future<> read_barrier(seastar::abort_source* as) = 0;
 
     // Initiate leader stepdown process.
+    // If target is specified, the leadership transfer will be attempted to that target only.
     //
     // Exceptions:
     // raft::timeout_error
@@ -239,7 +240,9 @@ public:
     //     Thrown if there is no other voting member.
     // std::logic_error
     //     Thrown if the stepdown process is already in progress.
-    virtual future<> stepdown(logical_clock::duration timeout) = 0;
+    // std::invalid_argument
+    //     Thrown if target is not a voting follower in the current configuration.
+    virtual future<> stepdown(logical_clock::duration timeout, server_id target = {}) = 0;
 
     // Register metrics for this server. Metric are global but their names
     // depend on the server's ID, so it is possible to register metrics
