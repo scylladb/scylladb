@@ -156,15 +156,39 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
     fourth_node_future = asyncio.create_task(
         manager.server_start(servers[3].server_id,
                              expected_error="raft operation \\[read_barrier\\] timed out, there is no raft quorum",
-                             timeout=60))
+                             # Generous budget: it must cover the graceful stop of two nodes and
+                             # the log waits below, all of which are slow in debug mode on a
+                             # loaded machine.
+                             timeout=120))
 
     logger.info(
         f"waiting for the fourth node {servers[3]} to hit join-node-response_handler-before-read-barrier")
     await manager.api.wait_for_injection_enter(servers[3].ip_addr, "join-node-response_handler-before-read-barrier")
 
+    # The "there is no raft quorum" suffix in the read_barrier timeout error is produced only
+    # if the joining node already knows the group 0 configuration. The configuration arrives
+    # with the group 0 snapshot, which races with stopping the followers below - make sure
+    # the snapshot is applied before we take the quorum away (SCYLLADB-3411).
+    log_file = await manager.server_open_log(servers[3].server_id)
+    await log_file.wait_for("transfer snapshot from .* completed", timeout=60)
+
+    follower_host_ids = [str(await manager.get_host_id(srv.server_id)) for srv in servers[1:3]]
+    # Make sure the joining node's failure detector saw the followers alive before we stop
+    # them: a server that dies before its first successful ping is counted dead implicitly
+    # and never logs the "as dead" transition we wait for below.
+    for host_id in follower_host_ids:
+        await log_file.wait_for(f"marking Raft server {host_id} as alive for raft groups", timeout=60)
+    mark = await log_file.mark()
+
     logger.info("stopping the second and third nodes")
     await asyncio.gather(manager.server_stop_gracefully(servers[1].server_id),
                          manager.server_stop_gracefully(servers[2].server_id))
+
+    # Make sure the joining node's failure detector noticed the quorum loss, so the
+    # read_barrier timeout error deterministically carries the no-quorum message.
+    for host_id in follower_host_ids:
+        await log_file.wait_for(f"marking Raft server {host_id} as dead for raft groups",
+                                from_mark=mark, timeout=60)
 
     # Do it here to prevent unexpected timeouts before quorum loss.
     await update_group0_raft_op_timeout(servers[3].server_id, manager, raft_op_timeout)
