@@ -194,6 +194,7 @@ public:
     static constexpr auto RAFT_GROUPS = "raft_groups";
     static constexpr auto RAFT_GROUPS_SNAPSHOTS = "raft_groups_snapshots";
     static constexpr auto RAFT_GROUPS_SNAPSHOT_CONFIG = "raft_groups_snapshot_config";
+    static constexpr auto RAFT_GROUPS_METADATA = "raft_groups_metadata";
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto REPAIR_TASKS = "repair_tasks";
     static constexpr auto GROUP0_HISTORY = "group0_history";
@@ -250,6 +251,7 @@ public:
     static schema_ptr raft_groups();
     static schema_ptr raft_groups_snapshots();
     static schema_ptr raft_groups_snapshot_config();
+    static schema_ptr raft_groups_metadata();
     static schema_ptr repair_history();
     static schema_ptr repair_tasks();
     static schema_ptr group0_history();

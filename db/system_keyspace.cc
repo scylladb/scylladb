@@ -445,6 +445,22 @@ schema_ptr system_keyspace::raft_groups_snapshot_config() {
     return schema;
 }
 
+schema_ptr system_keyspace::raft_groups_metadata() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(db::system_keyspace::NAME, RAFT_GROUPS_METADATA);
+        return schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, RAFT_GROUPS_METADATA, std::optional(id))
+            .with_column("group_id", timeuuid_type, column_kind::partition_key)
+            // Resize phase markers for the Raft group being replaced. Only their presence
+            // matters -- the kind of the resize in progress is carried by the tablet metadata.
+            .with_column("redirect_writes", boolean_type)
+            .with_column("groups_resized", boolean_type)
+            .set_comment("Resize phase markers (redirect_writes, groups_resized) for strongly consistent tablet Raft groups")
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr system_keyspace::repair_history() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, REPAIR_HISTORY);
@@ -2268,7 +2284,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), {sstables_registry()});
 
     if (cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
-        r.insert(r.end(), {raft_groups(), raft_groups_snapshots(), raft_groups_snapshot_config()});
+        r.insert(r.end(), {raft_groups(), raft_groups_snapshots(), raft_groups_snapshot_config(), raft_groups_metadata()});
     }
 
     return r;
