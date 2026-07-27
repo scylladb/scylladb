@@ -241,7 +241,7 @@ advanced_rpc_compressor::~advanced_rpc_compressor() {
 // Note: whenever a backwards-incompatible change to the compressor protocol/format
 // is made, the COMPRESSOR_NAME has to change.
 //
-const static sstring COMPRESSOR_NAME = "SCYLLA_V3";
+const static sstring COMPRESSOR_NAME = "SCYLLA_V4";
 
 compression_algorithm advanced_rpc_compressor::get_algo_for_next_msg(size_t msgsize) {
     auto algo = _control.sender_current_algorithm();
@@ -433,7 +433,7 @@ static rpc_compression_fingerprint get_compression_fingerprint(uint32_t crc, con
 }
 
 rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf data) {
-    const size_t checksum_size = _tracker->_cfg.checksumming.get() ? sizeof(uint32_t) : 0;
+    const size_t checksum_size = _tracker->_cfg.checksumming.get() ? sizeof(uint32_t) + sizeof(std::byte) : 0;
     const uint32_t crc = checksum_size ? crc_impl(data) : -1;
 
     auto now = _tracker->get_steady_nanos();
@@ -450,6 +450,8 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
 
     auto protocol_header = _control.produce_control_header();
     const size_t protocol_header_size = protocol_header ? control_protocol_frame::serialized_size : 0;
+
+    const std::byte dict_id = _control.sender_current_dict().id.content_sha256[0];
 
     auto uncompressed_size = data.size;
     auto compressed = std::invoke([&] {
@@ -472,6 +474,7 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
     dst->get_write()[head_space] = (algo.idx() & 0x3f) | (protocol_header ? 0x80 : 0x00) | (checksum_size ? 0x40 : 0x00);
     if (checksum_size) {
         write_le<uint32_t>(&dst->get_write()[head_space + 1], crc);
+        dst->get_write()[head_space + 1 + sizeof(uint32_t)] = static_cast<char>(dict_id);
     }
     if (protocol_header) {
         auto out_data = reinterpret_cast<std::byte*>(dst->get_write() + head_space + 1 + checksum_size);
@@ -546,8 +549,10 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     const bool has_control_frame = header_byte & 0x80;
 
     uint32_t expected_crc = -1;
+    std::byte expected_dict_id = std::byte(0);
     if (has_checksum) {
         expected_crc = seastar::le_to_cpu(read_from_rcv_buf<uint32_t>(data));
+        expected_dict_id = std::byte(read_from_rcv_buf<uint8_t>(data));
     }
 
     if (has_control_frame) {
@@ -573,6 +578,11 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     });
     if (has_checksum) {
         const uint32_t actual_crc = crc_impl(decompressed);
+        const auto& current_dict_id = _control.receiver_current_dict().id;
+        if (expected_dict_id != current_dict_id.content_sha256[0]) [[unlikely]] {
+            static thread_local logging::logger::rate_limit error_rate_limit(std::chrono::minutes(1));
+            arc_logger.log(log_level::error, error_rate_limit, "RPC compression dict ID mismatch: expected={:#04x}, actual={}", static_cast<int>(expected_dict_id), format_dict_id(current_dict_id));
+        }
         if (expected_crc != actual_crc) [[unlikely]] {
             const auto fingerprint = get_compression_fingerprint(expected_crc, data);
             // Gathering the details below (in particular hashing the dictionary) isn't free,
