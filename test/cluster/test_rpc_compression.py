@@ -14,6 +14,10 @@ from test.cluster.util import new_test_keyspace
 
 import pytest
 import asyncio
+import hashlib
+import os
+import re
+import stat
 import time
 import logging
 import random
@@ -254,3 +258,111 @@ async def test_external_dicts_sanity(manager: ManagerClient) -> None:
             assert compressed < expected_ratio * uncompressed
 
         await with_retries(functools.partial(test_algo, "lz4", 0.04), timeout=600)
+
+@pytest.mark.parametrize("use_dict", [False, True], ids=["null_dict", "trained_dict"])
+async def test_checksum_error_diagnostics(manager: ManagerClient, use_dict: bool, tmp_path) -> None:
+    """Tests that a corruption of a compressed message is diagnosed by the receiver.
+
+    Corrupts a single message on the sender (after it's compressed), and checks that
+    the receiver prints the detailed report about the resulting checksum mismatch,
+    and dumps the offending frame to a file.
+    """
+    cfg = {
+        'internode_compression_enable_advanced': True,
+        'internode_compression': "all",
+        'internode_compression_zstd_max_cpu_fraction': 0.0,
+        'internode_compression_dump_message_on_checksum_error': True,
+        'rpc_dict_training_when': 'when_leader' if use_dict else 'never',
+        'rpc_dict_training_min_bytes': 10000000,
+        'rpc_dict_training_min_time_seconds': 0,
+    }
+    cmdline = [
+        '--logger-log-level=advanced_rpc_compressor=debug',
+        # The checksum mismatch is reported via on_internal_error, which would kill
+        # the node if it was configured to abort on those.
+        '--abort-on-internal-error', '0',
+    ]
+    logger.info(f"Booting initial cluster")
+    servers = await manager.servers_add(servers_num=2, config=cfg, cmdline=cmdline, append_env={"TMPDIR": str(tmp_path)}, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    replication_factor = 2
+    async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}") as ks:
+        await cql.run_async(f"create table {ks}.cf (pk int, v blob, primary key (pk))")
+        write_stmt = cql.prepare(f"update {ks}.cf set v = ? where pk = ?")
+        write_stmt.consistency_level = ConsistencyLevel.ALL
+
+        msg = random.randbytes(8192)
+
+        async def write_messages(n_messages: int = 1000) -> None:
+            await asyncio.gather(*[cql.run_async(write_stmt, parameters=[msg, pk]) for pk in range(n_messages)])
+
+        if use_dict:
+            # Wait until a dict is trained and put to use. Since we are spamming the same
+            # message over and over, a compression ratio this good is only achievable with
+            # a dictionary.
+            async def dict_in_use() -> None:
+                metrics_before = await get_metrics(manager, servers)
+                await write_messages()
+                metrics_after = await get_metrics(manager, servers)
+                uncompressed = uncompressed_sent(metrics_after, "lz4") - uncompressed_sent(metrics_before, "lz4")
+                compressed = compressed_sent(metrics_after, "lz4") - compressed_sent(metrics_before, "lz4")
+                assert compressed < 0.04 * uncompressed
+            await with_retries(dict_in_use, timeout=600)
+
+        # The sender is servers[0], so the mismatch is detected and reported by servers[1].
+        receiver_log = await manager.server_open_log(servers[1].server_id)
+        mark = await receiver_log.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "advanced_rpc_compressor_corrupt_last_byte", one_shot=True)
+
+        write_stmt.consistency_level = ConsistencyLevel.ONE
+        await write_messages(n_messages=1)
+
+        mark, _ = await receiver_log.wait_for("RPC compression checksum error details", from_mark=mark, timeout=120)
+
+        # The dump is written before this message is logged, so by now the file is complete.
+        _, matches = await receiver_log.wait_for(
+            r"Dumped the compressed message which failed checksum validation to (\S+)", from_mark=mark, timeout=120)
+        dump_path = matches[0][1].group(1)
+        tmpdir = str(tmp_path)
+        assert re.fullmatch(re.escape(tmpdir) + r"/scylladb_rpc_checksum_error_dump\.shard_\d+\.bin", dump_path)
+        try:
+            # Only the owner may access the dump. It can contain user data.
+            assert stat.S_IMODE(os.stat(dump_path).st_mode) & 0o077 == 0
+            with open(dump_path, "rb") as f:
+                dump = f.read()
+        finally:
+            os.unlink(dump_path)
+
+        # Parse the dump. See `dump_message()` for the format.
+        pos = 0
+        def take(n: int) -> bytes:
+            nonlocal pos
+            assert pos + n <= len(dump), f"dump truncated at {pos}, wanted {n} more bytes out of {len(dump)}"
+            pos += n
+            return dump[pos - n:pos]
+        def take_be(n: int) -> int:
+            return int.from_bytes(take(n), 'big')
+
+        header_byte = take(1)[0]
+        # Bit 0x40 is the "frame has a checksum" flag. It must be set, or there would
+        # have been no checksum to mismatch.
+        assert header_byte & 0x40
+        expected_crc = take_be(4)
+        actual_crc = take_be(4)
+        assert expected_crc != actual_crc
+        dict_sha256 = take(32)
+        dict_data = take(take_be(8))
+        if use_dict:
+            assert len(dict_data) > 0
+            # The ID stored in the dump must describe the dictionary stored in the dump.
+            assert hashlib.sha256(dict_data).digest() == dict_sha256
+        else:
+            # The null dictionary is empty, and its ID is all zeros.
+            assert len(dict_data) == 0
+            assert dict_sha256 == bytes(32)
+        fragments = []
+        while pos < len(dump):
+            fragments.append(take(take_be(8)))
+        assert sum(len(f) for f in fragments) > 0

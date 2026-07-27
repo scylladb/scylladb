@@ -8,8 +8,16 @@
 
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
+#include <filesystem>
+#include <seastar/util/tmp_file.hh>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include <numeric>
+#include <system_error>
 #include "utils/log.hh"
+#include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/hashers.hh"
 #include "utils/xx_hasher.hh"
 #include "bytes.hh"
@@ -432,6 +440,80 @@ static rpc_compression_fingerprint get_compression_fingerprint(uint32_t crc, con
     };
 }
 
+static void write_all(int fd, std::span<const std::byte> data) {
+    while (!data.empty()) {
+        const ssize_t n = ::write(fd, data.data(), data.size());
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            throw std::system_error(errno, std::system_category(), "write");
+        }
+        data = data.subspan(n);
+    }
+}
+
+// Dumps a compressed frame together with the dictionary it used to a file in the
+// temporary directory, for offline investigation.
+//
+// This is just a diagnostic aid, so any failure is logged and otherwise ignored.
+// It must never bring the node down.
+template <RpcBuf Buf>
+static void dump_message(
+    std::string_view path_filename,
+    std::string_view description,
+    uint8_t header_byte,
+    uint32_t expected_crc,
+    uint32_t actual_crc,
+    const shared_dict& dict,
+    const Buf& data,
+    size_t payload_offset
+) {
+    const auto path = fmt::format("{}/{}.shard_{}.bin", seastar::default_tmpdir().native(), path_filename, this_shard_id());
+    int fd = -1;
+    auto close_fd = defer([&fd] noexcept {
+        if (fd >= 0) {
+            ::close(fd);
+        }
+    });
+    try {
+        // Recreate the file from scratch, so that we are sure about its permissions.
+        if (::unlink(path.c_str()) < 0 && errno != ENOENT) {
+            throw std::system_error(errno, std::system_category(), "unlink");
+        }
+        fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, S_IRUSR | S_IWUSR);
+        if (fd < 0) {
+            throw std::system_error(errno, std::system_category(), "open");
+        }
+
+        // The message can be arbitrarily big, so we stream it out fragment by fragment
+        // instead of gluing it into one contiguous buffer.
+        auto write_be = [&fd] <std::integral T> (T x) {
+            std::array<char, sizeof(T)> buf;
+            seastar::write_be<T>(buf.data(), x);
+            write_all(fd, std::as_bytes(std::span(buf)));
+        };
+
+        write_be(header_byte);
+        write_be(expected_crc);
+        write_be(actual_crc);
+        write_all(fd, dict.id.content_sha256);
+        write_be(uint64_t(dict.data.size()));
+        write_all(fd, dict.data);
+        for_each_rpc_buf_fragment(data, payload_offset, [&] (std::span<const std::byte> fragment) {
+            write_be(uint64_t(fragment.size()));
+            write_all(fd, fragment);
+        });
+
+        if (::close(std::exchange(fd, -1)) < 0) {
+            throw std::system_error(errno, std::system_category(), "close");
+        }
+        arc_logger.warn("Dumped {} to {}", description, path);
+    } catch (...) {
+        arc_logger.error("Failed to dump {} to {}: {}", description, path, std::current_exception());
+    }
+}
+
 rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf data) {
     const size_t checksum_size = _tracker->_cfg.checksumming.get() ? sizeof(uint32_t) + sizeof(std::byte) : 0;
     const uint32_t crc = checksum_size ? crc_impl(data) : -1;
@@ -481,6 +563,28 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
         constexpr size_t out_size = control_protocol_frame::serialized_size;
         auto out = std::span<std::byte, out_size>(out_data, out_size);
         protocol_header->serialize(out);
+    }
+
+    // Emulates a corruption of the message somewhere between the compressor and the
+    // decompressor, to let tests exercise the checksum validation path on the receiver.
+    // An empty message carries no compressed payload, so there is nothing to corrupt in it.
+    if (uncompressed_size > 0) {
+        utils::get_local_injector().inject("advanced_rpc_compressor_corrupt_last_byte", [&] {
+            auto* frags = std::get_if<temporary_buffer<char>>(&compressed.bufs);
+            size_t n_frags = 1;
+            if (!frags) {
+                auto& vec = std::get<std::vector<temporary_buffer<char>>>(compressed.bufs);
+                frags = vec.data();
+                n_frags = vec.size();
+            }
+            // The last fragment can be empty, so we look for the last one which isn't.
+            while (n_frags > 0 && frags[n_frags - 1].empty()) {
+                --n_frags;
+            }
+            SCYLLA_ASSERT(n_frags > 0);
+            auto& last = frags[n_frags - 1];
+            last.get_write()[last.size() - 1] ^= 0xff;
+        });
     }
 
     stats.bytes_sent += uncompressed_size;
@@ -602,6 +706,17 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
             static thread_local logging::logger::rate_limit dump_rate_limit(std::chrono::minutes(1));
             if (!dump_rate_limit.rate_limited()) {
                 arc_logger.error("sha256 recomputed from the contents of the dictionary used for decompression: {}", fmt_hex(get_sha256(_control.receiver_current_dict().data)));
+                if (_tracker->_cfg.dump_message_on_checksum_error.get()) {
+                    dump_message(
+                        "scylladb_rpc_checksum_error_dump",
+                        "the compressed message which failed checksum validation",
+                        header_byte,
+                        expected_crc,
+                        actual_crc,
+                        _control.receiver_current_dict(),
+                        data,
+                        0);
+                }
             }
             seastar::on_internal_error(arc_logger, fmt::format("RPC compression checksum error (expected: {:x}, got: {:x}). This indicates a bug. Set `internode_compression: none` and restart the nodes to regain stability, then report the bug.", expected_crc, actual_crc));
         }

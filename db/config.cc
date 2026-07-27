@@ -1184,6 +1184,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If this happens, this option can be used to make the stalls less severe.")
     , internode_compression_checksumming(this, "internode_compression_checksumming", liveness::LiveUpdate, value_status::Used, true,
         "Computes and checks checksums for compressed RPC frames. This is a paranoid precaution against corruption bugs in the compression protocol.")
+    , internode_compression_dump_message_on_checksum_error(this, "internode_compression_dump_message_on_checksum_error", liveness::LiveUpdate, value_status::Used, false,
+        "When internode_compression_checksumming detects a checksum violation, dump the bad message to a file in TMPDIR. For debug usage by Scylla developers.")
     , internode_compression_algorithms(this, "internode_compression_algorithms", liveness::LiveUpdate, value_status::Used,
             { netw::compression_algorithm::type::ZSTD, netw::compression_algorithm::type::LZ4, },
         "Specifies RPC compression algorithms supported by this node. ")

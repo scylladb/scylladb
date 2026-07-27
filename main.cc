@@ -1654,6 +1654,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .algo_config = cfg->internode_compression_algorithms,
                     .register_metrics = cfg->internode_compression_enable_advanced(),
                     .checksumming = cfg->internode_compression_checksumming,
+                    .dump_message_on_checksum_error = cfg->internode_compression_dump_message_on_checksum_error,
                 };
             };
             static sharded<netw::walltime_compressor_tracker> compressor_tracker;

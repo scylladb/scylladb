@@ -276,6 +276,10 @@ public:
         utils::updateable_value<algo_config> algo_config{{compression_algorithm::type::ZSTD, compression_algorithm::type::LZ4}};
         bool register_metrics = false;
         utils::updateable_value<bool> checksumming{true};
+        // Enables dumping extra diagnostic data to files in the temporary directory,
+        // so that compression bugs can be investigated offline.
+        // Currently, this only covers frames which fail checksum validation.
+        utils::updateable_value<bool> dump_message_on_checksum_error{false};
     };
 private:
     friend advanced_rpc_compressor;
