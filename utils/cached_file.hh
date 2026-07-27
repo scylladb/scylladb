@@ -19,6 +19,7 @@
 #include "utils/cached_file_stats.hh"
 
 #include <seastar/core/file.hh>
+#include <seastar/core/layered_file.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
 using namespace seastar;
@@ -582,7 +583,7 @@ void cached_file::cached_page::on_evicted() noexcept {
     });
 }
 
-class cached_file_impl : public file_impl {
+class cached_file_impl : public layered_file_impl {
     cached_file& _cf;
     tracing::trace_state_ptr _trace_state;
 private:
@@ -591,7 +592,7 @@ private:
     }
 public:
     cached_file_impl(cached_file& cf, tracing::trace_state_ptr trace_state = {})
-        : file_impl(*get_file_impl(cf.get_file()))
+        : layered_file_impl(cf.get_file())
         , _cf(cf)
         , _trace_state(std::move(trace_state))
     { }
