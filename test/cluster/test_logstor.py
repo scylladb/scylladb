@@ -461,23 +461,27 @@ async def test_drop_table(manager: ManagerClient):
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_table_during_logstor_compaction(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'debug_error_injection=debug', '--smp=1']
-    cfg = {'experimental_features': ['logstor']}
+    cfg = {
+        'experimental_features': ['logstor'],
+        'logstor_disk_size_in_mb': 8,
+        'logstor_file_size_in_mb': 8,
+    }
     server = await manager.server_add(cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
     inj = 'logstor_compaction_wait_before_remove_segments'
 
-    async with new_test_keyspace(manager, "") as ks:
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
 
         value_size = 30 * 1024
         base_value = 'a' * value_size
         overwritten_value = 'b' * value_size
 
-        for i in range(20):
+        for i in range(10):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{base_value}')")
 
         for _ in range(4):
-            for i in range(10):
+            for i in range(5):
                 await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{overwritten_value}')")
 
         await manager.api.logstor_flush(server.ip_addr)

@@ -7,6 +7,8 @@ extra_scylla_config_options:
     enable_user_defined_functions: False
     rf_rack_valid_keyspaces: True
     tablets_mode_for_new_keyspaces: enabled
+    logstor_disk_size_in_mb: 8
+    logstor_file_size_in_mb: 4
 run_first:
   - test_group0_schema_versioning
   - test_tablets_migration
