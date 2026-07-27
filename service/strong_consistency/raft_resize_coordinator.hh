@@ -51,6 +51,10 @@ future<> apply_resize_mutation(replica::database& db, const frozen_mutation& m, 
 // Persisted in system.raft_groups_metadata and driven by applying the resize phase markers to
 // the parent's Raft log.
 //
+// Committing those two markers is what "sealing" the group being resized means: after
+// redirect_writes new writes go to the groups replacing it, and after groups_resized its log
+// is final. A replica has sealed the group once it applied groups_resized.
+//
 // The state exists on a replica from the moment it learns that the group is being resized -
 // whichever comes first out of observing the resize in the tablet metadata, starting one of the
 // groups replacing it, or replaying its log after a restart. Code which already established
@@ -62,6 +66,10 @@ struct raft_resize_state {
     // The groups replacing the one being resized, as announced in the tablet metadata. Fixed
     // for the lifetime of a resize.
     std::vector<raft::group_id> new_gids;
+
+    // Set once the redirect_writes marker has been committed in the parent's log, i.e. once new
+    // writes are routed to the group(s) replacing it. Never cleared.
+    bool redirect_writes = false;
 
     // Resolved once the groups_resized mutation has been applied on this replica. The appliers
     // of the new groups block on this promise until it is set, at which point all the entries
@@ -111,9 +119,19 @@ public:
     // this for a group which is_resizing() doesn't hold for.
     raft_resize_state& get_resize_state(raft::group_id parent_gid);
 
+    // Used to "apply" the redirect_writes mutation before the applier fiber reaches it.
+    // This is safe if the redirect_writes mutation is already committed in the parent's log, 
+    // because it will never be rolled back - we apply all committed entries on restart and
+    // no other operation can remove the redirect_writes marker from the parent's log.
+    void fast_forward_redirect_writes(raft::group_id parent_gid);
+
     // Returns the parent group of `child_gid`, or nullopt if it is not one of the groups
     // replacing another one.
     std::optional<raft::group_id> get_parent_group(raft::group_id child_gid) const;
+
+    // Returns true once the writes of the given group are redirected to the groups replacing
+    // it. False if it is not being resized at all.
+    bool should_redirect_writes(raft::group_id parent_gid) const;
 
     // TODO(merge): a tablet merge has two parents per child, so this will have to return a
     // future which resolves once *all* parents applied groups_resized.

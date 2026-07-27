@@ -68,15 +68,20 @@ future<> raft_resize_coordinator::reload_group_resize_state(raft::group_id paren
     // from its own log, so this is also the point where a restarting replica learns about it.
     auto& state = _resize_states[parent_gid];
 
-    static const auto load_cql = format("SELECT groups_resized FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT_GROUPS_METADATA);
+    static const auto load_cql = format("SELECT redirect_writes, groups_resized FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT_GROUPS_METADATA);
     auto rs = co_await _sys_ks.query_processor().execute_internal(load_cql, {parent_gid.id}, cql3::query_processor::cache_internal::yes);
     if (rs->empty()) {
         // No marker applied yet, the resize is still in its first phase.
         co_return;
     }
 
-    // Only the presence of the marker matters.
+    // Only the presence of the markers matters. Both are monotonic: reloading must never undo
+    // a redirect_writes which fast_forward_redirect_writes() set ahead of its own apply.
     const auto& row = rs->one();
+    if (row.has("redirect_writes") && !state.redirect_writes) {
+        logger.debug("group {}: redirect_writes applied, writes are now served by the new groups", parent_gid);
+        state.redirect_writes = true;
+    }
     if (row.has("groups_resized") && !state.groups_resized.available()) {
         logger.debug("group {}: groups_resized applied, unblocking the appliers of the new groups", parent_gid);
         state.groups_resized.set_value();
@@ -114,12 +119,25 @@ raft_resize_state& raft_resize_coordinator::get_resize_state(raft::group_id pare
     return it->second;
 }
 
+void raft_resize_coordinator::fast_forward_redirect_writes(raft::group_id parent_gid) {
+    auto it = _resize_states.find(parent_gid);
+    if (it == _resize_states.end()) {
+        on_internal_error(logger, format("no resize state for group {}", parent_gid));
+    }
+    it->second.redirect_writes = true;
+}
+
 std::optional<raft::group_id> raft_resize_coordinator::get_parent_group(raft::group_id child_gid) const {
     auto it = _child_to_parent.find(child_gid);
     if (it != _child_to_parent.end()) {
         return it->second;
     }
     return std::nullopt;
+}
+
+bool raft_resize_coordinator::should_redirect_writes(raft::group_id parent_gid) const {
+    auto it = _resize_states.find(parent_gid);
+    return it != _resize_states.end() && it->second.redirect_writes;
 }
 
 std::optional<shared_future<>> raft_resize_coordinator::get_parent_finished_future(raft::group_id child_gid) const {

@@ -10,6 +10,7 @@
 
 #include "mutation/mutation.hh"
 #include "query/query-result.hh"
+#include "raft/raft.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -79,7 +80,8 @@ private:
     future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema,
         const dht::token& token,
         abort_source& as,
-        bool use_leader_cache);
+        bool use_leader_cache,
+        std::optional<raft::group_id> redirect_group = std::nullopt);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper);
 

@@ -129,6 +129,12 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
     return ok{};
 }
 
+void raft_server::advance_leader_timestamp(api::timestamp_type ts) {
+    if (_state.leader_info) {
+        _state.leader_info->last_timestamp = std::max(_state.leader_info->last_timestamp, ts);
+    }
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
@@ -583,6 +589,35 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
         return raft_server(state, std::move(h));
     });
+}
+
+bool groups_manager::should_redirect_writes(raft::group_id group_id) const {
+    return _resize_coordinator.should_redirect_writes(group_id);
+}
+
+raft::group_id groups_manager::group_for_redirect(schema_ptr s, const dht::token& token) const {
+    const auto& tablet_map = s->table().get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(s->id());
+    if (!tablet_map.has_raft_info()) {
+        on_internal_error(logger, format("group_for_redirect: table {} does not have raft info", s->id()));
+    }
+    const auto tablet_id = tablet_map.get_tablet_id(token);
+    if (!tablet_map.is_resizing(tablet_id)) {
+        on_internal_error(logger, format("group_for_redirect: tablet {} is not resizing", tablet_id));
+    }
+    const auto& resize_info = tablet_map.get_raft_resize_info(tablet_id);
+    switch (resize_info.kind) {
+    case locator::raft_resize_kind::split:
+        // The child covering the lower half of the parent's range owns tokens up to and
+        // including the split token.
+        return token <= tablet_map.get_split_token(tablet_id)
+                ? resize_info.left_gid() : resize_info.right_gid();
+    case locator::raft_resize_kind::merge:
+        // All the parents are merged into a single group, which owns every token of each of
+        // them.
+        return resize_info.new_gids.at(0);
+    }
+    on_internal_error(logger, format("group_for_redirect: invalid resize kind {}",
+            static_cast<int>(resize_info.kind)));
 }
 
 void groups_manager::start() {
