@@ -335,6 +335,39 @@ struct tablet_raft_info {
     bool operator==(const tablet_raft_info&) const = default;
 };
 
+/// The kind of resize a strongly-consistent tablet is undergoing.
+enum class raft_resize_kind : uint8_t {
+    split,
+    merge,
+};
+
+/// The names are persisted in system tables so should not be changed.
+sstring raft_resize_kind_to_name(raft_resize_kind);
+raft_resize_kind raft_resize_kind_from_name(std::string_view);
+
+/// Raft-related information about a strongly-consistent tablet which is undergoing a resize.
+/// Holds the group ids of the Raft groups which will replace the current one. Present only for
+/// the duration of the resize (between the resize decision and the tablet-map replacement).
+struct raft_resize_info {
+    raft_resize_kind kind = raft_resize_kind::split;
+    /// For a split: the left and right child groups, in this order.
+    /// For a merge: the single group all the parents are merged into.
+    utils::small_vector<raft::group_id, 2> new_gids;
+
+    bool operator==(const raft_resize_info&) const = default;
+
+    /// Raft group of the child owning the lower half of the parent's token range.
+    /// Valid only for a split.
+    raft::group_id left_gid() const {
+        return new_gids.at(0);
+    }
+    /// Raft group of the child owning the upper half of the parent's token range.
+    /// Valid only for a split.
+    raft::group_id right_gid() const {
+        return new_gids.at(1);
+    }
+};
+
 // Merges tablet_info b into a, but with following constraints:
 //  - they cannot have active repair task, since each task has a different id
 //  - their replicas must be all co-located.
@@ -748,6 +781,7 @@ public:
     struct initialized_later {};
 private:
     using transitions_map = std::unordered_map<tablet_id, tablet_transition_info>;
+    using raft_resize_map = std::unordered_map<tablet_id, raft_resize_info>;
     tablet_id_map _tablet_ids;
     tablet_container _tablets;
     transitions_map _transitions;
@@ -755,6 +789,9 @@ private:
     tablet_task_info _resize_task_info;
     std::optional<repair_scheduler_config> _repair_scheduler_config;
     raft_info_container _raft_info;
+    // Set only for strongly-consistent tablets currently being resized.
+    // Maps the tablet_id to the ids of the Raft groups which will replace its group.
+    raft_resize_map _raft_resizes;
     size_t _target_pow2_tablet_count = 0; // 0 means no convergence in progress
 
     // Internal constructor, used by clone() and clone_gently().
@@ -765,6 +802,7 @@ private:
                tablet_task_info resize_task_info,
                std::optional<repair_scheduler_config> repair_scheduler_config,
                raft_info_container raft_info,
+               raft_resize_map raft_resizes,
                size_t target_pow2_tablet_count)
         : _tablet_ids(std::move(ids))
         , _tablets(std::move(tablets))
@@ -773,6 +811,7 @@ private:
         , _resize_task_info(std::move(resize_task_info))
         , _repair_scheduler_config(std::move(repair_scheduler_config))
         , _raft_info(std::move(raft_info))
+        , _raft_resizes(std::move(raft_resizes))
         , _target_pow2_tablet_count(target_pow2_tablet_count)
     {}
 public:
@@ -838,6 +877,14 @@ public:
     /// Returns Raft information for the given tablet_id.
     /// It is an internal error to call this method if has_raft_info() returns false.
     const tablet_raft_info& get_tablet_raft_info(tablet_id) const;
+
+    /// Returns true if the given tablet is currently being resized, i.e. it has
+    /// associated replacement Raft group ids in _raft_resizes.
+    bool is_resizing(tablet_id) const;
+
+    /// Returns the replacement Raft group ids for a resizing tablet.
+    /// It is an internal error to call this method if is_resizing() returns false.
+    const raft_resize_info& get_raft_resize_info(tablet_id) const;
 
     /// Returns the largest token owned by a given tablet.
     /// \throws std::logic_error If the given id does not belong to this instance.
@@ -966,6 +1013,8 @@ public:
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
     void set_tablet_raft_info(tablet_id, tablet_raft_info);
+    void set_raft_resize_info(tablet_id, raft_resize_info);
+    void clear_raft_resize_info(tablet_id);
 
     // Destroys gently.
     // The tablet map is not usable after this call and should be destroyed.
