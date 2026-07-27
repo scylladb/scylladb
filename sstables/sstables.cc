@@ -1646,7 +1646,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         // The rest of the sstable is hard-linked and its scylla_metadata is carried over.
         new_sst->mark_created_by_component_rewrite();
 
-        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}).get();
+        _storage->link_with_excluded_components(*this, generation, {component, component_type::Scylla}, {}).get();
         new_sst->copy_components(*this).get();
 
         modifier(*new_sst);
