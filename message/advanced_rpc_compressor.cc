@@ -377,7 +377,7 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
         try {
             return compress_impl(head_space + 1 + checksum_size + protocol_header_size, std::move(data), get_compressor(algo), true, rpc::snd_buf::chunk_size);
         } catch (...) {
-            arc_logger.error("Error during decompression with algorithm {}: {}. ", algo.name(), std::current_exception());
+            arc_logger.error("Error during compression with algorithm {}: {}. ", algo.name(), std::current_exception());
             throw;
         }
     });
@@ -460,7 +460,7 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
         try {
             return decompress_impl(data, get_decompressor(algo), true, rpc::snd_buf::chunk_size);
          } catch (...) {
-            arc_logger.error("Error during compression with algorithm {}: {}. ", algo.name(), std::current_exception());
+            arc_logger.error("Error during decompression with algorithm {}: {}. ", algo.name(), std::current_exception());
             throw;
         }
     });
