@@ -65,7 +65,7 @@ async def test_perf_cql_raw(scylla_path, tmp_path, workload):
          await hosts.release_host(host)
 
 
-@pytest.mark.parametrize("workload", ["write"])
+@pytest.mark.parametrize("workload", ["write", "batch_read"])
 async def test_perf_alternator(scylla_path, tmp_path, workload):
     hosts = HostRegistry()
     host = await hosts.lease_host()
@@ -115,7 +115,7 @@ async def test_perf_cql_raw_remote(scylla_path, tmp_path, workload, manager):
     await run(client_cmd)
 
 
-@pytest.mark.parametrize("workload", ["read"])
+@pytest.mark.parametrize("workload", ["read", "batch_read"])
 async def test_perf_alternator_remote(scylla_path, tmp_path, workload, manager):
     server = await manager.server_add(cmdline=[
         "--alternator-port", "8000",
