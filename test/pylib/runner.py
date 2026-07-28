@@ -46,6 +46,7 @@ from test.pylib.scylla_cluster import (
     ScyllaServer,
     get_current_version_description,
     merge_cmdline_options,
+    run_teardown_callbacks,
 )
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
@@ -880,6 +881,9 @@ def create_suite_pool(suite_config: TestSuiteConfig,
            these if it came from a failed test.
         """
         await cluster.stop()
+        # The cluster is down, so a callback may now dispose of a resource the
+        # servers were using without racing against them.
+        await run_teardown_callbacks(logger)
         for srv in cluster.servers.values():
             if srv.log_file is not None:
                 srv.log_file.close()

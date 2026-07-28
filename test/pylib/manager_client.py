@@ -21,7 +21,7 @@ from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
 from test.pylib.util import gather_safely, wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
-from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer, ScyllaVersionDescription
+from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer, ScyllaVersionDescription, add_teardown_callback
 from test.pylib.driver_utils import safe_driver_shutdown
 from cassandra.cluster import Session as CassandraSession, \
     ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore # pylint: disable=no-name-in-module
@@ -192,6 +192,29 @@ class ManagerClient:
 
         return cluster_status
     
+    def on_teardown(self, callback: Callable[[], Any]) -> None:
+        """Register a callback to run once the cluster used by this test has
+        been stopped.
+
+        The callbacks fire from recycle_cluster(), which the pool reaches when
+        the cluster is dropped -- at the start of the next test case, or when
+        the suite's manager stops.  They therefore run against a cluster that
+        is down, and may dispose of a resource it was using without racing
+        against it: an object-storage bucket that an in-flight tablet
+        migration could otherwise still read from (SCYLLADB-2471).
+
+        Two consequences of firing that late are worth knowing.  The resource
+        the callback disposes of has to stay alive past the fixture that
+        created it, and a failure inside a callback is reported against the
+        test case that triggered the recycle, not the one that registered it.
+
+        Callbacks fire in LIFO order; both plain callables and coroutine
+        functions are accepted.  Register them from a fixture rather than from
+        a test body, so that a coroutine is handed back to a loop that is still
+        alive when it is awaited.
+        """
+        add_teardown_callback(callback)
+
     async def check_all_errors(self, check_all_errors=False) -> dict[ServerInfo, dict[str, Union[list[str], list[str], Path, list[str]]]]:
         
         errors = defaultdict(dict)
