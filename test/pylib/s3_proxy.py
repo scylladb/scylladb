@@ -185,7 +185,16 @@ class InjectingHandler(BaseHTTPRequestHandler):
             if policy.should_forward:
                 target_url = self.minio_uri + self.path
                 headers = {key: value for key, value in self.headers.items()}
-                response = requests.request(self.command, target_url, headers=headers, data=body)
+                try:
+                    response = requests.request(self.command, target_url, headers=headers, data=body)
+                except requests.exceptions.RequestException as e:
+                    # Forwarding to minio failed (e.g. connection reset while minio is under
+                    # load from concurrent requests). Nothing has been written to the client
+                    # yet, so respond with a well-formed retryable error instead of letting the
+                    # client hang until it eventually observes a bare connection drop.
+                    self.logger.warning("Failed to forward request to %s: %s", target_url, e)
+                    self.respond_with_error(reset_connection=False)
+                    return
 
             if policy.should_fail:
                 policy.error_count += 1
