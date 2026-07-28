@@ -7,6 +7,7 @@ extra_scylla_config_options:
     enable_user_defined_functions: False
     rf_rack_valid_keyspaces: True
     tablets_mode_for_new_keyspaces: enabled
+    force_effective_capacity_to_raw_disk_capacity: True
 run_first:
   - test_group0_schema_versioning
   - test_tablets_migration
