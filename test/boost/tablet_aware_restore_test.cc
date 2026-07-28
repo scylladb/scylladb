@@ -301,7 +301,14 @@ using namespace sstables;
 
 future<sstring> backup(cql_test_env& env, sstring endpoint, sstring bucket) {
     sharded<db::snapshot_ctl> ctl;
-    co_await ctl.start(std::ref(env.db()), std::ref(env.get_storage_proxy()), std::ref(env.get_task_manager()), std::ref(env.get_sstorage_manager()), db::snapshot_ctl::config{});
+    co_await ctl.start(std::ref(env.db())
+        , std::ref(env.get_storage_proxy())
+        , std::ref(env.qp())
+        , std::ref(env.get_messaging_service())
+        , std::ref(env.get_task_manager())
+        , std::ref(env.get_sstorage_manager())
+        , db::snapshot_ctl::config{}
+    );
     auto prefix = fmt::format("/backup-{}", utils::UUID_gen::get_time_UUID());
 
     auto task_id = co_await ctl.local().start_backup(endpoint, bucket, prefix, "ks", "cf", "snapshot", false);

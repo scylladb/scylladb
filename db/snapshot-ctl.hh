@@ -18,16 +18,27 @@
 #include <seastar/core/future.hh>
 #include "replica/database_fwd.hh"
 #include "tasks/task_manager.hh"
+#include "sstables/types.hh"
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
 
 using namespace seastar;
 
+namespace netw { class messaging_service; }
 namespace sstables { class storage_manager; }
 namespace service { class storage_proxy; }
 
+namespace dht {
+class token;
+}
+
+namespace cql3 {
+class query_processor;
+}
 namespace db {
+
+struct snapshot_dc_location;
 
 namespace snapshot {
 
@@ -65,11 +76,15 @@ public:
 
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
 
-    snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>&, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
+    snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>& sp, sharded<cql3::query_processor>& qp, netw::messaging_service& ms, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
 
     future<> stop();
 
     sharded<replica::database>& db() { return _db; };
+    sharded<service::storage_proxy>& sp() { return _sp; }
+    sharded<cql3::query_processor>& qp() { return _qp; }
+    netw::messaging_service& ms() { return _ms; }
+    sstables::storage_manager& sstm() { return _storage_manager; }
 
     /**
      * Takes the snapshot for all keyspaces. A snapshot name must be specified.
@@ -122,6 +137,8 @@ public:
     future<int64_t> true_snapshots_size();
     future<int64_t> true_snapshots_size(sstring ks, sstring cf);
 
+    future<tasks::task_id> start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files);
+
     future<> disable_all_operations();
 
     // Must be called on shard 0
@@ -132,10 +149,16 @@ public:
     // within the given scope.
     // Must be called on shard 0
     void cancel_expiration(sstring tag, std::vector<sstring> ks_names = {}, sstring table_name = "");
+
+    future<> run_snapshot_modify_operation(noncopyable_function<future<>()>&&);
+    future<> run_snapshot_gate_operation(noncopyable_function<future<>()>&&);
+
 private:
     config _config;
     sharded<replica::database>& _db;
     sharded<service::storage_proxy>& _sp;
+    sharded<cql3::query_processor>& _qp;
+    netw::messaging_service& _ms;
     seastar::rwlock _lock;
     seastar::named_gate _ops;
     shared_ptr<snapshot::task_manager_module> _task_manager_module;
@@ -159,8 +182,6 @@ private:
     // matches a column family.
     sstring resolve_table_name(const sstring& ks_name, const sstring& name) const;
 
-    future<> run_snapshot_modify_operation(noncopyable_function<future<>()> &&);
-
     template <typename Func>
     std::invoke_result_t<Func> run_snapshot_list_operation(Func&& f) {
         return with_gate(_ops, [f = std::move(f), this] () {
@@ -177,6 +198,7 @@ private:
     future<> do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
 
     future<> delete_expired_snapshots();
+    future<> backup_sstables(table_id, std::string, std::string, std::string, std::string, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
 };
 
 }

@@ -562,6 +562,10 @@ public:
         return _db.local();
     }
 
+    const locator::shared_token_metadata& shared_token_metadata() const {
+        return _shared_token_metadata;
+    }
+
     void set_cdc_service(cdc::cdc_service* cdc) {
         _cdc = cdc;
     }

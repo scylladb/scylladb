@@ -41,6 +41,8 @@ target_sources(db
     view/view_building_task_mutation_builder.cc
     snapshot-ctl.cc
     snapshot/backup_task.cc
+    snapshot/manifest.cc
+    snapshot/cluster_backup.cc
     rate_limiter.cc
     per_partition_rate_limit_options.cc
     row_cache.cc
