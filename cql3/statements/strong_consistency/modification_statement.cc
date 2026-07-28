@@ -68,12 +68,6 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
     if (keys.size() != 1 || !query::is_single_partition(keys[0])) {
         throw exceptions::invalid_request_exception("Strongly consistent queries can only target a single partition");
     }
-    if (_statement->requires_read()) {
-        throw exceptions::invalid_request_exception("Strongly consistent updates don't support data prefetch");
-    }
-    if (_statement->is_timestamp_set()) {
-        throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
-    }
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
     const auto token = keys[0].start()->value().token();
