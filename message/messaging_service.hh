@@ -486,7 +486,6 @@ public:
         return _connection_dropped.connect(slot);
     }
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
-    static msg_addr get_source(const rpc::client_info& client);
     scheduling_group scheduling_group_for_verb(messaging_verb verb) const;
     future<scheduling_group> scheduling_group_for_isolation_cookie(const sstring& isolation_cookie) const;
     std::vector<messaging_service::scheduling_info_for_connection_index> initial_scheduling_info() const;

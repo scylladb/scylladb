@@ -604,13 +604,6 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     init_feature_listeners();
 }
 
-msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
-    return msg_addr{
-        cinfo.retrieve_auxiliary<gms::inet_address>("baddr"),
-        cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id")
-    };
-}
-
 messaging_service::~messaging_service() = default;
 
 static future<> do_with_servers(std::string_view what, std::array<std::unique_ptr<messaging_service::rpc_protocol_server_wrapper>, 2>& servers, auto method) {

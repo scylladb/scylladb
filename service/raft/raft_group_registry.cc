@@ -92,7 +92,7 @@ raft_group_registry::raft_group_registry(
 
 void raft_group_registry::init_rpc_verbs() {
     auto handle_raft_rpc = [this] (
-            const rpc::client_info& cinfo,
+            const rpc::client_info&,
             const raft::group_id& gid, raft::server_id from, raft::server_id dst, auto handler) {
         constexpr bool is_one_way = std::is_void_v<std::invoke_result_t<decltype(handler), raft_rpc&>>;
         if (_my_id != dst) {
@@ -105,7 +105,7 @@ void raft_group_registry::init_rpc_verbs() {
         }
 
         return container().invoke_on(shard_for_group(gid),
-                [addr = netw::messaging_service::get_source(cinfo).addr, gid, handler] (raft_group_registry& self) mutable {
+                [gid, handler] (raft_group_registry& self) mutable {
             auto& rpc = self.get_rpc(gid);
             // Execute the actual message handling code
             if constexpr (is_one_way) {
