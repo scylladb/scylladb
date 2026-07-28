@@ -7,6 +7,15 @@ extra_scylla_config_options:
     enable_user_defined_functions: False
     rf_rack_valid_keyspaces: True
     tablets_mode_for_new_keyspaces: enabled
+<<<<<<< HEAD
+||||||| parent of 306e41c2ee (test/cluster: stabilize tablet merge tests by forcing raw disk capacity)
+    logstor_disk_size_in_mb: 8
+    logstor_file_size_in_mb: 4
+=======
+    logstor_disk_size_in_mb: 8
+    logstor_file_size_in_mb: 4
+    force_effective_capacity_to_raw_disk_capacity: True
+>>>>>>> 306e41c2ee (test/cluster: stabilize tablet merge tests by forcing raw disk capacity)
 run_first:
   - test_group0_schema_versioning
   - test_tablets_migration
