@@ -465,6 +465,8 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
 
     std::vector<cql3::statements::batch_statement::single_statement> statements;
     statements.reserve(_parsed_statements.size());
+    std::vector<std::reference_wrapper<const audit::audit_info>> batch_audit_infos;
+    batch_audit_infos.reserve(_parsed_statements.size());
 
     for (auto&& parsed : _parsed_statements) {
         if (!first_ks) {
@@ -474,11 +476,12 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
             have_multiple_cfs |= first_ks.value() != parsed->keyspace();
             have_multiple_cfs |= first_cf.value() != parsed->column_family();
         }
-        statements.emplace_back(parsed->prepare(db, meta, stats));
-        auto audit_info = statements.back().statement->get_audit_info();
-        if (audit_info) {
+        auto statement = parsed->prepare(db, meta, stats);
+        if (auto* audit_info = statement->get_audit_info()) {
             audit_info->set_query_string(parsed->get_raw_cql());
+            batch_audit_infos.emplace_back(*audit_info);
         }
+        statements.emplace_back(std::move(statement));
     }
 
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
@@ -490,7 +493,13 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
     if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
         partition_key_bind_indices = meta.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
     }
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
+
+    auto ai = audit_info();
+    if (ai) {
+        ai->set_batch_infos(std::move(batch_audit_infos));
+    }
+
+    return std::make_unique<prepared_statement>(std::move(ai), make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
                                                      meta.get_variable_specifications(),
                                                      std::move(partition_key_bind_indices));
 }
