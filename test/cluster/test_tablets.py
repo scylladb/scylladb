@@ -192,6 +192,20 @@ async def test_stop_reshape_aborts_all_compaction_groups(manager: ManagerClient)
             logger.info("Waiting for reshape to hit the injection point")
             await manager.api.wait_for_injection_enter(server.ip_addr, injection,
                                                        threshold=1, deadline=time.time() + 60)
+            async def reshape_tasks_registered():
+                compactions = await manager.api.client.get_json("/compaction_manager/compactions", host=server.ip_addr)
+                reshapes = [
+                    c for c in compactions
+                    if c["task_type"] == "RESHAPE"
+                    and c["ks"] in [ks1, ks2]
+                    and c["cf"] == "test"
+                ]
+                return True if len(reshapes) >= 2 else None
+
+            await wait_for(
+                reshape_tasks_registered,
+                time.time() + 60,
+                label="registered reshape compactions")
 
             logger.info("Stopping RESHAPE globally and releasing injection")
             stop_task = asyncio.create_task(manager.api.stop_compaction(server.ip_addr, "RESHAPE"))
