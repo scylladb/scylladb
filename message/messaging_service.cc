@@ -19,6 +19,7 @@
 #include <seastar/coroutine/all.hh>
 
 #include "message/messaging_service.hh"
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/sharded.hh>
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
@@ -1091,7 +1092,10 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 
         if (it != clients[idx].end()) {
             auto c = it->second.rpc_client;
-            if (!c->error()) {
+            // A client whose CLIENT_ID handshake failed is unusable (the peer
+            // never learned who we are); treat it like an errored one so a
+            // fresh connection is created right away.
+            if (!c->error() && !c->client_id_sent().failed()) {
                 return c;
             }
             // The 'dead_only' it should be true, because we're interested in
@@ -1231,8 +1235,13 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         client = it->second.rpc_client;
     }
     uint32_t src_cpu_id = this_shard_id();
-    // No reply is received, nothing to wait for.
-    (void)[&] () -> future<> {
+    // The CLIENT_ID handshake must reach the peer before any other verb on
+    // this connection: its handler attaches the sender identity (host_id etc.)
+    // that handlers of subsequent verbs rely on. Publish the send future on
+    // the client so senders can detect a synchronously failed handshake and
+    // refuse to use the connection (see
+    // rpc_protocol_client_wrapper::client_id_sent()).
+    shared_future<> client_id_sent = [&] () -> future<> {
         if (utils::get_local_injector().enter("fail_outgoing_client_id")) {
             return make_exception_future<>(std::bad_alloc());
         }
@@ -1240,8 +1249,19 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
                 rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID, std::optional<utils::UUID>, gms::generation_type)>(messaging_verb::CLIENT_ID)(
                     *client, broadcast_address, src_cpu_id,
                     query::result_memory_limiter::maximum_result_size, my_host_id.uuid(), host_id ? std::optional{host_id->uuid()} : std::nullopt, _current_generation);
-    }().handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
-        mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
+    }();
+    client->set_client_id_sent(client_id_sent);
+    // If the send failed (e.g. bad_alloc under memory pressure), the
+    // connection is unidentified and hence unusable - drop it, so that the
+    // next send creates a fresh one and re-sends CLIENT_ID.
+    (void)client_id_sent.get_future().handle_exception([ms = shared_from_this(), client, idx, id, host_id, remote_addr, verb] (std::exception_ptr ep) {
+        mlogger.warn("Failed to send CLIENT_ID to {} for verb {}: {}; dropping the connection", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
+        auto same_client = [&] (const shard_info& si) { return si.rpc_client == client; };
+        if (host_id) {
+            ms->find_and_remove_client(ms->_clients_with_host_id[idx], *host_id, same_client);
+        } else {
+            ms->find_and_remove_client(ms->_clients[idx], id, same_client);
+        }
     });
     return client;
 }

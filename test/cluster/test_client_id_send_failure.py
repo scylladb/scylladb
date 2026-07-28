@@ -25,8 +25,6 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.xfail(reason="SCYLLADB-3348: a failed CLIENT_ID send leaves a cached unidentified "
-                          "connection behind; the next commit fixes this and removes this mark")
 @pytest.mark.asyncio
 async def test_client_id_send_failure(manager: ManagerClient):
     """A CLIENT_ID send failure on a newly created RPC connection must:
