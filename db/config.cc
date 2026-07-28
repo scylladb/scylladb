@@ -976,10 +976,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "* offheap_objects  Native memory, eliminating NIO buffer heap overhead.")
     , memtable_cleanup_threshold(this, "memtable_cleanup_threshold", value_status::Invalid, .11,
         "Ratio of occupied non-flushing memtable size to total permitted size for triggering a flush of the largest memtable. Larger values mean larger flushes and less compaction, but also less concurrent flush activity, which can make it difficult to keep your disks saturated under heavy write load.")
-    , logstor_disk_size_in_mb(this, "logstor_disk_size_in_mb", value_status::Used, 2048,
+    , logstor_disk_size_in_mb(this, "logstor_disk_size_in_mb", value_status::Used, 0,
         "Total size in megabytes allocated for logstor storage on disk.")
     , logstor_file_size_in_mb(this, "logstor_file_size_in_mb", value_status::Used, 32,
         "Total size in megabytes allocated for each logstor data file on disk.")
+    , logstor_format_on_startup(this, "logstor_format_on_startup", value_status::Used, true,
+        "Controls when logstor data files are formatted. When enabled, all logstor files are formatted during node startup, which increases startup time but ensures optimal write performance immediately after startup. "
+        "When disabled, logstor files are formatted lazily on first write, which reduces startup time but may cause slightly degraded write performance on first access to each file.")
     , logstor_separator_delay_limit_ms(this, "logstor_separator_delay_limit_ms", value_status::Used, 100,
         "Maximum delay in milliseconds for logstor separator debt control.")
     , logstor_separator_max_memory_in_mb(this, "logstor_separator_max_memory_in_mb", value_status::Used, 256,
