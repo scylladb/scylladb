@@ -384,7 +384,7 @@ def failure_detector_timeout(build_mode):
     return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
 
 @pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
-async def storage(request, pytestconfig, tmpdir):
+async def storage(request, pytestconfig, tmpdir, manager: ManagerClient):
     """Parametrize tests over local / S3 / GCS storage.
 
     When storage is None the test runs with local (filesystem) storage.
@@ -394,5 +394,5 @@ async def storage(request, pytestconfig, tmpdir):
         yield None
         return
 
-    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name) as server:
+    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name, manager) as server:
         yield server
