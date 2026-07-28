@@ -5784,6 +5784,8 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     const uint64_t config_capacity = _db.local().get_config().data_file_capacity();
     if (config_capacity != 0) {
         tls.effective_capacity = config_capacity;
+    } else if (_db.local().get_config().force_effective_capacity_to_raw_disk_capacity()) {
+        tls.effective_capacity = _disk_space_monitor->space().capacity;
     } else {
         uint64_t sum_tablet_sizes = 0;
         for (const auto& ts : tablet_sizes_per_shard) {
