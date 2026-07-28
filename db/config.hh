@@ -616,6 +616,8 @@ public:
     named_value<float> size_based_balance_threshold_percentage;
     named_value<uint64_t> minimal_tablet_size_for_balancing;
 
+    named_value<bool> force_effective_capacity_to_raw_disk_capacity;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
