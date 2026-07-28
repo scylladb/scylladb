@@ -31,6 +31,8 @@ def gdb_cmd(scylla_server, request):
         "-q",
         "--batch",
         "--nx",
+        "-iex",
+        "set auto-load safe-path /",
         "-se",
         str(scylla_server.exe),
         "-p",
