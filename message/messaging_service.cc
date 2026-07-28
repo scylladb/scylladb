@@ -1232,11 +1232,15 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }
     uint32_t src_cpu_id = this_shard_id();
     // No reply is received, nothing to wait for.
-    (void)_rpc->make_client<
-            rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID, std::optional<utils::UUID>, gms::generation_type)>(messaging_verb::CLIENT_ID)(
-                *client, broadcast_address, src_cpu_id,
-                query::result_memory_limiter::maximum_result_size, my_host_id.uuid(), host_id ? std::optional{host_id->uuid()} : std::nullopt, _current_generation)
-            .handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
+    (void)[&] () -> future<> {
+        if (utils::get_local_injector().enter("fail_outgoing_client_id")) {
+            return make_exception_future<>(std::bad_alloc());
+        }
+        return _rpc->make_client<
+                rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID, std::optional<utils::UUID>, gms::generation_type)>(messaging_verb::CLIENT_ID)(
+                    *client, broadcast_address, src_cpu_id,
+                    query::result_memory_limiter::maximum_result_size, my_host_id.uuid(), host_id ? std::optional{host_id->uuid()} : std::nullopt, _current_generation);
+    }().handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
         mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
     });
     return client;
