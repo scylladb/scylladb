@@ -326,6 +326,8 @@ struct tablet_info {
     tablet_info& operator=(tablet_info&&) noexcept = default;
 
     bool operator==(const tablet_info&) const;
+
+    const tablet_replica* maybe_find_replica(host_id) const;
 };
 
 /// Reft-related information for strongly-consistent tablets.

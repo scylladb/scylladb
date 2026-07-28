@@ -514,6 +514,35 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_index) {
     });
 }
 
+SEASTAR_TEST_CASE(test_groups_store_stable_timestamp) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        // No row yet: load must return api::min_timestamp (the in-memory default),
+        // so a freshly-started group never observes a spurious non-min value.
+        auto ts0 = co_await raft_groups_storage::load_stable_timestamp(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(ts0, api::min_timestamp);
+
+        // Store a value and read it back.
+        const api::timestamp_type ts_a = 1000;
+        co_await raft_groups_storage::store_stable_timestamp(qp, gid, test_shard, ts_a);
+        auto ts1 = co_await raft_groups_storage::load_stable_timestamp(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(ts1, ts_a);
+
+        // Store a larger value (the common case: the timestamp advances) and read it back.
+        const api::timestamp_type ts_b = 2000;
+        co_await raft_groups_storage::store_stable_timestamp(qp, gid, test_shard, ts_b);
+        auto ts2 = co_await raft_groups_storage::load_stable_timestamp(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(ts2, ts_b);
+    });
+}
+
 // Test store_log_entries -> acquire_replay_position_handles_for roundtrip:
 // entries written to the commitlog produce valid replay position handles.
 SEASTAR_TEST_CASE(test_groups_store_and_get_replay_positions) {

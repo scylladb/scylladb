@@ -219,7 +219,9 @@ enum class messaging_verb : int32_t {
     CLONE_SSTABLE = 90,
     FETCH_COLUMN_MAPPINGS = 91,
     REPAIR_GET_TABLE_SIZE = 92,
-    LAST = 93,
+    GET_LOCAL_APPLIED_TIMESTAMPS = 93,
+    SET_STABLE_TIMESTAMP = 94,
+    LAST = 95,
 };
 
 } // namespace netw

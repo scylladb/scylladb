@@ -15,6 +15,8 @@
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 
+#include <seastar/core/abort_source.hh>
+
 namespace db {
 class system_keyspace;
 class raft_commitlog_replay_buffer;
@@ -100,6 +102,7 @@ public:
 class groups_manager : public peering_sharded_service<groups_manager> {
     class state_machine_impl;
     class rpc_impl;
+    class stable_timestamp_tracker;
 
     friend class raft_server;
 
@@ -127,6 +130,53 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
+
+        api::timestamp_type stable_timestamp = api::min_timestamp;
+    };
+
+    /// Periodically refreshes the stable_timestamp of the raft groups this node leads.
+    ///
+    /// stable_timestamp of a group is the minimum, taken across all of its replicas,
+    /// of the highest timestamp each replica has applied. Equivalently, it is the
+    /// highest timestamp such that every replica has already applied all mutations up
+    /// to and including it. A leader can therefore safely serve reads at any timestamp
+    /// not exceeding it without a read barrier.
+    class stable_timestamp_tracker {
+        replica::database& _db;
+        netw::messaging_service& _ms;
+        cql3::query_processor& _qp;
+        std::unordered_map<raft::group_id, raft_group_state>& _raft_groups;
+
+        // Drives shutdown of the periodic refresh fiber.
+        abort_source _as;
+        // The background fiber that periodically refreshes stable_timestamp.
+        future<> _fiber = make_ready_future<>();
+
+        // A single refresh pass: for every tablet of a group led by this node,
+        // collects applied timestamps from all replicas and advances the group's
+        // stable_timestamp to the minimum across replicas.
+        future<> refresh();
+
+        // The loop driving refresh() on a fixed interval until aborted.
+        future<> run();
+
+    public:
+        stable_timestamp_tracker(replica::database& db, netw::messaging_service& ms,
+            cql3::query_processor& qp,
+            std::unordered_map<raft::group_id, raft_group_state>& raft_groups);
+
+        // Idempotently launches the background refresh fiber (no-op if already
+        // running). Called from groups_manager::update() because the
+        // strongly_consistent_tables feature may only become enabled after
+        // groups_manager::start() has run.
+        void start();
+
+        // Requests shutdown and waits for the background fiber to finish.
+        future<> stop();
+
+        // Bumps state.stable_timestamp to candidate if it is greater, persisting
+        // the advanced value so it survives restarts and never regresses.
+        future<> advance(raft_group_state& state, raft::group_id group_id, api::timestamp_type candidate);
     };
 
     netw::messaging_service& _ms;
@@ -144,6 +194,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     bool _started = false;
 
     tablet_group_leader_cache _leader_cache;
+
+    stable_timestamp_tracker _stable_timestamp_tracker;
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
