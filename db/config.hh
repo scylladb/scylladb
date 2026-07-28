@@ -647,6 +647,8 @@ public:
     named_value<uint32_t> maintenance_io_throughput_mb_per_sec;
     named_value<uint32_t> backup_io_throughput_mb_per_sec;
 
+    named_value<bool> force_effective_capacity_to_raw_disk_capacity;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
