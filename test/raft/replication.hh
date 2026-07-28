@@ -369,7 +369,6 @@ public:
     void elapse_elections();
     future<> elect_new_leader(size_t new_leader);
     future<> free_election();
-    future<> init_raft_tickers();
     void pause_tickers();
     future<> restart_tickers();
     void cancel_ticker(size_t id);
@@ -920,8 +919,7 @@ future<> raft_cluster<Clock>::start_all() {
     // node becomes a candidate during start(), sending a vote_request to all
     // peers. All peers must be started and published by that point, otherwise
     // the request is dropped and node 0 loses its advantage: it is already a
-    // candidate so wait_until_candidate() won't tick it, and all nodes race
-    // equally once tickers start — the winner is non-deterministic.
+    // candidate so wait_until_candidate() won't tick it.
     BOOST_REQUIRE(_leader == 0);
     co_await coroutine::parallel_for_each(std::views::iota(size_t{1}, _servers.size()), [this] (size_t i) -> future<> {
         co_await _servers[i].server->start();
@@ -929,11 +927,30 @@ future<> raft_cluster<Clock>::start_all() {
     });
     co_await _servers[0].server->start();
     _servers[0].rpc->publish();
-    co_await init_raft_tickers();
+
+    // Install the ticker callbacks, but for the initial election arm only the leader's
+    // ticker; the rest are armed once the leader is established (below).
+    _tickers.resize(_servers.size());
+    for (auto s: _in_configuration) {
+        set_ticker_callback(s);
+    }
+
     BOOST_TEST_MESSAGE("Electing first leader " << _leader);
+    // Elect the first leader with only its own ticker running. Followers respond to vote
+    // requests over RPC without needing their tickers, so keeping every other node's
+    // ticker stopped means none of them can reach its own election timeout and compete:
+    // node 0 wins the initial election regardless of the order in which the reactor runs
+    // tasks (debug builds shuffle the task queue). node 0's ticker stays armed so it still
+    // retries the election if a vote request or reply is dropped (the *_drops tests inject
+    // packet loss); without it a dropped vote would hang wait_election_done() forever.
+    // Fixes https://scylladb.atlassian.net/browse/SCYLLADB-3471.
+    _tickers[_leader].rearm_periodic(_tick_delta);
     _servers[_leader].server->wait_until_candidate();
     co_await _servers[_leader].server->wait_election_done();
     BOOST_REQUIRE(_servers[_leader].server->is_leader());
+
+    // Leader established; arm the remaining tickers for normal operation.
+    co_await restart_tickers();
 }
 
 template <typename Clock>
@@ -1007,18 +1024,6 @@ future<> raft_cluster<Clock>::add_entry(size_t val, std::optional<size_t> server
 template <typename Clock>
 future<> raft_cluster<Clock>::add_remaining_entries() {
     co_await add_entries(_apply_entries - _next_val);
-}
-
-template <typename Clock>
-future<> raft_cluster<Clock>::init_raft_tickers() {
-    _tickers.resize(_servers.size());
-    // Only start tickers for servers in configuration
-    for (auto s: _in_configuration) {
-        _tickers[s].set_callback([&, s] {
-            _servers[s].server->tick();
-        });
-    }
-    co_await restart_tickers();
 }
 
 template <typename Clock>
