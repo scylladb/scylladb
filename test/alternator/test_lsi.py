@@ -121,6 +121,33 @@ def test_lsi_wrong_bad_range(dynamodb):
             ])
         table.delete()
 
+# Multi-attribute (composite) key schemas are NOT allowed on LSIs - unlike
+# GSIs (see test_gsi_composite_keys.py), LSIs remain limited to 1 HASH +
+# optional 1 RANGE.
+def test_lsi_wrong_multiattr(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*\\b(?:two|2)\\b'):
+        table = create_test_table(dynamodb,
+            KeySchema=[
+                { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                { 'AttributeName': 'c', 'KeyType': 'RANGE' },
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'c', 'AttributeType': 'S' },
+                { 'AttributeName': 'l', 'AttributeType': 'S' },
+            ],
+            LocalSecondaryIndexes=[
+                {   'IndexName': 'lsi',
+                    'KeySchema': [
+                        { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' },
+                        { 'AttributeName': 'l', 'KeyType': 'RANGE' },
+                    ],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ])
+        table.delete()
+
 # The purpose of an LSI is to allow an alternative sort key for the
 # existing partitions - the partitions do not change. So it doesn't make
 # sense to create an LSI on a table that did not originally have a sort key

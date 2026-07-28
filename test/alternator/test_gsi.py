@@ -2155,6 +2155,24 @@ def test_gsi_invalid_key_types(dynamodb):
                 }]) as table:
                 pass
 
+# A GSI's KeySchema must include a HASH key - a KeySchema with only a
+# RANGE key (and no HASH key at all) is rejected, just like it would be
+# for a base table or LSI.
+def test_gsi_range_key_only_rejected(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*HASH'):
+        with new_test_table(dynamodb,
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'RANGE' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }]) as table:
+            pass
+
 # In test_table_gsi_2, the base table has just a hash key "p", and the GSI
 # has just the hash key "x". The materialized view that Alternator uses to
 # implement this GSI needs to add "p" as an extra clustering key, but it
