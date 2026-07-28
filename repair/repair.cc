@@ -1075,7 +1075,14 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
             auto user_permit = _user_ranges_parallelism ? co_await seastar::get_units(*_user_ranges_parallelism, 1) : semaphore_units<>();
             co_await repair_range(range, table_info);
             if (2 * (_ranges_complete + 1) > ranges_size()) {
-                co_await utils::get_local_injector().inject("repair_shard_repair_task_impl_do_repair_ranges", utils::wait_for_message(10s));
+                // The test that arms this injection releases it only after a
+                // concurrent tablet migration (move_tablet, a raft topology
+                // operation) completes. Under CI load that can take much longer
+                // than 10s; a short timeout here would make wait_for_message
+                // time out and escalate to on_internal_error, aborting the node.
+                // Use the generous timeout convention used for topology-gated
+                // injection sync points.
+                co_await utils::get_local_injector().inject("repair_shard_repair_task_impl_do_repair_ranges", utils::wait_for_message(5min));
             }
             ++_ranges_complete;
             if (_reason == streaming::stream_reason::bootstrap) {
