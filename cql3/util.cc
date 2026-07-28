@@ -14,7 +14,12 @@
 
 #ifdef DEBUG
 
+#include <seastar/core/align.hh>
+#include <seastar/core/posix.hh>
+
+#include <sys/mman.h>
 #include <ucontext.h>
+#include <unistd.h>
 
 extern "C" {
 void __sanitizer_start_switch_fiber(void** fake_stack_save, const void* stack_bottom, size_t stack_size);
@@ -64,9 +69,52 @@ void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_
 
 #else
 
-// The CQL parser uses huge amounts of stack space in debug mode,
-// enough to overflow our 128k stacks. The mechanism below runs
-// the parser in a larger stack.
+// The CQL parser uses huge amounts of stack space in debug mode, enough to
+// overflow a seastar fiber stack - 256 KiB in the builds that define DEBUG,
+// since those enable ASAN and Seastar raises its default accordingly. The
+// mechanism below runs the parser on a larger stack.
+
+// The parser stack is hand-rolled, so nothing stops a deep parse from running
+// off its lower end into whatever is mapped below. That overflow used to be
+// completely silent under ASAN: the frame instrumentation writes the shadow
+// bytes of the frame it believes it owns, which un-poisons the redzones of the
+// neighbouring heap chunks, so the subsequent data writes clobber allocator
+// metadata without tripping a single check. The damage only surfaced much
+// later, as a CHECK failure inside ASAN's quarantine, in whatever unrelated
+// code happened to be freeing memory at the time (SCYLLADB-3116,
+// SCYLLADB-3264).
+//
+// A PROT_NONE guard region below the stack turns that into an immediate fault
+// at the offending frame instead.
+//
+// A guard only fires if the overflowing frame writes into it, so a frame larger
+// than the guard could move the stack pointer past it in one step and never
+// touch it. That does not happen here: -fstack-usage over the generated parser
+// in a debug build puts the largest frame at 536 bytes, median 40, so a single
+// page would already be impossible to step over. The rest of the 16 KiB is
+// margin for the non-parser frames that also run on this stack and for the
+// functions that allocate dynamically on top of their static frame. The margin
+// is free - guard pages are never touched, so none of them is ever committed.
+class parser_stack {
+    static constexpr size_t min_guard_size = 16 * 1024;
+    static constexpr size_t usable_size = 1 << 20;
+
+    // mprotect() rounds the protected range up to a page boundary, so the
+    // guard must be a whole number of pages or bottom() would land inside it.
+    size_t _guard_size;
+    mmap_area _area;
+public:
+    parser_stack()
+            : _guard_size(align_up(min_guard_size, size_t(getpagesize())))
+            , _area(mmap_anonymous(nullptr, _guard_size + usable_size,
+                                   PROT_READ | PROT_WRITE, MAP_PRIVATE)) {
+        throw_system_error_on(mprotect(_area.get(), _guard_size, PROT_NONE) != 0, "mprotect");
+    }
+
+    // Lowest usable address, i.e. what makecontext(3) wants as ss_sp.
+    char* bottom() const noexcept { return _area.get() + _guard_size; }
+    static constexpr size_t size() noexcept { return usable_size; }
+};
 
 struct thunk_args {
     // arguments to do_with_parser_impl_impl
@@ -105,8 +153,7 @@ static void thunk(int p1, int p2) {
 };
 
 void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
-    static constexpr size_t stack_size = 1 << 20;
-    static thread_local std::unique_ptr<char[]> stack = std::make_unique<char[]>(stack_size);
+    static thread_local parser_stack stack;
     thunk_args args{
         .cql = cql,
         .d = d,
@@ -115,19 +162,19 @@ void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_
     ucontext_t uc;
     auto r = getcontext(&uc);
     throwing_assert(r == 0);
-    if (stack.get() <= (char*)&uc && (char*)&uc < stack.get() + stack_size) {
+    if (stack.bottom() <= (char*)&uc && (char*)&uc < stack.bottom() + stack.size()) {
         // We are already running on the large stack, so just call the
         // parser directly.
         return do_with_parser_impl_impl(cql, d, std::move(f));
     }
-    uc.uc_stack.ss_sp = stack.get();
-    uc.uc_stack.ss_size = stack_size;
+    uc.uc_stack.ss_sp = stack.bottom();
+    uc.uc_stack.ss_size = stack.size();
     uc.uc_link = nullptr;
     auto q = reinterpret_cast<uint64_t>(reinterpret_cast<uintptr_t>(&args));
     makecontext(&uc, reinterpret_cast<void (*)()>(thunk), 2, int(q), int(q >> 32));
     auto& san = args.sanitizer_state;
     // Tell Address Sanitizer we are switching to another stack
-    __sanitizer_start_switch_fiber(&san.fake_stack, stack.get(), stack_size);
+    __sanitizer_start_switch_fiber(&san.fake_stack, stack.bottom(), stack.size());
     swapcontext(&args.caller_stack, &uc);
     // Completes stack switch started in thunk()
     __sanitizer_finish_switch_fiber(san.fake_stack, nullptr, 0);
