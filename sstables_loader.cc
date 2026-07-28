@@ -968,7 +968,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         throw std::runtime_error(fmt::format("No transition info for tablet {}", tid));
     }
     if (!trinfo->session_id) {
-        throw std::runtime_error(fmt::format("Restore of tablet {} was cancelled", tid));
+        throw std::runtime_error(fmt::format("Restore of tablet {} was aborted", tid));
     }
     if (trinfo->snapshot_name.empty()) {
         throw std::runtime_error(format("No snapshot name for tablet {} restore transition", tid));
