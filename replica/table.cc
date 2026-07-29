@@ -5521,6 +5521,8 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     m.upgrade(base);
     gc_clock::time_point now = gc_clock::now();
 
+    utils::get_local_injector().inject("delay_view_update_query_time_1s", [&] { now += 1s; });
+
     if (!db::view::should_generate_view_updates_on_this_shard(base, get_effective_replication_map(), m.token())) {
         // This could happen if we are a pending replica.
         // A pending replica may have incomplete data, and building view updates could result
