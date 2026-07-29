@@ -538,6 +538,11 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
         auto idx0 = co_await storage0.load_commit_idx();
         BOOST_CHECK_EQUAL(raft::index_t(42), idx0);
 
+        // The exact (idx, term) pair round-trips (SCYLLADB-3357).
+        const auto pair0 = co_await raft_groups_storage::load_commit_idx_and_term(qp, iso_gid, 0);
+        BOOST_CHECK_EQUAL(raft::index_t(42), pair0.idx);
+        BOOST_CHECK_EQUAL(raft::term_t(7), pair0.term);
+
         auto idx1 = co_await storage1.load_commit_idx();
         BOOST_CHECK_EQUAL(raft::index_t(0), idx1);
     });
