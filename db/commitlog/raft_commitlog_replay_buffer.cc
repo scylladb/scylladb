@@ -151,16 +151,16 @@ future<> raft_commitlog_replay_buffer::process_raft_replayed_items(replica::data
     co_await seastar::coroutine::parallel_for_each(_replayed_commit_idx_by_group,
             [&qp, &group_to_table] (const auto& entry) -> future<> {
         const auto group_id = entry.first;
-        const auto recovered_commit_idx = entry.second;
+        const auto recovered = entry.second;
         if (!group_to_table.contains(group_id)) {
             // Same rule as the entries loop below: the tablet was moved away or
             // dropped, so don't resurrect a system.raft_groups row for it.
             logger.debug("group {} not found in tablet metadata, discarding recovered commit_idx {}",
-                    group_id, recovered_commit_idx);
+                    group_id, recovered.idx);
             co_return;
         }
         co_await service::strong_consistency::raft_groups_storage::store_commit_idx_if_higher(
-                qp, group_id, this_shard_id(), recovered_commit_idx);
+                qp, group_id, this_shard_id(), recovered);
     });
 
     for (auto& [group_id, entries_list] : _replayed_commitlog_entries_by_group) {

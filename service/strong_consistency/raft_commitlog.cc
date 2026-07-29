@@ -70,9 +70,9 @@ raft_commitlog::~raft_commitlog() {
             _command_positions.size(), _noncommand_positions.size(), _group_id);
 }
 
-seastar::future<db::rp_handle> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries, raft::index_t commit_idx) {
-    logger.debug("store_log_entries: group_id={}, num_entries={}, commit_idx={}",
-            _group_id, entries.size(), commit_idx);
+seastar::future<db::rp_handle> raft_commitlog::store_log_entries(const raft::log_entry_ptr_list& entries, commit_idx_and_term commit) {
+    logger.debug("store_log_entries: group_id={}, num_entries={}, commit_idx={}, commit_term={}",
+            _group_id, entries.size(), commit.idx, commit.term);
 
     utils::chunked_vector<commitlog_raft_log_entry_writer> writers;
     writers.reserve(entries.size() + 1);
@@ -90,7 +90,7 @@ seastar::future<db::rp_handle> raft_commitlog::store_log_entries(const raft::log
     // with the memtable that ends up holding the handle.
     writers.emplace_back(
             _raft_groups_table_id,
-            raft_commit_idx_entry{.group_id = _group_id, .commit_idx = commit_idx});
+            raft_commit_idx_entry{.group_id = _group_id, .commit_idx = commit.idx, .term = commit.term});
 
     auto replay_handles = co_await _commit_log.add_raft_entries(std::move(writers));
     // We passed N raft entries + 1 commit_idx entry; add_raft_entries preserves order.

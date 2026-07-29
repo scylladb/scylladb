@@ -147,16 +147,14 @@ future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor
     co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
 }
 
-future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t commit_idx) {
+future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, commit_idx_and_term commit) {
     // Only advance, never regress: a prior flush (or an earlier replay) may
     // already have persisted a value at or beyond the recovered one.
     const auto persisted = co_await load_commit_idx(qp, gid, shard);
-    if (commit_idx <= persisted) {
+    if (commit.idx <= persisted) {
         co_return;
     }
-    // The term is threaded through the replay path in a following commit;
-    // until then restored rows record term 0 ("unknown").
-    co_await store_commit_idx_cql(qp, gid, shard, {commit_idx, raft::term_t(0)});
+    co_await store_commit_idx_cql(qp, gid, shard, commit);
 }
 
 future<raft::log_entries> raft_groups_storage::load_log() {
@@ -259,7 +257,7 @@ static mutation make_commit_idx_mutation(shard_id shard, raft::group_id group_id
 
 future<> raft_groups_storage::store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
     const auto known = _last_known_commit;
-    auto commit_idx_entry_handle = co_await _raft_commitlog.store_log_entries(entries, known.idx);
+    auto commit_idx_entry_handle = co_await _raft_commitlog.store_log_entries(entries, known);
 
     if (known.idx <= _last_persisted_commit_idx) {
         // commit_idx has not advanced since it was last recorded to

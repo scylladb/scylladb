@@ -368,9 +368,9 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_commit_idx_only_group) {
                 // Only commit_idx entries survived replay for this group (e.g. the
                 // segment holding its raft log entries was already reclaimed).
                 // The highest value wins.
-                buffer.add_commit_idx(gid, raft::index_t(3));
-                buffer.add_commit_idx(gid, raft::index_t(7));
-                buffer.add_commit_idx(gid, raft::index_t(5));
+                buffer.add_commit_idx(gid, raft::index_t(3), raft::term_t(1));
+                buffer.add_commit_idx(gid, raft::index_t(7), raft::term_t(2));
+                buffer.add_commit_idx(gid, raft::index_t(5), raft::term_t(1));
 
                 BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
 
@@ -1585,7 +1585,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_store_and_truncate_log) {
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        (void)co_await persistence.store_log_entries(all_entries, raft::index_t(0));
+        (void)co_await persistence.store_log_entries(all_entries, {});
 
         // Truncate at idx 6 — entries 6-10 should be removed.
         persistence.truncate_log(raft::index_t(6));
@@ -1628,7 +1628,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_truncate_log_tail_releases_handles) {
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        (void)co_await persistence.store_log_entries(all_entries, raft::index_t(0));
+        (void)co_await persistence.store_log_entries(all_entries, {});
 
         // Truncate tail at idx 5 — entries 1-5 handles should be released.
         persistence.truncate_log_tail(raft::index_t(5));
@@ -1781,7 +1781,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_combined_truncation) {
         for (int i = 1; i <= 10; ++i) {
             all_entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
-        (void)co_await persistence.store_log_entries(all_entries, raft::index_t(0));
+        (void)co_await persistence.store_log_entries(all_entries, {});
 
         // Truncate tail (entries <= 3) and head (entries >= 8).
         persistence.truncate_log_tail(raft::index_t(3));
@@ -1866,8 +1866,8 @@ SEASTAR_TEST_CASE(test_raft_commitlog_store_log_entries_writes_commit_idx_entry)
             entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
 
-        auto commit_idx = raft::index_t(2);
-        auto commit_idx_entry_handle = co_await persistence.store_log_entries(entries, commit_idx);
+        const service::strong_consistency::commit_idx_and_term commit{raft::index_t(2), raft::term_t(1)};
+        auto commit_idx_entry_handle = co_await persistence.store_log_entries(entries, commit);
         BOOST_REQUIRE(commit_idx_entry_handle);
 
         co_await log.sync_all_segments();
@@ -1893,7 +1893,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_store_log_entries_writes_commit_idx_entry)
                             BOOST_REQUIRE(std::holds_alternative<raft_commit_idx_entry>(entry_var));
                             const auto& commit_idx_entry = std::get<raft_commit_idx_entry>(entry_var);
                             BOOST_REQUIRE_EQUAL(commit_idx_entry.group_id, gid);
-                            BOOST_REQUIRE_EQUAL(commit_idx_entry.commit_idx, commit_idx);
+                            BOOST_REQUIRE_EQUAL(commit_idx_entry.commit_idx, commit.idx);
                             ++commit_idx_entries;
                         }
                         co_return;
@@ -1933,7 +1933,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_splits_command_and_noncommand_positions) {
             }
         }
 
-        auto commit_idx_entry_handle = co_await persistence.store_log_entries(entries, raft::index_t(2));
+        auto commit_idx_entry_handle = co_await persistence.store_log_entries(entries, {raft::index_t(2), raft::term_t(1)});
         commit_idx_entry_handle.release();
 
         // acquire_* only walks _command_positions; the 10 non-command entries
@@ -1971,7 +1971,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_release_noncommand_rp_handles) {
         entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(4)));
         entries.push_back(make_dummy_entry  (raft::term_t(1), raft::index_t(5)));
 
-        (void)co_await persistence.store_log_entries(entries, raft::index_t(0));
+        (void)co_await persistence.store_log_entries(entries, {});
 
         // Release non-command handles up to idx 3: covers the config@2 and
         // dummy@3. dummy@5 must remain (idx > 3). Commands must be untouched.
