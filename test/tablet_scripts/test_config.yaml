@@ -1,0 +1,5 @@
+# Unit tests for the Python tablet-analysis scripts in scripts/tablets/.
+#
+# They exercise pure Python only: no Scylla server, no instrumented binary and no
+# build artifacts, so there is no coverage data to collect.
+coverage: false
