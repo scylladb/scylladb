@@ -103,11 +103,12 @@ public:
     // re-apply already applied entries on restart. Only writes if the new
     // index is higher than the existing one (safe to call on repeated replays).
     static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
-    // Persist commit_idx to system.raft_groups, but only if it advances the
-    // currently persisted value. Used during commitlog replay to restore a
-    // commit_idx that a crash dropped from the raft_groups memtable before it
-    // could flush (the value survives in the commitlog's commit_idx entries).
-    static future<> store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t commit_idx);
+    // Persist (commit_idx, commit_idx_term) to system.raft_groups, but only if
+    // the index advances the currently persisted value. Used during commitlog
+    // replay to restore a commit_idx that a crash dropped from the raft_groups
+    // memtable before it could flush (the pair survives in the commitlog's
+    // commit_idx entries).
+    static future<> store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, commit_idx_and_term commit);
 
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 

@@ -72,7 +72,7 @@ public:
     // (raft_groups_storage) can attach it to a fake system.raft_groups mutation
     // applied in-memory. The N raft entries' rp_handles are placed into
     // _command_positions or _noncommand_positions based on entry->data type.
-    future<db::rp_handle> store_log_entries(const raft::log_entry_ptr_list& entries, raft::index_t commit_idx);
+    future<db::rp_handle> store_log_entries(const raft::log_entry_ptr_list& entries, commit_idx_and_term commit);
 
     // Get the log items that were loaded from database commit log on startup.
     raft::log_entries load_log();

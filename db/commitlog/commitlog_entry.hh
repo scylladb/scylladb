@@ -108,6 +108,10 @@ struct raft_commitlog_entry {
 struct raft_commit_idx_entry {
     raft::group_id group_id;
     raft::index_t commit_idx{0};
+    // Term of the log entry at commit_idx. Absent in entries written by
+    // binaries predating the field (IDL append); readers treat absence as
+    // "unknown" and fall back to a conservative term (SCYLLADB-3357).
+    std::optional<raft::term_t> term;
 };
 
 // The on-disk envelope for variant-format commitlog segments. Each entry

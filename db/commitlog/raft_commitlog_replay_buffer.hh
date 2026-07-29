@@ -112,10 +112,12 @@ class raft_commitlog_replay_buffer {
     // Populated via add() during replay, then consumed and cleared by process_raft_replayed_items().
     std::unordered_map<raft::group_id, utils::chunked_vector<raft::log_entry_ptr>> _replayed_commitlog_entries_by_group;
 
-    // Highest commit_idx seen per group across the commitlog's commit_idx entries.
-    // Used by process_raft_replayed_items() to restore commit_idx after a crash
-    // that dropped it from the raft_groups memtable before it could flush.
-    std::unordered_map<raft::group_id, raft::index_t> _replayed_commit_idx_by_group;
+    // Highest commit_idx seen per group across the commitlog's commit_idx
+    // entries, with the term of the entry at that index (term 0 = written by a
+    // binary predating the term field). Used by process_raft_replayed_items()
+    // to restore commit_idx after a crash that dropped it from the raft_groups
+    // memtable before it could flush.
+    std::unordered_map<raft::group_id, service::strong_consistency::commit_idx_and_term> _replayed_commit_idx_by_group;
 
     // Resulting entries and rp_handles written to the new (post-crash) commitlog,
     // raft_commitlog instances when tablet Raft groups start.
@@ -129,12 +131,12 @@ public:
         ++_total_entries;
     }
 
-    // Record a commit_idx recovered from a commitlog commit_idx entry during
-    // replay, keeping the highest value seen per group.
-    void add_commit_idx(const raft::group_id group_id, raft::index_t commit_idx) {
+    // Record a (commit_idx, term) recovered from a commitlog commit_idx entry
+    // during replay, keeping the pair with the highest index per group.
+    void add_commit_idx(const raft::group_id group_id, raft::index_t commit_idx, raft::term_t term) {
         auto& slot = _replayed_commit_idx_by_group[group_id];
-        if (commit_idx > slot) {
-            slot = commit_idx;
+        if (commit_idx > slot.idx) {
+            slot = {commit_idx, term};
         }
     }
 
