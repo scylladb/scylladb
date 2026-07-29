@@ -72,7 +72,7 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
     co_return std::pair(vote_term, vote);
 }
 
-future<> raft_groups_storage::store_commit_idx(raft::index_t idx, raft::term_t) {
+future<> raft_groups_storage::store_commit_idx(raft::index_t idx, raft::term_t term) {
     // Update in-memory tracking only. Persistence happens via the fake
     // mutation in store_log_entries (durable once the raft_groups memtable
     // flushes) and via persist_commit_idx() from the SC tablet flush hook
@@ -80,9 +80,9 @@ future<> raft_groups_storage::store_commit_idx(raft::index_t idx, raft::term_t) 
     // avoids a per-committed-batch CQL write on the raft io_fiber.
     //
     // The io_fiber calls this *before* pushing entries to the applier_fiber,
-    // so _last_known_commit_idx is always >= the raft index of any entry that
+    // so _last_known_commit.idx is always >= the raft index of any entry that
     // has been applied to a memtable.
-    _last_known_commit_idx = idx;
+    _last_known_commit = {idx, term};
     return make_ready_future<>();
 }
 
@@ -90,21 +90,21 @@ future<> raft_groups_storage::store_commit_idx(raft::index_t idx, raft::term_t) 
 // Shared by persist_commit_idx() and store_commit_idx_if_higher().
 //
 // The write timestamp is supplied by the caller: it must be captured in the
-// same task as the commit_idx value (no yield in between), so that a
+// same task as the (commit_idx, term) value (no yield in between), so that a
 // concurrent fake-mutation write of a larger commit_idx (store_log_entries())
 // always carries a larger timestamp and last-write-wins cannot regress the
 // row. api::new_timestamp() is monotonic within a shard.
-static future<> store_commit_idx_cql(cql3::query_processor& qp, raft::group_id gid, shard_id shard, raft::index_t commit_idx, api::timestamp_type ts) {
-    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?) USING TIMESTAMP ?",
+static future<> store_commit_idx_cql(cql3::query_processor& qp, raft::group_id gid, shard_id shard, commit_idx_and_term commit, api::timestamp_type ts) {
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx, commit_idx_term) VALUES (?, ?, ?, ?) USING TIMESTAMP ?",
         db::system_keyspace::RAFT_GROUPS);
     return qp.execute_internal(
         store_cql,
-        {int16_t(shard), gid.id, int64_t(commit_idx.value()), int64_t(ts)},
+        {int16_t(shard), gid.id, int64_t(commit.idx.value()), int64_t(commit.term.value()), int64_t(ts)},
         cql3::query_processor::cache_internal::yes).discard_result();
 }
 
 future<> raft_groups_storage::persist_commit_idx() {
-    if (_last_known_commit_idx <= _last_persisted_commit_idx) {
+    if (_last_known_commit.idx <= _last_persisted_commit_idx) {
         // Nothing new to persist since the last write.
         return make_ready_future<>();
     }
@@ -118,7 +118,7 @@ future<> raft_groups_storage::persist_commit_idx() {
         // skip quietly rather than starting a CQL write.
         rgslog.debug("persist_commit_idx skipped after abort for group {}"
             " (unpersisted commit_idx {}, last persisted {})",
-            _group_id, _last_known_commit_idx, _last_persisted_commit_idx);
+            _group_id, _last_known_commit.idx, _last_persisted_commit_idx);
         return make_ready_future<>();
     }
     return execute_with_linearization_point([this] () -> future<> {
@@ -131,7 +131,7 @@ future<> raft_groups_storage::persist_commit_idx() {
             // above.
             rgslog.debug("persist_commit_idx skipped after abort for group {}"
                 " (abort raced the linearization point; unpersisted commit_idx {}, last persisted {})",
-                _group_id, _last_known_commit_idx, _last_persisted_commit_idx);
+                _group_id, _last_known_commit.idx, _last_persisted_commit_idx);
             return make_ready_future<>();
         }
         // Read the value and capture the write timestamp at execution time, in
@@ -139,9 +139,9 @@ future<> raft_groups_storage::persist_commit_idx() {
         // fake-mutation write of a larger commit_idx (store_log_entries()),
         // and writing a stale snapshot taken at enqueue time with a fresher
         // timestamp would win last-write-wins and regress the row.
-        const auto idx = _last_known_commit_idx;
+        const auto known = _last_known_commit;
         const auto ts = api::new_timestamp();
-        return store_commit_idx_cql(_qp, _group_id, _shard, idx, ts).then([this, idx] {
+        return store_commit_idx_cql(_qp, _group_id, _shard, known, ts).then([this, idx = known.idx] {
                 // store_log_entries()'s fake mutation may have advanced the
                 // watermark past idx while our CQL write was in flight; keep it
                 // monotonic.
@@ -178,7 +178,9 @@ future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& 
     if (commit_idx <= persisted) {
         co_return;
     }
-    co_await store_commit_idx_cql(qp, gid, shard, commit_idx, api::new_timestamp());
+    // The term is threaded through the replay path in a following commit;
+    // until then restored rows record term 0 ("unknown").
+    co_await store_commit_idx_cql(qp, gid, shard, {commit_idx, raft::term_t(0)}, api::new_timestamp());
 }
 
 future<raft::log_entries> raft_groups_storage::load_log() {
@@ -266,32 +268,34 @@ future<> raft_groups_storage::store_snapshot_descriptor(const raft::snapshot_des
 // (shard, group_id) partition. Applied in-memory (see store_log_entries) with
 // the commit_idx entry's rp_handle so it rides the raft_groups memtable flush.
 // The write timestamp is supplied by the caller so it can be captured in the
-// same task as commit_idx (see store_log_entries()).
-static mutation make_commit_idx_mutation(shard_id shard, raft::group_id group_id, raft::index_t commit_idx, api::timestamp_type ts) {
+// same task as the (commit_idx, term) pair (see store_log_entries()).
+static mutation make_commit_idx_mutation(shard_id shard, raft::group_id group_id, commit_idx_and_term commit, api::timestamp_type ts) {
     auto schema = db::system_keyspace::raft_groups();
     auto pk = partition_key::from_exploded(*schema, {
         short_type->decompose(int16_t(shard)),
         timeuuid_type->decompose(group_id.id),
     });
     mutation m(schema, std::move(pk));
-    m.set_static_cell("commit_idx", data_value(int64_t(commit_idx.value())), ts);
+    m.set_static_cell("commit_idx", data_value(int64_t(commit.idx.value())), ts);
+    // Same timestamp: the (idx, term) pair is always written atomically.
+    m.set_static_cell("commit_idx_term", data_value(int64_t(commit.term.value())), ts);
     return m;
 }
 
 future<> raft_groups_storage::store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
-    const auto commit_idx = _last_known_commit_idx;
+    const auto known = _last_known_commit;
     // Stamp the fake mutation below with a timestamp captured here, together
-    // with commit_idx: persist_commit_idx() writes the same static cell from
-    // the flush path, and last-write-wins resolves the two by timestamp. As
-    // long as both writers capture (value, timestamp) in one task, timestamp
-    // order matches value order and the larger commit_idx always wins.
-    // Generating the timestamp after the append below instead would pair this
-    // (possibly already stale) value with a fresher timestamp and could
-    // regress the row.
+    // with the (commit_idx, term) pair: persist_commit_idx() writes the same
+    // static cells from the flush path, and last-write-wins resolves the two by
+    // timestamp. As long as both writers capture (value, timestamp) in one
+    // task, timestamp order matches value order and the larger commit_idx
+    // always wins. Generating the timestamp after the append below instead
+    // would pair this (possibly already stale) value with a fresher timestamp
+    // and could regress the row.
     const auto commit_idx_ts = api::new_timestamp();
-    auto commit_idx_entry_handle = co_await _raft_commitlog.store_log_entries(entries, commit_idx);
+    auto commit_idx_entry_handle = co_await _raft_commitlog.store_log_entries(entries, known.idx);
 
-    if (commit_idx <= _last_persisted_commit_idx) {
+    if (known.idx <= _last_persisted_commit_idx) {
         // commit_idx has not advanced since it was last recorded to
         // system.raft_groups — by a prior fake mutation here or by
         // persist_commit_idx() — or is 0 before any commit. Nothing new to
@@ -306,14 +310,14 @@ future<> raft_groups_storage::store_log_entries(const std::vector<raft::log_entr
     // attached: this pins the commitlog segment via the raft_groups memtable and
     // lets commit_idx eventually flush to an SSTable without a synchronous CQL
     // write on the raft io_fiber.
-    auto m = make_commit_idx_mutation(_shard, _group_id, commit_idx, commit_idx_ts);
+    auto m = make_commit_idx_mutation(_shard, _group_id, known, commit_idx_ts);
     auto& db = _qp.proxy().local_db();
     auto& cf = db.find_column_family(m.schema()->id());
     co_await db.apply_in_memory(m, cf, std::move(commit_idx_entry_handle), db::no_timeout);
     // Both this path and persist_commit_idx() write commit_idx to the raft_groups
     // memtable; either may run between our co_awaits, so keep the watermark
     // monotonic rather than clobbering a larger value.
-    _last_persisted_commit_idx = std::max(_last_persisted_commit_idx, commit_idx);
+    _last_persisted_commit_idx = std::max(_last_persisted_commit_idx, known.idx);
 
     // Non-command entries (configuration, dummy) are never applied to a memtable
     // — unlike command entries, whose rp_handles apply() hands to the target
@@ -322,7 +326,7 @@ future<> raft_groups_storage::store_log_entries(const std::vector<raft::log_entr
     // that commit_idx is recorded, are covered by it on restart, so raft won't
     // replay them. Release their handles and let the commitlog segments be
     // reclaimed.
-    _raft_commitlog.release_noncommand_rp_handles(commit_idx);
+    _raft_commitlog.release_noncommand_rp_handles(known.idx);
 }
 
 future<> raft_groups_storage::truncate_log(raft::index_t idx) {

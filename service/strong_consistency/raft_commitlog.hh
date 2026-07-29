@@ -12,6 +12,14 @@
 #include <deque>
 
 namespace service::strong_consistency {
+// Committed raft position: the commit index and the term of the log entry at
+// that index. The two are always tracked and persisted together so that the
+// post-replay snapshot bump can use the exact term (SCYLLADB-3357).
+struct commit_idx_and_term {
+    raft::index_t idx{0};
+    raft::term_t term{0};
+};
+
 struct index_and_replay_position {
     raft::index_t index;
     db::rp_handle replay_position_handle;
