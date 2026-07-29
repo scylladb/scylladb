@@ -155,6 +155,11 @@ inline endpoint_state_ptr make_endpoint_state_ptr(endpoint_state&& eps) {
 using permit_id = utils::tagged_uuid<struct permit_id_tag>;
 constexpr permit_id null_permit_id = permit_id::create_null_id();
 
+// Merges `from` into `into`, both of the same generation, keeping the highest
+// version of every application state and of the heartbeat. Facts present in
+// only one of the two are always kept.
+void merge_endpoint_state(endpoint_state& into, const endpoint_state& from);
+
 } // gms
 
 template <>

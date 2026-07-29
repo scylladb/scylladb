@@ -42,15 +42,24 @@ async def test_gossiper_race_on_decommission(manager: ManagerClient):
         parameters={"delay_node": decom_node.ip_addr},
     )
 
-    # wait for the "delay_gossiper_apply" error injection to take effect
-    # - wait for multiple occurrences to be batched, so that there is a higher chance of one of them
-    #   failing down in the `gossiper::do_on_change_notifications()`
-    for _ in range(5):
-        log_mark = await coordinator_log.mark()
-        await coordinator_log.wait_for(
-            "delay_gossiper_apply: suspend for node",
-            from_mark=log_mark,
-        )
+    # wait for the "delay_gossiper_apply" error injection to take effect.
+    # Pending state applies are coalesced per endpoint (at most one apply
+    # fiber per endpoint), so only a single suspension can be observed;
+    # newer states of the node arriving while the apply is suspended are
+    # coalesced into the pending slot instead of spawning more fibers.
+    await coordinator_log.wait_for(
+        "delay_gossiper_apply: suspend for node",
+        from_mark=coordinator_log_mark,
+    )
+
+    # wait until newer states of this specific node have queued up behind the
+    # suspended apply, so that the apply resumed after the decommission
+    # races with the node's removal like the batched applies used to
+    decom_host_id = await manager.get_host_id(decom_node.server_id)
+    await coordinator_log.wait_for(
+        f"queue_state_apply: coalesced a state of {decom_host_id} into the pending one",
+        from_mark=coordinator_log_mark,
+    )
 
     coordinator_log_mark = await coordinator_log.mark()
 

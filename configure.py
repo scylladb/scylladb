@@ -702,6 +702,7 @@ scylla_tests = set([
     'test/unit/row_cache_stress_test',
     'test/unit/cross_shard_barrier_test',
     'test/boost/address_map_test',
+    'test/boost/endpoint_state_merge_test',
 ]) | ldap_tests
 
 perf_tests = set([
@@ -1821,6 +1822,7 @@ deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/raft/helpers.cc'
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
     scylla_core + alternator + scylla_tests_generic_dependencies
 deps['test/boost/address_map_test'] = ['test/boost/address_map_test.cc'] + scylla_core + alternator
+deps['test/boost/endpoint_state_merge_test'] = ['test/boost/endpoint_state_merge_test.cc'] + scylla_core + alternator
 deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/raft/helpers.cc',
                                      'test/lib/log.cc',
