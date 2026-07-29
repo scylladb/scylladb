@@ -1682,6 +1682,14 @@ void database::set_strong_consistency_groups_manager(service::strong_consistency
     }
 }
 
+void database::clear_strong_consistency_groups_manager() {
+    _strong_consistency_groups_manager = nullptr;
+    auto column_families = get_tables_metadata().get_column_families_copy();
+    for (auto&& [_, cf] : column_families) {
+        cf->clear_strong_consistency_groups_manager();
+    }
+}
+
 future<> table::init_storage() {
     _storage_opts = co_await _sstables_manager.init_table_storage(*_schema, *_storage_opts);
 }

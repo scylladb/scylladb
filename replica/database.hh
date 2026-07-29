@@ -1011,6 +1011,9 @@ public:
     void set_strong_consistency_groups_manager(service::strong_consistency::groups_manager& gm) {
         _config.strong_consistency_groups_manager = &gm;
     }
+    void clear_strong_consistency_groups_manager() {
+        _config.strong_consistency_groups_manager = nullptr;
+    }
 
     const row_cache& get_row_cache() const {
         return _cache;
@@ -1838,6 +1841,10 @@ public:
     const gms::feature_service& features() const { return _feat; }
     service::strong_consistency::groups_manager* strong_consistency_groups_manager() const { return _strong_consistency_groups_manager; }
     void set_strong_consistency_groups_manager(service::strong_consistency::groups_manager& gm);
+    // Reset the pointer here and in every table's config copy. Called when the
+    // groups manager stops, so a later memtable flush hook cannot dereference a
+    // dangling manager pointer.
+    void clear_strong_consistency_groups_manager();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&,
                                db::timeout_clock::time_point timeout,
                                 shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* large_data_violation_out = nullptr);

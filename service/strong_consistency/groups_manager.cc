@@ -580,6 +580,12 @@ void groups_manager::start() {
 }
 
 future<> groups_manager::stop() {
+    // Stop new flush hooks from reaching this manager through the table
+    // configs before teardown begins. The hook's null-check and its call into
+    // save_commit_log_index() run without a preemption point between them, so
+    // after this line no new hook can enter; hooks already inside hold a
+    // per-group gate that the teardown below drains.
+    _db.clear_strong_consistency_groups_manager();
     co_await uninit_messaging_service();
 
     if (!_started) {
