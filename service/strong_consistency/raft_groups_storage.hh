@@ -94,6 +94,9 @@ public:
     // Static version that doesn't require constructing a full raft_groups_storage object.
     // Useful during commitlog replay when only read access to metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Load the persisted (commit_idx, commit_idx_term) pair. Term 0 means the
+    // row predates the commit_idx_term column ("unknown").
+    static future<commit_idx_and_term> load_commit_idx_and_term(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Load the current persisted snapshot's (idx, term) for this group.
     // Returns (0, 0) if no snapshot has been recorded yet.
     static future<std::pair<raft::index_t, raft::term_t>> load_snapshot_idx_and_term(

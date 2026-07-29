@@ -171,6 +171,20 @@ future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor
     co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
 }
 
+future<commit_idx_and_term> raft_groups_storage::load_commit_idx_and_term(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT commit_idx, commit_idx_term FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1",
+        db::system_keyspace::RAFT_GROUPS);
+    ::shared_ptr<cql3::untyped_result_set> rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    if (rs->empty()) {
+        co_return commit_idx_and_term{};
+    }
+    const auto& row = rs->one();
+    co_return commit_idx_and_term{
+        raft::index_t(row.get_or<int64_t>("commit_idx", 0)),
+        raft::term_t(row.get_or<int64_t>("commit_idx_term", 0)),
+    };
+}
+
 future<> raft_groups_storage::store_commit_idx_if_higher(cql3::query_processor& qp, raft::group_id gid, shard_id shard, commit_idx_and_term commit) {
     // Only advance, never regress: a prior flush (or an earlier replay) may
     // already have persisted a value at or beyond the recovered one.

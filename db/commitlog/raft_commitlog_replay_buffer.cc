@@ -256,29 +256,30 @@ future<> raft_commitlog_replay_buffer::bump_snapshot_indices(replica::database& 
     co_await seastar::coroutine::parallel_for_each(group_to_table,
             [&qp] (const auto& entry) -> future<> {
         const auto group_id = entry.first;
-        const auto commit_idx = co_await service::strong_consistency::raft_groups_storage::load_commit_idx(qp, group_id, this_shard_id());
-        if (commit_idx.value() == 0) {
+        const auto commit = co_await service::strong_consistency::raft_groups_storage::load_commit_idx_and_term(qp, group_id, this_shard_id());
+        if (commit.idx.value() == 0) {
             co_return;
         }
         auto [snap_idx, snap_term] = co_await service::strong_consistency::raft_groups_storage::load_snapshot_idx_and_term(qp, group_id, this_shard_id());
-        if (snap_idx >= commit_idx) {
+        if (snap_idx >= commit.idx) {
             co_return;
         }
-        // Reuse the previously-recorded snapshot term (the term of the last real
-        // raft snapshot). It is <= term(commit_idx), so it errs conservative /
-        // too-low, which is safe: the replica looks no more up-to-date than its
-        // data, and any log-matching mismatch is repaired by InstallSnapshot from
-        // a peer. The exact term(commit_idx) is not recoverable here once the
-        // commitlog is empty; persisting it for an exact bump is tracked in
-        // SCYLLADB-3357.
+        // Use the exact term of the entry at commit_idx when it is known.
+        // commit_idx_term == 0 means the row was written before the term was
+        // persisted (an older binary); fall back to the previously-recorded
+        // snapshot term. The fallback is <= term(commit_idx), i.e. errs
+        // conservative / too-low, which is safe — the replica looks no more
+        // up-to-date than its data — but a peer with higher-term entries may
+        // repair it via InstallSnapshot instead of plain log matching.
+        const auto bump_term = commit.term != raft::term_t(0) ? commit.term : snap_term;
         co_await service::strong_consistency::raft_groups_storage::store_snapshot_index(
                 qp, group_id, this_shard_id(), raft::snapshot_descriptor{
-                    .idx = commit_idx,
-                    .term = snap_term,
+                    .idx = commit.idx,
+                    .term = bump_term,
                     .id = raft::snapshot_id(utils::make_random_uuid()),
                 });
         logger.debug("group {}: post-replay catch-up, advanced snapshot idx {} -> {} (term={})",
-                group_id, snap_idx, commit_idx, snap_term);
+                group_id, snap_idx, commit.idx, bump_term);
     });
 }
 namespace raft_buffer_detail {
