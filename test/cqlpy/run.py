@@ -340,6 +340,9 @@ def run_scylla_cmd(pid, dir):
         # The expiration scanner's period (started for Alternator but
         # now also CQL)
         '--alternator-ttl-period-in-seconds=0.5',
+        '--logstor-disk-size-in-mb=8',
+        '--logstor-file-size-in-mb=4',
+        '--logstor-separator-max-memory-in-mb=8',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same

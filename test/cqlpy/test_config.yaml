@@ -6,3 +6,6 @@ extra_scylla_cmdline_options:
   - '--experimental-features=views-with-tablets'
   - '--enable-tablets=true'
   - '--tablets-initial-scale-factor=1'
+  - '--logstor-disk-size-in-mb=8'
+  - '--logstor-file-size-in-mb=4'
+  - '--logstor-separator-max-memory-in-mb=8'
