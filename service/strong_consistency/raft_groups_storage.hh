@@ -56,11 +56,12 @@ class raft_groups_storage : public raft::persistence {
     // down. abort() drains any in-flight operation via _pending_op_fut before
     // this object is destroyed.
     bool _aborted = false;
-    // Last commit index reported by the raft io_fiber via store_commit_idx().
-    // The io_fiber calls store_commit_idx() *before* pushing entries to the
-    // applier_fiber for apply(), so this value is always >= the raft index
-    // of any entry that has been applied to a memtable.
-    raft::index_t _last_known_commit_idx{0};
+    // Last commit index (and the term of the entry at it) reported by the raft
+    // io_fiber via store_commit_idx(). The io_fiber calls store_commit_idx()
+    // *before* pushing entries to the applier_fiber for apply(), so the index
+    // is always >= the raft index of any entry that has been applied to a
+    // memtable.
+    commit_idx_and_term _last_known_commit{};
     // Last commit index recorded to system.raft_groups, by either the flush-hook
     // CQL write (persist_commit_idx()) or the per-batch fake mutation
     // (store_log_entries()) — both target the raft_groups memtable. Both paths
@@ -110,8 +111,9 @@ public:
 
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 
-    // Persist _last_known_commit_idx to system.raft_groups. Skips the write
-    // if it hasn't advanced since the last persist, or if abort() has begun.
+    // Persist _last_known_commit (idx and term) to system.raft_groups. Skips
+    // the write if the index hasn't advanced since the last persist, or if
+    // abort() has begun.
     future<> persist_commit_idx();
 
 private:
