@@ -132,9 +132,18 @@ class DockerizedServer:
                 while True:
                     data = proc.stderr.readline()
                     if not data:
+                        rc = proc.poll()
+                        level = logging.DEBUG
                         if f:
-                            loop.call_soon_threadsafe(f.set_exception, RuntimeError("Log EOF"))
-                        logger.debug("EOF received")
+                            level = logging.ERROR
+                            self.logfile.close()
+                            self.logfile = None
+                            with logfilename.open('r') as logf:
+                                for line in logf:
+                                    logger.error(line)
+                            loop.call_soon_threadsafe(f.set_exception, RuntimeError(f"Log EOF, return code {rc}"))
+
+                        logger.log(level, "EOF received: %s", rc)
                         break
                     line = data.decode()
                     self.logfile.write(data)
