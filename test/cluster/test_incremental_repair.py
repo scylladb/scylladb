@@ -19,14 +19,48 @@ import logging
 import time
 import glob
 import os
-import subprocess
 import json
+import shlex
 import socket
 import random
 import requests
 import re
 
 logger = logging.getLogger(__name__)
+
+KEYS_JQ_FILTER = r'''
+select(
+  length == 2
+  and ((.[0] | length) == 5)
+  and .[0][0] == "sstables"
+  and ((.[0][2] | type) == "number")
+  and .[0][3] == "key"
+  and .[0][4] == "value"
+)
+| {sstable: .[0][1], key: .[1]}
+'''
+
+REPAIRED_AT_JQ_FILTER = r'''
+select(
+  length == 2
+  and ((.[0] | length) == 4)
+  and .[0][0] == "sstables"
+  and .[0][2] == "stats"
+  and .[0][3] == "repaired_at"
+)
+| {sstable: .[0][1], repaired_at: .[1]}
+'''
+
+async def run_sstable_jq(cmd, jq_filter):
+    pipeline = f"{shlex.join(cmd)} | jq --stream -c {shlex.quote(jq_filter)}"
+    process = await asyncio.create_subprocess_exec(
+        "bash", "-o", "pipefail", "-c", pipeline,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE)
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        raise RuntimeError(f"Command failed ({process.returncode}): {pipeline}\n{stderr.decode('utf-8', 'replace')}")
+    return stdout.decode('utf-8', 'replace').splitlines()
 
 async def inject_error_on(manager, error_name, servers, params = {}):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False, params) for s in servers]
@@ -55,41 +89,31 @@ async def get_sst_status(run, log, from_mark=None):
 async def insert_keys(cql, ks, start_key, end_key):
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in range(start_key, end_key)])
 
-def get_repaired_at_from_sst(sst_file, scylla_path):
-    try:
-        cmd = [scylla_path, "sstable", "dump-statistics", sst_file]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        output = json.loads(result.stdout)
-        repaired_at = output.get("sstables", {}).get(sst_file, {}).get("stats", {}).get("repaired_at")
-        return repaired_at
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Command failed with error: {e}")
-    except json.JSONDecodeError as e:
-        logging.error(f"Failed to parse JSON output: {e}")
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
+async def get_repaired_at_from_sst(sst_files, scylla_path):
+    """Return {sstable_path: repaired_at} for all given sstables in a single streamed dump."""
+    if not sst_files:
+        return {}
 
-    return None
+    repaired_at_by_sst = {sst: None for sst in sst_files}
+    cmd = [scylla_path, "sstable", "dump-statistics"] + list(sst_files)
+    for line in await run_sstable_jq(cmd, REPAIRED_AT_JQ_FILTER):
+        record = json.loads(line)
+        repaired_at_by_sst[record["sstable"]] = record["repaired_at"]
+    return repaired_at_by_sst
 
-def get_keys_from_sst(sst_file, scylla_path):
-    try:
-        cmd = [scylla_path, "sstable", "dump-data", sst_file]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        output = json.loads(result.stdout)
-        keys = []
-        for sstable_data in output.get("sstables", {}).values():
-            for entry in sstable_data:
-                key_value = entry.get("key", {}).get("value")
-                if key_value:
-                    keys.append(int(key_value))
-        return keys
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Command failed with error: {e}")
-    except json.JSONDecodeError as e:
-        logging.error(f"Failed to parse JSON output: {e}")
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
-    return []
+async def get_keys_from_sst(sst_files, scylla_path):
+    """Return {sstable_path: [partition keys]} for all given sstables in a single streamed dump."""
+    if not sst_files:
+        return {}
+
+    keys_by_sst = {sst: [] for sst in sst_files}
+    cmd = [scylla_path, "sstable", "dump-data"] + list(sst_files)
+    for line in await run_sstable_jq(cmd, KEYS_JQ_FILTER):
+        record = json.loads(line)
+        key_value = record["key"]
+        if key_value:
+            keys_by_sst.setdefault(record["sstable"], []).append(int(key_value))
+    return keys_by_sst
 
 def get_metrics(server, metric_name):
     num = 0
@@ -171,32 +195,24 @@ def assert_repaired_at_preserved(lineage, ops_name):
         )
 
 
-def get_repaired_at_from_ssts(sst_files, scylla_path):
-    """Return {sstable_path: repaired_at} for all given sstables in a single subprocess call."""
-    if not sst_files:
-        return {}
-    cmd = [scylla_path, "sstable", "dump-statistics"] + list(sst_files)
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    output = json.loads(result.stdout)
-    sstables = output.get("sstables", {})
-    return {sst: sstables.get(sst, {}).get("stats", {}).get("repaired_at") for sst in sst_files}
-
 async def get_repaired_at_map(manager, servers, ks, scylla_path):
     """Return {server_id: {sstable_path: repaired_at}} for all sstables on all servers."""
     result = {}
     for server in servers:
         ssts = await get_sstables_for_server(manager, server, ks)
-        result[server.server_id] = get_repaired_at_from_ssts(ssts, scylla_path)
+        result[server.server_id] = await get_repaired_at_from_sst(ssts, scylla_path)
     return result
 
 async def verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks, repaired_keys, unrepaired_keys):
-    async def process_server_keys(server):
+    for server in servers:
         node_workdir = await manager.server_get_workdir(server.server_id)
         sstables = get_sstables(node_workdir, ks, 'test')
         nr_sstables = len(sstables)
-        async def process_sst(sst):
-            keys = get_keys_from_sst(sst, scylla_path)
-            repaired_at = get_repaired_at_from_sst(sst, scylla_path)
+        keys_by_sst = await get_keys_from_sst(sstables, scylla_path)
+        repaired_at_by_sst = await get_repaired_at_from_sst(sstables, scylla_path)
+        for sst in sstables:
+            keys = keys_by_sst.get(sst, [])
+            repaired_at = repaired_at_by_sst.get(sst)
             logger.info(f"Got {node_workdir=} {nr_sstables=} {sst=} {repaired_at=} {keys=} {repaired_keys=} {unrepaired_keys=}")
             if repaired_at == 0 or repaired_at is None:
                 for key in keys:
@@ -204,20 +220,17 @@ async def verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks,
             elif repaired_at > 0:
                 for key in keys:
                     assert node_workdir and sst and key in repaired_keys
-        await asyncio.gather(*(process_sst(sst) for sst in sstables))
-    await asyncio.gather(*[process_server_keys(server) for server in servers])
 
 async def verify_max_repaired_at(manager, scylla_path, servers, ks, max_repaired_at):
-    async def process_server_keys(server):
+    for server in servers:
         node_workdir = await manager.server_get_workdir(server.server_id)
         sstables = get_sstables(node_workdir, ks, 'test')
         nr_sstables = len(sstables)
+        repaired_at_by_sst = await get_repaired_at_from_sst(sstables, scylla_path)
         for sst in sstables:
-            keys = get_keys_from_sst(sst, scylla_path)
-            repaired_at = get_repaired_at_from_sst(sst, scylla_path)
+            repaired_at = repaired_at_by_sst.get(sst)
             logger.info(f"Got {node_workdir=} {nr_sstables=} {sst=} {repaired_at=}")
             assert repaired_at <= max_repaired_at
-    await asyncio.gather(*[process_server_keys(server) for server in servers])
 
 async def trigger_tablet_merge(manager, servers, logs):
     s1_log = logs[0]
@@ -1137,12 +1150,14 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     deadline = time.time() + 60
     compaction_ran = False
     while time.time() < deadline:
-        for sst in await get_sstables_for_server(manager, target, ks):
-            if get_repaired_at_from_sst(sst, scylla_path) == 2:
-                if set(get_keys_from_sst(sst, scylla_path)) & set(post_repair_keys):
-                    compaction_ran = True
-                    logger.info(f"Post-restart compaction produced F(repaired_at=2) with post-repair keys: {sst}")
-                    break
+        sstables = await get_sstables_for_server(manager, target, ks)
+        keys_by_sst = await get_keys_from_sst(sstables, scylla_path)
+        repaired_at_by_sst = await get_repaired_at_from_sst(sstables, scylla_path)
+        for sst in sstables:
+            if repaired_at_by_sst.get(sst) == 2 and set(keys_by_sst.get(sst, [])) & set(post_repair_keys):
+                compaction_ran = True
+                logger.info(f"Post-restart compaction produced F(repaired_at=2) with post-repair keys: {sst}")
+                break
         if compaction_ran:
             break
         # Check for residual re-repair during the polling window.
@@ -1188,10 +1203,13 @@ async def _do_race_window_promotes_unrepaired_data(manager, servers, cql, ks, to
     async def keys_in_repaired_sstables(server) -> set:
         """Return the set of keys found in any sstable with repaired_at > 0 on this server."""
         result = set()
-        for sst in await get_sstables_for_server(manager, server, ks):
-            ra = get_repaired_at_from_sst(sst, scylla_path)
+        sstables = await get_sstables_for_server(manager, server, ks)
+        keys_by_sst = await get_keys_from_sst(sstables, scylla_path)
+        repaired_at_by_sst = await get_repaired_at_from_sst(sstables, scylla_path)
+        for sst in sstables:
+            ra = repaired_at_by_sst.get(sst)
             if ra is not None and ra > 0:
-                result.update(get_keys_from_sst(sst, scylla_path))
+                result.update(keys_by_sst.get(sst, []))
         return result
 
     repaired_keys_0 = await keys_in_repaired_sstables(servers[0])
