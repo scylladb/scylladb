@@ -532,7 +532,7 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
         // Commit index. store_commit_idx() only updates in-memory tracking now;
         // persist_commit_idx() writes it through to system.raft_groups, which is
         // what load_commit_idx() reads.
-        co_await storage0.store_commit_idx(raft::index_t(42));
+        co_await storage0.store_commit_idx(raft::index_t(42), raft::term_t(7));
         co_await storage0.persist_commit_idx();
 
         auto idx0 = co_await storage0.load_commit_idx();
