@@ -1537,8 +1537,9 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
         update.apply(*_schema, *existing);
     }
 
-    update.marker().compact_and_expire(update.tomb().tomb(), _now, always_gc, gc_before);
-    update.cells().compact_and_expire(*_schema, column_kind::regular_column, update.tomb(), _now, always_gc, gc_before, update.marker());
+    // Don't remove dead cells from the update - they still affect the base table even if they are immediately eligible for GC
+    update.marker().compact_and_expire(update.tomb().tomb(), _now, never_gc, gc_before);
+    update.cells().compact_and_expire(*_schema, column_kind::regular_column, update.tomb(), _now, never_gc, gc_before, update.marker());
 
     const auto update_row = clustering_or_static_row(std::move(update));
     const auto existing_row = existing
@@ -1565,7 +1566,8 @@ void view_update_builder::generate_update(static_row&& update, const tombstone& 
         update.apply(*_schema, static_row(*_schema, *existing));
     }
 
-    update.cells().compact_and_expire(*_schema, column_kind::static_column, row_tombstone(update_tomb), _now, always_gc, gc_before);
+    // Don't remove dead cells from the update - they still affect the base table even if they are immediately eligible for GC
+    update.cells().compact_and_expire(*_schema, column_kind::static_column, row_tombstone(update_tomb), _now, never_gc, gc_before);
 
     const auto update_row = clustering_or_static_row(std::move(update));
     const auto existing_row = existing

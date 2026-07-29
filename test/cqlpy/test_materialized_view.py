@@ -12,6 +12,7 @@ from .util import new_test_table, unique_name, new_materialized_view, new_second
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
+from .rest_api import scylla_inject_error
 
 from . import nodetool
 
@@ -881,6 +882,22 @@ def test_mv_with_only_primary_key_rows(scylla_only, cql, test_keyspace):
             nodetool.flush(cql, view)
             assert(set([row.id for row in cql.execute(f'SELECT id FROM {view}')]) == set([1, 2, 3]))
             # We now believe that empty value serialization/deserialization is correct
+
+# Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-3361
+# When there are no segments in the commitlog, view update generation takes into account current time when
+# deciding whether to compact the dead cells in the update. If this time is higher (by at least 1s) than the
+# time when the dead cell was created, the dead cell will be compacted away and the view update will not be generated.
+# This test reproduces this issue by injecting a 1s delay in time used for view update generation, and by flushing
+# the commitlog just before the DELETE.
+def test_mv_delete_cell_after_commitlog_flush(cql, test_keyspace, scylla_only):
+    with scylla_inject_error(cql, 'delay_view_update_query_time_1s', one_shot=False):
+        with new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as base:
+            with new_materialized_view(cql, table=base, select='pk', pk='pk', where='pk IS NOT NULL') as view:
+                # Add a row which is only kept alive by the liveness of v, clear commitlog, and delete v
+                cql.execute(f'UPDATE {base} SET v = 1 WHERE pk = 0')
+                nodetool.flush_all(cql)
+                cql.execute(f'DELETE v FROM {base} WHERE pk = 0')
+                assert(set([row.pk for row in cql.execute(f'SELECT pk FROM {view}')]) == set([]))
 
 # This test is regression testing added after fixing:
 # https://github.com/scylladb/scylladb/issues/16392 - the gist of the issue is that
