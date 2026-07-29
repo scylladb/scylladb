@@ -72,7 +72,7 @@ class ManagerClient:
     @property
     def client(self):
         if self.test_finished_event.is_set():
-            raise Exception("ManagerClient.after_test method was called, client object is not accessible anymore")
+            raise Exception("ManagerClient client object is not accessible after the test finished")
             # there are still can be issue when some task first obtains the client object,
             # but usually, tests obtains the manager and uses the client as manager.client
             # and there is an actual workaround for this case.
