@@ -22,6 +22,7 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_all
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from cassandra.cluster import ConsistencyLevel
+from cassandra.query import SimpleStatement
 from collections import defaultdict
 from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
@@ -1518,7 +1519,28 @@ async def test_drop_keyspace_during_tablet_restore(manager: ManagerClient, objec
     manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
     tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
 
-    await server_log.wait_for("pause_download_sstable: waiting for message", from_mark=log_mark)
+    try:
+        await server_log.wait_for("pause_download_sstable: waiting for message", from_mark=log_mark)
+    except Exception as e:
+        logger.error("Exception in waiting for download to start %s", e)
+        dc = servers[0].datacenter
+        rack = 'rack0'
+        query = (f"SELECT node, tablet, first_token, last_token, sstable_id, downloaded FROM system_distributed.snapshot_sstables "
+                 f"WHERE snapshot_name = '{snap_name}' AND \"keyspace\" = '{ks}' AND \"table\" = '{cf}' "
+                 f"AND datacenter = '{dc}' AND rack = '{rack}'")
+        for s in servers:
+            host = cql.cluster.metadata.get_host(s.ip_addr)
+            rows = list(await cql.run_async(SimpleStatement(query, consistency_level=ConsistencyLevel.ONE), host=host))
+            logger.error(f"snapshot_sstables as seen by {s.ip_addr} (host_id={host_ids[s.server_id]}): {rows}")
+        [row] = await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'")
+        table_id = row.id
+        tablets = list(await cql.run_async(
+            f"SELECT last_token, replicas FROM system.tablets WHERE table_id = {table_id}"))
+        logger.error(f"system.tablets for {ks}.{cf} (table_id={table_id}): {tablets}")
+        status = await manager.api.get_task_status(servers[0].ip_addr, tid)
+        logger.error(f"restore task {tid} status: {status}")
+        raise
 
     # Issue DROP concurrently — with the fix stream_in_progress() guard blocks
     # table::stop() until download completes; without the fix the data directory
