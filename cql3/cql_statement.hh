@@ -116,6 +116,8 @@ public:
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;
 
+    // Statements which keep their result set metadata elsewhere, e.g. in a
+    // selection, override this instead of setting _metadata.
     virtual seastar::shared_ptr<const metadata> get_result_metadata() const {
         if (_metadata) {
             return _metadata;
@@ -143,14 +145,6 @@ public:
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
 
     virtual void sanitize_audit_info() {}
-};
-
-class cql_statement_no_metadata : public cql_statement {
-public:
-    using cql_statement::cql_statement;
-    virtual seastar::shared_ptr<const metadata> get_result_metadata() const override {
-        return make_empty_metadata();
-    }
 };
 
 }

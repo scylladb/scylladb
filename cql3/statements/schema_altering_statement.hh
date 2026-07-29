@@ -33,7 +33,7 @@ namespace messages = cql_transport::messages;
 /**
  * Abstract class for statements that alter the schema.
  */
-class schema_altering_statement : public raw::cf_statement, public cql_statement_no_metadata {
+class schema_altering_statement : public raw::cf_statement, public cql_statement {
 private:
     const bool _is_column_family_level;
 
